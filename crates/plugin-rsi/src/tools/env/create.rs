@@ -99,7 +99,7 @@ impl ToolFunction for EnvironmentCreateTool {
     description = "Fork an existing environment workspace under a new id. Edit only the returned target path."
 )]
 pub(super) struct EnvironmentForkInput {
-    /// Existing environment workspace path, such as `/environments/dev/python`.
+    /// Existing environment workspace path, such as `local://environments/dev/python`.
     source_environment_path: String,
     /// New environment id in lowercase kebab-case.
     environment_id: String,

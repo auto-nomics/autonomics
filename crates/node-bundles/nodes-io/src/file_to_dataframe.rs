@@ -558,8 +558,8 @@ fn validate_local_path(path: &str, partitioned: bool) -> std::result::Result<(),
 /// when an OpenDAL-backed store is registered under that URL. Mounted virtual
 /// paths therefore must be addressed through the dedicated `vfs://` store.
 pub(crate) fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) -> String {
-    if vfs::uri::is_uri(path) {
-        return path.to_string();
+    if vfs::uri::storage_path(path).is_some() {
+        return vfs::uri::datafusion_uri(path);
     }
 
     let Some(storage) = node_ctx.opendal.as_ref() else {
@@ -622,7 +622,7 @@ impl DagNode for FileToDataFrameNode {
         // Pre-validate local paths so we never silently hand back a
         // zero-row DataFrame for a typo'd glob or missing file. vfs://
         // paths go through OpenDAL and don't have local fs access.
-        if !vfs::uri::is_uri(&path) {
+        if vfs::uri::storage_path(&path).is_none() {
             validate_local_path(&path, !self.partition_by.is_empty())
                 .map_err(FileToDataFrameError::InvalidInput)?;
         }
@@ -801,7 +801,7 @@ async fn read_file_with_options(
 /// Read the full contents of an input path: `vfs://` addresses go through
 /// the engine's OpenDAL storage, anything else is a local filesystem read.
 async fn read_input_bytes(node_ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, FileToDataFrameError> {
-    if let Some(vpath) = vfs::uri::virtual_path(path) {
+    if let Some(vpath) = vfs::uri::storage_path(path) {
         let storage = node_ctx.opendal.as_ref().ok_or_else(|| {
             FileToDataFrameError::InvalidInput(format!(
                 "path `{path}` requires engine file storage, but none is registered"
@@ -2238,6 +2238,66 @@ mod tests {
         .unwrap();
         assert_eq!(df.schema().fields().len(), 2);
         assert_eq!(df.count().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn double_slash_file_references_roundtrip_through_dataframe_nodes() {
+        use dag_core::dag::node_event::NodeReporter;
+
+        let storage = Arc::new(OpendalFileStorage::new_temp());
+        storage
+            .write_bytes("local://input%20%25.csv", b"id\n1\n2\n".to_vec())
+            .await
+            .unwrap();
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
+        let mut source = FileToDataFrameNode::new(Some("local://input%20%25.csv".into()), None);
+        let outputs = source
+            .execute(&ctx, &[], &NodeReporter::noop())
+            .await
+            .unwrap();
+        let mut sink = crate::dataframe_to_file::DataFrameToFileNodeFactory {}.build(
+            serde_json::json!({"path":"local://out/result.parquet", "format":"parquet", "mode":"overwrite"}),
+            ctx.clone(),
+        ).unwrap();
+        let written = sink
+            .execute(
+                &ctx,
+                &[NodeInput {
+                    port: 0,
+                    data: outputs.get(&0).unwrap().clone(),
+                }],
+                &NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let file = written.get(&0).unwrap().as_file().unwrap();
+        assert_eq!(file.path, "local://out/result.parquet");
+        let mut reopened = FileToDataFrameNode::new(None, None);
+        let reopened = reopened
+            .execute(
+                &ctx,
+                &[NodeInput {
+                    port: 0,
+                    data: dag_core::NodeValue::File(file.clone()),
+                }],
+                &NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let dag_core::NodeValue::DataFrame(frame) = reopened.get(&0).unwrap() else {
+            panic!("expected dataframe")
+        };
+        assert_eq!(
+            frame
+                .clone()
+                .collect()
+                .await
+                .unwrap()
+                .iter()
+                .map(|batch| batch.num_rows())
+                .sum::<usize>(),
+            2
+        );
     }
 
     #[tokio::test]

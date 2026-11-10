@@ -565,13 +565,15 @@ async fn glob_dicom_files(ctx: &NodeCtx, pattern: &str) -> Result<Vec<FileRef>, 
         return Err(DagError::Schedule("glob pattern cannot be empty".into()));
     }
 
-    if let Some(virtual_pattern) = vfs::uri::virtual_path(trimmed) {
+    if let Some(virtual_pattern) = vfs::uri::storage_path(trimmed) {
         let Some(storage) = ctx.opendal.as_ref() else {
             return Err(DagError::Schedule(
                 "vfs:// DICOM globs require registered object storage".into(),
             ));
         };
-        let virtual_pattern = vfs::OpendalFileStorage::normalize_path(virtual_pattern);
+        let virtual_pattern = storage
+            .try_resolve_virtual(virtual_pattern)
+            .map_err(|e| DagError::Schedule(e.to_string()))?;
         let wildcard = virtual_pattern
             .find(['*', '?', '['])
             .unwrap_or(virtual_pattern.len());
@@ -606,9 +608,12 @@ async fn glob_dicom_files(ctx: &NodeCtx, pattern: &str) -> Result<Vec<FileRef>, 
                 continue;
             }
             let mtime_ns = meta.last_modified.timestamp_nanos_opt().unwrap_or_default();
+            let canonical = storage
+                .canonical_uri(&path)
+                .map_err(|e| DagError::Schedule(e.to_string()))?;
             files.push(FileRef {
-                domain: dag_core::DomainId::local(),
-                path: vfs::uri::uri(path),
+                domain: dag_core::DomainId::new(vfs::uri::domain(&canonical).unwrap_or("local")),
+                path: canonical,
                 format: Some("dicom".into()),
                 fingerprint: Some(FileFingerprint {
                     size: meta.size,
@@ -1949,13 +1954,21 @@ async fn resolve_file_ref(ctx: &NodeCtx, path: &str) -> Result<FileRef, String> 
         return Err("path is empty".into());
     }
     if let Some(storage) = ctx.opendal.as_ref() {
-        let virtual_path = vfs::uri::virtual_path(path)
+        let virtual_path = vfs::uri::storage_path(path)
             .map(str::to_string)
             .or_else(|| path.strip_prefix("file://").map(str::to_string))
             .or_else(|| path.starts_with('/').then(|| path.to_string()));
         if let Some(virtual_path) = virtual_path {
-            let normalized = vfs::OpendalFileStorage::normalize_path(&virtual_path);
-            if storage.is_mounted(&normalized) {
+            let normalized = storage
+                .try_resolve_virtual(&virtual_path)
+                .map_err(|e| e.to_string())?;
+            if vfs::uri::storage_path(path).is_some() || storage.is_mounted(&normalized) {
+                storage
+                    .check_readable(&normalized)
+                    .map_err(|e| e.to_string())?;
+                let canonical = storage
+                    .canonical_uri(&normalized)
+                    .map_err(|e| e.to_string())?;
                 let operator = storage.resolve(&normalized);
                 let key = storage.resolve_path(&normalized);
                 let metadata = operator
@@ -1975,8 +1988,10 @@ async fn resolve_file_ref(ctx: &NodeCtx, path: &str) -> Result<FileRef, String> 
                     .map(|duration| duration.as_nanos() as i128)
                     .unwrap_or_default();
                 return Ok(FileRef {
-                    domain: dag_core::DomainId::local(),
-                    path: path.to_string(),
+                    domain: dag_core::DomainId::new(
+                        vfs::uri::domain(&canonical).unwrap_or("local"),
+                    ),
+                    path: canonical,
                     format: None,
                     fingerprint: Some(FileFingerprint {
                         size: metadata.content_length(),
@@ -2172,5 +2187,31 @@ mod tests {
             .unwrap();
         assert_eq!(samples[0].num_rows(), 2);
         assert!(features[0].num_rows() >= 2);
+    }
+}
+
+#[cfg(test)]
+mod domain_reference_tests {
+    #[tokio::test]
+    async fn radiomics_resolves_domain_files_and_refuses_unknown_domains() {
+        let storage = std::sync::Arc::new(vfs::OpendalFileStorage::new_temp());
+        storage
+            .write_bytes("/image.nii", b"fixture".to_vec())
+            .await
+            .unwrap();
+        let ctx = dag_core::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            Some(storage),
+        );
+        let file = super::resolve_file_ref(&ctx, "local://image.nii")
+            .await
+            .unwrap();
+        assert_eq!(file.path, "local://image.nii");
+        assert!(file.domain.is_local());
+        assert!(
+            super::resolve_file_ref(&ctx, "unknown://image.nii")
+                .await
+                .is_err()
+        );
     }
 }

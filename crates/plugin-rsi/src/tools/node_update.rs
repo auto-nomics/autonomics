@@ -27,7 +27,7 @@ use super::manifest::{load_manifest, parse_manifest_text, read_manifest_text, sa
                    compiled before the edit lands; a rejected edit leaves the file untouched."
 )]
 pub(super) struct PluginNodeUpdateInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    /// Plugin workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
     /// Text to replace, copied verbatim from the current manifest.toml;
     /// include surrounding lines so exactly one location matches.

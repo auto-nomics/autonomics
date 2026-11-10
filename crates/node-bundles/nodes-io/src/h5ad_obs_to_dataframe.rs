@@ -339,7 +339,7 @@ impl DagNode for H5adObsToDataFrameNode {
         }
 
         let mut temporary = None;
-        let local_path = if vfs::uri::is_uri(&source_path) {
+        let local_path = if vfs::uri::storage_path(&source_path).is_some() {
             stage_to_temporary(node_ctx, &source_path, &mut temporary).await?
         } else {
             let local = source_path.strip_prefix("file://").unwrap_or(&source_path);
@@ -354,7 +354,7 @@ impl DagNode for H5adObsToDataFrameNode {
                 // unreadable — otherwise host-provided H5ADs referenced by
                 // their mounted path fail with "not a readable file".
                 let mapped = crate::file_to_dataframe::source_path(node_ctx, local);
-                if vfs::uri::is_uri(&mapped) {
+                if vfs::uri::storage_path(&mapped).is_some() {
                     stage_to_temporary(node_ctx, &mapped, &mut temporary).await?
                 } else {
                     return Err(DagError::Schedule(format!(
@@ -406,10 +406,7 @@ async fn stage_to_temporary(
     vfs_uri: &str,
     temporary: &mut Option<Arc<NamedTempFile>>,
 ) -> Result<PathBuf, DagError> {
-    let virtual_path = match vfs::uri::virtual_path(vfs_uri) {
-        Some(virtual_path) => vfs::OpendalFileStorage::normalize_path(virtual_path),
-        None => vfs_uri.to_string(),
-    };
+    let virtual_path = vfs_uri.to_string();
     *temporary = Some(Arc::new(
         stage_vfs_object(node_ctx, &virtual_path)
             .await

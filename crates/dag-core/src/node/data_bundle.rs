@@ -68,7 +68,7 @@ impl BundleRegistry {
             if bundle.ident.trim().is_empty() {
                 return Err(BundleRegistryError::InvalidIdentifier(bundle.ident.clone()));
             }
-            if !bundle.vpath.starts_with('/') {
+            if !bundle.vpath.starts_with('/') && vfs::uri::storage_path(&bundle.vpath).is_none() {
                 return Err(BundleRegistryError::InvalidPath(bundle.vpath));
             }
             self.bundles.insert(bundle.ident.clone(), bundle);
@@ -82,7 +82,7 @@ impl BundleRegistry {
         if bundle.ident.trim().is_empty() {
             return Err(BundleRegistryError::InvalidIdentifier(bundle.ident.clone()));
         }
-        if !bundle.vpath.starts_with('/') {
+        if !bundle.vpath.starts_with('/') && vfs::uri::storage_path(&bundle.vpath).is_none() {
             return Err(BundleRegistryError::InvalidPath(bundle.vpath));
         }
         if self.bundles.contains_key(&bundle.ident) {
@@ -183,6 +183,19 @@ impl DataBundle {
 mod tests {
     use super::*;
     use crate::node::test_support::mounted_vfs;
+
+    #[tokio::test]
+    async fn domain_bundle_addresses_are_registered_and_read() {
+        let storage = OpendalFileStorage::new_temp();
+        storage
+            .write_bytes("/panel.txt", b"panel".to_vec())
+            .await
+            .unwrap();
+        let bundle = DataBundle::new("domain-panel", "panel", "local://panel.txt");
+        let registry = BundleRegistry::from_bundles([bundle.clone()]).unwrap();
+        assert!(registry.get("domain-panel").is_some());
+        assert_eq!(bundle.read_file(&storage).await.unwrap(), b"panel");
+    }
 
     #[test]
     fn registry_registers_and_reports_duplicate_bundles() {

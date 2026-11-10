@@ -210,6 +210,6 @@ async fn old_long_line_read_gives_an_actionable_range_recovery_hint() {
     let result = value(tool.run(request).await.unwrap());
     assert_eq!(result["output_truncated"], true);
     assert_eq!(result["read_chunk_request"]["op"], "read_chunk");
-    assert_eq!(result["read_chunk_request"]["path"], "/page.html");
+    assert_eq!(result["read_chunk_request"]["path"], "local://page.html");
     assert_eq!(result["read_chunk_request"]["offset"], 0);
 }

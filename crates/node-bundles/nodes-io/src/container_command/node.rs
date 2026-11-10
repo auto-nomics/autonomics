@@ -480,7 +480,12 @@ async fn stage_input_file(
     let destination = staged_path(staging_dir, "input", index, &file.path);
 
     let host_source: Option<PathBuf> =
-        if let Some(virtual_source) = vfs::uri::virtual_path(&file.path) {
+        if let Some(virtual_source) = vfs::uri::storage_path(&file.path) {
+            if let Some(storage) = &ctx.opendal {
+                storage
+                    .check_readable(virtual_source)
+                    .map_err(|e| e.to_string())?;
+            }
             ctx.opendal
                 .as_ref()
                 .and_then(|storage| storage.local_host_path(virtual_source))
@@ -553,6 +558,9 @@ async fn stage_input_file(
     if let Some(storage) = ctx.opendal.as_ref()
         && let Some(virtual_source) = virtual_path(&file.path)
     {
+        storage
+            .check_readable(&virtual_source)
+            .map_err(|e| e.to_string())?;
         let operator = storage.resolve(&virtual_source);
         let key = storage.resolve_path(&virtual_source);
         if let Ok(bytes) = operator.read(&key).await {
@@ -1534,12 +1542,17 @@ async fn publish_output(
         .opendal
         .as_ref()
         .ok_or("container outputs require registered object storage")?;
-    let prefix = vfs::OpendalFileStorage::normalize_path(artifact_prefix.trim_end_matches('/'));
+    let prefix = storage
+        .try_resolve_virtual(artifact_prefix)
+        .map_err(|e| e.to_string())?;
     let relative = spec.path.replace('\\', "/");
     let virtual_path = format!("{prefix}/{run_name}/{relative}");
     storage
         .check_writable(&virtual_path)
         .map_err(|error| error.to_string())?;
+    let canonical = storage
+        .canonical_uri(&virtual_path)
+        .map_err(|e| e.to_string())?;
     let object_path = storage.resolve_path(&virtual_path);
     let operator = storage.resolve(&virtual_path);
     let pending_path = format!("{object_path}.pending-{run_name}");
@@ -1614,7 +1627,7 @@ async fn publish_output(
     }
 
     Ok(FileRef::remote(
-        vfs::uri::uri(virtual_path),
+        canonical,
         spec.format.clone(),
         metadata.len(),
         Some(digest),

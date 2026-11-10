@@ -495,14 +495,16 @@ pub(super) fn lower_worker_task(
             let Some(storage) = execution.engine_ctx.opendal.as_ref() else {
                 continue;
             };
-            let path = if let Some(path) = vfs::uri::virtual_path(path) {
+            let path = if let Some(path) = vfs::uri::storage_path(path) {
                 path.to_owned()
             } else if !path.contains("://") && storage.is_mounted(path) {
                 path.to_owned()
             } else {
                 continue;
             };
-            let path = vfs::OpendalFileStorage::normalize_path(&path);
+            let path = storage
+                .try_resolve_virtual(&path)
+                .map_err(|e| failure(e.to_string()))?;
             storage
                 .check_writable(&path)
                 .map_err(|e| failure(e.to_string()))?;
@@ -521,8 +523,11 @@ pub(super) fn lower_worker_task(
                 ));
             }
             envelope.output_directories.insert(pointer.into(), port);
-            *envelope.task.spec.pointer_mut(pointer).unwrap() =
-                serde_json::json!(vfs::uri::uri(path));
+            *envelope.task.spec.pointer_mut(pointer).unwrap() = serde_json::json!(
+                storage
+                    .canonical_uri(&path)
+                    .map_err(|e| failure(e.to_string()))?
+            );
         }
     }
     for pointer in execution
@@ -564,7 +569,7 @@ pub(super) fn lower_worker_task(
         {
             return Err(failure("duplicate spec file transport binding"));
         }
-        let source = if vfs::uri::is_uri(path) {
+        let source = if vfs::uri::storage_path(path).is_some() {
             path.to_owned()
         } else if !path.starts_with("file://")
             && execution
@@ -966,7 +971,11 @@ pub(super) async fn execute_typed_worker_core(
         let value = rebound_task
             .spec
             .pointer_mut(pointer)
-            .filter(|value| value.as_str().is_some_and(vfs::uri::is_uri))
+            .filter(|value| {
+                value
+                    .as_str()
+                    .is_some_and(|path| vfs::uri::storage_path(path).is_some())
+            })
             .ok_or_else(|| failure("directory publication requires an original VFS target"))?;
         *value = serde_json::json!(format!(
             "file://{}",
@@ -1133,7 +1142,10 @@ pub(super) async fn execute_typed_worker_core(
         return Err(failure("unexpected staged worker input bindings"));
     }
     let reporter = NodeReporter::noop();
-    let outputs = node.execute(ctx, &inputs, &reporter).await?;
+    let mut outputs = node.execute(ctx, &inputs, &reporter).await?;
+    if let Some(storage) = ctx.opendal.as_deref() {
+        outputs.canonicalize_files(storage)?;
+    }
     if outputs
         .iter()
         .any(|(port, _)| !requested.contains_key(port))
@@ -1251,7 +1263,7 @@ async fn copy_worker_file(
     destination: &Path,
     ctx: &crate::registry::NodeCtx,
 ) -> Result<(), DagError> {
-    if let Some(path) = vfs::uri::virtual_path(&file.path) {
+    if let Some(path) = vfs::uri::storage_path(&file.path) {
         let storage = ctx
             .opendal
             .as_ref()

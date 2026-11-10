@@ -23,7 +23,7 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
                    this tool for real data analysis."
 )]
 pub(super) struct EnvironmentContainerRunInput {
-    /// Environment workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Environment workspace path, such as `local://environments/dev/bioconductor-extra`.
     environment_path: String,
     /// Executable and arguments. No shell string is accepted.
     argv: Vec<String>,

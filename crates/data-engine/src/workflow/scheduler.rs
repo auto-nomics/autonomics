@@ -304,15 +304,7 @@ impl FlowScheduler {
         for source_plan in plan.sources.values() {
             for item in &source_plan.items {
                 let mut delivery = PortOutputs::new();
-                delivery.insert_file(
-                    0,
-                    FileRef {
-                        domain: dag_core::DomainId::local(),
-                        path: item.path.clone(),
-                        format: None,
-                        fingerprint: None,
-                    },
-                );
+                delivery.insert_file(0, FileRef::new(item.path.clone(), None));
                 statuses.insert(item.id.clone(), RuntimeStatus::Success);
                 outputs.insert(item.id.clone(), delivery);
                 effective.insert(item.id.clone(), item.fingerprint.clone());
@@ -1063,12 +1055,7 @@ fn release_ignored(
 /// Convenience for tests and embedders: a file-carrying value.
 #[allow(dead_code)]
 fn file_value(path: impl Into<String>) -> NodeValue {
-    NodeValue::File(FileRef {
-        domain: dag_core::DomainId::local(),
-        path: path.into(),
-        format: None,
-        fingerprint: None,
-    })
+    NodeValue::File(FileRef::new(path, None))
 }
 
 fn serialize_instance_records<S: serde::Serializer>(

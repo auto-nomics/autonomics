@@ -24,7 +24,7 @@ fn report_json(report: &EnvironmentValidationReport) -> Result<Value, ToolError>
                    secret scan) over an environment workspace. Fast iteration; no image is built."
 )]
 pub(super) struct EnvironmentValidateInput {
-    /// Environment workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Environment workspace path, such as `local://environments/dev/bioconductor-extra`.
     environment_path: String,
 }
 
@@ -72,7 +72,7 @@ impl ToolFunction for EnvironmentValidateTool {
                    is reported as a blocked gate, not a pass."
 )]
 pub(super) struct EnvironmentBuildInput {
-    /// Environment workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Environment workspace path, such as `local://environments/dev/bioconductor-extra`.
     environment_path: String,
 }
 
@@ -122,7 +122,7 @@ impl ToolFunction for EnvironmentBuildTool {
                    publication to the remote registry happens later without blocking."
 )]
 pub(super) struct EnvironmentInstallInput {
-    /// Environment workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Environment workspace path, such as `local://environments/dev/bioconductor-extra`.
     environment_path: String,
 }
 

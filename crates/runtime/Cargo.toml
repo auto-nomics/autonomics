@@ -59,6 +59,7 @@ turso.workspace = true
 wiki = { path = "../wiki", features = ["vfs"] }
 
 schemars.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true
@@ -66,6 +67,5 @@ workspace = true
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 data-catalog = { path = "../data-catalog", features = ["test-util"] }
-tempfile = "3"
 # Enables `MessageStream::from_events` for mock-backed streaming tests.
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }

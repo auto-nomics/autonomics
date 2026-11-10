@@ -29,7 +29,7 @@ use super::{ensure_editable, environment_manifest_lock, resolve_target, tool_err
                    it is written; a rejected edit leaves the file untouched."
 )]
 pub(super) struct EnvironmentManifestUpdateInput {
-    /// Environment workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Environment workspace path, such as `local://environments/dev/bioconductor-extra`.
     environment_path: String,
     /// Text to replace, copied verbatim from the current manifest.toml;
     /// include surrounding lines so exactly one location matches.

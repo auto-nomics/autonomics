@@ -99,7 +99,9 @@ impl DataDomain {
     /// validation so an invalid domain fails the registry save, not the
     /// first scheduled task.
     pub fn validate(&self) -> Result<(), String> {
-        identifier(&self.id)?;
+        if self.id.len() > 64 || !vfs::uri::valid_domain_name(&self.id) || self.id == "local" {
+            return Err("remote data domain id must be a lowercase, non-reserved URI scheme other than local".into());
+        }
         if self.ssh_aliases.is_empty()
             || self.ssh_aliases.iter().any(|alias| {
                 alias.is_empty()
@@ -131,15 +133,15 @@ impl DataDomain {
         Ok(())
     }
 
-    /// The transport-side placement record for this domain. The registry id
-    /// flows through so every placement the store publishes carries the
-    /// domain identity downstream consumers compare against.
+    /// The transport-side placement record for this domain. Historical ids
+    /// use the same URI spelling as their source mounts, without rewriting
+    /// immutable target records or their pinned profiles.
     pub fn data_home(&self) -> dag_core::SshDataHome {
         dag_core::SshDataHome {
             ssh_aliases: self.ssh_aliases.clone(),
             remote_root: self.remote_root.clone(),
             vfs_prefix: self.vfs_prefix.clone(),
-            domain_id: Some(self.id.clone()),
+            domain_id: Some(source_address_domain(&self.id)),
             retained_vfs_prefix: self.retained_vfs_prefix.clone(),
             retained_remote_root: self.retained_remote_root.clone(),
         }
@@ -258,7 +260,34 @@ pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, St
     Ok(resolved)
 }
 
+/// Compute/source identifiers predate URI domains and admit capitals,
+/// underscores and leading digits. Derive the address without renaming the
+/// saved source, mount path, or immutable target revision.
+fn source_address_domain(id: &str) -> String {
+    let scheme = id.to_ascii_lowercase().replace('_', "-");
+    if vfs::uri::valid_domain_name(&scheme) && scheme != "local" {
+        scheme
+    } else {
+        format!("source-{scheme}")
+    }
+}
+
 impl DataSource {
+    fn address_domain(&self) -> Option<String> {
+        self.domain
+            .as_ref()
+            .map(|domain| {
+                if domain == &self.id {
+                    source_address_domain(domain)
+                } else {
+                    domain.to_ascii_lowercase()
+                }
+            })
+            .or_else(|| {
+                matches!(self.backend, DataBackend::Ssh { .. })
+                    .then(|| source_address_domain(&self.id))
+            })
+    }
     pub fn mount_path(&self) -> String {
         format!("/data/{}", self.id)
     }
@@ -301,7 +330,7 @@ impl DataSource {
                 config,
             }],
             mount: vec![vfs::MountDefinition {
-                domain: self.domain.clone(),
+                domain: self.address_domain(),
                 path: self.mount_path(),
                 backend: format!("data-{}", self.id),
                 source: "/".into(),
@@ -1030,6 +1059,7 @@ impl ComputeRegistry {
     ) -> Result<ComputeRegistryState, String> {
         self.healthy()?;
         identifier(&request.source.id)?;
+        request.source.domain = request.source.address_domain();
         if self.state().revision != request.expected_revision {
             return Err("stale compute revision; reload settings".into());
         }
@@ -1053,6 +1083,15 @@ impl ComputeRegistry {
         }
         let manifest = request.source.manifest()?;
         vfs::MountedObjectStore::from_manifest(&manifest).map_err(|e| e.to_string())?;
+        if let Some(domain) = &request.source.domain
+            && self
+                .vfs
+                .mount_definitions()
+                .iter()
+                .any(|m| m.domain.as_ref() == Some(domain))
+        {
+            return Err(format!("filesystem domain '{domain}' is already mounted"));
+        }
         // Collision check before persistence; no existing namespace can be rebound.
         let path = request.source.mount_path();
         if self.vfs.mount_paths().iter().any(|p| {

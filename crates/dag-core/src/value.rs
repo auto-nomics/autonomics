@@ -185,6 +185,7 @@ impl Default for DomainId {
 
 /// A file artifact address passed between nodes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "FileRefWire")]
 pub struct FileRef {
     /// Absolute or engine-mounted path. Relative paths are not accepted at
     /// runtime because they depend on the caller's process working directory.
@@ -198,6 +199,38 @@ pub struct FileRef {
     /// format of local files is byte-identical to the pre-domain form.
     #[serde(default, skip_serializing_if = "DomainId::is_local")]
     pub domain: DomainId,
+}
+
+// Keep legacy records readable while making a domain URI authoritative.
+#[derive(Deserialize)]
+struct FileRefWire {
+    path: String,
+    format: Option<String>,
+    fingerprint: Option<FileFingerprint>,
+    domain: Option<DomainId>,
+}
+
+impl TryFrom<FileRefWire> for FileRef {
+    type Error = String;
+
+    fn try_from(wire: FileRefWire) -> Result<Self, Self::Error> {
+        let addressed = vfs::uri::domain(&wire.path).map(DomainId::new);
+        if let (Some(addressed), Some(declared)) = (&addressed, &wire.domain) {
+            if addressed != declared {
+                return Err(format!(
+                    "file URI domain '{}' disagrees with declared domain '{}'",
+                    addressed.as_str(),
+                    declared.as_str()
+                ));
+            }
+        }
+        Ok(Self {
+            path: wire.path,
+            format: wire.format,
+            fingerprint: wire.fingerprint,
+            domain: addressed.or(wire.domain).unwrap_or_default(),
+        })
+    }
 }
 
 /// A location-independent contract for an object stored by the DAG data plane.
@@ -215,23 +248,50 @@ pub struct ArtifactRef {
 
 impl From<ArtifactRef> for FileRef {
     fn from(artifact: ArtifactRef) -> Self {
+        let domain = vfs::uri::domain(&artifact.uri)
+            .map(DomainId::new)
+            .unwrap_or_default();
         Self {
             path: artifact.uri,
             format: artifact.format,
             fingerprint: artifact.fingerprint,
-            domain: DomainId::local(),
+            domain,
         }
     }
 }
 
 impl FileRef {
     pub fn new(path: impl Into<String>, format: Option<String>) -> Self {
+        let path = path.into();
+        let domain = vfs::uri::domain(&path)
+            .map(DomainId::new)
+            .unwrap_or_default();
         Self {
-            path: path.into(),
+            path,
             format,
             fingerprint: None,
-            domain: DomainId::local(),
+            domain,
         }
+    }
+
+    /// Upgrade a mounted legacy reference using the current mount table.
+    /// Host paths retain their identity; no filesystem bytes are moved.
+    pub fn canonicalized(mut self, storage: &vfs::OpendalFileStorage) -> Result<Self, DagError> {
+        if vfs::uri::storage_path(&self.path).is_none() {
+            return Ok(self);
+        }
+        let path = storage
+            .canonical_uri(&self.path)
+            .map_err(|e| DagError::Schedule(e.to_string()))?;
+        let domain = DomainId::new(vfs::uri::domain(&path).unwrap_or("local"));
+        if !self.domain.is_local() && self.domain != domain {
+            return Err(DagError::Schedule(
+                "file domain disagrees with its mounted address".into(),
+            ));
+        }
+        self.path = path;
+        self.domain = domain;
+        Ok(self)
     }
 
     /// Rebind this placement to an explicit filesystem domain. Use at the
@@ -272,11 +332,15 @@ impl FileRef {
         size: u64,
         sha256: Option<String>,
     ) -> Self {
+        let path = uri.into();
+        let domain = vfs::uri::domain(&path)
+            .map(DomainId::new)
+            .unwrap_or_default();
         Self {
-            path: uri.into(),
+            path,
             format,
             fingerprint: Some(FileFingerprint::remote(size, sha256)),
-            domain: DomainId::local(),
+            domain,
         }
     }
 }
@@ -360,6 +424,63 @@ impl PortType {
 #[cfg(test)]
 mod domain_tests {
     use super::*;
+
+    #[test]
+    fn legacy_mounted_reference_upgrades_without_changing_content_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest = vfs::VfsManifest::from_toml(&format!(
+            "[[backend]]\nid='shared'\ntype='local'\nroot={}\n[[mount]]\npath='/cluster'\nbackend='shared'\nsource='/'\ndomain='ht'\n",
+            serde_json::to_string(&root.path().to_string_lossy()).unwrap())).unwrap();
+        let storage = vfs::OpendalFileStorage::with_mounts(
+            root.path(),
+            std::sync::Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap()),
+        );
+        let file = FileRef::remote(
+            "vfs:///cluster/output.tsv",
+            Some("tsv".into()),
+            7,
+            Some("abc".into()),
+        );
+        let upgraded = file.canonicalized(&storage).unwrap();
+        assert_eq!(upgraded.path, "ht://output.tsv");
+        assert_eq!(upgraded.domain.as_str(), "ht");
+        assert_eq!(
+            upgraded.fingerprint.unwrap().content_hash.as_deref(),
+            Some("abc")
+        );
+        assert!(
+            FileRef::new("vfs:///cluster/output.tsv", None)
+                .in_domain(DomainId::new("other"))
+                .canonicalized(&storage)
+                .is_err()
+        );
+        assert_eq!(
+            FileRef::new("/host/file.tsv", None)
+                .canonicalized(&storage)
+                .unwrap()
+                .path,
+            "/host/file.tsv"
+        );
+    }
+
+    #[test]
+    fn uri_domain_is_inferred_and_conflicts_are_rejected() {
+        let file: FileRef = serde_json::from_str(r#"{"path":"ht://share/x.tsv"}"#).unwrap();
+        assert_eq!(file.domain.as_str(), "ht");
+        assert_eq!(FileRef::new("ht://share/x.tsv", None).domain, file.domain);
+        assert!(
+            serde_json::from_str::<FileRef>(r#"{"path":"ht://share/x.tsv","domain":"local"}"#)
+                .is_err()
+        );
+        let artifact = ArtifactRef {
+            uri: file.path,
+            format: None,
+            fingerprint: None,
+            producer: None,
+            generation: None,
+        };
+        assert_eq!(FileRef::from(artifact).domain.as_str(), "ht");
+    }
 
     #[test]
     fn pre_domain_records_parse_as_local() {

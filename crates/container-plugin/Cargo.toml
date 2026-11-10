@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+vfs = { path = "../vfs" }
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
@@ -33,7 +34,6 @@ tempfile = "3"
 datafusion.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
-vfs = { path = "../vfs" }
 data-catalog = { path = "../data-catalog", features = ["test-util"] }
 
 [lints]

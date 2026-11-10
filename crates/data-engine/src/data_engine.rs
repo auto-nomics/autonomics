@@ -1640,7 +1640,7 @@ impl DataEngine {
             let fresh = match entry.file.fingerprint.as_ref() {
                 // No recorded fingerprint — existence is all we can verify.
                 None => {
-                    vfs::uri::is_uri(&entry.file.path)
+                    vfs::uri::storage_path(&entry.file.path).is_some()
                         || std::path::Path::new(&entry.file.path).exists()
                 }
                 // Immutable remote content never goes stale.
@@ -1650,7 +1650,15 @@ impl DataEngine {
             if !fresh {
                 continue;
             }
-            let outputs = vec![(entry.port, entry.file.clone())];
+            let file = if let Some(storage) = storage {
+                match entry.file.clone().canonicalized(storage) {
+                    Ok(file) => file,
+                    Err(_) => continue,
+                }
+            } else {
+                entry.file.clone()
+            };
+            let outputs = vec![(entry.port, file)];
             if self
                 .dag
                 .restore_cached_file_outputs(&entry.node_id, &entry.fingerprint, outputs)
@@ -1673,15 +1681,23 @@ impl DataEngine {
     /// Fails closed on payloads larger than [`Self::MAX_READ_FILE_BYTES`] so
     /// the tool layer never materializes a runaway artifact by accident.
     pub async fn read_file(&self, path: &str) -> crate::error::Result<Vec<u8>> {
-        if let Some(virtual_path) = vfs::uri::virtual_path(path) {
+        if let Some(virtual_path) = vfs::uri::storage_path(path) {
             let storage = self.engine_ctx.opendal.as_ref().ok_or_else(|| {
                 crate::error::Error::Custom(format!(
                     "VFS path `{path}` requires a mounted runtime VFS"
                 ))
             })?;
-            let operator = storage.resolve(virtual_path);
-            let bytes = operator
-                .read(&storage.resolve_path(virtual_path))
+            let length = storage
+                .content_length(virtual_path)
+                .await
+                .map_err(|e| crate::error::Error::Custom(e.to_string()))?;
+            if length > Self::MAX_READ_FILE_BYTES as u64 {
+                return Err(crate::error::Error::Custom(format!(
+                    "file `{path}` exceeds read_file byte limit"
+                )));
+            }
+            let bytes = storage
+                .read_range(virtual_path, 0..length)
                 .await
                 .map_err(|error| {
                     crate::error::Error::Custom(format!("cannot read VFS file `{path}`: {error}"))
@@ -1805,6 +1821,9 @@ impl DataEngineBuilder {
             .map_err(|e| Error::Custom(format!("cannot parse datafusion url: {e}")))?;
         self.runtime_env
             .register_object_store(object_url.as_ref(), file_session.clone());
+        file_session
+            .register_domain_stores(&self.runtime_env)
+            .map_err(|e| Error::Custom(format!("cannot register VFS domains: {e}")))?;
         // Keep the handle so artifact-producing nodes can write
         // into the virtualized filesystem instead of the host filesystem.
         Ok(Self {
@@ -1838,7 +1857,7 @@ impl DataEngineBuilder {
     ///
     /// All mounted backends are addressed through one namespace, for example
     /// `vfs:///data/ldscore/1000g_eur/`.
-    pub fn with_vfs(self, vfs: MountedObjectStore) -> Self {
+    pub fn with_vfs(mut self, vfs: MountedObjectStore) -> Self {
         let url = ObjectStoreUrl::parse("vfs://").expect("vfs:// is a valid object-store URL");
         let vfs = Arc::new(vfs);
         // When OpendalFileStorage already wraps this mount table, `vfs://`
@@ -1854,15 +1873,19 @@ impl DataEngineBuilder {
                 })
             })
             .cloned();
-        if let Some(storage) = shared_storage {
-            self.runtime_env
-                .register_object_store(url.as_ref(), storage.clone());
-            return self;
-        }
-
-        let vfs_object_store: Arc<dyn datafusion::object_store::ObjectStore> = vfs;
+        let storage = shared_storage.unwrap_or_else(|| {
+            // Embedded engines also need the mount-aware byte adapter for
+            // domain references. The unmapped fallback is an isolated temp FS.
+            let mut storage = OpendalFileStorage::new_temp();
+            storage.mounts = Some(vfs);
+            Arc::new(storage)
+        });
+        storage
+            .register_domain_stores(&self.runtime_env)
+            .expect("validated VFS mount domains must be registerable URI schemes");
         self.runtime_env
-            .register_object_store(url.as_ref(), vfs_object_store);
+            .register_object_store(url.as_ref(), storage.clone());
+        self.opendal = Some(storage);
         self
     }
 

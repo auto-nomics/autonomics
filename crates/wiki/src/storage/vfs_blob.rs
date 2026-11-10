@@ -28,10 +28,10 @@ impl VfsBlobStore {
         })
     }
 
-    fn vpath(&self, key: &str) -> String {
-        // key 由存储层生成(`attachments/<uuid>.<ext>`),无用户输入,
-        // 但仍走 normalize_path 防御。
-        vfs::OpendalFileStorage::normalize_path(&format!("{}/{}", self.prefix, key))
+    fn vpath(&self, key: &str) -> Result<String> {
+        self.vfs
+            .try_resolve_virtual(&vfs::uri::join_path(&self.prefix, key))
+            .map_err(|e| Self::map_err(key, e))
     }
 
     fn map_err(key: &str, e: vfs::opendal::Error) -> Error {
@@ -47,13 +47,13 @@ impl VfsBlobStore {
 impl BlobStore for VfsBlobStore {
     async fn put(&self, key: &str, data: Vec<u8>) -> Result<()> {
         self.vfs
-            .write_bytes(&self.vpath(key), data)
+            .write_bytes(&self.vpath(key)?, data)
             .await
             .map_err(|e| Self::map_err(key, e))
     }
 
     async fn get(&self, key: &str) -> Result<Vec<u8>> {
-        let vpath = self.vpath(key);
+        let vpath = self.vpath(key)?;
         let operator = self.vfs.resolve(&vpath);
         let path = self.vfs.resolve_path(&vpath);
         let buffer = operator
@@ -65,7 +65,7 @@ impl BlobStore for VfsBlobStore {
 
     async fn delete(&self, key: &str) -> Result<()> {
         // 幂等:目标不存在也算删净。
-        match self.vfs.delete_object(&self.vpath(key)).await {
+        match self.vfs.delete_object(&self.vpath(key)?).await {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == vfs::opendal::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(Self::map_err(key, e)),
@@ -85,6 +85,30 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn domain_blob_prefix_preserves_keys_and_refuses_unknown_domains() {
+        let storage = vfs::OpendalFileStorage::new_temp();
+        let store = VfsBlobStore::new(storage.clone(), "local://wiki%20assets");
+        store.put("a %.bin", b"blob".to_vec()).await.unwrap();
+        assert_eq!(store.get("a %.bin").await.unwrap(), b"blob");
+        assert_eq!(
+            storage
+                .content_length("/wiki assets/a %.bin")
+                .await
+                .unwrap(),
+            4
+        );
+        store.delete("a %.bin").await.unwrap();
+        assert!(matches!(
+            store.get("a %.bin").await,
+            Err(Error::NotFound(_))
+        ));
+        let unknown = VfsBlobStore::new(storage, "missing://assets");
+        assert!(unknown.put("a", vec![1]).await.is_err());
+        assert!(unknown.get("a").await.is_err());
+        assert!(unknown.delete("a").await.is_err());
     }
 
     #[tokio::test]

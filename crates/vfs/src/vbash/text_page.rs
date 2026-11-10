@@ -55,7 +55,9 @@ pub(super) async fn read(
     if !(4..=MAX_PAGE_BYTES).contains(&budget) {
         return Err(invalid("read_chunk max_bytes must be 4..4096"));
     }
-    let virtual_path = OpendalFileStorage::normalize_path(path);
+    let virtual_path = storage
+        .try_resolve_virtual(path)
+        .map_err(|e| e.to_string())?;
     storage
         .check_readable(&virtual_path)
         .map_err(|e| e.to_string())?;

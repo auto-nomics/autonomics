@@ -213,6 +213,13 @@ impl NodeCtx {
     /// the end of the execution — no mutable catalog state ever leaks across
     /// runs or between `clone_box` copies of a node.
     pub fn session(&self) -> SessionContext {
+        // The mount table can gain data sources after engine construction.
+        // Keep this engine's principal-bound domain views current as well.
+        if let Some(storage) = &self.opendal {
+            storage
+                .register_domain_stores(&self.runtime_env)
+                .expect("validated mount domains must remain registerable");
+        }
         new_isolated_ctx(self.runtime_env.clone())
     }
 }
@@ -710,5 +717,43 @@ mod tests {
         assert!(reg.get_node_ports("alpha/same_kind").is_err());
         assert!(reg.get_node_ports("beta/same_kind").is_ok());
         assert!(!reg.list_nodes().iter().any(|node| node.plugin == "alpha"));
+    }
+}
+
+#[cfg(test)]
+mod domain_session_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sessions_refresh_domains_added_after_context_creation() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("table.csv"), b"value\n7\n").unwrap();
+        let mounts =
+            Arc::new(vfs::MountedObjectStore::from_manifest(&vfs::VfsManifest::default()).unwrap());
+        let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
+            root.path(),
+            mounts.clone(),
+        ));
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
+        let _before = ctx.session();
+        let mut addition = vfs::VfsManifest::local_root(root.path().to_string_lossy());
+        addition.mount[0].path = "/dynamic".into();
+        addition.mount[0].domain = Some("ht".into());
+        mounts.add_data_mount(&addition).unwrap();
+        let session = ctx.session();
+        let batches = session
+            .read_csv(
+                vfs::uri::datafusion_uri("ht://table.csv"),
+                datafusion::prelude::CsvReadOptions::default(),
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            1
+        );
     }
 }

@@ -16,7 +16,7 @@ use super::helpers::{resolve_target, tool_error};
                    pending development changes."
 )]
 pub(super) struct EngineInspectCacheInput {
-    /// Development workspace path, such as `/plugins/dev/hello-world`.
+    /// Development workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
 }
 

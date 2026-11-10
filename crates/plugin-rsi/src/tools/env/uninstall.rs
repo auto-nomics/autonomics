@@ -14,7 +14,7 @@ use super::{environment_manifest_lock, resolve_target, tool_error};
                    The development workspace and its history are retained for audit and later reinstall."
 )]
 pub(super) struct EnvironmentUninstallInput {
-    /// Environment workspace path, such as `/environments/dev/bioconductor-extra`.
+    /// Environment workspace path, such as `local://environments/dev/bioconductor-extra`.
     environment_path: String,
 }
 

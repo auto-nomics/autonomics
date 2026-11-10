@@ -222,6 +222,9 @@ impl PanelCache {
         panel: &PanelRef,
     ) -> Result<CachedPanel, ContainerRuntimeError> {
         panel.validate().map_err(ContainerRuntimeError::Invalid)?;
+        storage
+            .try_resolve_virtual(&panel.source)
+            .map_err(|e| ContainerRuntimeError::Invalid(e.to_string()))?;
         let prefix =
             normalize_virtual_prefix(&panel.source).map_err(ContainerRuntimeError::Invalid)?;
 
@@ -385,7 +388,7 @@ impl PanelCache {
         storage: &OpendalFileStorage,
         prefix: &str,
     ) -> Result<(PanelManifest, Vec<u8>), ContainerRuntimeError> {
-        let path = format!("{prefix}/{PANEL_MANIFEST_OBJECT}");
+        let path = vfs::uri::join_path(prefix, PANEL_MANIFEST_OBJECT);
         let bytes = storage
             .resolve(&path)
             .read(&storage.resolve_path(&path))
@@ -430,7 +433,7 @@ impl PanelCache {
         destination: &Path,
     ) -> Result<(), ContainerRuntimeError> {
         for file in &manifest.files {
-            let virtual_path = format!("{prefix}/{}", file.path);
+            let virtual_path = vfs::uri::join_path(prefix, &file.path);
             let object_path = storage.resolve_path(&virtual_path);
             let operator = storage.resolve(&virtual_path);
             let target = destination.join(&file.path);
@@ -491,6 +494,16 @@ async fn marker_is_valid(path: &Path, digest: &str) -> bool {
 fn normalize_virtual_prefix(source: &str) -> Result<String, String> {
     if source.contains('\0') {
         return Err("panel source cannot contain NUL bytes".into());
+    }
+    if let Some(domain) = vfs::uri::domain(source) {
+        if !vfs::uri::valid_domain_name(domain) {
+            return Err("invalid panel domain".into());
+        }
+        let (_, rest) = vfs::uri::split_scheme(source).unwrap();
+        if rest.trim_matches('/').is_empty() {
+            return Err("panel source cannot be the domain root".into());
+        }
+        return Ok(source.trim_end_matches('/').to_string());
     }
     let value = vfs::uri::virtual_path(source).unwrap_or(source);
     let normalized = vfs::OpendalFileStorage::normalize_path(value);

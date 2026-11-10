@@ -14,7 +14,7 @@ use super::helpers::{resolve_target, tool_error};
                    The development workspace and immutable snapshots are retained for audit and later reinstall."
 )]
 pub(super) struct PluginUninstallInput {
-    /// Installed workspace path, such as `/plugins/dev/hello-world`.
+    /// Installed workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
 }
 

@@ -144,7 +144,9 @@ pub fn validate(spec: &MultiomicConcordanceSpec) -> Result<(), String> {
             return Err("per_input_p_cutoff must lie strictly between 0 and 1".into());
         }
     }
-    if !spec.artifact_prefix.starts_with('/') {
+    if !spec.artifact_prefix.starts_with('/')
+        && vfs::uri::storage_path(&spec.artifact_prefix).is_none()
+    {
         return Err("artifact_prefix must be an absolute VFS path".into());
     }
     Ok(())
@@ -264,6 +266,9 @@ impl DagNode for MultiomicConcordanceNode {
                 "multiomic_concordance requires a registered runtime VFS".into(),
             )
         })?;
+        let prefix = storage
+            .try_resolve_virtual(&prefix)
+            .map_err(|e| ConcordanceError::Runtime(e.to_string()))?;
         let fingerprints = write_outputs(
             ctx,
             &prefix,
@@ -273,7 +278,11 @@ impl DagNode for MultiomicConcordanceNode {
             &joined,
         )
         .await?;
-        Ok(joined_outputs(&prefix, fingerprints))
+        let mut outputs = joined_outputs(&prefix, fingerprints);
+        outputs
+            .canonicalize_files(storage)
+            .map_err(|e| ConcordanceError::Runtime(e.to_string()))?;
+        Ok(outputs)
     }
 }
 
@@ -697,9 +706,8 @@ async fn write_vfs(
     bytes: &[u8],
 ) -> Result<dag_core::value::FileFingerprint, ConcordanceError> {
     let virtual_path = path.trim_start_matches('/');
-    let op = storage.resolve(virtual_path);
-    let target = storage.resolve_path(virtual_path);
-    op.write(&target, bytes.to_vec())
+    storage
+        .write_bytes(virtual_path, bytes.to_vec())
         .await
         .map_err(|e| ConcordanceError::Runtime(format!("write `{path}`: {e}")))?;
     let digest = Sha256::digest(bytes);

@@ -99,6 +99,7 @@ pub(crate) async fn stat(
     let mount = browse::covering_mount(storage, &query.path);
     Ok(Json(serde_json::json!({
         "path": entry.path,
+        "uri": entry.uri,
         "name": entry.name,
         "is_dir": entry.is_dir,
         "size": entry.size,
@@ -109,6 +110,7 @@ pub(crate) async fn stat(
             "backend": m.backend,
             "source": m.source,
             "read_only": m.read_only,
+            "domain": m.domain,
         })),
     })))
 }
@@ -125,6 +127,7 @@ pub(crate) async fn mounts(State(state): State<GatewayState>) -> Json<serde_json
                 "backend": m.backend,
                 "source": m.source,
                 "read_only": m.read_only,
+            "domain": m.domain,
             })
         })
         .collect();

@@ -219,7 +219,7 @@ fn render_tool_call(name: &str, input: &str, width: u16) -> Vec<Line<'static>> {
         Ok(value) => value.to_string(),
         Err(_) => input.split_whitespace().collect::<Vec<_>>().join(" "),
     };
-    let prefix = format!("• {clean_name}");
+    let prefix = format!(" • {clean_name}");
     let remaining = (width as usize).saturating_sub(UnicodeWidthStr::width(prefix.as_str()) + 2);
     let mut spans = vec![Span::styled(
         truncate_plain(&prefix, width as usize),
@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(
             line_text(&lines[0]),
-            "• Bash  command=cargo test  timeout=30"
+            " • Bash  command=cargo test  timeout=30"
         );
     }
 

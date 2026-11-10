@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 /// `vfs://` URI by [`to_vfs_uri`] before any I/O is attempted; the engine
 /// has no other writable namespace.
 pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
-    if vfs::uri::is_uri(path) || path.starts_with("file://") {
+    if vfs::uri::storage_path(path).is_some() || path.starts_with("file://") {
         return Ok(());
     }
     if !std::path::Path::new(path).is_absolute() {
@@ -61,6 +61,9 @@ pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
 /// re-check absoluteness so an unsupported path can still be reported with
 /// the original wording.
 pub(crate) fn to_vfs_uri(path: &str) -> String {
+    if vfs::uri::domain(path).is_some() {
+        return path.to_string();
+    }
     if let Some(stripped) = vfs::uri::virtual_path(path) {
         vfs::uri::uri(stripped)
     } else if let Some(stripped) = path.strip_prefix("file://") {
@@ -82,18 +85,19 @@ pub(crate) fn to_vfs_uri(path: &str) -> String {
 ///    share one object-store namespace — and falls back to a host-FS read
 ///    when the engine runs without a VFS (embedded / test engines).
 pub(crate) async fn read_file_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
-    if !vfs::uri::is_uri(path) && ctx.opendal.is_none() {
+    if !vfs::uri::storage_path(path).is_some() && ctx.opendal.is_none() {
         let local = path.strip_prefix("file://").unwrap_or(path);
         return tokio::fs::read(local)
             .await
             .map_err(|error| DagError::Schedule(format!("cannot read file `{path}`: {error}")));
     }
-    let virtual_path = vfs::uri::virtual_path(&to_vfs_uri(path))
-        .unwrap()
-        .to_string();
+    let virtual_path = to_vfs_uri(path);
     let storage = ctx.opendal.as_ref().ok_or_else(|| {
         DagError::Schedule(format!("VFS input `{path}` requires a mounted runtime VFS"))
     })?;
+    storage
+        .check_readable(&virtual_path)
+        .map_err(|e| DagError::Schedule(e.to_string()))?;
     let operator = storage.resolve(&virtual_path);
     operator
         .read(&storage.resolve_path(&virtual_path))
@@ -123,7 +127,7 @@ pub(crate) async fn write_artifact(
     let size = bytes.len() as u64;
     let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
 
-    if !vfs::uri::is_uri(path) && ctx.opendal.is_none() {
+    if !vfs::uri::storage_path(path).is_some() && ctx.opendal.is_none() {
         // Legacy embedded-engine path: no mounted VFS, write the host FS.
         let local = path.strip_prefix("file://").unwrap_or(path);
         if let Some(parent) = std::path::Path::new(local).parent() {
@@ -155,20 +159,22 @@ pub(crate) async fn write_artifact(
     }
 
     let vfs_uri = to_vfs_uri(path);
-    let virtual_path = vfs::uri::virtual_path(&vfs_uri).unwrap().to_string();
+    let virtual_path = vfs_uri;
     let storage = ctx.opendal.as_ref().ok_or_else(|| {
         DagError::Schedule(format!(
             "VFS output `{path}` requires a mounted runtime VFS"
         ))
     })?;
-    let operator = storage.resolve(&virtual_path);
-    operator
-        .write(&storage.resolve_path(&virtual_path), bytes)
+    let canonical = storage
+        .canonical_uri(&virtual_path)
+        .map_err(|e| DagError::Schedule(e.to_string()))?;
+    storage
+        .write_bytes(&virtual_path, bytes)
         .await
         .map_err(|error| DagError::Schedule(format!("cannot write VFS file `{path}`: {error}")))?;
     Ok(FileRef {
-        domain: dag_core::DomainId::local(),
-        path: vfs_uri,
+        domain: dag_core::DomainId::new(vfs::uri::domain(&canonical).unwrap_or("local")),
+        path: canonical,
         format: Some(format.to_string()),
         fingerprint: Some(FileFingerprint {
             size,
@@ -251,7 +257,7 @@ mod tests {
             .unwrap();
         assert_eq!(file.format.as_deref(), Some("evidence"));
         // The FileRef's path is the canonical vfs:// URI the agent and engine share.
-        assert!(vfs::uri::is_uri(&file.path));
+        assert!(vfs::uri::storage_path(&file.path).is_some());
         let fingerprint = file.fingerprint.expect("fingerprint attached");
         assert_eq!(fingerprint.size, 7);
         assert!(

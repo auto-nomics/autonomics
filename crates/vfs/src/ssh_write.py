@@ -58,7 +58,7 @@ def root_descriptor(root):
         raise
 
 
-def confined_parent(root, key):
+def confined_parent(root, key, create=False):
     """Open the parent directory of ``key`` under a held root fd and return
     ``(dir_fd, final_name)``. Intermediate components never follow symlinks."""
     parts = key.strip('/').split('/') if key.strip('/') else []
@@ -70,6 +70,11 @@ def confined_parent(root, key):
     descriptor = root_descriptor(root)
     try:
         for part in parts[:-1]:
+            if create:
+                try:
+                    os.mkdir(part, 0o755, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
             following = os.open(part, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW,
                                 dir_fd=descriptor)
             os.close(descriptor)
@@ -106,7 +111,7 @@ def frames(stream):
 
 
 def op_write(request, body):
-    parent, name = confined_parent(request['root'], request['path'])
+    parent, name = confined_parent(request['root'], request['path'], create=True)
     try:
         staged = '%s%s' % (STAGING_PREFIX, uuid.uuid4().hex)
         descriptor = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -171,11 +176,26 @@ def op_rename(request):
 
 
 def op_mkdir(request):
-    parent, name = confined_parent(request['root'], request['path'])
+    key = request['path']
+    parts = key.strip('/').split('/') if key.strip('/') else []
+    if (any(part in ('', '.', '..') or '\x00' in part for part in parts)
+            or (parts and parts[-1].startswith(STAGING_PREFIX))):
+        raise PermissionError('key')
+    descriptor = root_descriptor(request['root'])
     try:
-        os.mkdir(name, 0o755, dir_fd=parent)
+        # OpenDAL directory creation is recursive and idempotent. An empty
+        # key only validates the existing operator root; it never mutates it.
+        for part in parts:
+            try:
+                os.mkdir(part, 0o755, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            following = os.open(part, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = following
     finally:
-        os.close(parent)
+        os.close(descriptor)
     return {}
 
 

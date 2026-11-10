@@ -263,13 +263,17 @@ mod tests {
         std::fs::write(&program, format!("#!/bin/bash\nprintf 'connected-live\\n'\nwhile ! test -e {}; do sleep 0.01; done\nexec bash -s\n", shq(release.to_str().unwrap()))).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         let release_signal = release.clone();
-        let connection = ClusterConnection::new("test", "cluster", program.to_str().unwrap(), "python3")
-            .with_progress(EnrollProgress::new(move |_, message| {
-                if message.contains("stdout: connected-live") {
-                    std::fs::write(&release_signal, b"observed").unwrap();
-                }
-            }));
-        tokio::time::timeout(std::time::Duration::from_secs(5), connection.authenticate()).await.unwrap().unwrap();
+        let connection =
+            ClusterConnection::new("test", "cluster", program.to_str().unwrap(), "python3")
+                .with_progress(EnrollProgress::new(move |_, message| {
+                    if message.contains("stdout: connected-live") {
+                        std::fs::write(&release_signal, b"observed").unwrap();
+                    }
+                }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), connection.authenticate())
+            .await
+            .unwrap()
+            .unwrap();
         assert!(release.exists());
     }
 

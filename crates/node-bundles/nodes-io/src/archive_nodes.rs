@@ -542,7 +542,7 @@ fn staged_path(root: &Path, source: &str) -> PathBuf {
 }
 
 async fn stage_archive(ctx: &NodeCtx, source: &str, staged: &Path) -> Result<(), DagError> {
-    if vfs::uri::is_uri(source) {
+    if vfs::uri::storage_path(source).is_some() {
         crate::file_decompress::stage_vfs_input(ctx, source, staged).await
     } else if Path::new(source).is_file() {
         tokio::fs::copy(source, staged)
@@ -868,12 +868,7 @@ impl ArchiveExtractNode {
 }
 
 fn virtual_join(prefix: &str, member: &str) -> String {
-    let prefix = prefix.trim_end_matches('/');
-    if prefix == vfs::uri::SCHEME_PREFIX {
-        vfs::uri::uri(format!("/{member}"))
-    } else {
-        format!("{prefix}/{member}")
-    }
+    vfs::uri::join_path(prefix, member)
 }
 
 async fn delete_vfs_outputs(ctx: &NodeCtx, paths: &[String]) {
@@ -881,11 +876,10 @@ async fn delete_vfs_outputs(ctx: &NodeCtx, paths: &[String]) {
         return;
     };
     for path in paths {
-        let Some(virtual_path) = vfs::uri::virtual_path(path) else {
+        let Some(virtual_path) = vfs::uri::storage_path(path) else {
             continue;
         };
-        let operator = storage.resolve(virtual_path);
-        let _ = operator.delete(&storage.resolve_path(virtual_path)).await;
+        let _ = storage.delete_object(virtual_path).await;
     }
 }
 
@@ -952,9 +946,12 @@ impl DagNode for ArchiveExtractNode {
         let mut outputs = Vec::new();
         let mut published = Vec::new();
         let mut result: Result<(), DagError> = Ok(());
-        if vfs::uri::is_uri(&destination_prefix) {
+        if vfs::uri::storage_path(&destination_prefix).is_some() {
             for extracted in files {
-                let path = virtual_join(&destination_prefix, &extracted.path);
+                let path = crate::file_decompress::canonical_output(
+                    ctx,
+                    &virtual_join(&destination_prefix, &extracted.path),
+                )?;
                 // Already-published VFS members must be removed before returning.
                 #[allow(clippy::question_mark)]
                 if let Err(error) =
@@ -966,7 +963,7 @@ impl DagNode for ArchiveExtractNode {
                 let mut fingerprint = extracted.fingerprint;
                 fingerprint.immutable_remote = true;
                 outputs.push(FileRef {
-                    domain: dag_core::DomainId::local(),
+                    domain: dag_core::DomainId::new(vfs::uri::domain(&path).unwrap_or("local")),
                     format: crate::file_decompress::format_from_path(&path),
                     path,
                     fingerprint: Some(fingerprint),
@@ -1029,7 +1026,7 @@ impl DagNode for ArchiveExtractNode {
                 let path = destination.to_string_lossy().into_owned();
                 published.push(path.clone());
                 outputs.push(FileRef {
-                    domain: dag_core::DomainId::local(),
+                    domain: dag_core::DomainId::new(vfs::uri::domain(&path).unwrap_or("local")),
                     format: crate::file_decompress::format_from_path(&path),
                     path,
                     fingerprint: Some(fingerprint),
@@ -1363,7 +1360,7 @@ mod tests {
             .await
             .unwrap();
         let files = outputs.get(&0).unwrap().as_file_set().unwrap();
-        assert_eq!(files[0].path, "vfs:///extracted/data/a.txt");
+        assert_eq!(files[0].path, "local://extracted/data/a.txt");
 
         let operator = storage.resolve("/extracted/data/a.txt");
         let contents = operator

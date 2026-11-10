@@ -382,6 +382,7 @@ pub fn validate(node: &NodeDefinition) -> Result<(), String> {
     }
     if let Some(prefix) = &node.artifact_prefix
         && !prefix.starts_with('/')
+        && vfs::uri::storage_path(prefix).is_none()
     {
         return Err(format!(
             "node `{}` artifact_prefix must be an absolute VFS path",

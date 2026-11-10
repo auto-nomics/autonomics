@@ -1199,8 +1199,11 @@ async fn pull_file(
     // Explicit VFS URIs keep that namespace. Recognized local FileRefs keep
     // theirs even under a root mount; legacy unrecognized bare mounted paths
     // retain their previous VFS resolution. No permission-error fallback.
-    let (virtual_path, target_rel) = if let Some(vpath) = vfs::uri::virtual_path(&entry.path) {
-        let normalized = vfs::OpendalFileStorage::normalize_path(vpath);
+    let (virtual_path, target_rel) = if let Some(vpath) = vfs::uri::storage_path(&entry.path) {
+        let storage = storage.ok_or_else(|| skip(format!("file `{}` requires VFS", entry.path)))?;
+        let normalized = storage
+            .try_resolve_virtual(vpath)
+            .map_err(|e| fatal(e.to_string()))?;
         (
             Some(normalized.clone()),
             format!("data/{}", normalized.trim_start_matches('/')),
@@ -1417,10 +1420,15 @@ pub fn resolve_export_target(
     out: &str,
     storage: Option<&vfs::OpendalFileStorage>,
 ) -> Result<ExportTarget, String> {
-    if let Some(vpath) = vfs::uri::virtual_path(out) {
-        return Ok(ExportTarget::Vfs(vfs::OpendalFileStorage::normalize_path(
-            vpath,
-        )));
+    if let Some(vpath) = vfs::uri::storage_path(out) {
+        let resolved = match storage {
+            Some(storage) => storage
+                .try_resolve_virtual(vpath)
+                .map_err(|e| e.to_string())?,
+            None if vfs::uri::is_uri(out) => vfs::OpendalFileStorage::normalize_path(vpath),
+            None => return Err(format!("domain output `{out}` requires VFS")),
+        };
+        return Ok(ExportTarget::Vfs(resolved));
     }
     if out.starts_with('/') {
         let normalized = vfs::OpendalFileStorage::normalize_path(out);
@@ -1445,7 +1453,13 @@ pub async fn upload_export_to_vfs(
     vfs_prefix: &str,
     storage: &vfs::OpendalFileStorage,
 ) -> Result<(), String> {
-    let prefix = vfs_prefix.trim_end_matches('/');
+    let resolved_prefix = storage
+        .try_resolve_virtual(vfs_prefix)
+        .map_err(|e| e.to_string())?;
+    let canonical_prefix = storage
+        .canonical_uri(&resolved_prefix)
+        .map_err(|e| e.to_string())?;
+    let prefix = resolved_prefix.trim_end_matches('/');
     let out_file_index = summary
         .files
         .iter()
@@ -1455,15 +1469,16 @@ pub async fn upload_export_to_vfs(
         let bytes = std::fs::read(&local)
             .map_err(|e| format!("read staged {}: {e}", file.exported_path))?;
         let vpath = format!("{prefix}/{}", file.exported_path);
+        let canonical = storage.canonical_uri(&vpath).map_err(|e| e.to_string())?;
         storage
             .write_bytes(&vpath, bytes)
             .await
             .map_err(|e| format!("upload {vpath}: {e}"))?;
-        file.exported_path = vfs::uri::uri(vpath);
+        file.exported_path = canonical;
     }
     summary.out = match out_file_index {
         Some(index) => summary.files[index].exported_path.clone(),
-        None => vfs::uri::uri(prefix),
+        None => canonical_prefix,
     };
     Ok(())
 }
@@ -1471,6 +1486,20 @@ pub async fn upload_export_to_vfs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn domain_export_targets_resolve_and_unknown_domains_fail() {
+        let storage = vfs::OpendalFileStorage::new_temp();
+        assert!(
+            matches!(resolve_export_target("local://exports/run", Some(&storage)).unwrap(),
+            ExportTarget::Vfs(path) if path == "/exports/run")
+        );
+        assert!(resolve_export_target("unknown://exports/run", Some(&storage)).is_err());
+        assert_eq!(
+            storage.canonical_uri("/exports/run/data.txt").unwrap(),
+            "local://exports/run/data.txt"
+        );
+    }
 
     fn sample_run() -> RunRecord {
         RunRecord {

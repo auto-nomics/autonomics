@@ -312,7 +312,7 @@ impl TaskExecutor for LocalTaskExecutor {
                 details,
             };
         }
-        let result = match outcome {
+        let mut result = match outcome {
             Some(result) => result,
             None => {
                 let cancelled = cancellation.is_cancelled();
@@ -352,6 +352,13 @@ impl TaskExecutor for LocalTaskExecutor {
                 };
             }
         };
+        if let (Some(storage), Ok(Ok(outputs))) =
+            (execution.engine_ctx.opendal.as_deref(), &mut result)
+        {
+            if let Err(error) = outputs.canonicalize_files(storage) {
+                result = Ok(Err(error));
+            }
+        }
         drop(resource_lease);
 
         let duration = start.elapsed();

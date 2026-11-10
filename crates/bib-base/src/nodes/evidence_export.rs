@@ -261,7 +261,11 @@ mod tests {
             .and_then(|value| value.as_file().ok())
             .unwrap();
         assert_eq!(out_file.format.as_deref(), Some(format.label()));
-        assert!(vfs::uri::is_uri(&out_file.path), "{}", out_file.path);
+        assert!(
+            vfs::uri::storage_path(&out_file.path).is_some(),
+            "{}",
+            out_file.path
+        );
         assert!(
             out_file
                 .fingerprint

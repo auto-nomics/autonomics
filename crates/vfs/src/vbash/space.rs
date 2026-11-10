@@ -71,7 +71,9 @@ pub async fn op_df(
             "df: parent traversal or control characters refused",
         ));
     }
-    let requested = OpendalFileStorage::normalize_path(raw);
+    let requested = storage
+        .try_resolve_virtual(raw)
+        .map_err(|e| e.to_string())?;
     if !readable(storage, &requested) {
         return Ok(ToolResult::error("df: target not readable/listable"));
     }

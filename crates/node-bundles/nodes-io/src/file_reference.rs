@@ -138,11 +138,10 @@ async fn resolve_file(
         return Err(DagError::Schedule("file path cannot be empty".into()));
     }
 
-    if vfs::uri::is_uri(path) {
+    if let Some(virtual_path) = vfs::uri::storage_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!("file `{path}` requires a registered runtime VFS"))
         })?;
-        let virtual_path = vfs::uri::virtual_path(path).expect("path starts with vfs://");
         return vfs_file(storage, path, virtual_path, format).await;
     }
 
@@ -167,8 +166,17 @@ async fn vfs_file(
     virtual_path: &str,
     format: Option<String>,
 ) -> Result<FileRef, DagError> {
-    let operator = storage.resolve(virtual_path).clone();
-    let key = storage.resolve_path(virtual_path);
+    let virtual_path = storage
+        .try_resolve_virtual(virtual_path)
+        .map_err(|e| DagError::Schedule(e.to_string()))?;
+    storage
+        .check_readable(&virtual_path)
+        .map_err(|e| DagError::Schedule(e.to_string()))?;
+    let canonical = storage
+        .canonical_uri(&virtual_path)
+        .map_err(|e| DagError::Schedule(e.to_string()))?;
+    let operator = storage.resolve(&virtual_path).clone();
+    let key = storage.resolve_path(&virtual_path);
     let metadata = operator.stat(&key).await.map_err(|error| {
         if error.kind() == ErrorKind::NotFound {
             DagError::Schedule(format!(
@@ -199,8 +207,8 @@ async fn vfs_file(
         .unwrap_or_default();
 
     Ok(FileRef {
-        domain: dag_core::DomainId::local(),
-        path: output_path.to_string(),
+        domain: dag_core::DomainId::new(vfs::uri::domain(&canonical).unwrap_or("local")),
+        path: canonical,
         format,
         fingerprint: Some(FileFingerprint {
             size: metadata.content_length(),
@@ -316,6 +324,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn domain_reference_is_canonical_and_unknown_domain_fails_closed() {
+        let input = tempfile::tempdir().unwrap();
+        std::fs::write(input.path().join("input.tsv"), b"content").unwrap();
+        let (storage, _workspace) = mounted_ctx(input.path());
+        let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
+        let file = resolve_file(&ctx, "local://input.tsv", None).await.unwrap();
+        assert_eq!(file.path, "local://input.tsv");
+        assert!(file.domain.is_local());
+        assert!(
+            resolve_file(&ctx, "missing://input.tsv", None)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn emits_vfs_file_without_parsing_it() {
         let input = tempfile::tempdir().unwrap();
         std::fs::write(input.path().join("input.sumstats.gz"), b"binary-payload").unwrap();
@@ -330,7 +354,7 @@ mod tests {
             .unwrap();
 
         let file = outputs.get(&0).unwrap().as_file().unwrap();
-        assert_eq!(file.path, "vfs:///input.sumstats.gz");
+        assert_eq!(file.path, "local://input.sumstats.gz");
         assert_eq!(file.format.as_deref(), Some("sumstats_gz"));
         let fingerprint = file.fingerprint.as_ref().unwrap();
         assert_eq!(fingerprint.size, b"binary-payload".len() as u64);

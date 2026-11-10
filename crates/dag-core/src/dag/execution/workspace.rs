@@ -502,7 +502,7 @@ impl LocalTaskWorkspace {
         let mut current = 0u64;
         let mut last = std::time::Instant::now();
         let total;
-        if let Some(virtual_path) = vfs::uri::virtual_path(&source.path) {
+        if let Some(virtual_path) = vfs::uri::storage_path(&source.path) {
             let storage = storage
                 .ok_or_else(|| DagError::Schedule("task input requires object storage".into()))?;
             total = storage

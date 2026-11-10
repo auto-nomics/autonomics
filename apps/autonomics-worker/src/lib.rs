@@ -580,6 +580,7 @@ pub async fn run(dispatch_path: &Path) -> Result<(), Box<dyn std::error::Error>>
     let runtime = session.runtime_env();
     let file_url = datafusion::execution::object_store::ObjectStoreUrl::parse("file://")?;
     runtime.register_object_store(file_url.as_ref(), storage.clone());
+    storage.register_domain_stores(&runtime)?;
     if mounts.is_some() {
         let vfs_url = datafusion::execution::object_store::ObjectStoreUrl::parse("vfs://")?;
         runtime.register_object_store(vfs_url.as_ref(), storage.clone());

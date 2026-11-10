@@ -14,7 +14,7 @@ use super::helpers::{resolve_target, tool_error};
                    Edit only the returned target path; never copy active plugin files with vfs cp."
 )]
 pub(super) struct PluginForkInput {
-    /// Installed reference workspace path, such as `/plugins/dev/hello-world`.
+    /// Installed reference workspace path, such as `local://plugins/dev/hello-world`.
     reference_plugin_path: String,
     /// New plugin name in lowercase kebab-case.
     plugin_name: String,

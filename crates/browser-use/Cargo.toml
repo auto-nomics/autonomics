@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+vfs = { path = "../vfs" }
 thiserror.workspace = true
 chromiumoxide.workspace = true
 futures.workspace = true

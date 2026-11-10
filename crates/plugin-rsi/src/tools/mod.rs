@@ -133,7 +133,9 @@ impl PluginDevelopmentToolsetRegistry {
         Ok(PluginTarget {
             workspace: PluginWorkspace::new(root.join(&plugin_name)),
             plugin_name,
-            virtual_path,
+            virtual_path: vfs
+                .canonical_uri(&virtual_path)
+                .map_err(|e| Error::Validation(e.to_string()))?,
             vfs,
         })
     }
@@ -152,7 +154,7 @@ impl PluginDevelopmentToolsetRegistry {
             })?;
             Ok((infra.store().root().to_path_buf(), vfs))
         })?;
-        let (environment_id, virtual_path, _vfs) = resolve_mounted_workspace(
+        let (environment_id, virtual_path, vfs) = resolve_mounted_workspace(
             principal,
             environment_path,
             crate::ENVIRONMENT_DEVELOPMENT_VFS_ROOT,
@@ -161,7 +163,9 @@ impl PluginDevelopmentToolsetRegistry {
         Ok(crate::tools::env::EnvironmentTarget {
             workspace: PluginWorkspace::new(root.join(&environment_id)),
             environment_id,
-            virtual_path,
+            virtual_path: vfs
+                .canonical_uri(&virtual_path)
+                .map_err(|e| Error::Validation(e.to_string()))?,
         })
     }
 
@@ -228,7 +232,9 @@ fn resolve_mounted_workspace(
     vfs_root: &str,
     base_vfs: OpendalFileStorage,
 ) -> RsiResult<(String, String, OpendalFileStorage)> {
-    let normalized = OpendalFileStorage::normalize_path(path);
+    let normalized = base_vfs
+        .try_resolve_virtual(path)
+        .map_err(|e| Error::Validation(format!("invalid workspace address: {e}")))?;
     let suffix = normalized
         .strip_prefix(vfs_root)
         .and_then(|suffix| suffix.strip_prefix('/'))
@@ -331,4 +337,48 @@ fn principal_for_agent(agent_id: &str) -> VfsPrincipal {
     }
     let uid = 10_000_u32 + u32::try_from(hash % 55_536).unwrap_or_default();
     VfsPrincipal::plugin_developer(uid)
+}
+
+#[cfg(test)]
+mod domain_address_tests {
+    use super::*;
+
+    #[test]
+    fn domain_workspace_paths_resolve_before_root_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let manifest: vfs::VfsManifest = toml::from_str(&format!(
+            r#"
+[[backend]]
+id = "local"
+type = "local"
+root = {}
+[[mount]]
+path = "/plugins-dev"
+backend = "local"
+source = "/"
+"#,
+            toml::Value::String(root.path().to_string_lossy().into_owned())
+        ))
+        .unwrap();
+        let mounts = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = OpendalFileStorage::with_mounts(root.path(), mounts);
+        let principal = principal_for_agent("domain-test");
+        for address in [
+            "/plugins-dev/probe",
+            "vfs:///plugins-dev/probe",
+            "local://plugins-dev/probe",
+        ] {
+            let (name, path, _) =
+                resolve_mounted_workspace(&principal, address, "/plugins-dev", storage.clone())
+                    .unwrap();
+            assert_eq!(name, "probe");
+            assert_eq!(path, "/plugins-dev/probe");
+        }
+        for address in ["missing://plugins-dev/probe", "local://elsewhere/probe"] {
+            assert!(
+                resolve_mounted_workspace(&principal, address, "/plugins-dev", storage.clone())
+                    .is_err()
+            );
+        }
+    }
 }

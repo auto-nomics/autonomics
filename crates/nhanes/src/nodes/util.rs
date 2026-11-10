@@ -14,7 +14,7 @@ pub(crate) async fn write_output(
     let size = bytes.len() as u64;
     let sha256 = sha256_hex(&bytes);
 
-    if let Some(vpath) = vfs::uri::virtual_path(path) {
+    if let Some(vpath) = vfs::uri::storage_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "path `{path}` requires engine file storage, but none is registered"
@@ -23,12 +23,15 @@ pub(crate) async fn write_output(
         storage
             .check_writable(vpath)
             .map_err(|e| DagError::Schedule(format!("vfs path `{path}` is not writable: {e}")))?;
+        let canonical = storage
+            .canonical_uri(vpath)
+            .map_err(|e| DagError::Schedule(e.to_string()))?;
         storage
             .write_bytes(vpath, bytes)
             .await
             .map_err(|e| DagError::Schedule(format!("failed to write `{path}`: {e}")))?;
         Ok(FileRef::remote(
-            path,
+            canonical,
             Some(format.to_owned()),
             size,
             Some(sha256),

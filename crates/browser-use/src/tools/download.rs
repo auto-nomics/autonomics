@@ -22,7 +22,7 @@ const PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 #[tool(
     name = "browser_download",
     description = "Download a URL in a browser tab and wait until Chromium reports completion or \
-                  cancellation. Returns the local file and `/browser-downloads/...` VFS path. \
+                  cancellation. Returns a canonical `local://browser-downloads/...` vfs_path (file_path is host metadata). \
                   Runs in the background: the call returns a task number straight away — poll \
                   `view_task_status` for progress and use `wait_task` or `view_task_results` \
                   with that number to collect the result."
@@ -160,7 +160,7 @@ impl ToolFunction for DownloadTool {
 #[tool(
     name = "browser_wait_for_download",
     description = "Wait for a download initiated by `browser_click` or another page action, then \
-                  return its local file and `/browser-downloads/...` VFS path."
+                  return its canonical `local://browser-downloads/...` vfs_path."
 )]
 pub struct WaitForDownloadInput {
     #[desc = "Maximum time to wait for a final download state, in milliseconds."]

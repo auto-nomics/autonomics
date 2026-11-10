@@ -26,18 +26,21 @@ pub(crate) async fn write_pdf(
 ) -> Result<FileRef, DagError> {
     let size = bytes.len() as u64;
     let sha256 = sha256_hex(&bytes);
-    if let Some(vpath) = vfs::uri::virtual_path(path) {
+    if let Some(vpath) = vfs::uri::storage_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "path `{path}` requires engine file storage, but none is registered"
             ))
         })?;
+        let canonical = storage
+            .canonical_uri(vpath)
+            .map_err(|e| DagError::Schedule(e.to_string()))?;
         storage
             .write_bytes(vpath, bytes)
             .await
             .map_err(|error| DagError::Schedule(format!("failed to write `{path}`: {error}")))?;
         Ok(FileRef::remote(
-            path,
+            canonical,
             Some("pdf".to_owned()),
             size,
             Some(sha256),

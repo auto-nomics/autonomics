@@ -11,6 +11,18 @@ pub struct StoredFulltext {
     pub file_hash: String,
 }
 
+impl StoredFulltext {
+    /// Bind a newly named object to its configured filesystem domain before
+    /// persisting the address. This changes no object key or content hash.
+    pub fn canonicalized(
+        mut self,
+        storage: &vfs::OpendalFileStorage,
+    ) -> Result<Self, vfs::opendal::Error> {
+        self.path = storage.canonical_uri(&self.path)?;
+        Ok(self)
+    }
+}
+
 /// Build a collision-resistant literature object path.
 ///
 /// Including the SHA-256 prefix means replacing a file with different content
@@ -50,6 +62,12 @@ pub fn stored_attachment(
 /// Convert a bibliography VFS URI back to the virtual path expected by
 /// [`vfs::OpendalFileStorage`].
 pub fn vfs_virtual_path(uri: &str) -> Option<String> {
+    if let Some(domain) = vfs::uri::domain(uri) {
+        if !vfs::uri::valid_domain_name(domain) || matches!(domain, "http" | "https") {
+            return None;
+        }
+        return Some(uri.to_string());
+    }
     let path = uri.strip_prefix(VFS_PREFIX)?.trim_start_matches('/');
     (!path.is_empty()).then(|| format!("/{path}"))
 }
@@ -227,12 +245,36 @@ mod tests {
     }
 
     #[test]
+    fn canonical_stored_address_preserves_content_identity() {
+        let storage = vfs::OpendalFileStorage::new_temp();
+        let original = stored_fulltext("article", "file.txt", b"content");
+        let hash = original.file_hash.clone();
+        let original_key = storage.try_resolve_virtual(&original.path).unwrap();
+        let canonical = original.canonicalized(&storage).unwrap();
+        assert!(canonical.path.starts_with("local://literature/article/"));
+        assert_eq!(canonical.file_hash, hash);
+        assert_eq!(
+            storage.try_resolve_virtual(&canonical.path).unwrap(),
+            original_key
+        );
+    }
+
+    #[test]
     fn parses_virtual_path() {
         assert_eq!(
             vfs_virtual_path("vfs:///literature/a/file.txt"),
             Some("/literature/a/file.txt".to_owned())
         );
         assert_eq!(vfs_virtual_path("europepmc:PMC1"), None);
+        assert_eq!(
+            vfs_virtual_path("ht://literature/a/file.txt"),
+            Some("ht://literature/a/file.txt".to_owned())
+        );
+        assert_eq!(vfs_virtual_path("https://example.org/paper.pdf"), None);
+        assert_eq!(
+            vfs_virtual_path("local://literature/a/file.txt"),
+            Some("local://literature/a/file.txt".to_owned())
+        );
     }
 
     #[test]

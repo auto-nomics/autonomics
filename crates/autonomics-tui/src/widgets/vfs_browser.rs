@@ -98,13 +98,16 @@ impl VfsBrowserState {
 
     /// Longest read-only mount covering the current directory, if any.
     pub fn read_only_cwd(&self) -> bool {
-        self.mounts.iter().any(|(mount, read_only)| {
-            *read_only
-                && (self.cwd == *mount
+        self.mounts
+            .iter()
+            .filter(|(mount, _)| {
+                self.cwd == *mount
                     || self
                         .cwd
-                        .starts_with(&format!("{}/", mount.trim_end_matches('/'))))
-        })
+                        .starts_with(&format!("{}/", mount.trim_end_matches('/')))
+            })
+            .max_by_key(|(mount, _)| mount.len())
+            .is_some_and(|(_, read_only)| *read_only)
     }
 
     pub fn selected(&self) -> Option<&VfsEntry> {
@@ -224,7 +227,9 @@ impl VfsBrowserState {
                     Some(entry) if entry.is_dir => {
                         Some(VfsBrowserCommand::LoadDir(entry.path.clone()))
                     }
-                    Some(entry) => Some(VfsBrowserCommand::LoadText(entry.path.clone())),
+                    Some(entry) => {
+                        Some(VfsBrowserCommand::LoadText(entry.uri.unwrap_or(entry.path)))
+                    }
                     None => None,
                 }
             }

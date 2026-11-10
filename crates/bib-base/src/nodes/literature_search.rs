@@ -423,7 +423,11 @@ mod tests {
         assert!(fingerprint.immutable_remote);
         // The recorded path is the canonical vfs:// URI, not the bare
         // absolute path the spec used.
-        assert!(vfs::uri::is_uri(&file.path), "{}", file.path);
+        assert!(
+            vfs::uri::storage_path(&file.path).is_some(),
+            "{}",
+            file.path
+        );
     }
 
     #[tokio::test]

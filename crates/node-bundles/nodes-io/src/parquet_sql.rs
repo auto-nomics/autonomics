@@ -69,7 +69,7 @@ pub fn validate(spec: &DataFusionSqlSpec) -> Result<(), String> {
         return Err("table_name must be a nonempty SQL identifier".into());
     }
     if !spec.output_path.starts_with('/')
-        && !vfs::uri::is_uri(&spec.output_path)
+        && vfs::uri::storage_path(&spec.output_path).is_none()
         && !spec.output_path.starts_with("file://")
     {
         return Err("output_path must be an absolute local, file://, or vfs:// path".into());

@@ -170,7 +170,7 @@ impl DataFrameToFileNode {
         node_ctx: &dag_core::registry::NodeCtx,
         path: &str,
     ) -> Result<(), DataFrameToFileError> {
-        let Some(virtual_path) = vfs::uri::virtual_path(path) else {
+        let Some(virtual_path) = vfs::uri::storage_path(path) else {
             return Err(DataFrameToFileError::InvalidInput {
                 message: format!("expected a vfs:// partitioned output path, got `{path}`"),
             });
@@ -180,6 +180,11 @@ impl DataFrameToFileNode {
                 message: "partitioned VFS output requires registered object storage".into(),
             });
         };
+        storage
+            .check_writable(virtual_path)
+            .map_err(|e| DataFrameToFileError::InvalidInput {
+                message: e.to_string(),
+            })?;
         let op = storage.resolve(virtual_path);
         let root = storage.resolve_path(virtual_path);
         match op.stat(&root).await {
@@ -224,7 +229,8 @@ impl DataFrameToFileNode {
         else {
             return;
         };
-        let virtual_path = vfs::uri::virtual_path(path)
+        let virtual_path = vfs::uri::split_scheme(path)
+            .map(|(_, rest)| rest)
             .unwrap_or(path)
             .trim_matches('/');
         let Ok(object_path) = datafusion::object_store::path::Path::parse(virtual_path) else {
@@ -240,7 +246,7 @@ impl DataFrameToFileNode {
     /// Check a DataFusion path without relying on host-path semantics. A
     /// `vfs://` object is resolved through the mounted OpenDAL backend.
     async fn object_exists(&self, node_ctx: &dag_core::registry::NodeCtx, path: &str) -> bool {
-        let Some(virtual_path) = vfs::uri::virtual_path(path) else {
+        let Some(virtual_path) = vfs::uri::storage_path(path) else {
             return std::path::Path::new(path).exists();
         };
         let Some(storage) = node_ctx.opendal.as_ref() else {
@@ -258,16 +264,15 @@ impl DataFrameToFileNode {
         path: &str,
         bytes: Vec<u8>,
     ) -> Result<(), DataFrameToFileError> {
-        if let Some(virtual_path) = vfs::uri::virtual_path(path) {
+        if let Some(virtual_path) = vfs::uri::storage_path(path) {
             let storage = node_ctx
                 .opendal
                 .as_ref()
                 .ok_or(DataFrameToFileError::InvalidInput {
                     message: format!("VFS output `{path}` requires mounted object storage"),
                 })?;
-            let operator = storage.resolve(virtual_path);
-            operator
-                .write(&storage.resolve_path(virtual_path), bytes)
+            storage
+                .write_bytes(virtual_path, bytes)
                 .await
                 .map_err(|error| DataFrameToFileError::InvalidInput {
                     message: format!("cannot write VFS MatrixMarket `{path}`: {error}"),
@@ -639,6 +644,22 @@ impl DagNode for DataFrameToFileNode {
             .into());
         }
         let mut path = source_path(node_ctx, &normalize_path(&self.path));
+        let canonical_output = if vfs::uri::storage_path(&path).is_some() {
+            Some(
+                node_ctx
+                    .opendal
+                    .as_ref()
+                    .ok_or_else(|| DataFrameToFileError::InvalidInput {
+                        message: "domain output requires registered file storage".into(),
+                    })?
+                    .canonical_uri(&path)
+                    .map_err(|e| DataFrameToFileError::InvalidInput {
+                        message: e.to_string(),
+                    })?,
+            )
+        } else {
+            None
+        };
         if partitioned {
             path = path.trim_end_matches('/').to_string();
             path.push('/');
@@ -659,8 +680,12 @@ impl DagNode for DataFrameToFileNode {
             }
             let bytes = Self::matrix_market_bytes(&df, &self.id_column).await?;
             Self::write_bytes(node_ctx, &path, bytes).await?;
-            let file = FileRef::local(&path, Some("mtx".into()))
-                .unwrap_or_else(|_| FileRef::new(path.clone(), Some("mtx".into())));
+            let file = if let Some(canonical) = canonical_output {
+                FileRef::new(canonical, Some("mtx".into()))
+            } else {
+                FileRef::local(&path, Some("mtx".into()))
+                    .unwrap_or_else(|_| FileRef::new(path.clone(), Some("mtx".into())))
+            };
             let mut outputs = PortOutputs::new();
             outputs.insert_file(0, file);
             return Ok(outputs);
@@ -676,7 +701,7 @@ impl DagNode for DataFrameToFileNode {
         // missing-file window to concurrent readers.
         let to_write = if partitioned {
             if self.mode == SinkMode::Overwrite {
-                if vfs::uri::is_uri(&path) {
+                if vfs::uri::storage_path(&path).is_some() {
                     Self::clear_vfs_output(node_ctx, &path).await?;
                 } else if path.starts_with('/') || path.starts_with("file://") {
                     Self::clear_local_output(&path)?;
@@ -740,7 +765,9 @@ impl DagNode for DataFrameToFileNode {
         }
 
         let format_label = format.as_label().to_string();
-        let file = if partitioned {
+        let file = if let Some(canonical) = canonical_output {
+            FileRef::new(canonical, Some(format_label))
+        } else if partitioned {
             FileRef::new(path.clone(), Some(format_label))
         } else {
             FileRef::local(&path, Some(format_label.clone()))

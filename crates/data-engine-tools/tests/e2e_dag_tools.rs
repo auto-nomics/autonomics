@@ -845,6 +845,91 @@ async fn test_dag_runs_log_records_execution_audit_trail() {
     );
 }
 
+// Execute the real source/sink implementations, then archive their measured
+// output in the historical DAG report shape. These tests exercise export of
+// existing records; the retired run_dag/dag_export_run agent tools are not
+// part of the current tool registry.
+async fn record_legacy_export_run(engine: &DataEngine, storage: &OpendalFileStorage, output: &str) {
+    use data_engine::{
+        dag::{DagManifest, RunRecord, node_event::NodeReporter},
+        node::NodeInput,
+    };
+    let registry = engine.node_registry();
+    let source_spec = json!({"path": "/insurance.csv"});
+    let sink_spec = json!({"path": output, "format": "csv", "mode": "overwrite"});
+    let mut source = registry
+        .build_node("file_to_dataframe", source_spec.clone())
+        .unwrap();
+    let source_outputs = source
+        .execute(registry.ctx(), &[], &NodeReporter::noop())
+        .await
+        .unwrap();
+    let mut sink = registry
+        .build_node("dataframe_to_file", sink_spec.clone())
+        .unwrap();
+    let sink_outputs = sink
+        .execute(
+            registry.ctx(),
+            &[NodeInput {
+                port: 0,
+                data: source_outputs.get(&0).unwrap().clone(),
+            }],
+            &NodeReporter::noop(),
+        )
+        .await
+        .unwrap();
+    let file = sink_outputs.get(&0).unwrap().as_file().unwrap();
+    let (size, hash) = storage.sha256(&file.path).await.unwrap();
+    // Pin the pre-migration spelling to prove that old output references are
+    // still retrieved and content-verified while exports publish domain URIs.
+    let historical_file = json!({
+        "path": format!("vfs://{}", storage.try_resolve_virtual(&file.path).unwrap()),
+        "format": file.format,
+        "fingerprint": {"size":size,"mtime_ns":0,"content_hash":format!("sha256:{hash}")}
+    });
+    let report = json!({"ok":true,"nodes":[
+        {"id":"src","node_type":"file_to_dataframe","status":"success","dispatch_seq":0,"output_type":"DataFrame"},
+        {"id":"sink","node_type":"dataframe_to_file","status":"success","dispatch_seq":1,
+         "inputs":[{"from":"src","from_port":0,"to_port":0,"kind":"DataFrame"}],
+         "port_assignments":{"0":historical_file}}
+    ]});
+    let manifest: DagManifest = serde_json::from_value(json!({
+        "nodes":[{"id":"src","kind":"file_to_dataframe","spec":source_spec},
+                 {"id":"sink","kind":"dataframe_to_file","spec":sink_spec}],
+        "edges":[{"from":"src","from_port":0,"to":"sink","to_port":0}]
+    }))
+    .unwrap();
+    let history = engine.history().unwrap();
+    let snapshot_id = history
+        .commit(
+            "main",
+            &manifest,
+            Some(&report),
+            "VFS migration export fixture",
+        )
+        .await
+        .unwrap();
+    history
+        .record_run(&RunRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            ref_name: "main".into(),
+            snapshot_id: Some(snapshot_id),
+            manifest_hash: manifest.content_hash(),
+            trigger: None,
+            started_at: "2026-11-10T00:00:00Z".into(),
+            finished_at: "2026-11-10T00:00:01Z".into(),
+            ok: true,
+            cancelled: false,
+            error: None,
+            message: Some("VFS migration export fixture".into()),
+            engine_version: "fixture".into(),
+            source_revision: "fixture".into(),
+            run_report_json: Some(report.to_string()),
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn test_dag_export_run_produces_evidence_crate() {
     // Same mounted-VFS arrangement as the audit-trail test, plus a file sink
@@ -889,19 +974,13 @@ async fn test_dag_export_run_produces_evidence_crate() {
         .with_vfs((*mounted).clone())
         .build()
         .with_history(history);
+    record_legacy_export_run(&engine, &file_storage, "/exports/out.csv").await;
     let (client, _handle) = spawn_with_engine(engine);
 
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
     let mut registry = agentik_core::tools::ToolRegistry::new();
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
-
-    build_source_sink(&toolset, "build", "/exports/out.csv").await;
-    let results = toolset
-        .execute(&[build_tooluse("xr", "run_dag", json!({}))], None)
-        .await
-        .unwrap();
-    check_ok(&results[0], "run_dag");
 
     let results = toolset
         .execute(
@@ -927,19 +1006,18 @@ async fn test_dag_export_run_produces_evidence_crate() {
     // Export the run through the agent tool. out_dir "/" is VFS-visible (the
     // mount covers "/"), so the crate is uploaded into the object store and
     // stays readable through the same VFS the agent sees.
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "xe",
-                "dag_export_run",
-                json!({"run_id": listed_run_id, "format": "crate", "out_dir": "/"}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "dag_export_run");
-    let summary = result_json(&results[0]);
+    let export = json!({"run_id": listed_run_id, "format": "crate", "out_dir": "/"});
+    let summary = serde_json::to_value(
+        client
+            .export_run(
+                export["run_id"].as_str().unwrap().into(),
+                export["format"].as_str().unwrap().into(),
+                export["out_dir"].as_str().unwrap().into(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     let exported: Vec<&str> = summary["files"]
         .as_array()
         .unwrap()
@@ -978,22 +1056,24 @@ async fn test_dag_export_run_produces_evidence_crate() {
         .count();
     assert_eq!(actions, 2, "one CreateAction per node");
     // PROV export through the same tool.
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "xp",
-                "dag_export_run",
-                json!({"run_id": listed_run_id, "format": "prov", "out_dir": "/"}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "dag_export_run prov");
-    let prov_summary = result_json(&results[0]);
+    let export = json!({"run_id": listed_run_id, "format": "prov", "out_dir": "/"});
+    let prov_summary = serde_json::to_value(
+        client
+            .export_run(
+                export["run_id"].as_str().unwrap().into(),
+                export["format"].as_str().unwrap().into(),
+                export["out_dir"].as_str().unwrap().into(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     let prov_uri = prov_summary["out"].as_str().unwrap();
-    assert!(vfs::uri::is_uri(prov_uri), "prov upload is vfs-addressed");
-    let vpath = vfs::uri::virtual_path(prov_uri).unwrap();
+    assert!(
+        vfs::uri::storage_path(prov_uri).is_some(),
+        "prov upload is vfs-addressed"
+    );
+    let vpath = vfs::uri::storage_path(prov_uri).unwrap();
     let length = file_storage.content_length(vpath).await.unwrap();
     let prov_bytes = file_storage.read_range(vpath, 0..length).await.unwrap();
     let prov: serde_json::Value = serde_json::from_slice(&prov_bytes.to_vec()).unwrap();
@@ -1054,6 +1134,7 @@ async fn test_dag_export_run_uploads_into_vfs() {
         .with_vfs((*mounted).clone())
         .build()
         .with_history(history);
+    record_legacy_export_run(&engine, &file_storage, "/vfs-exports/out.csv").await;
     let (client, _handle) = spawn_with_engine(engine);
 
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
@@ -1061,28 +1142,21 @@ async fn test_dag_export_run_uploads_into_vfs() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    build_source_sink(&toolset, "build", "/vfs-exports/out.csv").await;
-    let results = toolset
-        .execute(&[build_tooluse("vr", "run_dag", json!({}))], None)
-        .await
-        .unwrap();
-    check_ok(&results[0], "run_dag");
-
     // `latest` + a mounted (agent-visible) out path.
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "ve",
-                "dag_export_run",
-                json!({"run_id": "latest", "format": "crate", "out_dir": "/evidence/crate"}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-    check_ok(&results[0], "dag_export_run");
-    let summary = result_json(&results[0]);
-    assert_eq!(summary["out"], json!("vfs:///evidence/crate"));
+    let export =
+        json!({"run_id": "latest", "format": "crate", "out_dir": "local://evidence/crate"});
+    let summary = serde_json::to_value(
+        client
+            .export_run(
+                export["run_id"].as_str().unwrap().into(),
+                export["format"].as_str().unwrap().into(),
+                export["out_dir"].as_str().unwrap().into(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["out"], json!("local://evidence/crate"));
     let paths: Vec<&str> = summary["files"]
         .as_array()
         .unwrap()
@@ -1092,7 +1166,7 @@ async fn test_dag_export_run_uploads_into_vfs() {
     assert!(
         paths
             .iter()
-            .all(|path| path.starts_with("vfs:///evidence/crate/")),
+            .all(|path| path.starts_with("local://evidence/crate/")),
         "all uploaded paths are vfs-addressed: {paths:?}"
     );
     assert!(
@@ -1154,6 +1228,7 @@ async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
         .with_vfs((*mounted).clone())
         .build()
         .with_history(history);
+    record_legacy_export_run(&engine, &file_storage, "/vfs-exports/out.csv").await;
     let (client, _handle) = spawn_with_engine(engine);
 
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
@@ -1161,41 +1236,29 @@ async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
     registry.register_all(tools).unwrap();
     let toolset = Toolset::from_registry(Arc::new(registry), None);
 
-    build_source_sink(&toolset, "build", "/vfs-exports/out.csv").await;
-    let results = toolset
-        .execute(&[build_tooluse("vr", "run_dag", json!({}))], None)
-        .await
-        .unwrap();
-    check_ok(&results[0], "run_dag");
-
-    let results = toolset
-        .execute(
-            &[build_tooluse(
-                "ve",
-                "dag_export_run",
-                json!({"run_id": "latest", "format": "prov", "out_dir": "/evidence/prov"}),
-            )],
-            None,
-        )
-        .await
-        .unwrap();
-
-    check_ok(&results[0], "dag_export_run");
-    let summary = result_json(&results[0]);
+    let export = json!({"run_id": "latest", "format": "prov", "out_dir": "/evidence/prov"});
+    let summary = serde_json::to_value(
+        client
+            .export_run(
+                export["run_id"].as_str().unwrap().into(),
+                export["format"].as_str().unwrap().into(),
+                export["out_dir"].as_str().unwrap().into(),
+            )
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert!(
         summary["out"]
             .as_str()
             .unwrap()
-            .starts_with("vfs:///evidence/prov/prov-"),
+            .starts_with("local://evidence/prov/prov-"),
         "single-file export lands at its vfs address: {}",
         summary["out"]
     );
 
     // Read the document back through the same VFS the agent sees.
-    let prov_vpath = summary["files"][0]["exported_path"]
-        .as_str()
-        .unwrap()
-        .strip_prefix("vfs://")
+    let prov_vpath = vfs::uri::storage_path(summary["files"][0]["exported_path"].as_str().unwrap())
         .unwrap()
         .to_string();
     let length = file_storage.content_length(&prov_vpath).await.unwrap();

@@ -1194,7 +1194,18 @@ async fn upload_attachment(
         .create_zotero_attachment(input, make_preferred)
         .await
         .map_err(internal)?;
-    let stored = stored_attachment(&article.id, &attachment.key, &filename, &content);
+    let stored = match stored_attachment(&article.id, &attachment.key, &filename, &content)
+        .canonicalized(file_storage(&shared)?)
+    {
+        Ok(stored) => stored,
+        Err(failure) => {
+            let _ = shared
+                .bib
+                .delete_zotero_attachment(&id, &attachment.key)
+                .await;
+            return Err(internal(failure));
+        }
+    };
     let virtual_path = vfs_virtual_path(&stored.path).expect("stored attachment uses a VFS path");
     if let Err(write_error) = write_stored_file(&shared, &virtual_path, content.to_vec()).await {
         let _ = shared
@@ -1625,7 +1636,9 @@ async fn upload_fulltext(
         .unwrap_or("txt");
     let format = FileFormat::from_extension(extension);
 
-    let stored = stored_fulltext(&article.id, &filename, &content);
+    let stored = stored_fulltext(&article.id, &filename, &content)
+        .canonicalized(file_storage(&shared)?)
+        .map_err(internal)?;
     let path = vfs_virtual_path(&stored.path).expect("stored fulltext uses a VFS path");
     write_stored_file(&shared, &path, content.to_vec()).await?;
     let fulltext = FullText {

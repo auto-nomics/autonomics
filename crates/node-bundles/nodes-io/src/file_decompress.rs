@@ -222,7 +222,7 @@ pub(crate) async fn stage_vfs_input(
     source: &str,
     destination: &Path,
 ) -> Result<(), DagError> {
-    let virtual_path = vfs::uri::virtual_path(source)
+    let virtual_path = vfs::uri::storage_path(source)
         .ok_or_else(|| DagError::Schedule(format!("expected VFS path `{source}`")))?;
     let storage = ctx
         .opendal
@@ -269,8 +269,21 @@ pub(crate) fn normalize_and_source(ctx: &NodeCtx, path: &str) -> String {
     crate::file_to_dataframe::source_path(ctx, &crate::file_to_dataframe::normalize_path(path))
 }
 
+/// Canonicalize only mounted addresses; explicit host paths retain their
+/// host identity until copied into the VFS.
+pub(crate) fn canonical_output(ctx: &NodeCtx, path: &str) -> Result<String, DagError> {
+    if vfs::uri::storage_path(path).is_none() {
+        return Ok(path.to_string());
+    }
+    ctx.opendal
+        .as_ref()
+        .ok_or_else(|| DagError::Schedule("domain output requires VFS".into()))?
+        .canonical_uri(path)
+        .map_err(|e| DagError::Schedule(e.to_string()))
+}
+
 pub(crate) async fn upload_local(ctx: &NodeCtx, path: &str, local: &Path) -> Result<(), DagError> {
-    let virtual_path = vfs::uri::virtual_path(path)
+    let virtual_path = vfs::uri::storage_path(path)
         .ok_or_else(|| DagError::Schedule(format!("expected VFS path `{path}`")))?;
     let storage = ctx
         .opendal
@@ -388,7 +401,7 @@ impl DagNode for FileDecompressNode {
                 DagError::Schedule("file_decompress requires src or an upstream File".into())
             })?;
         let source = normalize_and_source(ctx, &source);
-        let destination = normalize_and_source(ctx, &self.spec.dst);
+        let destination = canonical_output(ctx, &normalize_and_source(ctx, &self.spec.dst))?;
         if source.trim().is_empty() || destination.trim().is_empty() {
             return Err(DagError::Schedule(
                 "file_decompress src and dst cannot be empty".into(),
@@ -399,7 +412,7 @@ impl DagNode for FileDecompressNode {
             DagError::Schedule(format!("cannot create decompression workspace: {error}"))
         })?;
         let staged_input = workspace.path().join("input.compressed");
-        if vfs::uri::is_uri(&source) {
+        if vfs::uri::storage_path(&source).is_some() {
             stage_vfs_input(ctx, &source, &staged_input).await?;
         } else if Path::new(&source).is_file() {
             tokio::fs::copy(&source, &staged_input)
@@ -415,7 +428,7 @@ impl DagNode for FileDecompressNode {
 
         let format = detect_format(&staged_input.to_string_lossy(), self.spec.format)
             .map_err(DagError::Schedule)?;
-        let local_parent = if vfs::uri::is_uri(&destination) {
+        let local_parent = if vfs::uri::storage_path(&destination).is_some() {
             None
         } else {
             Some(PathBuf::from(&destination))
@@ -484,7 +497,7 @@ impl DagNode for FileDecompressNode {
         }
 
         let file = FileRef {
-            domain: dag_core::DomainId::local(),
+            domain: dag_core::DomainId::new(vfs::uri::domain(&destination).unwrap_or("local")),
             path: destination.clone(),
             format: format_from_path(&destination),
             fingerprint: Some(fingerprint),

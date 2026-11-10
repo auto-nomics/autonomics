@@ -1,6 +1,137 @@
 # Virtual File System
 
-Autonomics exposes storage resources through one Unix-style namespace. The runtime mounts local directories, S3-compatible buckets, and GitHub Container Registry OSS buckets under `vfs://`; DataFusion then reads them with ordinary paths.
+Autonomics addresses files by filesystem domain. Canonical public addresses use
+`<domain>://path`, for example `local://work/input.tsv` or
+`ht://share/input.tsv`. A domain identifies a filesystem partition declared by
+a mount; compute targets declare which domains they can access in place. A
+compute target name and a filesystem domain name need not be identical.
+
+`local` names the coordinator's mounted local namespace. It does not mean the
+current worker's host filesystem. Bare host paths and `file://` retain their
+existing host-path meaning at DAG boundaries. `vfs:///...` remains a legacy
+address for the composite mount namespace; new published references use domain
+URIs. The examples below using `vfs://` also document this compatibility form.
+Existing three-slash domain addresses remain readable and canonicalize to the
+two-slash form. `ht://share/input.tsv` means path `/share/input.tsv` in domain
+`ht`; `share` is a path component, not a hostname. The domain root is `ht://`.
+At DataFusion's URL boundary, use `vfs::uri::datafusion_uri(address)`; engine
+file nodes apply this adapter automatically so standard URL parsing preserves
+the first path component and existing percent escapes.
+
+Historical compute/source identifiers may contain capitals or underscores.
+Their filesystem addresses use lowercase with underscores replaced by dashes
+(for example source `Csu` at `/data/Csu` publishes `csu://...`). A leading digit
+or reserved scheme gets a `source-` prefix. Saved target revisions and mount
+paths retain their original spelling; conflicting domain names are rejected.
+
+## Agent address contract
+
+The `vfs` tool accepts canonical domain addresses for `path`, `src`, `dst`,
+and patch headers. Its schema and every agent kind's system prompt explain
+domain discovery, escaping, local namespace identity, and cross-domain copies.
+Successful file results publish canonical `path` / `uri` fields; listing names
+are display basenames, while `virtual_path` records the compatibility mount
+projection. Grep/glob matches and tree roots also use domain URIs. File contents,
+image blocks, byte offsets, and consistency tokens are never URI-rewritten.
+
+`vfs` op=`mount_list` returns each mount's canonical URI, effective domain,
+domain root, virtual projection and read-only flag, including permission
+submounts. Backend/source paths are metadata, not addresses to pass to file
+tools. Old unnamed remote mounts can only publish legacy `vfs://` references;
+runtime manifest migration assigns domains before normal operation.
+
+The agent's dynamic compute context publishes actual filesystem-domain roots
+independently of compute target names and refreshes when that mapping changes,
+even without a compute policy revision. `compute_status` includes canonical
+mount addresses. Plugin/environment workspaces and browser download results
+publish `local://` addresses as well. Legacy inputs remain readable, and native
+host paths keep their separate execution semantics.
+
+## Domain addresses
+
+Declare a domain on its primary mount:
+
+```toml
+[[backend]]
+id = "cluster-storage"
+type = "ssh"
+alias = "cluster-login"
+root = "/shared"
+
+[[mount]]
+path = "/data/cluster"
+backend = "cluster-storage"
+source = "/"
+read_only = true
+domain = "ht"
+```
+
+`ht://share/input.tsv` resolves to `/data/cluster/share/input.tsv` in the
+virtual namespace and `/shared/share/input.tsv` on that SSH backend. The same
+address is supported by file operations, DataFusion, node inputs, and artifact
+exports. Domain stores enforce the same principal, permissions, read-only
+policy, and replacement locks as the composite VFS store.
+Domain addresses are also accepted for Wiki/deck blob prefixes, deck asset
+inputs, and mounted plugin workspace selectors. Blob keys remain relative to
+their configured area.
+
+Names must be lowercase URI schemes beginning with a letter, followed by
+letters, digits, `+`, `.`, or `-`. `vfs`, `file`, `http`, and `https` are reserved; remote compute
+domains also cannot claim `local`. Each primary domain is unique. A permission
+submount may inherit its parent's domain only when it preserves the backend
+and object key. Named retained-output mounts must preserve the primary
+projection of their remote retained directory.
+
+Canonical paths percent-encode non-unreserved UTF-8 bytes, including literal
+percent signs. For example the object key `space name/doi%3Ax.txt` becomes
+`local://space%20name/doi%253Ax.txt`. Domain paths are decoded once before
+traversal and mount checks. Unknown domains, root escapes, encoded separators,
+and unencoded query/fragment syntax are refused. Legacy `vfs://` paths retain
+their historical spelling semantics.
+
+## Compatibility and migration
+
+At runtime startup, old manifests gain explicit domains without moving files.
+Existing domain declarations remain unchanged. The local root uses `local`;
+unnamed remote partitions use their unique backend name when it is a valid
+scheme, otherwise a deterministic mount-derived name. Existing named-domain
+permission submounts retain their inherited identity. The first original
+manifest is saved as `vfs.toml.pre-domain.bak`; migration preserves operator
+extension fields and replaces the manifest atomically. Repeated loading does
+not reassign names or overwrite that backup.
+
+`FileRef` readers infer placement from a domain URI and reject a conflicting
+explicit `domain` field. Old records without a domain retain compatibility;
+mounted legacy references restored from the file cache are upgraded using the
+current mount table. Node execution canonicalizes File, FileSet, and nested
+channel artifact outputs before publication. Content hashes remain unchanged.
+The VFS listing/stat API exposes `uri` alongside the legacy virtual `path`, and
+mount metadata exposes `domain`.
+
+With a mounted storage context, FileSet exact-path and glob selectors compare
+resolved virtual paths, so existing `vfs://` selectors can match canonical
+domain references while preserving the selected reference and its metadata.
+Workflow caches hash and revalidate domain-addressed outputs through VFS;
+they never treat a domain URI as a host filesystem path. Typed remote directory
+outputs keep their coordinator domain address in the dispatch envelope and are
+rebound to an isolated worker directory only for execution, then published back
+through the coordinator's checked mount table.
+
+## Live SSH acceptance
+
+The isolated SSH acceptance test creates and removes its own remote temporary
+directory. It verifies distinct local/remote bytes, transfers in both directions,
+read-only refusal, canonical metadata, and DataFusion CSV reads plus Parquet
+writes/readback with escaped names.
+Run it against an available SSH alias (normal test runs leave it ignored):
+
+```bash
+AUTONOMICS_VFS_TEST_SSH_ALIAS=ht cargo test -p vfs --test domain_ssh -- --ignored
+```
+
+Set `AUTONOMICS_VFS_TEST_PYTHON` when the remote Python 3 executable has a
+nondefault name. The test does not change the deployed VFS manifest or submit
+compute jobs.
 
 ## Concurrent writes
 

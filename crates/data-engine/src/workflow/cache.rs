@@ -86,7 +86,7 @@ impl CachedInstance {
         });
         for file in files {
             let expected = file.fingerprint.as_ref().map(|fp| fp.size);
-            if let Some(virtual_path) = file.path.strip_prefix("vfs://") {
+            if let Some(virtual_path) = vfs::uri::storage_path(&file.path) {
                 let Some(storage) = storage else {
                     return false;
                 };

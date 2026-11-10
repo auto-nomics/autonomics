@@ -75,7 +75,7 @@ async fn read_chunk(
     offset: u64,
     end: u64,
 ) -> Result<Vec<u8>, DagError> {
-    if let Some(path) = vfs::uri::virtual_path(&file.path) {
+    if let Some(path) = vfs::uri::storage_path(&file.path) {
         let storage = ctx
             .opendal
             .as_ref()
@@ -111,6 +111,9 @@ async fn ensure_fresh(ctx: &NodeCtx, target: &str) -> Result<(), DagError> {
         .ok_or_else(|| failure("publication requires VFS"))?;
     storage
         .check_writable(target)
+        .map_err(|e| failure(e.to_string()))?;
+    storage
+        .canonical_uri(target)
         .map_err(|e| failure(e.to_string()))?;
     // Reject static symlinks and non-directory ancestors on local mounts.
     if let Some(local) = storage.local_host_path(target) {
@@ -153,6 +156,9 @@ async fn publish_file(ctx: &NodeCtx, file: &FileRef, target: &str) -> Result<Fil
         .opendal
         .as_ref()
         .ok_or_else(|| failure("publication requires VFS"))?;
+    let canonical = storage
+        .canonical_uri(target)
+        .map_err(|e| failure(e.to_string()))?;
     let mut writer = storage
         .atomic_writer(target)
         .await
@@ -189,7 +195,8 @@ async fn publish_file(ctx: &NodeCtx, file: &FileRef, target: &str) -> Result<Fil
         .await
         .map_err(|e| failure(e.to_string()))?;
     let mut published = file.clone();
-    published.path = vfs::uri::uri(target);
+    published.path = canonical;
+    published.domain = crate::DomainId::new(vfs::uri::domain(&published.path).unwrap_or("local"));
     published.fingerprint.as_mut().unwrap().immutable_remote = false;
     Ok(published)
 }
@@ -207,8 +214,15 @@ pub(super) async fn publish(
             .spec
             .pointer(pointer)
             .and_then(serde_json::Value::as_str)
-            .and_then(|s| vfs::uri::virtual_path(s))
+            .and_then(|s| vfs::uri::storage_path(s))
             .ok_or_else(|| failure("coordinator publication destination must be VFS"))?;
+        let destination = ctx
+            .opendal
+            .as_ref()
+            .ok_or_else(|| failure("publication requires VFS"))?
+            .try_resolve_virtual(destination)
+            .map_err(|e| failure(e.to_string()))?;
+        let destination = destination.as_str();
         let files = outputs
             .get(port)
             .ok_or_else(|| failure("missing publication output"))?

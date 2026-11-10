@@ -250,6 +250,7 @@ mod tests {
             vec![
                 vfs::browse::VfsEntry {
                     path: "/data".into(),
+                    uri: None,
                     name: "data".into(),
                     is_dir: true,
                     size: 0,
@@ -257,6 +258,7 @@ mod tests {
                 },
                 vfs::browse::VfsEntry {
                     path: "/notes.md".into(),
+                    uri: None,
                     name: "notes.md".into(),
                     is_dir: false,
                     size: 12,
@@ -265,6 +267,22 @@ mod tests {
             ],
         );
         state
+    }
+
+    #[test]
+    fn preview_uses_domain_uri_and_permissions_use_deepest_mount() {
+        let mut state = state_with_entries();
+        state.entries[1].uri = Some("ht://notes.md".into());
+        state.handle_key(key(KeyCode::Down));
+        assert_eq!(
+            state.handle_key(key(KeyCode::Enter)),
+            Some(VfsBrowserCommand::LoadText("ht://notes.md".into()))
+        );
+        state.mounts = vec![("/".into(), true), ("/work".into(), false)];
+        state.cwd = "/work/sub".into();
+        assert!(!state.read_only_cwd());
+        state.cwd = "/other".into();
+        assert!(state.read_only_cwd());
     }
 
     #[test]
@@ -330,6 +348,7 @@ mod tests {
             "/data".into(),
             vec![vfs::browse::VfsEntry {
                 path: "/data/panel.parquet".into(),
+                uri: None,
                 name: "panel.parquet".into(),
                 is_dir: false,
                 size: 5,

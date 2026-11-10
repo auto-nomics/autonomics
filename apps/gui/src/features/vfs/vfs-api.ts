@@ -11,6 +11,8 @@ import { isTauri } from "@/lib/is-tauri";
 export interface VfsEntry {
   /** Full virtual path, e.g. `/data/ldsc/panel.parquet`. */
   path: string;
+  /** Canonical address, such as ht://share/table.tsv. */
+  uri?: string | null;
   /** Final path segment. */
   name: string;
   is_dir: boolean;
@@ -28,6 +30,7 @@ export interface VfsListing {
 
 export interface VfsMount {
   path: string;
+  domain?: string | null;
   backend: string;
   source: string;
   read_only: boolean;
@@ -35,6 +38,7 @@ export interface VfsMount {
 
 export interface VfsStat {
   path: string;
+  uri?: string | null;
   name: string;
   is_dir: boolean;
   size: number;

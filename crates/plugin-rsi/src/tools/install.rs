@@ -16,7 +16,7 @@ use super::helpers::{resolve_target, tool_error};
                    This is required after fork/edit before the node can run; it does not publish to GitHub."
 )]
 pub(super) struct PluginInstallInput {
-    /// Developed workspace path, such as `/plugins/dev/hello-world`.
+    /// Developed workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
 }
 

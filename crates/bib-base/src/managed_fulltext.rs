@@ -136,7 +136,9 @@ pub async fn materialize_legacy(shared: &BibShared, mut ft: FullText) -> Result<
         .as_ref()
         .map(|s| format!("{s}.txt"))
         .unwrap_or_else(|| "fulltext.txt".into());
-    let stored = stored_attachment(&ft.article_id, &key, &filename, text.as_bytes());
+    let stored = stored_attachment(&ft.article_id, &key, &filename, text.as_bytes())
+        .canonicalized(storage)
+        .map_err(|e| Error::Unknown(e.to_string()))?;
     storage
         .write_bytes(
             &vfs_virtual_path(&stored.path).unwrap(),
@@ -208,7 +210,9 @@ pub async fn store_pdf(
     let previous = shared.bib.zotero_attachment(article_id).await?;
     let key = uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase();
     let filename = pdf.filename();
-    let stored = stored_attachment(article_id, &key, &filename, &pdf.bytes);
+    let stored = stored_attachment(article_id, &key, &filename, &pdf.bytes)
+        .canonicalized(storage)
+        .map_err(|e| Error::Unknown(e.to_string()))?;
     let size = pdf.bytes.len() as i64;
     storage
         .write_bytes(&vfs_virtual_path(&stored.path).unwrap(), pdf.bytes)

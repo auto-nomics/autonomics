@@ -32,6 +32,7 @@ struct EchoNode {
     path: Option<String>,
     container_dispatch: bool,
     host_service: bool,
+    destination: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -55,7 +56,13 @@ impl crate::DagNode for EchoNode {
         if self.omit_output {
             return Ok(outputs);
         }
-        if let Some(path) = &self.path {
+        if let Some(destination) = &self.destination {
+            let root = std::path::Path::new(destination.strip_prefix("file://").unwrap());
+            std::fs::create_dir_all(root).unwrap();
+            let path = root.join("result %part.txt");
+            std::fs::write(&path, b"published directory bytes").unwrap();
+            outputs.insert(0, NodeValue::FileSet(vec![FileRef::local(&path, None)?]));
+        } else if let Some(path) = &self.path {
             assert!(inputs.is_empty(), "spec file must not become a node port");
             outputs.insert_file(
                 0,
@@ -72,6 +79,13 @@ impl crate::DagNode for EchoNode {
     fn file_input_spec_pointers(&self, _: &[NodeInput]) -> Vec<&'static str> {
         if self.path.is_some() {
             vec!["/path"]
+        } else {
+            vec![]
+        }
+    }
+    fn file_output_directory_spec_pointers(&self) -> Vec<(&'static str, u8)> {
+        if self.destination.is_some() {
+            vec![("/destination", 0)]
         } else {
             vec![]
         }
@@ -127,6 +141,10 @@ impl NodeFactory for EchoFactory {
             omit_output: spec["omit_output"].as_bool().unwrap_or(false),
             container_dispatch: false,
             host_service: spec["host_service"].as_bool().unwrap_or(false),
+            destination: spec["directory_output"]
+                .as_bool()
+                .unwrap_or(false)
+                .then(|| spec["destination"].as_str().unwrap().to_owned()),
             path: spec["path"].as_str().map(str::to_owned),
             ports: if spec["optional_output"].as_bool().unwrap_or(false) {
                 NodePorts::new()
@@ -140,6 +158,86 @@ impl NodeFactory for EchoFactory {
             },
         }))
     }
+}
+
+#[tokio::test]
+async fn domain_directory_output_is_rebound_and_published_by_typed_worker() {
+    let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+    let mut invocation = execution();
+    invocation.submission.spec = task("file_set");
+    invocation.submission.spec.inputs.clear();
+    invocation.submission.inputs.clear();
+    invocation.submission.spec.spec = serde_json::json!({
+        "type": "file_set", "directory_output": true,
+        "destination": "local://exports/directory"
+    });
+    invocation.node = registry()
+        .build_node(
+            &invocation.submission.spec.kind,
+            invocation.submission.spec.spec.clone(),
+        )
+        .unwrap();
+    invocation.engine_ctx = Arc::new(NodeCtx::new(
+        SessionContext::new().runtime_env(),
+        Some(storage.clone()),
+    ));
+    let executor = TypedRemoteTaskExecutor::new(
+        Arc::new(CaptureExecutor {
+            calls: Arc::new(AtomicUsize::new(0)),
+            capture: false,
+        }),
+        settings(),
+    )
+    .unwrap();
+    executor.prepare(&mut invocation).unwrap();
+    let envelope: TypedWorkerEnvelope =
+        serde_json::from_value(invocation.submission.spec.spec["typed_dispatch"].clone()).unwrap();
+    assert_eq!(
+        envelope.task.spec["destination"],
+        "local://exports/directory"
+    );
+    assert_eq!(envelope.output_directories["/destination"], 0);
+    let worker = tempfile::tempdir().unwrap();
+    execute_typed_worker(&envelope, &registry(), BTreeMap::new(), worker.path())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read(worker.path().join("typed-outputs/port-0/00000000.txt")).unwrap(),
+        b"published directory bytes"
+    );
+    let mut transported = Vec::new();
+    for name in ["00000000.txt", "zz-publication.json"] {
+        let path = worker.path().join("typed-outputs/port-0").join(name);
+        let mut file = FileRef::local(&path, None).unwrap();
+        use sha2::Digest;
+        file.fingerprint.as_mut().unwrap().content_hash = Some(format!(
+            "sha256:{:x}",
+            sha2::Sha256::digest(std::fs::read(&path).unwrap())
+        ));
+        transported.push(file);
+    }
+    let mut outputs = PortOutputs::new();
+    outputs.insert(0, NodeValue::FileSet(transported));
+    super::super::typed_publication::publish(&envelope, &mut outputs, &invocation.engine_ctx)
+        .await
+        .unwrap();
+    let files = outputs.get(&0).unwrap().as_file_set().unwrap();
+    assert_eq!(
+        files[0].path,
+        "local://exports/directory/result%20%25part.txt"
+    );
+    assert_eq!(
+        invocation
+            .engine_ctx
+            .opendal
+            .as_ref()
+            .unwrap()
+            .read_range(&files[0].path, 0..b"published directory bytes".len() as u64)
+            .await
+            .unwrap()
+            .to_vec(),
+        b"published directory bytes"
+    );
 }
 
 #[tokio::test]
@@ -212,7 +310,7 @@ async fn spec_file_is_staged_from_coordinator_vfs_and_rebound_without_a_node_por
     forged_directory
         .output_directories
         .insert("/destination".into(), 0);
-    forged_directory.task.spec["destination"] = serde_json::json!("vfs:///work/forged");
+    forged_directory.task.spec["destination"] = serde_json::json!("local://work/forged");
     let error = execute_typed_worker(
         &forged_directory,
         &registry(),
@@ -843,6 +941,7 @@ fn remote_lowering_prepares_tuple_before_recording_file_artifacts() {
         path: None,
         container_dispatch: false,
         host_service: false,
+        destination: None,
     }));
     remote.prepare(&mut invocation).unwrap();
     let envelope: TypedWorkerEnvelope =

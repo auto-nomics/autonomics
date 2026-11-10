@@ -151,7 +151,7 @@ impl PluginStore {
     /// Return the VFS address for one development workspace.
     pub fn development_vfs_path(&self, plugin_name: &str) -> Result<String> {
         crate::validate_plugin_name(plugin_name)?;
-        Ok(format!("{PLUGIN_DEVELOPMENT_VFS_ROOT}/{plugin_name}"))
+        Ok(vfs::uri::join_path("local://plugins/dev", plugin_name))
     }
 
     /// Return the immutable runtime materialization root.

@@ -1519,7 +1519,7 @@ pub(crate) async fn sync_fulltext_attachment(
         item_id
     };
 
-    let is_vfs = vfs::uri::is_uri(&fulltext.file_path);
+    let is_vfs = crate::stored_files::vfs_virtual_path(&fulltext.file_path).is_some();
     let original_filename = if is_vfs {
         Some(filename_from_vfs_uri(&fulltext.file_path))
     } else {
@@ -1836,7 +1836,13 @@ fn new_item_key() -> String {
 }
 
 fn filename_from_vfs_uri(uri: &str) -> String {
-    let raw = uri.rsplit('/').next().unwrap_or("attachment");
+    // Domain URI encoding wraps the bibliography's existing component
+    // encoding. Decode the URI layer before decoding the stored filename.
+    let decoded = vfs::uri::domain(uri)
+        .and_then(|_| vfs::uri::split_scheme(uri))
+        .and_then(|(_, path)| vfs::uri::decode_path(path).ok());
+    let path = decoded.as_deref().unwrap_or(uri);
+    let raw = path.rsplit('/').next().unwrap_or("attachment");
     decode_component(raw.split_once('-').map_or(raw, |(_, filename)| filename))
 }
 
@@ -2170,5 +2176,20 @@ mod tests {
             attachment.key,
             "fulltext".to_owned()
         )));
+    }
+}
+
+#[cfg(test)]
+mod domain_filename_tests {
+    #[test]
+    fn canonical_and_legacy_attachment_addresses_keep_the_original_filename() {
+        assert_eq!(
+            super::filename_from_vfs_uri("vfs:///literature/a/hash-paper%20one.pdf"),
+            "paper one.pdf"
+        );
+        assert_eq!(
+            super::filename_from_vfs_uri("local://literature/a/hash-paper%2520one.pdf"),
+            "paper one.pdf"
+        );
     }
 }

@@ -231,13 +231,6 @@ fn vault_set(path: &Path, alias: &str, args: &[String]) -> i32 {
             "  (the base32 string from the cluster's OTP enrollment page / QR manual-entry code)"
         );
         let secret = prompt_secret("  OTP shared secret (base32)");
-        // Double entry: the prompts are echo-free, so a silent typo would
-        // otherwise surface only as permanently wrong codes at login.
-        let confirm = prompt_secret("  confirm OTP secret");
-        if secret != confirm {
-            eprintln!("OTP secrets do not match");
-            return 1;
-        }
         // Refuse to store a secret that cannot produce codes.
         if let Err(error) =
             crate::credential::totp_code(&secret, digits, period, std::time::SystemTime::now())

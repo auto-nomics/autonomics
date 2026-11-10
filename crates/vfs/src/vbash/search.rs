@@ -287,7 +287,9 @@ pub async fn op_grep(
     after: Option<usize>,
     case_insensitive: Option<bool>,
 ) -> Result<AgentToolResult, ToolError> {
-    let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
+    let vpath = storage
+        .try_resolve_virtual(path.unwrap_or("/"))
+        .map_err(|e| e.to_string())?;
     let pattern = pattern.ok_or("missing 'pattern' for grep")?;
     if let Err(error) = storage.check_listable(&vpath) {
         return Ok(AgentToolResult::error(format!("grep: '{vpath}': {error}")));
@@ -337,7 +339,7 @@ pub async fn op_grep(
         let (fr, scanned, skipped) = search_file(
             &op,
             &remote,
-            &vpath,
+            &super::address::uri(storage, &vpath)?,
             &re,
             output_mode,
             before,
@@ -397,7 +399,7 @@ pub async fn op_grep(
         let (fr, scanned, skipped) = search_file(
             &op,
             &entry_path,
-            &display_path,
+            &super::address::uri(storage, &display_path)?,
             &re,
             output_mode,
             before,
@@ -443,7 +445,9 @@ pub async fn op_glob(
     path: Option<&str>,
     pattern: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
-    let vpath = OpendalFileStorage::normalize_path(path.unwrap_or("/"));
+    let vpath = storage
+        .try_resolve_virtual(path.unwrap_or("/"))
+        .map_err(|e| e.to_string())?;
     let pattern = pattern.ok_or("missing 'pattern' for glob")?;
     if let Err(error) = storage.check_listable(&vpath) {
         return Ok(AgentToolResult::error(format!("glob: '{vpath}': {error}")));
@@ -479,12 +483,7 @@ pub async fn op_glob(
         }
 
         if pat.matches(rel) || pat.matches(&display) {
-            let rendered = if display.starts_with('/') {
-                display
-            } else {
-                format!("/{display}")
-            };
-            matches.push(rendered);
+            matches.push(super::address::uri(storage, &display)?);
             if matches.len() >= GLOB_MAX_RESULTS {
                 break;
             }

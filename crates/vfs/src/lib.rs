@@ -1,4 +1,5 @@
 mod authorized;
+mod domain_store;
 mod execution_mount;
 mod ssh;
 mod ssh_endpoint;
@@ -19,7 +20,7 @@ pub use mount::{
 pub use ssh::{SshLocation, build_ssh_operator, build_ssh_operator_with_program};
 pub use ssh_endpoint::SshEndpoint;
 pub use storage::OpendalFileStorage;
-pub use vbash::vbash_registrations;
+pub use vbash::{AgentMount, agent_mounts, vbash_registrations};
 
 // Re-export so downstream crates can reference opendal error/operator types
 // without taking a direct dependency on the opendal crate.

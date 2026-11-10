@@ -83,7 +83,7 @@ function Row({
 
   const download = async () => {
     try {
-      await downloadVfsFile(node.path);
+      await downloadVfsFile(node.uri ?? node.path);
     } catch (cause) {
       setError(String((cause as { message?: string } | null)?.message ?? cause));
     }
@@ -97,11 +97,11 @@ function Row({
         aria-expanded={node.is_dir ? isOpen : undefined}
         aria-current={active ? "true" : undefined}
         aria-label={node.path}
-        title={`${node.path}${node.is_dir ? "" : ` · ${formatBytes(node.size)}`}`}
+        title={`${node.uri ?? node.path}${node.is_dir ? "" : ` · ${formatBytes(node.size)}`}`}
         data-vfs-path={node.path}
         data-vfs-dir={node.is_dir || undefined}
         disabled={busy}
-        onClick={() => (node.is_dir ? (toggleDir(node.path), onSelect(node)) : void openOrDownloadVfsFile(node.path, node.readOnly))}
+        onClick={() => (node.is_dir ? (toggleDir(node.path), onSelect(node)) : void openOrDownloadVfsFile(node.uri ?? node.path, node.readOnly))}
         className={cn(
           "flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left text-xs hover:bg-accent",
           !node.is_dir && "cursor-pointer",

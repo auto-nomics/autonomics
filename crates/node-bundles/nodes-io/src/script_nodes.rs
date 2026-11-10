@@ -274,6 +274,7 @@ fn validate(spec: &ScriptNodeSpec) -> Result<(), String> {
     }
     if let Some(prefix) = &spec.artifact_prefix
         && !prefix.starts_with('/')
+        && vfs::uri::storage_path(prefix).is_none()
     {
         return Err("artifact_prefix must be an absolute VFS path when set".into());
     }

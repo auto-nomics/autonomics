@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "SQL and echo DAG node bundle."
 
 [dependencies]
+vfs = { path = "../../vfs" }
 dag-core = { path = "../../dag-core" }
 arrow-array.workspace = true
 arrow-cast.workspace = true

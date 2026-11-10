@@ -83,7 +83,10 @@ async fn agent_can_create_an_empty_greenfield_plugin_workspace() {
     };
 
     assert_eq!(output["plugin_name"], "greenfield-plugin");
-    assert_eq!(output["plugin_vfs_path"], "/plugins/dev/greenfield-plugin");
+    assert_eq!(
+        output["plugin_vfs_path"],
+        "local://plugins/dev/greenfield-plugin"
+    );
     assert_eq!(output["environment_id"], "alpine");
     assert_eq!(output["environment_reference"], ENVIRONMENT_REFERENCE);
     assert_eq!(output["status"], "draft");

@@ -132,14 +132,20 @@ async fn validate_worker_package(path: &Path) -> Result<(), String> {
     let bytes = tokio::fs::read(path).await.map_err(|e| format!("matching worker package unavailable at {}: {e}; install autonomics-worker alongside the gateway from the same build", path.display()))?;
     let sha = format!("{:x}", Sha256::digest(&bytes));
     drop(bytes);
-    let output = tokio::process::Command::new(path).arg("identity")
-        .kill_on_drop(true).output();
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), output).await
+    let output = tokio::process::Command::new(path)
+        .arg("identity")
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), output)
+        .await
         .map_err(|_| "local worker identity check timed out")?
         .map_err(|e| format!("local worker identity check failed: {e}"))?;
-    if !output.status.success() { return Err("local worker identity check failed".into()); }
+    if !output.status.success() {
+        return Err("local worker identity check failed".into());
+    }
     let identity: dag_core::dag::execution::typed_worker::WorkerIdentity =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("invalid local worker identity: {e}"))?;
+        serde_json::from_slice(&output.stdout)
+            .map_err(|e| format!("invalid local worker identity: {e}"))?;
     identity.validate(&sha).map_err(|e| e.to_string())
 }
 
@@ -153,17 +159,28 @@ mod repair_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("autonomics-worker");
         for revision in ["old-source", dag_core::source_revision()] {
-            let script = format!(r#"#!/bin/sh
+            let script = format!(
+                r#"#!/bin/sh
 hash=$(sha256sum -- "$0"); hash=${{hash%% *}}
 printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","executable_sha256":"%s","capabilities":["task-worker"]}}\n' "$hash"
-"#, revision);
+"#,
+                revision
+            );
             fs::write(&path, script).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
             let result = validate_worker_package(&path).await;
-            if revision == "old-source" { assert!(result.unwrap_err().contains("differs from coordinator")); }
-            else { result.unwrap(); }
+            if revision == "old-source" {
+                assert!(result.unwrap_err().contains("differs from coordinator"));
+            } else {
+                result.unwrap();
+            }
         }
-        assert!(validate_worker_package(&dir.path().join("missing")).await.unwrap_err().contains("matching worker package unavailable"));
+        assert!(
+            validate_worker_package(&dir.path().join("missing"))
+                .await
+                .unwrap_err()
+                .contains("matching worker package unavailable")
+        );
     }
 }
 
@@ -185,34 +202,71 @@ pub(super) fn valid_sha256(value: &str) -> bool {
 
 impl ComputeRegistry {
     /// Replace only the worker pin, preserving the target's remaining configuration.
-    pub async fn repair_worker(&self, request: RepairWorkerRequest) -> Result<ComputeRegistryState, String> {
-        self.repair_worker_with_progress(request, EnrollProgress::default()).await
+    pub async fn repair_worker(
+        &self,
+        request: RepairWorkerRequest,
+    ) -> Result<ComputeRegistryState, String> {
+        self.repair_worker_with_progress(request, EnrollProgress::default())
+            .await
     }
 
-    pub async fn repair_worker_with_progress(&self, request: RepairWorkerRequest, progress: EnrollProgress) -> Result<ComputeRegistryState, String> {
+    pub async fn repair_worker_with_progress(
+        &self,
+        request: RepairWorkerRequest,
+        progress: EnrollProgress,
+    ) -> Result<ComputeRegistryState, String> {
         progress.report("validate", "正在读取目标已有配置");
         let state = self.state();
-        if state.revision != request.expected_revision { return Err("stale compute revision; reload settings".into()); }
-        let target = state.targets.iter().rev().find(|t| t.id == request.target_id)
-            .ok_or("unknown target")?.clone();
-        if state.deleted_target_ids.contains(&target.id) { return Err("target is deleted".into()); }
+        if state.revision != request.expected_revision {
+            return Err("stale compute revision; reload settings".into());
+        }
+        let target = state
+            .targets
+            .iter()
+            .rev()
+            .find(|t| t.id == request.target_id)
+            .ok_or("unknown target")?
+            .clone();
+        if state.deleted_target_ids.contains(&target.id) {
+            return Err("target is deleted".into());
+        }
         let mut settings = match &target.backend {
             ComputeBackend::Slurm { settings } => settings.clone(),
             _ => return Err("worker repair currently requires a Slurm target".into()),
         };
         if let Some(pinned) = target.endpoints.get(&settings.ssh_host) {
             let current = vfs::SshEndpoint::capture(&settings.ssh_command, &settings.ssh_host)?;
-            if &current != pinned { return Err("SSH endpoint changed since this target revision; review the target configuration before repair".into()); }
+            if &current != pinned {
+                return Err("SSH endpoint changed since this target revision; review the target configuration before repair".into());
+            }
         }
-        let profile_path = settings.typed_worker_config.as_ref().ok_or("target has no worker profile")?;
+        let profile_path = settings
+            .typed_worker_config
+            .as_ref()
+            .ok_or("target has no worker profile")?;
         let profile_bytes = read_owned(profile_path, false)?;
-        if target.capsule_sha256.get("worker.json").is_some_and(|expected| *expected != format!("{:x}", Sha256::digest(&profile_bytes))) {
+        if target
+            .capsule_sha256
+            .get("worker.json")
+            .is_some_and(|expected| *expected != format!("{:x}", Sha256::digest(&profile_bytes)))
+        {
             return Err("pinned worker profile hash mismatch".into());
         }
-        let mut profile: serde_json::Value = serde_json::from_slice(&profile_bytes).map_err(|e| e.to_string())?;
-        let old_path = profile["worker"]["executable"].as_str().ok_or("worker executable missing from profile")?;
-        if !old_path.starts_with('/') { return Err("worker executable must be absolute".into()); }
-        let connection = super::cluster_connection::ClusterConnection::new(&target.id, &settings.ssh_host, &settings.ssh_command, &settings.remote_python).with_progress(progress.clone());
+        let mut profile: serde_json::Value =
+            serde_json::from_slice(&profile_bytes).map_err(|e| e.to_string())?;
+        let old_path = profile["worker"]["executable"]
+            .as_str()
+            .ok_or("worker executable missing from profile")?;
+        if !old_path.starts_with('/') {
+            return Err("worker executable must be absolute".into());
+        }
+        let connection = super::cluster_connection::ClusterConnection::new(
+            &target.id,
+            &settings.ssh_host,
+            &settings.ssh_command,
+            &settings.remote_python,
+        )
+        .with_progress(progress.clone());
         connection.authenticate().await?;
         // A healthy worker only needs a fresh connection and identity observation.
         // Repair transport failures or stale pins using the bundled worker below.
@@ -220,19 +274,28 @@ impl ComputeRegistry {
             let sha = connection.probe_worker(old_path).await?;
             connection.verify_worker_identity(old_path, &sha).await?;
             if profile["worker"]["executable_sha256"] != sha
-                || profile["worker"]["expected_source_revision"] != dag_core::source_revision() {
+                || profile["worker"]["expected_source_revision"] != dag_core::source_revision()
+            {
                 return Err("worker pin needs an updated target revision".to_string());
             }
             Ok::<_, String>(())
-        }.await;
+        }
+        .await;
         match existing_worker {
             Ok(()) => {
                 if self.state().revision != request.expected_revision {
-                    return Err("compute registry changed during repair; reload the dashboard".into());
+                    return Err(
+                        "compute registry changed during repair; reload the dashboard".into(),
+                    );
                 }
-                if state.policy.target_id == target.id && state.policy.target_revision != target.revision {
+                if state.policy.target_id == target.id
+                    && state.policy.target_revision != target.revision
+                {
                     progress.report("select_target", "正在激活已验证的目标修订");
-                    return self.select(SelectTarget { expected_revision: state.revision, target_id: target.id });
+                    return self.select(SelectTarget {
+                        expected_revision: state.revision,
+                        target_id: target.id,
+                    });
                 }
                 progress.report("ready", "连接及 worker 校验通过，无需更新");
                 return Ok(state);
@@ -241,25 +304,58 @@ impl ComputeRegistry {
         }
         progress.report("worker_package", "正在检查系统随附的匹配 worker");
         let package = bundled_worker().await?;
-        let parent = Path::new(old_path).parent().ok_or("worker directory missing")?;
-        let destination = parent.join(format!("autonomics-worker-repair-{}", uuid::Uuid::new_v4())).to_string_lossy().into_owned();
-        connection.deploy_worker(package.to_str().ok_or("worker package path is not UTF-8")?, &destination).await?;
+        let parent = Path::new(old_path)
+            .parent()
+            .ok_or("worker directory missing")?;
+        let destination = parent
+            .join(format!("autonomics-worker-repair-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .into_owned();
+        connection
+            .deploy_worker(
+                package.to_str().ok_or("worker package path is not UTF-8")?,
+                &destination,
+            )
+            .await?;
         let sha = connection.probe_worker(&destination).await?;
-        connection.verify_worker_identity(&destination, &sha).await?;
+        connection
+            .verify_worker_identity(&destination, &sha)
+            .await?;
         profile["worker"]["executable"] = serde_json::json!(destination);
         profile["worker"]["executable_sha256"] = serde_json::json!(sha);
-        profile["worker"]["expected_source_revision"] = serde_json::json!(dag_core::source_revision());
-        let staging = self.root.join("targets").join(format!("{}-repair-{}", target.id, uuid::Uuid::new_v4()));
+        profile["worker"]["expected_source_revision"] =
+            serde_json::json!(dag_core::source_revision());
+        let staging = self.root.join("targets").join(format!(
+            "{}-repair-{}",
+            target.id,
+            uuid::Uuid::new_v4()
+        ));
         private_dir(&staging)?;
         let path = staging.join("worker.json");
-        write_bytes_new(&path, &serde_json::to_vec(&profile).map_err(|e| e.to_string())?)?;
+        write_bytes_new(
+            &path,
+            &serde_json::to_vec(&profile).map_err(|e| e.to_string())?,
+        )?;
         settings.typed_worker_config = Some(path);
         progress.report("save_target", "正在保存已验证的 worker 新修订");
-        let saved = self.save_target(SaveTarget { expected_revision: request.expected_revision, id: target.id.clone(), name: target.name, enabled: target.enabled, backend: ComputeBackend::Slurm { settings }, data_domains: target.data_domains })?;
+        let saved = self.save_target(SaveTarget {
+            expected_revision: request.expected_revision,
+            id: target.id.clone(),
+            name: target.name,
+            enabled: target.enabled,
+            backend: ComputeBackend::Slurm { settings },
+            data_domains: target.data_domains,
+        })?;
         if state.policy.target_id == target.id {
             progress.report("select_target", "正在激活修复后的目标");
-            self.select(SelectTarget { expected_revision: saved.revision, target_id: target.id }).map_err(|e| format!("worker revision saved but activation failed: {e}"))
-        } else { Ok(saved) }
+            self.select(SelectTarget {
+                expected_revision: saved.revision,
+                target_id: target.id,
+            })
+            .map_err(|e| format!("worker revision saved but activation failed: {e}"))
+        } else {
+            Ok(saved)
+        }
     }
     /// Enroll (or upgrade) one cluster target from minimal input. The
     /// sequence is: worker probe → profile generation → data-source
@@ -410,7 +506,7 @@ impl ComputeRegistry {
                     python: settings.remote_python.clone(),
                 },
                 read_only: true,
-                domain: Some(request.id.clone()),
+                domain: Some(source_address_domain(&request.id)),
                 endpoint: None,
                 permissions: Default::default(),
             };
@@ -430,7 +526,7 @@ impl ComputeRegistry {
         let data_domains = data
             .map(|(alias, root)| {
                 vec![DataDomain {
-                    id: request.id.clone(),
+                    id: source_address_domain(&request.id),
                     ssh_aliases: vec![alias],
                     remote_root: root,
                     vfs_prefix: format!("/data/{}", request.id),

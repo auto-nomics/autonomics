@@ -305,6 +305,7 @@ pub(crate) fn validate(spec: &ContainerCommandSpec) -> Result<(), ContainerComma
     }
     if let Some(prefix) = &spec.artifact_prefix
         && !prefix.starts_with('/')
+        && vfs::uri::storage_path(prefix).is_none()
     {
         return Err(ContainerCommandError::Invalid(
             "`artifact_prefix` must be an absolute VFS path when set".into(),
@@ -1086,6 +1087,8 @@ mod tests {
             ],
             "result.txt",
         );
+        node_spec.artifact_prefix = Some("local://artifacts/test".into());
+        validate(&node_spec).unwrap();
         node_spec.workdir = Some(dir.to_string_lossy().into_owned());
         let mut node = ContainerCommandNode::new(
             "container_command",
@@ -1130,7 +1133,7 @@ mod tests {
         // When `artifact_prefix` is configured, the downstream value is the
         // immutable published artifact, not the mutable work-dir path.
         let run_name = request.name.clone();
-        let published = format!("vfs:///artifacts/test/{run_name}/result.txt");
+        let published = format!("local://artifacts/test/{run_name}/result.txt");
         let file = outputs.get(&0).unwrap().as_file().unwrap();
         assert_eq!(file.path, published);
         let fingerprint = file.fingerprint.as_ref().unwrap();
@@ -1143,7 +1146,7 @@ mod tests {
         );
         assert!(fingerprint.immutable_remote);
         let storage = env.ctx.opendal.as_ref().unwrap();
-        let virtual_path = vfs::uri::virtual_path(&published).unwrap();
+        let virtual_path = vfs::uri::storage_path(&published).unwrap();
         let length = storage.content_length(virtual_path).await.unwrap();
         let stored = storage.read_range(virtual_path, 0..length).await.unwrap();
         assert_eq!(stored.to_vec(), b"hello-container");

@@ -215,7 +215,7 @@ impl ResultCache {
 }
 
 fn output_available(file: &FileRef) -> bool {
-    if vfs::uri::is_uri(&file.path) {
+    if vfs::uri::storage_path(&file.path).is_some() {
         return true;
     }
     Path::new(&file.path).exists()
@@ -830,13 +830,13 @@ fn vfs_artifacts_from_value(value: &serde_json::Value) -> Vec<(String, u64)> {
 fn walk_vfs(value: &serde_json::Value, output: &mut Vec<(String, u64)>) {
     match value {
         serde_json::Value::String(raw) => {
-            if vfs::uri::is_uri(raw) {
+            if vfs::uri::storage_path(raw).is_some() {
                 output.push((normalize_vfs_uri(raw), 0));
             }
         }
         serde_json::Value::Object(map) => {
             if let Some(serde_json::Value::String(path)) = map.get("path")
-                && vfs::uri::is_uri(path)
+                && vfs::uri::storage_path(path).is_some()
             {
                 let bytes = map
                     .get("fingerprint")

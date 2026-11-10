@@ -50,7 +50,19 @@ impl FileSetSelectNode {
         }
     }
 
-    fn select(&self, files: &[FileRef]) -> Result<FileRef, DagError> {
+    fn select(
+        &self,
+        files: &[FileRef],
+        storage: Option<&vfs::OpendalFileStorage>,
+    ) -> Result<FileRef, DagError> {
+        let comparable = |path: &str| -> Result<String, DagError> {
+            match (storage, vfs::uri::storage_path(path)) {
+                (Some(storage), Some(path)) => storage
+                    .try_resolve_virtual(path)
+                    .map_err(|e| DagError::Schedule(e.to_string())),
+                _ => Ok(path.to_owned()),
+            }
+        };
         if let Some(index) = self.spec.index {
             return files.get(index).cloned().ok_or_else(|| {
                 DagError::Schedule(format!(
@@ -61,21 +73,26 @@ impl FileSetSelectNode {
         }
 
         if let Some(path) = &self.spec.path {
-            return files
-                .iter()
-                .find(|file| &file.path == path)
-                .cloned()
-                .ok_or_else(|| DagError::Schedule(format!("FileSet has no path `{path}`")));
+            let expected = comparable(path)?;
+            for file in files {
+                if comparable(&file.path)? == expected {
+                    return Ok(file.clone());
+                }
+            }
+            return Err(DagError::Schedule(format!("FileSet has no path `{path}`")));
         }
 
         if let Some(pattern) = &self.spec.glob {
-            let pattern = glob::Pattern::new(pattern).map_err(|error| {
+            let comparable_pattern = comparable(pattern)?;
+            let pattern = glob::Pattern::new(&comparable_pattern).map_err(|error| {
                 DagError::Schedule(format!("invalid file_set_select glob `{pattern}`: {error}"))
             })?;
-            let matches: Vec<&FileRef> = files
-                .iter()
-                .filter(|file| pattern.matches(&file.path))
-                .collect();
+            let mut matches = Vec::new();
+            for file in files {
+                if pattern.matches(&comparable(&file.path)?) {
+                    matches.push(file);
+                }
+            }
             if matches.len() != 1 {
                 if self.spec.require_unique {
                     return Err(DagError::Schedule(format!(
@@ -119,7 +136,7 @@ impl DagNode for FileSetSelectNode {
 
     async fn execute(
         &mut self,
-        _ctx: &NodeCtx,
+        ctx: &NodeCtx,
         inputs: &[NodeInput],
         _reporter: &dag_core::dag::node_event::NodeReporter,
     ) -> Result<PortOutputs, DagError> {
@@ -130,7 +147,7 @@ impl DagNode for FileSetSelectNode {
             })?
             .data
             .as_file_set()?;
-        let file = self.select(files)?;
+        let file = self.select(files, ctx.opendal.as_deref())?;
         let mut outputs = PortOutputs::new();
         outputs.insert_file(0, file);
         Ok(outputs)
@@ -219,6 +236,28 @@ mod tests {
         let selected = outputs.get(&0).unwrap().as_file().unwrap();
         assert_eq!(selected.path, "vfs:///extracted/a/table.csv");
         assert_eq!(selected.format.as_deref(), Some("csv"));
+    }
+
+    #[test]
+    fn legacy_and_domain_selectors_match_canonical_files() {
+        let storage = vfs::OpendalFileStorage::new_temp();
+        let files = vec![file("local://extracted/a/table%20%25.csv", "csv")];
+        for (path, glob) in [
+            (Some("vfs:///extracted/a/table %.csv"), None),
+            (None, Some("vfs:///extracted/**/*.csv")),
+            (Some("local://extracted/a/table%20%25.csv"), None),
+            (None, Some("local://extracted/**/*.csv")),
+        ] {
+            let node = FileSetSelectNode::new(FileSetSelectSpec {
+                path: path.map(str::to_owned),
+                glob: glob.map(str::to_owned),
+                index: None,
+                require_unique: true,
+            });
+            let selected = node.select(&files, Some(&storage)).unwrap();
+            assert_eq!(selected.path, files[0].path);
+            assert_eq!(selected.format, files[0].format);
+        }
     }
 
     fn ctx() -> NodeCtx {

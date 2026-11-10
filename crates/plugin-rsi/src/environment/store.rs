@@ -83,8 +83,9 @@ impl EnvironmentStore {
     /// Return the VFS address for one development workspace.
     pub fn development_vfs_path(&self, environment_id: &str) -> Result<String> {
         crate::validate_plugin_name(environment_id)?;
-        Ok(format!(
-            "{ENVIRONMENT_DEVELOPMENT_VFS_ROOT}/{environment_id}"
+        Ok(vfs::uri::join_path(
+            "local://environments/dev",
+            environment_id,
         ))
     }
 

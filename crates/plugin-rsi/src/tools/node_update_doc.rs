@@ -13,7 +13,7 @@ use super::manifest::{editable_manifest, save_manifest, selected_node};
     description = "Replace one plugin node's documentation without changing its structural spec."
 )]
 pub(super) struct PluginNodeUpdateDocInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    /// Plugin workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
     /// Kind of the node to update.
     node_kind: String,

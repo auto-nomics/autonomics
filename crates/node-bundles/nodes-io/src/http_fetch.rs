@@ -271,7 +271,7 @@ fn describe_request_error(url: &str, source: reqwest::Error) -> HttpFetchError {
 }
 
 async fn write_body(node_ctx: &NodeCtx, path: &str, bytes: Vec<u8>) -> Result<(), HttpFetchError> {
-    if let Some(virtual_path) = vfs::uri::virtual_path(path) {
+    if let Some(virtual_path) = vfs::uri::storage_path(path) {
         let storage = node_ctx
             .opendal
             .as_ref()
@@ -279,9 +279,8 @@ async fn write_body(node_ctx: &NodeCtx, path: &str, bytes: Vec<u8>) -> Result<()
                 path: path.to_string(),
                 reason: "vfs:// output requires mounted object storage".into(),
             })?;
-        let operator = storage.resolve(virtual_path);
-        operator
-            .write(&storage.resolve_path(virtual_path), bytes)
+        storage
+            .write_bytes(virtual_path, bytes)
             .await
             .map_err(|error| HttpFetchError::Write {
                 path: path.to_string(),
@@ -310,7 +309,7 @@ fn file_output(path: &str) -> FileRef {
         .extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_ascii_lowercase());
-    if vfs::uri::is_uri(path) {
+    if vfs::uri::storage_path(path).is_some() {
         return FileRef::new(path.to_string(), format);
     }
     FileRef::local(path, format).unwrap_or_else(|_| FileRef::new(path.to_string(), None))
@@ -385,8 +384,14 @@ impl HttpFetchNode {
             node_ctx,
             &crate::file_to_dataframe::normalize_path(&self.spec.path),
         );
-        write_body(node_ctx, &path, body).await?;
-        let file = file_output(&path);
+        let canonical = crate::file_decompress::canonical_output(node_ctx, &path).map_err(|e| {
+            HttpFetchError::Write {
+                path: path.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        write_body(node_ctx, &canonical, body).await?;
+        let file = file_output(&canonical);
         let mut outputs = PortOutputs::new();
         outputs.insert_file(0, file);
         Ok(outputs)

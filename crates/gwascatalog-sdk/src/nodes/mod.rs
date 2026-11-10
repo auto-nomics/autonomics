@@ -56,6 +56,9 @@ pub(crate) mod util {
     /// and the agent share one mounted object-store namespace. Relative
     /// paths fall through unchanged so the caller's error stays informative.
     pub fn to_vfs_uri(path: &str) -> String {
+        if vfs::uri::domain(path).is_some() {
+            return path.to_string();
+        }
         if let Some(stripped) = vfs::uri::virtual_path(path) {
             vfs::uri::uri(stripped)
         } else if let Some(stripped) = path.strip_prefix("file://") {
@@ -70,7 +73,7 @@ pub(crate) mod util {
     /// Validate a node output path: `vfs://` URI, `file://` URI, or bare
     /// absolute host path (auto-routed through the mounted VFS).
     pub fn validate_output_path(path: &str) -> Result<(), DagError> {
-        if vfs::uri::is_uri(path) || path.starts_with("file://") {
+        if vfs::uri::storage_path(path).is_some() || path.starts_with("file://") {
             return Ok(());
         }
         if !std::path::Path::new(path).is_absolute() {
@@ -99,7 +102,7 @@ pub(crate) mod util {
         let size = bytes.len() as u64;
         let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
 
-        if !vfs::uri::is_uri(path) && ctx.opendal.is_none() {
+        if !vfs::uri::storage_path(path).is_some() && ctx.opendal.is_none() {
             let local = path.strip_prefix("file://").unwrap_or(path);
             if let Some(parent) = std::path::Path::new(local).parent() {
                 tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -123,23 +126,25 @@ pub(crate) mod util {
         }
 
         let vfs_uri = to_vfs_uri(path);
-        let virtual_path = vfs::uri::virtual_path(&vfs_uri).unwrap().to_string();
+        let virtual_path = vfs_uri;
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "VFS output `{path}` requires a mounted runtime VFS"
             ))
         })?;
-        let operator = storage.resolve(&virtual_path);
-        operator
-            .write(&storage.resolve_path(&virtual_path), bytes)
+        let canonical = storage
+            .canonical_uri(&virtual_path)
+            .map_err(|e| DagError::Schedule(e.to_string()))?;
+        storage
+            .write_bytes(&virtual_path, bytes)
             .await
             .map_err(|error| {
                 DagError::Schedule(format!("cannot write VFS file `{path}`: {error}"))
             })?;
 
         Ok(FileRef {
-            domain: dag_core::DomainId::local(),
-            path: vfs_uri,
+            domain: dag_core::DomainId::new(vfs::uri::domain(&canonical).unwrap_or("local")),
+            path: canonical,
             format: Some(format.to_string()),
             fingerprint: Some(FileFingerprint {
                 size,

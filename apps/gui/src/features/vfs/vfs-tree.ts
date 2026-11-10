@@ -53,11 +53,23 @@ export function getVfsTreeState(): VfsTreeState {
 
 /** Longest read-only mount covering `path`, if any. */
 export function readOnlyCover(path: string): boolean {
-  return state.mounts.some(
-    (mount) =>
-      mount.read_only &&
-      (path === mount.path || path.startsWith(mount.path.endsWith("/") ? mount.path : `${mount.path}/`)),
-  );
+  const address = /^([a-z][a-z0-9+.-]*):\/\/(.*)$/.exec(path);
+  if (address) {
+    const [, domain, encoded] = address;
+    let rest = encoded;
+    if (domain !== "vfs") {
+      try { rest = decodeURIComponent(encoded); } catch { return true; }
+    }
+    const primary = state.mounts.find((mount) => mount.domain === domain);
+    if (domain === "vfs") path = `/${rest.replace(/^\/+/, "")}`;
+    else if (primary) path = `${primary.path.replace(/\/+$/, "")}/${rest.replace(/^\/+/, "")}`;
+    else if (domain === "local") path = `/${rest.replace(/^\/+/, "")}`;
+    else return true;
+  }
+  const covering = state.mounts
+    .filter((mount) => path === mount.path || path.startsWith(mount.path.endsWith("/") ? mount.path : `${mount.path}/`))
+    .sort((a, b) => b.path.length - a.path.length)[0];
+  return covering?.read_only ?? false;
 }
 
 function sortEntries(entries: VfsEntry[]): TreeNode[] {

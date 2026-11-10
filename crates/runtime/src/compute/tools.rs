@@ -22,13 +22,13 @@ fn error(message: impl Into<String>) -> ToolError {
 /// This uses the standard context interface, independently of optional goal governance.
 pub(crate) struct ComputeContext {
     registry: Arc<ComputeRegistry>,
-    revision: std::sync::atomic::AtomicU64,
+    last_snapshot: std::sync::Mutex<Option<String>>,
 }
 impl ComputeContext {
     pub(crate) fn new(registry: Arc<ComputeRegistry>) -> Self {
         Self {
             registry,
-            revision: std::sync::atomic::AtomicU64::new(0),
+            last_snapshot: std::sync::Mutex::new(None),
         }
     }
 }
@@ -36,25 +36,32 @@ impl ComputeContext {
 impl agentik_core::context::ContextProvider for ComputeContext {
     async fn poll(&self) -> Option<String> {
         let state = self.registry.state();
-        if self
-            .revision
-            .swap(state.revision, std::sync::atomic::Ordering::AcqRel)
-            == state.revision
-        {
-            return None;
-        }
-        let sources: Vec<_> = state.data_sources.iter().map(|s| s.mount_path()).collect();
+        let mounts = vfs::agent_mounts(&self.registry.storage).ok()?;
+        let domains: Vec<_> = mounts.iter()
+            .filter(|m| m.domain_root.as_deref() == Some(m.uri.as_str()))
+            .map(|m| json!({"domain":m.domain,"uri":m.uri,"virtual_path":m.virtual_path,"read_only":m.read_only}))
+            .collect();
+        let sources: Vec<_> = state.data_sources.iter().map(|source| {
+            let virtual_path = source.mount_path();
+            let uri = self.registry.storage.canonical_uri(&virtual_path).ok();
+            json!({"id":source.id,"uri":uri,"virtual_path":virtual_path,"read_only":source.read_only})
+        }).collect();
         let deployment = self
             .registry
             .target(&state.policy.target_id, Some(state.policy.target_revision))
             .ok()?
             .deployment();
         let status = serde_json::to_string(&json!({
-            "policy":state.policy,"data_sources":sources,"deployment":deployment
+            "policy":state.policy,"data_sources":sources,"filesystem_domains":domains,"deployment":deployment
         }))
         .ok()?;
+        let mut last = self.last_snapshot.lock().ok()?;
+        if last.as_ref() == Some(&status) {
+            return None;
+        }
+        *last = Some(status.clone());
         Some(format!(
-            "[Operator compute policy]\n{status}\nNew DAG runs bind this target once. Existing runs and jobs retain their original target/revision. If deployment.source_compatible is false, report both source revisions: the operator must deploy a measured matching worker and enroll a new target revision. Retrying a DAG or approving a download cannot repair that mismatch. Data-source VFS mounts are independent and remain accessible after compute switches. Use compute_status to inspect mounts and bindings. Never repeat uncertain work on another server."
+            "[Operator compute policy]\n{status}\nNew DAG runs bind this target once. Existing runs and jobs retain their original target/revision. If deployment.source_compatible is false, report both source revisions: the operator must deploy a measured matching worker and enroll a new target revision. Retrying a DAG or approving a download cannot repair that mismatch. Data-source VFS mounts are independent and remain accessible after compute switches. Use canonical domain://path URIs from filesystem_domains/data_sources for VFS and DAG inputs. local:// is the coordinator namespace; compute target names are not filesystem domains. Use vfs mount_list for current canonical mount URIs and permission submounts, and compute_status for bindings. Never repeat uncertain work on another server."
         ))
     }
 }
@@ -138,7 +145,7 @@ impl DynToolFunction for EnvironmentTool {
 
 #[agentik_proc::tool(
     name = "compute_status",
-    description = "Read the operator's current compute target, immutable target revisions, independent data-source mounts and recorded run bindings. Compute selection does not remove data access. Use stable VFS data paths from mounts. Agents cannot change the global target. Existing jobs must be observed at their original target_id and target_revision; never repeat an uncertain submission on another target."
+    description = "Read the operator's current compute target, immutable target revisions, independent data-source mounts and recorded run bindings. Compute selection does not remove data access. Use canonical domain://path URIs discovered with vfs mount_list; mount virtual_path values are compatibility metadata, and filesystem domains need not match compute target names. Agents cannot change the global target. Existing jobs must be observed at their original target_id and target_revision; never repeat an uncertain submission on another target."
 )]
 pub struct StatusInput {}
 struct StatusTool(Arc<ComputeRegistry>);
@@ -207,10 +214,20 @@ impl ToolFunction for ImageEvidenceTool {
 impl ToolFunction for StatusTool {
     type Input = StatusInput;
     async fn run(&self, _: StatusInput) -> Result<ToolResult, ToolError> {
-        Ok(ToolResult::success_json(
-            serde_json::to_value(self.0.status().map_err(error)?)
-                .map_err(|e| error(e.to_string()))?,
-        ))
+        let mut status = serde_json::to_value(self.0.status().map_err(error)?)
+            .map_err(|e| error(e.to_string()))?;
+        status["mounts"] = serde_json::to_value(vfs::agent_mounts(&self.0.storage)?)
+            .map_err(|e| error(e.to_string()))?;
+        if let Some(sources) = status["state"]["data_sources"].as_array_mut() {
+            for source in sources {
+                if let Some(id) = source["id"].as_str() {
+                    let path = format!("/data/{id}");
+                    source["uri"] = self.0.storage.canonical_uri(&path).ok().into();
+                    source["virtual_path"] = path.into();
+                }
+            }
+        }
+        Ok(ToolResult::success_json(status))
     }
 }
 

@@ -292,7 +292,11 @@ mod tests {
                 .is_some_and(|h| h.starts_with("sha256:"))
         );
         assert!(fingerprint.immutable_remote);
-        assert!(vfs::uri::is_uri(&out_file.path), "{}", out_file.path);
+        assert!(
+            vfs::uri::storage_path(&out_file.path).is_some(),
+            "{}",
+            out_file.path
+        );
     }
 
     #[tokio::test]

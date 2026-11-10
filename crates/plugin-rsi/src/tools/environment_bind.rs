@@ -14,7 +14,7 @@ use super::helpers::{resolve_target, tool_error};
                    The environment id must come from plugin_environments_list."
 )]
 pub(super) struct PluginEnvironmentBindInput {
-    /// Developed workspace path, such as `/plugins/dev/hello-world`.
+    /// Developed workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
     /// Approved environment id from the host catalog.
     environment_id: String,

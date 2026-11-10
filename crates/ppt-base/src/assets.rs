@@ -47,15 +47,23 @@ impl BlobArea {
         format!("{}/{}", self.prefix.trim_matches('/'), key)
     }
 
+    #[cfg(feature = "vfs")]
+    fn vfs_path(&self, storage: &vfs::OpendalFileStorage, key: &str) -> Result<String> {
+        storage
+            .try_resolve_virtual(&vfs::uri::join_path(&self.prefix, key))
+            .map_err(|e| Error::Asset(format!("blob address {key}: {e}")))
+    }
+
     /// Write (or overwrite) a blob.
     pub async fn put(&self, key: &str, data: Vec<u8>) -> Result<()> {
         match &self.backend {
             #[cfg(feature = "vfs")]
             Backend::Vfs(storage) => {
-                let vpath = vfs::OpendalFileStorage::normalize_path(&self.vpath(key));
-                storage.write_bytes(&vpath, data).await.map_err(|e| {
-                    Error::Asset(format!("blob write {key}: {e}"))
-                })
+                let vpath = self.vfs_path(storage, key)?;
+                storage
+                    .write_bytes(&vpath, data)
+                    .await
+                    .map_err(|e| Error::Asset(format!("blob write {key}: {e}")))
             }
             Backend::Memory(map) => {
                 map.lock().expect("blob map poisoned").insert(self.vpath(key), data);
@@ -69,7 +77,7 @@ impl BlobArea {
         match &self.backend {
             #[cfg(feature = "vfs")]
             Backend::Vfs(storage) => {
-                let vpath = vfs::OpendalFileStorage::normalize_path(&self.vpath(key));
+                let vpath = self.vfs_path(storage, key)?;
                 let operator = storage.resolve(&vpath);
                 let path = storage.resolve_path(&vpath);
                 match operator.read(&path).await {
@@ -87,7 +95,7 @@ impl BlobArea {
         match &self.backend {
             #[cfg(feature = "vfs")]
             Backend::Vfs(storage) => {
-                let vpath = vfs::OpendalFileStorage::normalize_path(&self.vpath(key));
+                let vpath = self.vfs_path(storage, key)?;
                 let operator = storage.resolve(&vpath);
                 let path = storage.resolve_path(&vpath);
                 match operator.read(&path).await {
@@ -112,7 +120,7 @@ impl BlobArea {
         match &self.backend {
             #[cfg(feature = "vfs")]
             Backend::Vfs(storage) => {
-                let vpath = vfs::OpendalFileStorage::normalize_path(&self.vpath(key));
+                let vpath = self.vfs_path(storage, key)?;
                 match storage.delete_object(&vpath).await {
                     Ok(()) => Ok(()),
                     Err(e) if e.kind() == vfs::opendal::ErrorKind::NotFound => Ok(()),
@@ -159,6 +167,28 @@ mod tests {
         assert!(area.get("assets/d1/a.png").await.is_err());
         // idempotent delete
         area.delete("assets/d1/a.png").await.unwrap();
+    }
+
+    #[cfg(feature = "vfs")]
+    #[tokio::test]
+    async fn domain_blob_prefix_preserves_escaped_keys_and_refuses_unknown_domains() {
+        let storage = vfs::OpendalFileStorage::new_temp();
+        let area = BlobArea::on_vfs(storage.clone(), "local://deck%20assets");
+        area.put("a %.txt", b"bytes".to_vec()).await.unwrap();
+        assert_eq!(area.get("a %.txt").await.unwrap(), b"bytes");
+        assert_eq!(
+            storage
+                .content_length("/deck assets/a %.txt")
+                .await
+                .unwrap(),
+            5
+        );
+        area.delete("a %.txt").await.unwrap();
+        assert!(area.get_optional("a %.txt").await.unwrap().is_none());
+        let unknown = BlobArea::on_vfs(storage, "missing://assets");
+        assert!(unknown.put("a", vec![1]).await.is_err());
+        assert!(unknown.get_optional("a").await.is_err());
+        assert!(unknown.delete("a").await.is_err());
     }
 
     #[test]

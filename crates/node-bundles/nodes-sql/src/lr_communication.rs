@@ -276,7 +276,7 @@ impl LrCommunicationScoreNode {
         session
             .register_parquet(
                 "__lr_default",
-                path,
+                vfs::uri::datafusion_uri(path),
                 datafusion::prelude::ParquetReadOptions::default(),
             )
             .await

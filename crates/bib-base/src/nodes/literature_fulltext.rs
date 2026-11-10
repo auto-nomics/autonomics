@@ -54,7 +54,7 @@ fn port_layout() -> NodePorts {
 /// are a permanent fingerprint with no stat or read required.
 fn file_ref(fulltext: &FullText) -> FileRef {
     FileRef {
-        domain: dag_core::DomainId::local(),
+        domain: dag_core::DomainId::new(vfs::uri::domain(&fulltext.file_path).unwrap_or("local")),
         path: fulltext.file_path.clone(),
         format: Some(fulltext.file_format.as_str().to_string()),
         fingerprint: Some(FileFingerprint {
@@ -268,7 +268,7 @@ impl DagNode for LiteratureFulltextNode {
                 .await
             {
                 Ok(Some(fulltext)) => {
-                    let fulltext = if vfs::uri::is_uri(&fulltext.file_path) {
+                    let fulltext = if vfs_virtual_path(&fulltext.file_path).is_some() {
                         fulltext
                     } else if let Some(storage) = shared.file_storage.as_ref() {
                         // Synthetic pointer: materialize once, then it is a
@@ -579,7 +579,7 @@ mod tests {
             .unwrap();
         assert_eq!(files.len(), 1);
         assert!(
-            files[0].path.starts_with("vfs:///literature/art-2/"),
+            files[0].path.starts_with("local://literature/art-2/"),
             "{}",
             files[0].path
         );

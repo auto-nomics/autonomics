@@ -30,6 +30,7 @@ pub struct OpendalFileStorage {
     op: Operator,
     pub mounts: Option<Arc<MountedObjectStore>>,
     principal: VfsPrincipal,
+    domain_scope: Option<(String, String)>,
     path_locks: Arc<PathLocks>,
     /// Keeps the temp directory alive until this storage is dropped.
     _temp_guard: Arc<Option<TempDir>>,
@@ -80,6 +81,7 @@ impl OpendalFileStorage {
             op: self.op.clone(),
             mounts: self.mounts.clone(),
             principal,
+            domain_scope: self.domain_scope.clone(),
             path_locks: Arc::clone(&self.path_locks),
             _temp_guard: Arc::clone(&self._temp_guard),
         }
@@ -98,6 +100,7 @@ impl OpendalFileStorage {
             op,
             mounts: Some(mounts),
             principal: VfsPrincipal::root(),
+            domain_scope: None,
             path_locks: Arc::new(PathLocks::default()),
             _temp_guard: Arc::new(None),
         }
@@ -110,6 +113,7 @@ impl OpendalFileStorage {
             op,
             mounts: None,
             principal: VfsPrincipal::root(),
+            domain_scope: None,
             path_locks: Arc::new(PathLocks::default()),
             _temp_guard: Arc::new(None),
         }
@@ -125,6 +129,7 @@ impl OpendalFileStorage {
             op,
             mounts: None,
             principal: VfsPrincipal::root(),
+            domain_scope: None,
             path_locks: Arc::new(PathLocks::default()),
             _temp_guard: Arc::new(None),
         }
@@ -142,6 +147,7 @@ impl OpendalFileStorage {
             op,
             mounts: None,
             principal: VfsPrincipal::root(),
+            domain_scope: None,
             path_locks: Arc::new(PathLocks::default()),
             _temp_guard: Arc::new(Some(tmp)),
         }
@@ -262,6 +268,25 @@ impl OpendalFileStorage {
         access: VfsAccess,
         is_directory: bool,
     ) -> Result<(), ObjectStoreError> {
+        if let Some((domain, prefix)) = &self.domain_scope {
+            let normalized = Self::normalize_path(path.as_ref());
+            let relative = normalized
+                .strip_prefix(prefix.trim_end_matches('/'))
+                .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+                .ok_or_else(|| permission_object_error("path outside domain store".into()))?;
+            let address = format!(
+                "{domain}://{rest}",
+                rest = crate::uri::encode_path(relative.trim_start_matches('/'))
+            );
+            let resolved = self
+                .try_resolve_virtual(&address)
+                .map_err(|e| permission_object_error(e.to_string()))?;
+            if resolved != normalized {
+                return Err(permission_object_error(
+                    "domain store address mismatch".into(),
+                ));
+            }
+        }
         if let Some(mounts) = &self.mounts {
             if let Some(handle) = mounts.handle_for(path) {
                 if handle.read_only && access == VfsAccess::Write {
@@ -317,28 +342,191 @@ impl OpendalFileStorage {
     /// key does not bypass VFS authorization. Paths are normalized before the
     /// mount lookup runs.
     pub fn resolve(&self, path: &str) -> Operator {
-        let v = Self::normalize_path(path);
-        match Path::parse(&v) {
-            Ok(p) => self.dispatch_op(&p),
-            Err(_) => self.op.clone(),
+        match self
+            .try_resolve_virtual(path)
+            .ok()
+            .and_then(|v| Path::parse(&v).ok())
+        {
+            Some(path) => self.dispatch_op(&path),
+            None => authorize_operator(
+                self.op.clone(),
+                AuthorizedOperatorConfig {
+                    principal: self.principal.clone(),
+                    policies: Vec::new(),
+                },
+            ),
         }
     }
 
     /// Public `&str` wrapper around [`Self::dispatch_path`].
     pub fn resolve_path(&self, path: &str) -> String {
-        let v = Self::normalize_path(path);
+        let v = self.resolve_virtual(path);
         match Path::parse(&v) {
             Ok(p) => self.dispatch_path(&p),
             Err(_) => v,
         }
     }
 
+    /// Resolve an address before normalization or authorization. Domain paths
+    /// are rooted in their declared mount and may not cross that boundary.
+    pub fn try_resolve_virtual(&self, path: &str) -> Result<String, opendal::Error> {
+        let invalid =
+            |message: String| opendal::Error::new(opendal::ErrorKind::ConfigInvalid, message);
+        let Some((domain, rest)) = crate::uri::split_scheme(path) else {
+            if path.contains("://") {
+                return Err(invalid("invalid VFS scheme".into()));
+            }
+            return Ok(Self::normalize_path(path));
+        };
+        if domain == crate::uri::SCHEME {
+            return Ok(Self::normalize_path(rest));
+        }
+        let prefix = self
+            .mounts
+            .as_ref()
+            .and_then(|m| m.domain_prefix(domain))
+            .or_else(|| (domain == "local").then(|| "/".to_string()))
+            .ok_or_else(|| invalid(format!("unknown VFS domain '{domain}'")))?;
+        let rest = crate::uri::decode_path(rest).map_err(|e| invalid(e.into()))?;
+        let mut depth = 0usize;
+        for segment in rest.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." if depth == 0 => return Err(invalid("path escapes VFS domain root".into())),
+                ".." => depth -= 1,
+                _ => depth += 1,
+            }
+        }
+        let resolved = Self::normalize_path(&format!("{}/{rest}", prefix.trim_end_matches('/')));
+        let parsed = Path::parse(&resolved).map_err(|e| invalid(e.to_string()))?;
+        let covering = self.mounts.as_ref().and_then(|m| m.handle_for(&parsed));
+        if let Some(handle) = covering {
+            let actual = handle.definition.domain.as_deref();
+            // A child mount can refine permissions without changing file
+            // identity. Inherit the domain only when backend and object key
+            // agree with the domain's primary projection.
+            let transparent_child = actual.is_none()
+                && self
+                    .mounts
+                    .as_ref()
+                    .and_then(|mounts| {
+                        Path::parse(&prefix)
+                            .ok()
+                            .and_then(|p| mounts.handle_for(&p))
+                    })
+                    .is_some_and(|root| {
+                        root.definition.domain.as_deref() == Some(domain)
+                            && Arc::ptr_eq(&root.backend_op, &handle.backend_op)
+                            && mount_key(&root, &parsed) == mount_key(&handle, &parsed)
+                    });
+            if !transparent_child
+                && actual != Some(domain)
+                && !(domain == "local"
+                    && actual.is_none()
+                    && handle.backend_op.info().scheme() == "fs"
+                    && !self.mount_definitions().iter().any(|mount| {
+                        let prefix = Self::normalize_path(&mount.path);
+                        mount.domain.as_deref().is_some_and(|id| id != "local")
+                            && (resolved == prefix
+                                || prefix == "/"
+                                || resolved.starts_with(&format!("{prefix}/")))
+                            && self
+                                .mounts
+                                .as_ref()
+                                .and_then(|mounts| {
+                                    Path::parse(&prefix)
+                                        .ok()
+                                        .and_then(|path| mounts.handle_for(&path))
+                                })
+                                .is_some_and(|ancestor| {
+                                    Arc::ptr_eq(&ancestor.backend_op, &handle.backend_op)
+                                        && mount_key(&ancestor, &parsed)
+                                            == mount_key(&handle, &parsed)
+                                })
+                    }))
+            {
+                return Err(invalid(format!(
+                    "address crosses VFS domain '{domain}' boundary"
+                )));
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// Canonical public address for a mounted virtual path. The scheme names
+    /// the deepest mount's domain; unmounted/local filesystem paths use local.
+    /// Unnamed remote mounts must be assigned a domain before publication.
+    pub fn canonical_uri(&self, path: &str) -> Result<String, opendal::Error> {
+        let resolved = self.try_resolve_virtual(path)?;
+        let parsed = Path::parse(&resolved)
+            .map_err(|e| opendal::Error::new(opendal::ErrorKind::ConfigInvalid, e.to_string()))?;
+        let handle = self.mounts.as_ref().and_then(|m| m.handle_for(&parsed));
+        // Prefer a named ancestor whose address preserves the selected
+        // backend/key, including transparent retained permission submounts.
+        let mut named = self
+            .mount_definitions()
+            .into_iter()
+            .filter(|mount| mount.domain.is_some())
+            .collect::<Vec<_>>();
+        named.sort_by_key(|mount| std::cmp::Reverse(mount.path.len()));
+        for mount in named {
+            let prefix = Self::normalize_path(&mount.path);
+            let Some(relative) = resolved.strip_prefix(prefix.trim_end_matches('/')) else {
+                continue;
+            };
+            if !relative.is_empty() && !relative.starts_with('/') {
+                continue;
+            }
+            let address = format!(
+                "{}://{}",
+                mount.domain.unwrap(),
+                crate::uri::encode_path(relative.trim_start_matches('/'))
+            );
+            if self.try_resolve_virtual(&address).ok().as_deref() == Some(resolved.as_str()) {
+                return Ok(address);
+            }
+        }
+        let (domain, relative) = match handle {
+            Some(handle) => match handle.definition.domain {
+                Some(domain) => {
+                    let prefix = Self::normalize_path(&handle.definition.path);
+                    let relative = resolved
+                        .strip_prefix(prefix.trim_end_matches('/'))
+                        .unwrap_or(&resolved)
+                        .to_string();
+                    (domain, relative)
+                }
+                None if handle.backend_op.info().scheme() == "fs" => ("local".into(), resolved),
+                None => {
+                    return Err(opendal::Error::new(
+                        opendal::ErrorKind::ConfigInvalid,
+                        "remote VFS mount requires a domain for canonical publication",
+                    ));
+                }
+            },
+            None => ("local".into(), resolved),
+        };
+        let address = format!(
+            "{domain}://{}",
+            crate::uri::encode_path(relative.trim_start_matches('/'))
+        );
+        // Also rejects local paths shadowed by a domain explicitly named local.
+        if self.try_resolve_virtual(&address)? != self.try_resolve_virtual(path)? {
+            return Err(opendal::Error::new(
+                opendal::ErrorKind::ConfigInvalid,
+                "canonical address does not round-trip through its domain",
+            ));
+        }
+        Ok(address)
+    }
+
     /// Resolve a user-supplied path — including `<domain>://` addresses —
     /// to its normalized virtual form.
     pub fn resolve_virtual(&self, path: &str) -> String {
-        let rewritten = self.rewrite_domain_uri(path);
-        let stripped = crate::uri::virtual_path(&rewritten).unwrap_or(&rewritten);
-        Self::normalize_path(stripped)
+        // Infallible legacy callers retain an unresolvable spelling. Public
+        // operations use try_resolve_virtual before authorization and I/O.
+        self.try_resolve_virtual(path)
+            .unwrap_or_else(|_| path.to_string())
     }
 
     /// If `path` (virtual, with or without a `vfs://` scheme) resolves to an
@@ -349,8 +537,7 @@ impl OpendalFileStorage {
     /// zero-copy staging. Returns `None` for remote backends (the caller
     /// should transfer the bytes instead) and for unparseable paths.
     pub fn local_host_path(&self, path: &str) -> Option<std::path::PathBuf> {
-        let stripped = crate::uri::virtual_path(path).unwrap_or(path);
-        let v = Self::normalize_path(stripped);
+        let v = self.try_resolve_virtual(path).ok()?;
         let p = Path::parse(&v).ok()?;
         if let Some(mounts) = &self.mounts
             && let Some(handle) = mounts.handle_for(&p)
@@ -410,10 +597,7 @@ impl OpendalFileStorage {
     /// A same-host worker must independently open the path without following
     /// symlinks and enforce its own admitted input roots.
     pub fn ssh_location(&self, path: &str) -> Result<Option<crate::SshLocation>, opendal::Error> {
-        // Domain addresses (`hpc-b://…`) resolve through their mount first.
-        let rewritten = self.rewrite_domain_uri(path);
-        let stripped = crate::uri::virtual_path(&rewritten).unwrap_or(&rewritten);
-        let normalized = Self::normalize_path(stripped);
+        let normalized = self.try_resolve_virtual(path)?;
         self.check_readable(&normalized)?;
         let parsed = Path::parse(&normalized).map_err(|_| {
             opendal::Error::new(opendal::ErrorKind::ConfigInvalid, "invalid SSH VFS path")
@@ -464,7 +648,7 @@ impl OpendalFileStorage {
         access: VfsAccess,
         is_directory: bool,
     ) -> Result<(), opendal::Error> {
-        let v = Self::normalize_path(path);
+        let v = self.try_resolve_virtual(path)?;
         if let Ok(p) = Path::parse(&v) {
             if let Err(e) = self.authorize_access_path(&p, access, is_directory) {
                 return Err(opendal::Error::new(
@@ -672,7 +856,9 @@ impl OpendalFileStorage {
         let Some(mounts) = &self.mounts else {
             return false;
         };
-        let normalized = Self::normalize_path(path);
+        let Ok(normalized) = self.try_resolve_virtual(path) else {
+            return false;
+        };
         Path::parse(&normalized)
             .map(|path| mounts.handle_for(&path).is_some())
             .unwrap_or(false)
@@ -684,7 +870,7 @@ impl OpendalFileStorage {
     /// writable mounts where a silent overwrite would defeat caching.
     pub fn mount_read_only(&self, path: &str) -> Option<bool> {
         let mounts = self.mounts.as_ref()?;
-        let normalized = Self::normalize_path(path);
+        let normalized = self.try_resolve_virtual(path).ok()?;
         let parsed = Path::parse(&normalized).ok()?;
         Some(mounts.handle_for(&parsed)?.read_only)
     }
@@ -692,10 +878,15 @@ impl OpendalFileStorage {
     /// The domain name declared by the deepest mount covering `path`.
     /// `None` when no mount declares one.
     pub fn mount_domain(&self, path: &str) -> Option<String> {
-        let normalized = Self::normalize_path(path);
+        let normalized = self.try_resolve_virtual(path).ok()?;
         self.mount_definitions()
             .into_iter()
-            .filter(|definition| normalized.starts_with(&Self::normalize_path(&definition.path)))
+            .filter(|definition| {
+                let prefix = Self::normalize_path(&definition.path);
+                normalized == prefix
+                    || prefix == "/"
+                    || normalized.starts_with(&format!("{prefix}/"))
+            })
             .max_by_key(|definition| definition.path.len())
             .and_then(|definition| definition.domain)
     }
@@ -705,34 +896,27 @@ impl OpendalFileStorage {
     /// unchanged. Unknown domain schemes pass through untouched so the
     /// caller's own admission (which rejects unresolvable paths) speaks.
     pub fn rewrite_domain_uri(&self, path: &str) -> String {
-        let Some((domain, rest)) = crate::uri::split_scheme(path) else {
-            return path.to_string();
-        };
-        if domain == crate::uri::SCHEME {
+        if crate::uri::split_scheme(path).is_none() || crate::uri::is_uri(path) {
             return path.to_string();
         }
-        let Some(mounts) = &self.mounts else {
-            return path.to_string();
-        };
-        let Some(prefix) = mounts.domain_prefix(domain) else {
-            return path.to_string();
-        };
-        let rest = if rest.starts_with('/') {
-            rest.to_string()
-        } else {
-            format!("/{rest}")
-        };
-        crate::uri::uri(format!("{}{}", prefix.trim_end_matches('/'), rest))
+        match self.try_resolve_virtual(path) {
+            Ok(path) => crate::uri::uri(path),
+            Err(_) => path.to_string(),
+        }
     }
 
     /// Return true iff `path_a` and `path_b` resolve to the same
     /// backend operator. Used by `cp`/`mv` to decide between
     /// backend-internal rename/copy and an explicit read+write.
     pub fn same_backend(&self, path_a: &str, path_b: &str) -> bool {
+        let (Ok(va), Ok(vb)) = (
+            self.try_resolve_virtual(path_a),
+            self.try_resolve_virtual(path_b),
+        ) else {
+            return false;
+        };
         if let Some(mounts) = &self.mounts {
             use datafusion::object_store::path::Path as DsPath;
-            let va = OpendalFileStorage::normalize_path(path_a);
-            let vb = OpendalFileStorage::normalize_path(path_b);
             let ha = DsPath::parse(&va).ok().and_then(|p| mounts.handle_for(&p));
             let hb = DsPath::parse(&vb).ok().and_then(|p| mounts.handle_for(&p));
             match (ha, hb) {
@@ -746,6 +930,45 @@ impl OpendalFileStorage {
         } else {
             true
         }
+    }
+
+    /// Register domain schemes with a scoped store and mount-relative keys.
+    /// PrefixStore remaps returned object metadata as well as request paths.
+    pub fn register_domain_stores(
+        &self,
+        runtime: &datafusion::execution::runtime_env::RuntimeEnv,
+    ) -> Result<(), opendal::Error> {
+        let mut domains = std::collections::BTreeMap::new();
+        domains.insert("local".to_string(), "/".to_string());
+        for mount in self.mount_definitions() {
+            if let Some(domain) = mount.domain {
+                domains.insert(domain, mount.path);
+            }
+        }
+        // Validate every URL before mutating the registry.
+        let entries = domains
+            .into_iter()
+            .map(|(domain, prefix)| {
+                let url = ObjectStoreUrl::parse(format!("{domain}://")).map_err(|e| {
+                    opendal::Error::new(opendal::ErrorKind::ConfigInvalid, e.to_string())
+                })?;
+                let path = Path::parse(&prefix).map_err(|e| {
+                    opendal::Error::new(opendal::ErrorKind::ConfigInvalid, e.to_string())
+                })?;
+                let mut scoped = self.clone();
+                scoped.domain_scope = Some((domain, Self::normalize_path(&prefix)));
+                let store =
+                    datafusion::object_store::prefix::PrefixStore::new(Arc::new(scoped), path);
+                Ok((url, store))
+            })
+            .collect::<Result<Vec<_>, opendal::Error>>()?;
+        for (url, store) in entries {
+            runtime.register_object_store(
+                url.as_ref(),
+                Arc::new(crate::domain_store::DomainStore(store)),
+            );
+        }
+        Ok(())
     }
 
     pub fn register_to_ctx(self) -> (SessionContext, Arc<OpendalFileStorage>) {
@@ -2806,7 +3029,289 @@ mod domain_address_tests {
             }],
         };
         let mounts = crate::MountedObjectStore::from_manifest(&manifest).unwrap();
-        OpendalFileStorage::with_mounts(dir.path(), mounts.into())
+        let mut storage = OpendalFileStorage::with_mounts(dir.path(), mounts.into());
+        storage._temp_guard = Arc::new(Some(dir));
+        storage
+    }
+
+    #[tokio::test]
+    async fn domain_copy_transfers_bytes_and_refused_move_preserves_source() {
+        let storage = domain_storage(Some("hpc-b"));
+        crate::browse::copy(&storage, "hpc-b://probe.bin", "local://copy.bin")
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .read_range("local://copy.bin", 0..6)
+                .await
+                .unwrap()
+                .to_vec(),
+            b"domain"
+        );
+        assert!(
+            crate::browse::move_entry(&storage, "local://copy.bin", "hpc-b://new.bin")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            storage
+                .read_range("local://copy.bin", 0..6)
+                .await
+                .unwrap()
+                .to_vec(),
+            b"domain"
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_addresses_reach_browse_and_authorization() {
+        let storage = domain_storage(Some("hpc-b"));
+        let entry = crate::browse::stat(&storage, "hpc-b://probe.bin")
+            .await
+            .unwrap();
+        assert_eq!(entry.path, "/data/hpc-b/probe.bin");
+        assert!(storage.check_writable("hpc-b://probe.bin").is_err());
+        assert!(
+            crate::browse::stat(&storage, "missing://probe.bin")
+                .await
+                .is_err()
+        );
+        assert!(storage.check_readable("missing://probe.bin").is_err());
+        assert!(
+            storage
+                .resolve("missing://probe.bin")
+                .read("probe.bin")
+                .await
+                .is_err()
+        );
+        assert!(!storage.same_backend("missing://probe.bin", "/local"));
+    }
+
+    #[test]
+    fn coordinator_local_submount_below_remote_root_keeps_local_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = VfsManifest::from_toml(&format!(
+            "[[backend]]\nid='cluster'\ntype='ssh'\nalias='fixture'\nroot='/share'\n[[backend]]\nid='literature'\ntype='local'\nroot={}\n[[mount]]\npath='/'\nbackend='cluster'\nsource='/'\ndomain='ht'\n[[mount]]\npath='/literature'\nbackend='literature'\nsource='/'\n",
+            serde_json::to_string(&directory.path().to_string_lossy()).unwrap())).unwrap();
+        let storage = OpendalFileStorage::with_mounts(
+            directory.path(),
+            Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap()),
+        );
+        assert_eq!(
+            storage
+                .try_resolve_virtual("local://literature/paper.pdf")
+                .unwrap(),
+            "/literature/paper.pdf"
+        );
+        assert_eq!(
+            storage.canonical_uri("/literature/paper.pdf").unwrap(),
+            "local://literature/paper.pdf"
+        );
+        assert!(
+            storage
+                .try_resolve_virtual("ht://literature/paper.pdf")
+                .is_err()
+        );
+        assert!(
+            storage
+                .try_resolve_virtual("local://remote-file.tsv")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn permission_submount_inherits_domain_only_for_identical_objects() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut manifest = VfsManifest {
+            backend: vec![BackendDefinition {
+                id: "shared".into(),
+                config: BackendConfig::local(directory.path().to_string_lossy()),
+            }],
+            mount: vec![
+                MountDefinition {
+                    path: "/cluster".into(),
+                    domain: Some("ht".into()),
+                    backend: "shared".into(),
+                    source: "/".into(),
+                    read_only: true,
+                    permissions: Default::default(),
+                },
+                MountDefinition {
+                    path: "/cluster/retained".into(),
+                    domain: None,
+                    backend: "shared".into(),
+                    source: directory
+                        .path()
+                        .join("retained")
+                        .to_string_lossy()
+                        .into_owned(),
+                    read_only: true,
+                    permissions: Default::default(),
+                },
+            ],
+        };
+        let storage = OpendalFileStorage::with_mounts(
+            directory.path(),
+            Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap()),
+        );
+        assert_eq!(
+            storage
+                .try_resolve_virtual("ht://retained/output.tsv")
+                .unwrap(),
+            "/cluster/retained/output.tsv"
+        );
+        assert_eq!(
+            storage
+                .canonical_uri("/cluster/retained/output.tsv")
+                .unwrap(),
+            "ht://retained/output.tsv"
+        );
+        assert!(
+            storage
+                .try_resolve_virtual("local://cluster/retained/output.tsv")
+                .is_err()
+        );
+        manifest.mount[1].source = directory
+            .path()
+            .join("different")
+            .to_string_lossy()
+            .into_owned();
+        let storage = OpendalFileStorage::with_mounts(
+            directory.path(),
+            Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap()),
+        );
+        assert!(
+            storage
+                .try_resolve_virtual("ht://retained/output.tsv")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn datafusion_domain_stores_read_and_enforce_boundaries() {
+        use datafusion::prelude::CsvReadOptions;
+        let storage = domain_storage(Some("hpc-b"));
+        let probe = storage.local_host_path("hpc-b://probe.bin").unwrap();
+        std::fs::write(probe.with_file_name("table.csv"), b"value\n7\n").unwrap();
+        std::fs::write(probe.with_file_name("table %part.csv"), b"value\n9\n").unwrap();
+        let ctx = SessionContext::new();
+        storage.register_domain_stores(&ctx.runtime_env()).unwrap();
+        let escaped = storage
+            .canonical_uri("/data/hpc-b/table %part.csv")
+            .unwrap();
+        assert_eq!(escaped, "hpc-b://table%20%25part.csv");
+        let escaped_batches = ctx
+            .read_csv(
+                crate::uri::datafusion_uri(&escaped),
+                CsvReadOptions::default(),
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            escaped_batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            1
+        );
+        let batches = ctx
+            .read_csv(
+                crate::uri::datafusion_uri("hpc-b://table.csv"),
+                CsvReadOptions::default(),
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+        assert!(
+            ctx.read_csv(
+                crate::uri::datafusion_uri("local://data/hpc-b/table.csv"),
+                CsvReadOptions::default()
+            )
+            .await
+            .is_err()
+        );
+        // The default filesystem shares the fixture directory, outside its
+        // mounted projection, and remains accessible through the local scheme.
+        let batches = ctx
+            .read_csv(
+                crate::uri::datafusion_uri("local://table.csv"),
+                CsvReadOptions::default(),
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    }
+
+    #[test]
+    fn canonical_double_slash_paths_accept_legacy_triple_slash_inputs() {
+        let storage = domain_storage(Some("ht"));
+        for address in ["ht://probe.bin", "ht:///probe.bin"] {
+            assert_eq!(
+                storage.try_resolve_virtual(address).unwrap(),
+                "/data/hpc-b/probe.bin"
+            );
+            assert_eq!(storage.canonical_uri(address).unwrap(), "ht://probe.bin");
+        }
+        assert_eq!(storage.canonical_uri("ht://").unwrap(), "ht://");
+        assert_eq!(storage.canonical_uri("local:///").unwrap(), "local://");
+        for address in ["ht://../escape", "ht://%2e%2e/escape", "ht://dir/%2Fescape"] {
+            assert!(storage.try_resolve_virtual(address).is_err());
+        }
+    }
+
+    #[test]
+    fn canonical_addresses_round_trip_and_preserve_domains() {
+        let storage = domain_storage(Some("hpc-b"));
+        assert_eq!(
+            storage
+                .canonical_uri("vfs:///data/hpc-b/probe.bin")
+                .unwrap(),
+            "hpc-b://probe.bin"
+        );
+        assert_eq!(
+            storage.canonical_uri("hpc-b://probe.bin").unwrap(),
+            "hpc-b://probe.bin"
+        );
+        assert_eq!(
+            storage.canonical_uri("/other/file.tsv").unwrap(),
+            "local://other/file.tsv"
+        );
+        assert!(storage.canonical_uri("missing://file.tsv").is_err());
+        let literal = "/other/space name/doi%3Ax.txt";
+        let uri = storage.canonical_uri(literal).unwrap();
+        assert_eq!(uri, "local://other/space%20name/doi%253Ax.txt");
+        assert_eq!(storage.try_resolve_virtual(&uri).unwrap(), literal);
+        assert!(
+            storage
+                .try_resolve_virtual("hpc-b://%2e%2e/escape")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn domain_resolution_confines_paths_and_host_mapping() {
+        let storage = domain_storage(Some("hpc-b"));
+        assert_eq!(
+            storage
+                .try_resolve_virtual("hpc-b://a/../probe.bin")
+                .unwrap(),
+            "/data/hpc-b/probe.bin"
+        );
+        assert!(storage.try_resolve_virtual("hpc-b://../probe.bin").is_err());
+        assert!(
+            storage
+                .try_resolve_virtual("local://data/hpc-b/probe.bin")
+                .is_err()
+        );
+        assert!(storage.local_host_path("hpc-b://probe.bin").is_some());
+        assert!(storage.local_host_path("missing://probe.bin").is_none());
+        assert!(storage.same_backend("hpc-b://probe.bin", "vfs:///data/hpc-b/probe.bin"));
     }
 
     #[test]
@@ -2817,7 +3322,7 @@ mod domain_address_tests {
             "vfs:///data/hpc-b/share/x.vcf"
         );
         assert_eq!(
-            storage.rewrite_domain_uri("hpc-b:///y.tsv"),
+            storage.rewrite_domain_uri("hpc-b://y.tsv"),
             "vfs:///data/hpc-b/y.tsv"
         );
         // Non-domain spellings pass through untouched.

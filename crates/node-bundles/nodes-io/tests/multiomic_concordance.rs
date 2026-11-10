@@ -109,7 +109,7 @@ async fn joins_three_modalities_and_publishes_ranked_reports() {
         let file = outputs.get(&(index as u8)).unwrap().as_file().unwrap();
         assert_eq!(
             file.path,
-            format!("vfs:///artifacts/multiomic-concordance-test/{name}")
+            format!("local://artifacts/multiomic-concordance-test/{name}")
         );
         assert!(
             file.fingerprint
@@ -121,7 +121,7 @@ async fn joins_three_modalities_and_publishes_ranked_reports() {
 
     async fn read(ctx: &NodeCtx, file: &dag_core::value::FileRef) -> Vec<u8> {
         let storage = ctx.opendal.as_ref().unwrap();
-        let path = vfs::uri::virtual_path(&file.path).unwrap();
+        let path = vfs::uri::storage_path(&file.path).unwrap();
         storage
             .resolve(path)
             .read(&storage.resolve_path(path))

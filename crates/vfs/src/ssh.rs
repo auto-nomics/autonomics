@@ -935,6 +935,70 @@ directory_mode = "0700"
     }
 
     #[tokio::test]
+    async fn directory_creation_is_recursive_idempotent_and_confined() {
+        let root = tempfile::tempdir().unwrap();
+        let operator = local_operator(root.path());
+        operator.create_dir("/").await.unwrap();
+        operator.create_dir("a/b/").await.unwrap();
+        operator.create_dir("a/b/").await.unwrap();
+        assert!(root.path().join("a/b").is_dir());
+        std::fs::write(root.path().join("file"), b"unchanged").unwrap();
+        assert!(operator.create_dir("file/").await.is_err());
+        assert_eq!(
+            std::fs::read(root.path().join("file")).unwrap(),
+            b"unchanged"
+        );
+        #[cfg(unix)]
+        {
+            let outside = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(outside.path(), root.path().join("link")).unwrap();
+            assert!(operator.create_dir("link/escape/").await.is_err());
+            assert!(!outside.path().join("escape").exists());
+            assert!(
+                operator
+                    .write("link/escape/file.bin", b"refused".to_vec())
+                    .await
+                    .is_err()
+            );
+            assert!(!outside.path().join("escape").exists());
+        }
+        assert!(operator.write("/", b"refused".to_vec()).await.is_err());
+        assert!(operator.delete("/").await.is_err());
+        assert!(root.path().is_dir());
+    }
+
+    #[tokio::test]
+    async fn storage_writes_root_files_and_reuses_nested_directories_over_ssh() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = OpendalFileStorage::from_operator(local_operator(root.path()));
+        use datafusion::object_store::{ObjectStoreExt, path::Path};
+        let object = Path::from("object-store/deep/result.bin");
+        storage
+            .put(&object, b"object".to_vec().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .get(&object)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .as_ref(),
+            b"object"
+        );
+        for path in ["vfs:///root.bin", "vfs:///nested/deep/result.bin"] {
+            storage.write_bytes(path, b"first".to_vec()).await.unwrap();
+            storage.write_bytes(path, b"other".to_vec()).await.unwrap();
+            assert_eq!(
+                storage.read_range(path, 0..5).await.unwrap().to_vec(),
+                b"other"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn python_write_protocol_roundtrips_write_rename_delete_and_mkdir() {
         let root = tempfile::tempdir().unwrap();
         let operator = local_operator(root.path());

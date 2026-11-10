@@ -50,6 +50,18 @@ pub const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Default agent-visible download mount used when no runtime path is supplied.
 const DEFAULT_DOWNLOAD_VFS_PATH: &str = "/browser-downloads";
+/// A download lives in the coordinator's local namespace. Escape only the
+/// filename; retain any escapes already supplied in a canonical prefix.
+fn download_uri(prefix: &str, filename: &str) -> String {
+    let prefix = if vfs::uri::domain(prefix).is_some() {
+        prefix.to_owned()
+    } else {
+        let path = vfs::uri::virtual_path(prefix).unwrap_or(prefix);
+        format!("local://{}", vfs::uri::encode_path(path.trim_matches('/')))
+    };
+    vfs::uri::join_path(&prefix, filename)
+}
+
 static PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
@@ -681,12 +693,9 @@ async fn watch_downloads(
                         .as_deref()
                         .and_then(|path| std::path::Path::new(path).file_name())
                         .map(|name| {
-                            format!(
-                                "{}/{}",
-                                download_vfs_path
-                                    .clone()
-                                    .unwrap_or_else(|| DEFAULT_DOWNLOAD_VFS_PATH.to_string()),
-                                name.to_string_lossy()
+                            download_uri(
+                                download_vfs_path.as_deref().unwrap_or(DEFAULT_DOWNLOAD_VFS_PATH),
+                                &name.to_string_lossy(),
                             )
                         });
                 }
@@ -987,12 +996,11 @@ impl BrowserSession {
                         }
                         entry.info.state = "completed".into();
                         entry.info.file_path = Some(final_path.to_string_lossy().into_owned());
-                        entry.info.vfs_path = Some(format!(
-                            "{}/{}",
+                        entry.info.vfs_path = Some(download_uri(
                             self.download_vfs_path
-                                .clone()
-                                .unwrap_or_else(|| DEFAULT_DOWNLOAD_VFS_PATH.to_string()),
-                            entry.info.guid
+                                .as_deref()
+                                .unwrap_or(DEFAULT_DOWNLOAD_VFS_PATH),
+                            &entry.info.guid,
                         ));
                     }
                     entry.delivered = true;
@@ -1336,8 +1344,26 @@ mod tests {
         assert!(
             info.vfs_path
                 .as_deref()
-                .is_some_and(|path| path.starts_with("/browser-downloads/"))
+                .is_some_and(|path| path.starts_with("local://browser-downloads/"))
         );
         session.close().await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod download_uri_tests {
+    #[test]
+    fn canonical_download_uris_preserve_filename_case_and_escapes() {
+        for prefix in [
+            "/browser-downloads",
+            "vfs:///browser-downloads",
+            "local://browser-downloads",
+            "local:///browser-downloads",
+        ] {
+            assert_eq!(
+                super::download_uri(prefix, "Data 10%.csv"),
+                "local://browser-downloads/Data%2010%25.csv"
+            );
+        }
     }
 }

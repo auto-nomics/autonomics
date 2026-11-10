@@ -21,7 +21,9 @@ pub async fn op_write(
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "write")?;
     let content = content.unwrap_or("").to_string();
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     if let Err(e) = storage.check_writable(&vpath) {
         return Ok(AgentToolResult::error(format!("write: {raw_path}: {e}")));
     }
@@ -102,7 +104,9 @@ pub async fn op_edit(
         ));
     }
 
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!(
             "edit: '{raw_path}': {error}"
@@ -207,7 +211,9 @@ pub async fn op_patch(
     for hunk in &args.hunks {
         match hunk {
             apply_patch::Hunk::AddFile { path, contents } => {
-                let vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
+                let vpath = storage
+                    .try_resolve_virtual(&path.display().to_string())
+                    .map_err(|e| e.to_string())?;
                 if let Err(e) = storage.check_writable(&vpath) {
                     return Ok(AgentToolResult::error(format!(
                         "Failed to write {}: {e}",
@@ -229,7 +235,9 @@ pub async fn op_patch(
             }
 
             apply_patch::Hunk::DeleteFile { path } => {
-                let vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
+                let vpath = storage
+                    .try_resolve_virtual(&path.display().to_string())
+                    .map_err(|e| e.to_string())?;
                 if let Err(e) = storage.check_writable(&vpath) {
                     return Ok(AgentToolResult::error(format!(
                         "Failed to delete {}: {e}",
@@ -255,7 +263,9 @@ pub async fn op_patch(
                 move_path,
                 chunks,
             } => {
-                let src_vpath = OpendalFileStorage::normalize_path(&path.display().to_string());
+                let src_vpath = storage
+                    .try_resolve_virtual(&path.display().to_string())
+                    .map_err(|e| e.to_string())?;
                 let src_op = storage.resolve(&src_vpath);
                 let src_remote = storage.resolve_path(&src_vpath);
 
@@ -295,7 +305,9 @@ pub async fn op_patch(
                     .map(|d| d.display().to_string())
                     .unwrap_or_else(|| path.display().to_string());
 
-                let dest_vpath = OpendalFileStorage::normalize_path(&dest_display);
+                let dest_vpath = storage
+                    .try_resolve_virtual(&dest_display)
+                    .map_err(|e| e.to_string())?;
                 if let Err(e) = storage.check_writable(&dest_vpath) {
                     return Ok(AgentToolResult::error(format!(
                         "Failed to write {}: {e}",
@@ -345,7 +357,9 @@ pub async fn op_touch(
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "touch")?;
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     if let Err(e) = storage.check_writable(&vpath) {
         return Ok(AgentToolResult::error(format!("touch: {raw_path}: {e}")));
     }

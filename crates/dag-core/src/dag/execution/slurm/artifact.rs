@@ -67,6 +67,15 @@ impl SshDataHome {
         }
     }
     pub(super) fn validate(&self) -> Result<(), DagError> {
+        if self
+            .domain_id
+            .as_deref()
+            .is_some_and(|id| !vfs::uri::valid_domain_name(id) || id == "local")
+        {
+            return Err(DagError::Schedule(
+                "invalid remote filesystem domain URI scheme".into(),
+            ));
+        }
         if !clean_absolute(&self.remote_root)
             || !clean_absolute(&self.vfs_prefix)
             || self.ssh_aliases.is_empty()
@@ -99,6 +108,21 @@ impl SshDataHome {
     pub fn validate_vfs(&self, storage: &vfs::OpendalFileStorage) -> Result<(), DagError> {
         self.validate()?;
         self.validate_vfs_mapping(storage, &self.vfs_prefix, &self.remote_root)?;
+        if let (Some(_), Some(prefix), Some(root)) = (
+            &self.domain_id,
+            &self.retained_vfs_prefix,
+            &self.retained_remote_root,
+        ) {
+            let relative = Path::new(root)
+                .strip_prefix(&self.remote_root)
+                .map_err(|_| DagError::Schedule("retained root outside domain".into()))?;
+            let expected = format!("{}/{}", self.vfs_prefix, relative.to_string_lossy());
+            if *prefix != expected {
+                return Err(DagError::Schedule(format!(
+                    "named domain retained mount must preserve its primary projection: expected '{expected}'"
+                )));
+            }
+        }
         if let (Some(prefix), Some(root)) = (&self.retained_vfs_prefix, &self.retained_remote_root)
         {
             self.validate_vfs_mapping(storage, prefix, root)?;
@@ -401,7 +425,19 @@ impl TaskArtifactStore for SshArtifactStore {
             ));
         }
         let mut reference = self.measure_data_file(&artifact.path, &artifact).await?;
-        reference.path = vfs::uri::uri(format!("{prefix}/{}", relative.to_string_lossy()));
+        reference.path = if let Some(domain) = &home.domain_id {
+            // Domain addresses are relative to the primary filesystem root,
+            // including the retained subdirectory when one is configured.
+            let domain_relative = Path::new(&artifact.path)
+                .strip_prefix(&home.remote_root)
+                .map_err(|_| DagError::Schedule("output is outside its domain root".into()))?;
+            format!(
+                "{domain}://{}",
+                vfs::uri::encode_path(&domain_relative.to_string_lossy())
+            )
+        } else {
+            vfs::uri::uri(format!("{prefix}/{}", relative.to_string_lossy()))
+        };
         // measure_data_file already stamps the domain; assert it stays put
         // when the path is rewritten into the VFS projection.
         debug_assert_eq!(reference.domain, self.placement_domain());

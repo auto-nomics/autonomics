@@ -57,7 +57,7 @@ async fn retained_files_are_measured_and_referenced_without_downloads() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(reference.path, "vfs:///cluster/answer.tsv");
+    assert_eq!(reference.path, "hpc-b://answer.tsv");
     assert_eq!(reference.format.as_deref(), Some("tsv"));
     // The retained publication carries the declared domain identity.
     assert_eq!(reference.domain.as_str(), "hpc-b");
@@ -222,11 +222,11 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
     std::fs::write(&output, b"toy result").unwrap();
     let mut store = store(root);
     let mut home = store.data_home.take().unwrap();
-    home.retained_vfs_prefix = Some("/cluster-runs".into());
+    home.retained_vfs_prefix = Some("/cluster/attempts".into());
     home.retained_remote_root = Some(root.join("attempts").to_string_lossy().into_owned());
     store = store.with_data_home(home).unwrap();
     let mut manifest = vfs::VfsManifest::from_toml(&format!(
-        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot={}\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\ndomain='hpc-b'\n[[mount]]\npath='/cluster-runs'\nbackend='ssh'\nsource='attempts'\nread_only=true\n",
+        "[[backend]]\nid='ssh'\ntype='ssh'\nalias='fixture'\nroot={}\n[[mount]]\npath='/cluster'\nbackend='ssh'\nsource='/'\nread_only=true\ndomain='hpc-b'\n[[mount]]\npath='/cluster/attempts'\nbackend='ssh'\nsource='attempts'\nread_only=true\n",
         serde_json::to_string(&root.to_string_lossy()).unwrap(),
     )).unwrap();
     manifest.mount[0].permissions = vfs::permission::MountPermissions::unix(
@@ -241,7 +241,7 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
     assert!(agent.check_readable("/cluster/input.tsv").is_err());
     assert!(
         agent
-            .check_readable("/cluster-runs/task/output.tsv")
+            .check_readable("/cluster/attempts/task/output.tsv")
             .is_ok()
     );
     store
@@ -264,7 +264,10 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(reference.path, "vfs:///cluster-runs/task/output.tsv");
+    assert_eq!(reference.path, "hpc-b://attempts/task/output.tsv");
+    assert!(agent.check_readable(&reference.path).is_ok());
+    let location = agent.ssh_location(&reference.path).unwrap().unwrap();
+    assert_eq!(location.path, output.to_string_lossy());
     assert!(
         store
             .retained_reference(FileRef::local(&input, None).unwrap())

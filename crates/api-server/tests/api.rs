@@ -240,7 +240,7 @@ async fn bib_upload_preserves_and_serves_the_original_file() {
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let fulltext = &body["fulltext"];
     let file_path = fulltext["file_path"].as_str().unwrap();
-    assert!(file_path.starts_with("vfs:///literature/doi%3A10.1000%2Foriginal-upload/"));
+    assert!(file_path.starts_with("local://literature/doi%253A10.1000%252Foriginal-upload/"));
     assert!(file_path.ends_with("-original.txt"));
     assert_eq!(fulltext["file_size"], content.len() as i64);
     assert!(
@@ -651,7 +651,7 @@ async fn bib_upload_stores_original_pdf_bytes_with_application_pdf_mime() {
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["fulltext"]["file_format"], "pdf");
     let file_path = body["fulltext"]["file_path"].as_str().unwrap();
-    assert!(file_path.starts_with("vfs:///literature/doi%3A10.1000%2Fpdf-host/"));
+    assert!(file_path.starts_with("local://literature/doi%253A10.1000%252Fpdf-host/"));
     assert!(file_path.ends_with("-paper.pdf"));
     assert_eq!(body["fulltext"]["file_size"], pdf_bytes.len() as i64);
 

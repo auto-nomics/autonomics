@@ -350,6 +350,57 @@ fn load_or_create_vfs_manifest(config: &RuntimeConfig) -> Result<VfsManifestStat
             let catalog_source = extract_catalog_section(&source);
             let mut manifest = VfsManifest::from_toml(&source)
                 .map_err(|e| Error::Other(format!("invalid {}: {e}", manifest_path.display())))?;
+            let domains_changed = manifest.migrate_domains();
+            if domains_changed {
+                // Edit only domain fields in the source document: preserve
+                // catalog and operator extensions unknown to VfsManifest.
+                let mut document: toml::Value = toml::from_str(&source)
+                    .map_err(|e| Error::Other(format!("parse VFS migration: {e}")))?;
+                if let Some(mounts) = document
+                    .get_mut("mount")
+                    .and_then(toml::Value::as_array_mut)
+                {
+                    for mount in mounts {
+                        let path = mount.get("path").and_then(toml::Value::as_str);
+                        let domain = manifest
+                            .mount
+                            .iter()
+                            .find(|m| Some(m.path.as_str()) == path)
+                            .and_then(|m| m.domain.clone());
+                        if let (Some(table), Some(domain)) = (mount.as_table_mut(), domain) {
+                            table.insert("domain".into(), toml::Value::String(domain));
+                        }
+                    }
+                }
+                let migrated =
+                    toml::to_string_pretty(&document).map_err(|e| Error::Other(e.to_string()))?;
+                let backup = manifest_path.with_extension("toml.pre-domain.bak");
+                let mut options = std::fs::OpenOptions::new();
+                options.write(true).create_new(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    options.mode(0o600);
+                }
+                use std::io::Write;
+                match options.open(&backup) {
+                    Ok(mut file) => file
+                        .write_all(source.as_bytes())
+                        .and_then(|_| file.sync_all())
+                        .map_err(|e| Error::Other(format!("backup VFS manifest: {e}")))?,
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(Error::Other(format!("backup VFS manifest: {e}"))),
+                }
+                let mut staged = tempfile::NamedTempFile::new_in(&config.state_dir)
+                    .map_err(|e| Error::Other(e.to_string()))?;
+                staged
+                    .write_all(migrated.as_bytes())
+                    .and_then(|_| staged.as_file().sync_all())
+                    .map_err(|e| Error::Other(e.to_string()))?;
+                staged
+                    .persist(&manifest_path)
+                    .map_err(|e| Error::Other(e.to_string()))?;
+            }
             let literature_changed = ensure_literature_mount(&mut manifest, config);
             let browser_downloads_changed = ensure_browser_download_mount(&mut manifest, config)?;
             let changed = literature_changed || browser_downloads_changed;
@@ -394,25 +445,67 @@ fn write_vfs_manifest(
         ))
     })?;
 
-    let mut source = toml::to_string_pretty(manifest)
-        .map_err(|e| Error::Other(format!("serialize {}: {e}", path.display())))?;
-    if let Some(catalog_source) = catalog_source {
-        source.push_str(catalog_source);
+    let mut document = match std::fs::read_to_string(path) {
+        Ok(source) => {
+            toml::from_str::<toml::Value>(&source).map_err(|e| Error::Other(e.to_string()))?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            toml::Value::Table(Default::default())
+        }
+        Err(e) => return Err(Error::Other(e.to_string())),
+    };
+    let typed = toml::Value::try_from(manifest).map_err(|e| Error::Other(e.to_string()))?;
+    for (section, identity) in [("backend", "id"), ("mount", "path")] {
+        let old = document
+            .get(section)
+            .and_then(toml::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut entries = typed
+            .get(section)
+            .and_then(toml::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for entry in &mut entries {
+            if let Some(previous) = old
+                .iter()
+                .find(|old| old.get(identity) == entry.get(identity))
+                && let (Some(previous), Some(current)) = (previous.as_table(), entry.as_table_mut())
+            {
+                for (key, value) in previous {
+                    current.entry(key.clone()).or_insert_with(|| value.clone());
+                }
+            }
+        }
+        document
+            .as_table_mut()
+            .ok_or_else(|| Error::Other("VFS manifest must be a table".into()))?
+            .insert(section.into(), toml::Value::Array(entries));
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
+    if document.get("catalog").is_none()
+        && let Some(catalog) = catalog_source
     {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        let catalog: toml::Value =
+            toml::from_str(catalog).map_err(|e| Error::Other(e.to_string()))?;
+        if let Some(value) = catalog.get("catalog") {
+            document
+                .as_table_mut()
+                .unwrap()
+                .insert("catalog".into(), value.clone());
+        }
     }
-    options
-        .open(path)
-        .and_then(|mut file| {
-            use std::io::Write;
-            file.write_all(source.as_bytes())
-        })
-        .map_err(|e| Error::Other(format!("write {}: {e}", path.display())))
+    let source = toml::to_string_pretty(&document).map_err(|e| Error::Other(e.to_string()))?;
+    use std::io::Write;
+    let mut staged =
+        tempfile::NamedTempFile::new_in(parent).map_err(|e| Error::Other(e.to_string()))?;
+    staged
+        .write_all(source.as_bytes())
+        .and_then(|_| staged.as_file().sync_all())
+        .map_err(|e| Error::Other(format!("write {}: {e}", path.display())))?;
+    staged
+        .persist(path)
+        .map_err(|e| Error::Other(format!("replace {}: {e}", path.display())))?;
+    Ok(())
 }
 
 fn extract_catalog_section(source: &str) -> Option<String> {
@@ -437,7 +530,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         config: vfs::BackendConfig::local("/"),
     }];
     let mut mount = vec![MountDefinition {
-        domain: None,
+        domain: Some("local".into()),
         path: "/".into(),
         backend: "default".into(),
         source: config.data_dir.to_string_lossy().to_string(),
@@ -483,7 +576,7 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
             config: vfs::BackendConfig::oss(bucket, endpoint, ak, sk),
         });
         mount.push(MountDefinition {
-            domain: None,
+            domain: Some("oss".into()),
             path: "/data/oss".into(),
             backend: "oss-prod".into(),
             source: "/".into(),
@@ -671,6 +764,41 @@ fn ensure_workspace_mount(manifest: &mut VfsManifest, workspace_root: &std::path
 #[cfg(test)]
 mod vfs_tests {
     use super::*;
+
+    #[test]
+    fn legacy_domains_migrate_once_with_backup_and_operator_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.state_dir = dir.path().to_path_buf();
+        config.data_dir = dir.path().join("data");
+        let path = dir.path().join("vfs.toml");
+        let source = "[operator]\nlabel='preserved'\n[[backend]]\nid='shared'\ntype='ssh'\nalias='fixture'\nroot='/share'\ncustom='backend-extension'\n[[mount]]\npath='/cluster'\nbackend='shared'\nsource='/'\nread_only=true\ncustom='mount-extension'\n[catalog]\nrepository='owner/index'\n";
+        std::fs::write(&path, source).unwrap();
+        let first = load_or_create_vfs_manifest(&config).unwrap();
+        assert_eq!(
+            first
+                .manifest
+                .mount
+                .iter()
+                .find(|m| m.path == "/cluster")
+                .unwrap()
+                .domain
+                .as_deref(),
+            Some("shared")
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("backend-extension")
+                && text.contains("mount-extension")
+                && text.contains("preserved")
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("toml.pre-domain.bak")).unwrap(),
+            source
+        );
+        load_or_create_vfs_manifest(&config).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+    }
 
     #[test]
     fn build_vfs_materializes_default_manifest_on_first_launch() {

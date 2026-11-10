@@ -105,7 +105,11 @@ pub const KEGG_PATHWAYS_BUNDLE: &str = "kegg-pathways";
 pub const KEGG_GENOME_PATHWAYS_BUNDLE: &str = "kegg-genome-pathways";
 
 fn storage_url(bundle: &DataBundle) -> String {
-    vfs::uri::uri(&bundle.vpath)
+    if vfs::uri::storage_path(&bundle.vpath).is_some() {
+        vfs::uri::datafusion_uri(&bundle.vpath)
+    } else {
+        vfs::uri::uri(&bundle.vpath)
+    }
 }
 
 impl NodeFactory for MagmaKeggAlignNodeFactory {

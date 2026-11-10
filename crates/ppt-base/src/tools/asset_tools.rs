@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 
 use std::sync::Arc;
 
-use super::{box_write, tool_err, DeckToolState};
+use super::{DeckToolState, box_write, tool_err};
 use crate::actor::DeckHandle;
 use crate::shared::DeckShared;
 
@@ -132,42 +132,42 @@ async fn attach_inner(
 
     // Exactly one source.
     let (bytes, filename) = match (&vfs_path, &data_base64) {
-            (Some(_), Some(_)) => {
-                return Err(crate::Error::Asset(
-                    "pass exactly one source: vfs_path or data_base64".into(),
-                ));
-            }
-            (None, None) => {
-                return Err(crate::Error::Asset(
-                    "no source: pass vfs_path (preferred) or data_base64".into(),
-                ));
-            }
-            (Some(path), None) => {
-                let bytes = read_vfs(&s, path).await?;
-                let name = filename_in.clone().unwrap_or_else(|| basename(path));
-                (bytes, name)
-            }
-            (None, Some(b64)) => {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(b64.trim())
-                    .map_err(|e| {
-                        crate::Error::Asset(format!(
-                            "invalid base64: {e} (note: for real files use vfs_path instead)"
-                        ))
-                    })?;
-                if bytes.len() > MAX_INLINE_BYTES {
-                    return Err(crate::Error::Asset(format!(
-                        "inline payload too large ({} bytes > {MAX_INLINE_BYTES}); \
-                         write the file to the VFS and pass vfs_path instead",
-                        bytes.len()
-                    )));
-                }
-                let name = filename_in.clone().ok_or_else(|| {
-                    crate::Error::Asset("filename is required when using data_base64".into())
+        (Some(_), Some(_)) => {
+            return Err(crate::Error::Asset(
+                "pass exactly one source: vfs_path or data_base64".into(),
+            ));
+        }
+        (None, None) => {
+            return Err(crate::Error::Asset(
+                "no source: pass vfs_path (preferred) or data_base64".into(),
+            ));
+        }
+        (Some(path), None) => {
+            let bytes = read_vfs(&s, path).await?;
+            let name = filename_in.clone().unwrap_or_else(|| basename(path));
+            (bytes, name)
+        }
+        (None, Some(b64)) => {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64.trim())
+                .map_err(|e| {
+                    crate::Error::Asset(format!(
+                        "invalid base64: {e} (note: for real files use vfs_path instead)"
+                    ))
                 })?;
-                (bytes, name)
+            if bytes.len() > MAX_INLINE_BYTES {
+                return Err(crate::Error::Asset(format!(
+                    "inline payload too large ({} bytes > {MAX_INLINE_BYTES}); \
+                         write the file to the VFS and pass vfs_path instead",
+                    bytes.len()
+                )));
             }
-        };
+            let name = filename_in.clone().ok_or_else(|| {
+                crate::Error::Asset("filename is required when using data_base64".into())
+            })?;
+            (bytes, name)
+        }
+    };
 
         if bytes.is_empty() {
             return Err(crate::Error::Asset("empty asset payload".into()));
@@ -208,9 +208,6 @@ async fn attach_inner(
 /// Read bytes from the shared VFS (mount-routed; the sanctioned API,
 /// no raw filesystem access).
 async fn read_vfs(s: &DeckShared, vpath: &str) -> crate::Result<Vec<u8>> {
-    /// Read bytes from the shared VFS (mount-routed; the sanctioned API,
-    /// no raw filesystem access).
-    let _ = vpath;
     #[cfg(not(feature = "vfs"))]
     {
         return Err(crate::Error::Asset(
@@ -220,9 +217,13 @@ async fn read_vfs(s: &DeckShared, vpath: &str) -> crate::Result<Vec<u8>> {
     #[cfg(feature = "vfs")]
     {
         let storage = s.vfs.as_ref().ok_or_else(|| {
-            crate::Error::Asset("no VFS attached in this deployment; pass data_base64 instead".into())
+            crate::Error::Asset(
+                "no VFS attached in this deployment; pass data_base64 instead".into(),
+            )
         })?;
-        let normalized = vfs::OpendalFileStorage::normalize_path(vpath);
+        let normalized = storage
+            .try_resolve_virtual(vpath)
+            .map_err(|e| crate::Error::Asset(format!("invalid VFS address {vpath}: {e}")))?;
         let operator = storage.resolve(&normalized);
         let path = storage.resolve_path(&normalized);
         let buffer = operator.read(&path).await.map_err(|e| {
@@ -236,12 +237,16 @@ async fn read_vfs(s: &DeckShared, vpath: &str) -> crate::Result<Vec<u8>> {
 
 fn basename(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
-    trimmed
+    let name = trimmed
         .rsplit('/')
         .next()
         .filter(|s| !s.is_empty())
-        .unwrap_or("asset.bin")
-        .to_string()
+        .unwrap_or("asset.bin");
+    #[cfg(feature = "vfs")]
+    if vfs::uri::domain(path).is_some() {
+        return vfs::uri::decode_path(name).unwrap_or_else(|_| name.to_string());
+    }
+    name.to_string()
 }
 
 /// Guess a mime type from a filename extension (small allowlist for
@@ -268,6 +273,29 @@ pub fn guess_mime(filename: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "vfs")]
+    #[tokio::test]
+    async fn domain_asset_reads_preserve_escaped_names_and_refuse_unknown_domains() {
+        let storage = Arc::new(vfs::OpendalFileStorage::new_temp());
+        storage
+            .write_bytes("local://figure%20%25.png", b"image".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(basename("local://figure%20%25.png"), "figure %.png");
+        assert_eq!(basename("/figure%20.png"), "figure%20.png");
+        let shared = DeckShared::open_in_memory()
+            .await
+            .unwrap()
+            .with_vfs(Some(storage));
+        assert_eq!(
+            read_vfs(&shared, "local://figure%20%25.png")
+                .await
+                .unwrap(),
+            b"image"
+        );
+        assert!(read_vfs(&shared, "missing://figure.png").await.is_err());
+    }
 
     #[test]
     fn basename_helpers() {

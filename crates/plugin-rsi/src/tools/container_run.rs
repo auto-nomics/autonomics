@@ -22,7 +22,7 @@ const DEFAULT_TOOL_TIMEOUT_SECS: u64 = 900;
                   intended plugin nodes and supported data-analysis tools."
 )]
 pub(super) struct PluginContainerRunInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    /// Plugin workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
     /// Executable and arguments. No shell string is accepted.
     argv: Vec<String>,

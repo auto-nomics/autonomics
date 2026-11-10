@@ -1905,6 +1905,60 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
 
 // ── data-domain declarations (placement phase 1) ────────────────────────
 
+#[test]
+fn legacy_source_domains_reopen_without_rewriting_registry_history() {
+    for (id, expected) in [("Csu", "csu"), ("Hpc_B", "hpc-b"), ("7hpc", "source-7hpc")] {
+        let f = fixture();
+        let mut state = f.registry.state();
+        state.data_sources.push(DataSource {
+            id: id.into(),
+            name: id.into(),
+            backend: DataBackend::Ssh {
+                alias: "fixture".into(),
+                root: "/share".into(),
+                python: "python3".into(),
+            },
+            read_only: true,
+            domain: Some(id.into()),
+            endpoint: None,
+            permissions: Default::default(),
+        });
+        f.registry.persist(&state).unwrap();
+        let path = f.registry.root.join("registry.json");
+        let before = fs::read(&path).unwrap();
+        let (vfs, storage) = mounts(&f.config);
+        let reopened = ComputeRegistry::open(
+            &f.config,
+            storage.clone(),
+            vfs,
+            &f.containers,
+            crate::hpc_monitor::MonitorHub::empty(),
+        )
+        .unwrap();
+        let prefix = format!("/data/{id}");
+        let legacy_domain = DataDomain {
+            id: id.into(),
+            ssh_aliases: vec!["fixture".into()],
+            remote_root: "/share".into(),
+            vfs_prefix: prefix.clone(),
+            retained_vfs_prefix: None,
+            retained_remote_root: None,
+        };
+        let home = legacy_domain.data_home();
+        assert_eq!(home.domain_id.as_deref(), Some(expected));
+        home.validate_vfs(&storage).unwrap();
+        assert_eq!(
+            storage
+                .canonical_uri(&format!("{prefix}/MixedCase.tsv"))
+                .unwrap(),
+            format!("{expected}://MixedCase.tsv")
+        );
+        assert_eq!(reopened.state().data_sources[0].domain.as_deref(), Some(id));
+        assert_eq!(legacy_domain.id, id);
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+}
+
 fn domain(alias: &str) -> DataDomain {
     DataDomain {
         id: "hpc-b".into(),
@@ -1919,6 +1973,16 @@ fn domain(alias: &str) -> DataDomain {
 #[test]
 fn data_domain_admission_mirrors_transport_rules() {
     assert!(domain("data-a").validate().is_ok());
+    for id in ["ht.archive", "ht+archive"] {
+        let mut named = domain("data-a");
+        named.id = id.into();
+        assert!(named.validate().is_ok());
+    }
+    for id in ["local", "vfs", "file", "http", "https", "HT", "hpc_b"] {
+        let mut invalid = domain("data-a");
+        invalid.id = id.into();
+        assert!(invalid.validate().is_err());
+    }
 
     let mut leading_dash = domain("data-a");
     leading_dash.ssh_aliases = vec!["-bad".into()];
@@ -2144,11 +2208,18 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
 
     // One-key repair reconnects and verifies a healthy worker without a package
     // path, configuration changes, or an unnecessary target revision.
-    let repaired = f.registry.repair_worker(super::RepairWorkerRequest {
-        expected_revision: catalog.revision,
-        target_id: "hpc-b".into(),
-    }).await.unwrap();
-    assert_eq!(serde_json::to_value(&repaired).unwrap(), serde_json::to_value(&catalog).unwrap());
+    let repaired = f
+        .registry
+        .repair_worker(super::RepairWorkerRequest {
+            expected_revision: catalog.revision,
+            target_id: "hpc-b".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&repaired).unwrap(),
+        serde_json::to_value(&catalog).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -2175,4 +2246,47 @@ async fn enroll_rejects_partial_data_home_inputs() {
         .await
         .unwrap_err();
     assert!(error.contains("together"), "{error}");
+}
+
+#[tokio::test]
+async fn filesystem_domain_context_refreshes_without_a_compute_revision_change() {
+    use agentik_core::context::ContextProvider;
+    let f = fixture();
+    let context = super::tools::ComputeContext::new(f.registry.clone());
+    assert!(context.poll().await.unwrap().contains("local://"));
+    assert!(context.poll().await.is_none());
+    let revision = f.registry.state().revision;
+    let remote = tempfile::tempdir().unwrap();
+    let manifest = vfs::VfsManifest::from_toml(&format!(
+        "[[backend]]\nid='context-remote'\ntype='local'\nroot={}\n[[mount]]\npath='/data/Csu'\nbackend='context-remote'\nsource='/'\ndomain='csu'\nread_only=true\n",
+        serde_json::to_string(&remote.path().to_string_lossy()).unwrap(),
+    )).unwrap();
+    f.registry.vfs.add_data_mount(&manifest).unwrap();
+    let update = context.poll().await.unwrap();
+    let payload: serde_json::Value = serde_json::from_str(update.lines().nth(1).unwrap()).unwrap();
+    let domains = payload["filesystem_domains"].as_array().unwrap();
+    assert!(domains.iter().any(|d| d["uri"] == "csu://"
+        && d["virtual_path"] == "/data/Csu"
+        && d["read_only"] == true));
+    assert_eq!(f.registry.state().revision, revision);
+    assert!(context.poll().await.is_none());
+    let status_tool = super::tools::registrations(f.registry.clone())
+        .into_iter()
+        .find(|tool| tool.definition.name == "compute_status")
+        .unwrap();
+    let result = status_tool
+        .implementation
+        .execute(serde_json::json!({}))
+        .await
+        .unwrap();
+    let agentik_sdk::types::ToolResultContent::Json(status) = result.content else {
+        panic!("expected JSON")
+    };
+    assert!(
+        status["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["path"] == "csu://" && m["virtual_path"] == "/data/Csu")
+    );
 }

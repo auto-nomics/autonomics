@@ -169,13 +169,13 @@ const PROMPT_RESOURCE_DOWNLOADS: &str = "\n\
 ### Central Resource Downloads\n\
 - Use `resource_download` for allowlisted HTTP(S) files and host-managed S3/OSS \
 objects. It streams in the background and installs the final file atomically \
-under `/downloads`; poll `view_task_status` and collect the receipt with \
+under `local://downloads`; poll `view_task_status` and collect the receipt with \
 `wait_task` or `view_task_results`.\n\
 - For HTTP(S), provide `uri` plus `destination`. For S3/OSS, provide the \
 host-configured `profile`, `bucket`, and `key`; never request or expose \
 object-store credentials.\n\
 - Set `expected_sha256` when a checksum is available, and choose explicit \
-filenames under `/downloads`.";
+filenames under `local://downloads`.";
 
 const PROMPT_DAG_ENGINE: &str = "\n\
 ### Data Pipeline (DAG Engine)\n\
@@ -269,7 +269,7 @@ into **refs** (branches) — each ref is an independent lineage.\n\
 
 const PROMPT_PLUGIN_RSI: &str = "\n\
 ### Plugin Development\n\
-You can develop plugins through their `/plugins/dev/<plugin-name>` VFS paths.\n\
+You can develop plugins through their `local://plugins/dev/<plugin-name>` VFS paths.\n\
 List approved environments with `plugin_environments_list`, inspect the addressed\n\
 workspace with `vfs`, create greenfield workspaces with `plugin_create`, fork\n\
 installed references with `plugin_fork`, bind approved environment images with\n\
@@ -285,7 +285,7 @@ active runtime source while retaining development history. Treat manifest\n\
 lifecycle state as host-owned: do not attempt direct manifest writes.\n\
 \n\
 When no approved environment fits, develop a new one through\n\
-`/environments/dev/<environment-id>` VFS paths: `environment_create` derives a\n\
+`local://environments/dev/<environment-id>` VFS paths: `environment_create` derives a\n\
 workspace from an approved base, you author the Containerfile through the VFS,\n\
 `environment_manifest_update` edits manifest.toml via old_string/new_string\n\
 replacement (read the file through the VFS first; host-owned fields such as\n\
@@ -387,7 +387,7 @@ Tool groups, in order of preference:\n\
   with elements by CSS selector.\n\
 - `browser_get_url` / `browser_get_title` — light state queries.\n\
 - `browser_download(url[, tab_index, timeout_ms])` — download a URL and wait\n\
-  for completion. Completed files are visible in `/browser-downloads`.\n\
+  for completion. Completed files are visible in `local://browser-downloads`.\n\
 - `browser_wait_for_download([timeout_ms])` — call this after clicking a\n\
   download link or submitting a form that starts a download.\n\
 - `browser_scroll(x, y[, tab_index])` — scroll the viewport.\n\
@@ -399,13 +399,13 @@ Tool groups, in order of preference:\n\
 click, type, scroll, or navigate you MUST call `browser_extract_text` or\n\
 `browser_screenshot` yourself to see the new state — action tools never\n\
 auto-report page content. A click that starts a download should be followed by\n\
-`browser_wait_for_download`; then report the returned `/browser-downloads/...`\n\
+`browser_wait_for_download`; then report the returned `local://browser-downloads/...`\n\
 path.";
 
 const PROMPT_BROWSER_HANDOFF: &str = "\n\
 ### Collaboration Boundary\n\
 You do not have direct host filesystem or network access. Browser actions and\n\
-the mounted `/browser-downloads` namespace are the supported interfaces. If a\n\
+the mounted `local://browser-downloads` namespace are the supported interfaces. If a\n\
 task needs another capability, return a structured handoff to the calling agent\n\
 describing exactly which pages you visited, what you extracted, what files you\n\
 downloaded, and what remains to be done; do not invent capabilities you were\n\
@@ -440,9 +440,19 @@ or any other tool that accepts SQL.\n\
   The same applies to other types: prefer SQL-standard names (`INTEGER`, `BIGINT`, \
   `VARCHAR`, `DOUBLE`) over their Arrow equivalents (`INT32`, `INT64`, `UTF8`, `FLOAT64`).";
 
+const PROMPT_FILESYSTEM: &str = "\n\
+### Filesystem domains\n\
+- Use the `vfs` tool with canonical `<domain>://path` addresses for all file operations and DAG file parameters. Examples: `local://work/input.tsv`, `ht://share/input.tsv`; the domain root is `ht://`. Everything after `://` is a path, not a hostname.\n\
+- Discover actual filesystem domains, canonical mount URIs, and read-only submounts with `vfs` op=`mount_list`. Reuse returned `uri`/`path` values; `virtual_path`, `backend`, and `source` are descriptive metadata, not preferred file addresses. Never infer a filesystem domain from a compute target name.\n\
+- `local://` is the coordinator's mounted namespace, not the current worker's host disk. Domain names use canonical lowercase spelling; file paths retain case. Spaces, percent signs, and other special characters are percent-encoded in returned URIs; reuse those escapes without double encoding.\n\
+- Use `vfs` op=`cp` or `mv` with explicit source and destination domain URIs to transfer files. Compute selection does not move data or revoke other domains. Permission submounts still apply; referencing a file does not make it accessible in place to every compute target.\n\
+- Bare virtual paths, `vfs://`, and three-slash domain URIs are legacy inputs. New file references and patch headers should use the canonical two-slash form. Native `file://` or remote shell paths have separate host semantics; do not fabricate them from VFS URIs.\n\
+- For local namespaces use `local://downloads`, `local://browser-downloads`, `local://literature`, `local://plugins/dev/<plugin-name>`, and `local://environments/dev/<environment-id>` as appropriate; check mount permissions first.\n\
+- For `read_chunk`, reuse the returned canonical path, next_offset and source_version; do not rewrite file contents, byte offsets, or consistency tokens when carrying addresses between tools.";
+
 const PROMPT_GENERAL: &str = "\n\
 ### General\n\
-- Read, write, and manage files on the local filesystem.\n\
+- Read, write, and manage files through the domain-aware `vfs` tool.\n\
 - Break complex research questions into sequential tool calls; explain your reasoning.\n\
 \n\
 ## Guidelines\n\
@@ -455,7 +465,7 @@ const PROMPT_HPC: &str = "\n\
 - Inspect the cluster with `hpc_cluster` (identity, partitions, resources, accounts, quota, queue) before submitting work.\n\
 - Submit scheduler jobs with `hpc_jobs` under a stable `submission_key`. An uncertain submission is recovered with `recover` — never resubmitted; use `inspect` to read the frozen submission.\n\
 - Address existing jobs with their original `target_id`/`target_revision`; new computation must match the globally selected compute target.\n\
-- Move data through the VFS domain mounts (`cp`/`mv` over `vfs://` paths): each mount is one explicit filesystem partition. Prefer referencing inputs already on the cluster filesystem over re-uploading them.\n\
+- Move data through the VFS domain mounts (`vfs` op=`cp`/`mv` with explicit domain:// source and destination addresses): each mount is one explicit filesystem partition. Prefer referencing inputs already on the cluster filesystem over re-uploading them.\n\
 - `cancel` stays STOP_PENDING until both the queue and accounting confirm the job is gone — wait for that confirmation before declaring success.";
 
 /// Trait so [`build_system_prompt`] can accept either an
@@ -577,6 +587,7 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
 
     s.push_str(PROMPT_SQL_CONVENTIONS);
 
+    s.push_str(PROMPT_FILESYSTEM);
     s.push_str(PROMPT_GENERAL);
     s
 }
@@ -663,4 +674,20 @@ impl PromptCapabilities for RuntimeConfig {
     // runtime config — the `AgentKind` impl of this trait is what
     // actually drives the system-prompt section. Returning `false` here
     // keeps the default-prompt path aligned with the legacy behavior.
+}
+
+#[cfg(test)]
+mod filesystem_prompt_tests {
+    #[test]
+    fn every_agent_kind_gets_canonical_filesystem_guidance() {
+        for kind in agentik_core::AgentKind::ALL {
+            let prompt = super::build_system_prompt(&kind);
+            assert!(prompt.contains("### Filesystem domains"), "{kind:?}");
+            assert!(prompt.contains("local://work/input.tsv"));
+            assert!(prompt.contains("not a hostname"));
+            assert!(prompt.to_ascii_lowercase().contains("permission submounts"));
+            assert!(!prompt.contains("over `vfs://` paths"));
+            assert!(!prompt.contains("`/browser-downloads"));
+        }
+    }
 }

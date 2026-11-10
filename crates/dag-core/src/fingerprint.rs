@@ -425,11 +425,11 @@ async fn file_sha256_observed(
     if let Some(reporter) = reporter {
         reporter.phase(phase, "verifying input content");
     }
-    if let Some(vpath) = vfs::uri::virtual_path(path) {
+    if let Some(vpath) = vfs::uri::storage_path(path) {
         let storage = storage?;
         return storage
             .sha256_with_progress(
-                &vfs::OpendalFileStorage::normalize_path(vpath),
+                &storage.try_resolve_virtual(vpath).ok()?,
                 |current, total| {
                     if let Some(reporter) = reporter {
                         reporter.phase_progress(phase, current, Some(total), "bytes");

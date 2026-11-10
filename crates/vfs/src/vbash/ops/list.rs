@@ -37,7 +37,9 @@ pub async fn op_ls(
         match crate::browse::list(storage, raw, recursive.unwrap_or(false), limit, offset).await {
             Ok(listing) => listing,
             Err(error) => {
-                let vpath = storage.resolve_virtual(raw);
+                let vpath = storage
+                    .try_resolve_virtual(raw)
+                    .map_err(|e| e.to_string())?;
                 return Ok(AgentToolResult::error(format!(
                     "ls: '{vpath}': {}",
                     error.message()
@@ -50,7 +52,9 @@ pub async fn op_ls(
         .iter()
         .map(|entry| {
             serde_json::json!({
-                "name": entry.path,
+                "name": entry.name,
+                "path": entry.path,
+                "uri": entry.uri,
                 "is_dir": entry.is_dir,
                 "size": entry.size,
             })
@@ -95,17 +99,7 @@ pub async fn op_stat(
 /// read_only) so the agent can introspect the available
 /// mount points without needing them listed in the system prompt.
 pub async fn op_mount_list(storage: &OpendalFileStorage) -> Result<AgentToolResult, ToolError> {
-    let mounts: Vec<serde_json::Value> = crate::browse::mounts(storage)
-        .into_iter()
-        .map(|d| {
-            serde_json::json!({
-                "path": d.path,
-                "backend": d.backend,
-                "source": d.source,
-                "read_only": d.read_only,
-            })
-        })
-        .collect();
+    let mounts = crate::vbash::agent_mounts(storage)?;
     Ok(AgentToolResult::success_json(serde_json::json!({
         "mounts": mounts,
         "count": mounts.len(),
@@ -118,7 +112,9 @@ pub async fn op_wc(
     path: Option<&str>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "wc")?;
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!("wc: '{raw_path}': {error}")));
     }
@@ -149,7 +145,9 @@ pub async fn op_tree(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
-    let vpath = storage.resolve_virtual(path.unwrap_or("/"));
+    let vpath = storage
+        .try_resolve_virtual(path.unwrap_or("/"))
+        .map_err(|e| e.to_string())?;
     if let Err(error) = storage.check_listable(&vpath) {
         return Ok(AgentToolResult::error(format!("tree: '{vpath}': {error}")));
     }
@@ -354,7 +352,7 @@ pub async fn op_tree(
     }
 
     let mut out = String::new();
-    out.push_str(&vpath);
+    out.push_str(&crate::vbash::address::uri(storage, &vpath)?);
     out.push('\n');
 
     let mut ancestor_has_more: Vec<bool> = Vec::new();

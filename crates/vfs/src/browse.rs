@@ -36,6 +36,9 @@ pub const DEFAULT_LIST_LIMIT: usize = 200;
 pub struct VfsEntry {
     /// Full virtual path, for example `/data/ldsc/panel.parquet`.
     pub path: String,
+    /// Canonical domain URI; absent for legacy remote mounts lacking a domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
     /// Final path segment, for example `panel.parquet`.
     pub name: String,
     pub is_dir: bool,
@@ -61,6 +64,7 @@ impl VfsEntry {
             .to_string();
         Self {
             path: display,
+            uri: None,
             name,
             is_dir,
             size,
@@ -256,7 +260,7 @@ pub async fn list(
     limit: Option<usize>,
     offset: Option<usize>,
 ) -> Result<VfsListing, BrowseError> {
-    let vpath = OpendalFileStorage::normalize_path(path);
+    let vpath = storage.try_resolve_virtual(path)?;
     storage.check_listable(&vpath)?;
     let max = limit.unwrap_or(DEFAULT_LIST_LIMIT).max(1);
     let skip = offset.unwrap_or(0);
@@ -511,6 +515,9 @@ pub async fn list(
         }
     }
 
+    for entry in &mut items {
+        entry.uri = storage.canonical_uri(&entry.path).ok();
+    }
     let returned = items.len();
     let next_offset = truncated.then_some(skip + returned);
     Ok(VfsListing {
@@ -524,7 +531,7 @@ pub async fn list(
 
 /// File or directory metadata for a single virtual path.
 pub async fn stat(storage: &OpendalFileStorage, path: &str) -> Result<VfsEntry, BrowseError> {
-    let vpath = OpendalFileStorage::normalize_path(path);
+    let vpath = storage.try_resolve_virtual(path)?;
     storage.check_readable(&vpath)?;
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
@@ -534,12 +541,15 @@ pub async fn stat(storage: &OpendalFileStorage, path: &str) -> Result<VfsEntry, 
         }
         _ => BrowseError::from(e),
     })?;
-    Ok(VfsEntry::from_metadata(
+    let uri = storage.canonical_uri(&vpath).ok();
+    let mut entry = VfsEntry::from_metadata(
         vpath,
         meta.is_dir(),
         meta.content_length(),
         meta.last_modified().map(|t| t.to_string()),
-    ))
+    );
+    entry.uri = uri;
+    Ok(entry)
 }
 
 /// Snapshot of every mount defined for this VFS.
@@ -550,7 +560,7 @@ pub fn mounts(storage: &OpendalFileStorage) -> Vec<MountDefinition> {
 /// The mount covering `path` (longest prefix), if any. Exposes the
 /// read-only flag and declarative policy for UI badges.
 pub fn covering_mount(storage: &OpendalFileStorage, path: &str) -> Option<MountDefinition> {
-    covering_handle(storage, &OpendalFileStorage::normalize_path(path))
+    covering_handle(storage, &storage.try_resolve_virtual(path).ok()?)
         .map(|handle| handle.definition)
 }
 
@@ -565,7 +575,7 @@ pub async fn read_text(
     path: &str,
     max_bytes: usize,
 ) -> Result<TextRead, BrowseError> {
-    let vpath = OpendalFileStorage::normalize_path(path);
+    let vpath = storage.try_resolve_virtual(path)?;
     storage.check_readable(&vpath)?;
     let size = storage.content_length(&vpath).await?;
     let cap = (max_bytes as u64).min(size);
@@ -583,7 +593,7 @@ pub async fn read_text(
 
 /// Create a directory.
 pub async fn mkdir(storage: &OpendalFileStorage, path: &str) -> Result<String, BrowseError> {
-    let vpath = OpendalFileStorage::normalize_path(path);
+    let vpath = storage.try_resolve_virtual(path)?;
     storage.check_writable(&vpath)?;
     let op = storage.resolve(&vpath);
     let remote = storage.resolve_path(&vpath);
@@ -612,7 +622,7 @@ pub async fn remove(
     path: &str,
     recursive: bool,
 ) -> Result<String, BrowseError> {
-    let vpath = OpendalFileStorage::normalize_path(path);
+    let vpath = storage.try_resolve_virtual(path)?;
     if vpath == "/" {
         return Err(BrowseError::Invalid(
             "Refusing to rm '/': that is the virtual filesystem root. \
@@ -655,8 +665,8 @@ pub async fn copy(
     src: &str,
     dst: &str,
 ) -> Result<(String, String), BrowseError> {
-    let vsrc = OpendalFileStorage::normalize_path(src);
-    let vdst = OpendalFileStorage::normalize_path(dst);
+    let vsrc = storage.try_resolve_virtual(src)?;
+    let vdst = storage.try_resolve_virtual(dst)?;
     storage.check_readable(&vsrc)?;
     storage.check_writable(&vdst)?;
     let src_op = storage.resolve(&vsrc);
@@ -682,8 +692,8 @@ pub async fn move_entry(
     src: &str,
     dst: &str,
 ) -> Result<(String, String), BrowseError> {
-    let vsrc = OpendalFileStorage::normalize_path(src);
-    let vdst = OpendalFileStorage::normalize_path(dst);
+    let vsrc = storage.try_resolve_virtual(src)?;
+    let vdst = storage.try_resolve_virtual(dst)?;
     storage.check_writable(&vsrc)?;
     storage.check_writable(&vdst)?;
     let src_op = storage.resolve(&vsrc);

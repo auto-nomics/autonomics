@@ -267,6 +267,76 @@ impl VfsManifest {
         Ok(toml::from_str(source)?)
     }
 
+    /// Assign stable addresses to legacy unnamed remote partitions. Existing
+    /// domains are preserved; local files share the coordinator namespace.
+    /// Return whether the manifest needs persistence.
+    pub fn migrate_domains(&mut self) -> bool {
+        use sha2::{Digest, Sha256};
+        let mut changed = false;
+        let mut used = self
+            .mount
+            .iter()
+            .filter_map(|m| m.domain.clone())
+            .collect::<std::collections::HashSet<_>>();
+        let original = self.mount.clone();
+        for mount in &mut self.mount {
+            if mount.domain.is_some() {
+                continue;
+            }
+            let local = self
+                .backend
+                .iter()
+                .find(|b| b.id == mount.backend)
+                .is_some_and(|b| matches!(b.config, BackendConfig::Local { .. }));
+            if local {
+                if mount.path == "/" && used.insert("local".into()) {
+                    mount.domain = Some("local".into());
+                    changed = true;
+                }
+                continue;
+            }
+            // Permission submounts inherit their declared ancestor's domain.
+            if original.iter().any(|parent| {
+                parent.domain.is_some()
+                    && parent.backend == mount.backend
+                    && mount
+                        .path
+                        .strip_prefix(parent.path.trim_end_matches('/'))
+                        .filter(|relative| relative.starts_with('/'))
+                        .is_some_and(|relative| {
+                            OpendalFileStorage::normalize_path(&format!(
+                                "{}/{relative}",
+                                parent.source.trim_end_matches('/')
+                            )) == OpendalFileStorage::normalize_path(&mount.source)
+                        })
+            }) {
+                continue;
+            }
+            let digest = format!(
+                "{:x}",
+                Sha256::digest(format!("{}:{}", mount.backend, mount.path))
+            );
+            let candidate = if crate::uri::valid_domain_name(&mount.backend)
+                && mount.backend != "local"
+                && !used.contains(&mount.backend)
+                && original
+                    .iter()
+                    .filter(|m| m.backend == mount.backend)
+                    .count()
+                    == 1
+            {
+                mount.backend.clone()
+            } else {
+                format!("mount-{}", &digest[..16])
+            };
+            if used.insert(candidate.clone()) {
+                mount.domain = Some(candidate);
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn local_root(root: impl Into<String>) -> Self {
         let root = root.into();
         Self {
@@ -452,16 +522,21 @@ impl MountedObjectStore {
                 return Err(MountError::InvalidMountPath(definition.path.clone()));
             }
             if let Some(domain) = &definition.domain {
-                if domain.is_empty()
-                    || domain.starts_with('-')
-                    || !domain
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-                {
+                if !crate::uri::valid_domain_name(domain) {
                     return Err(MountError::Config(format!(
                         "mount '{}': invalid domain name '{domain}'",
                         definition.path
                     )));
+                }
+                if domain == "local"
+                    && (definition.path != "/"
+                        || !backends.get(&definition.backend).is_some_and(|backend| {
+                            matches!(backend.config, BackendConfig::Local { .. })
+                        }))
+                {
+                    return Err(MountError::Config(
+                        "local domain is reserved for the coordinator's local root mount".into(),
+                    ));
                 }
                 if seen_domains
                     .insert(domain.clone(), definition.path.clone())
@@ -629,6 +704,15 @@ impl MountedObjectStore {
             .write()
             .map_err(|_| MountError::Config("VFS mount lock poisoned".into()))?;
         for addition in additions.iter() {
+            if let Some(domain) = &addition.definition.domain
+                && mounts
+                    .iter()
+                    .any(|old| old.definition.domain.as_ref() == Some(domain))
+            {
+                return Err(MountError::Config(format!(
+                    "domain '{domain}' is already mounted"
+                )));
+            }
             if addition.definition.path == "/"
                 || mounts.iter().any(|old| {
                     old.definition.path == addition.definition.path
@@ -936,6 +1020,48 @@ fn remap_location(
 mod tests {
     use super::*;
     use datafusion::object_store::ObjectStoreExt;
+
+    #[test]
+    fn dynamic_domain_collision_does_not_publish_any_mount() {
+        let mut base = VfsManifest::local_root("/tmp");
+        base.mount[0].domain = Some("shared".into());
+        let store = MountedObjectStore::from_manifest(&base).unwrap();
+        let mut addition = VfsManifest::local_root("/tmp");
+        addition.mount[0].path = "/added".into();
+        addition.mount[0].domain = Some("shared".into());
+        assert!(store.add_data_mount(&addition).is_err());
+        assert_eq!(store.mount_paths(), vec!["/"]);
+        addition.mount[0].domain = Some("new-domain".into());
+        store.add_data_mount(&addition).unwrap();
+        assert_eq!(store.domain_prefix("new-domain").as_deref(), Some("/added"));
+    }
+
+    #[test]
+    fn legacy_domain_assignment_is_stable_and_idempotent() {
+        let source = "[[backend]]\nid='local-root'\ntype='local'\nroot='/tmp'\n[[backend]]\nid='shared'\ntype='ssh'\nalias='fixture'\nroot='/share'\n[[mount]]\npath='/'\nbackend='local-root'\nsource='/'\n[[mount]]\npath='/a'\nbackend='shared'\nsource='a'\n[[mount]]\npath='/b'\nbackend='shared'\nsource='b'\n";
+        let mut manifest = VfsManifest::from_toml(source).unwrap();
+        let mut reversed = manifest.clone();
+        reversed.mount.reverse();
+        assert!(manifest.migrate_domains());
+        assert!(reversed.migrate_domains());
+        assert!(!manifest.migrate_domains());
+        for mount in &manifest.mount {
+            assert_eq!(
+                mount.domain,
+                reversed
+                    .mount
+                    .iter()
+                    .find(|m| m.path == mount.path)
+                    .unwrap()
+                    .domain
+            );
+            assert!(crate::uri::valid_domain_name(
+                mount.domain.as_deref().unwrap()
+            ));
+        }
+        assert_eq!(manifest.mount[0].domain.as_deref(), Some("local"));
+        assert_ne!(manifest.mount[1].domain, manifest.mount[2].domain);
+    }
 
     fn nested_manifest(root: &std::path::Path, nested: &std::path::Path) -> VfsManifest {
         VfsManifest {

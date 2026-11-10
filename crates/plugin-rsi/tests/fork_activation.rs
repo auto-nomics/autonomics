@@ -168,7 +168,10 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
     };
     assert_eq!(fork_output["reference_plugin"], "reference-plugin");
     assert_eq!(fork_output["target_plugin"], "forked-plugin");
-    assert_eq!(fork_output["target_vfs_path"], "/plugins/dev/forked-plugin");
+    assert_eq!(
+        fork_output["target_vfs_path"],
+        "local://plugins/dev/forked-plugin"
+    );
     let environment_result = execute(
         &tools,
         "plugin_environment_bind",
@@ -195,7 +198,7 @@ async fn an_installed_reference_can_be_forked_and_locally_activated() {
         Some("reference-plugin")
     );
     let fork_path = forked.development_vfs_path().unwrap();
-    assert_eq!(fork_path, "/plugins/dev/forked-plugin");
+    assert_eq!(fork_path, "local://plugins/dev/forked-plugin");
     let repository = GitRepo::open(store.root().join("forked-plugin"));
     assert!(repository.remote_url("origin").unwrap().is_none());
 

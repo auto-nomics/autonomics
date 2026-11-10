@@ -431,8 +431,9 @@ async fn stream_glob(
     opts: GlobOptions,
     tx: &mpsc::Sender<Result<serde_json::Value, Error>>,
 ) -> Result<(), Error> {
-    let normalized =
-        OpendalFileStorage::normalize_path(pattern.strip_prefix("vfs://").unwrap_or(pattern));
+    let normalized = storage
+        .try_resolve_virtual(pattern)
+        .map_err(|e| Error::Execution(e.to_string()))?;
     let normalized = normalized.trim_start_matches('/');
     if !opts.glob || !normalized.contains(['*', '?', '[', '{']) {
         storage
@@ -446,7 +447,11 @@ async fn stream_glob(
             })?;
         }
         let _ = tx
-            .send(Ok(serde_json::json!(format!("vfs://{normalized}"))))
+            .send(Ok(serde_json::json!(
+                storage
+                    .canonical_uri(normalized)
+                    .map_err(|e| Error::Execution(e.to_string()))?
+            )))
             .await;
         return Ok(());
     }
@@ -505,7 +510,11 @@ async fn stream_glob(
                         .any(|matcher| matcher.matches_with(path, options))
                     && seen.insert(path.to_owned())
                     && tx
-                        .send(Ok(serde_json::json!(format!("vfs://{path}"))))
+                        .send(Ok(serde_json::json!(
+                            storage
+                                .canonical_uri(&path)
+                                .map_err(|e| Error::Execution(e.to_string()))?
+                        )))
                         .await
                         .is_err()
                 {
@@ -523,7 +532,11 @@ async fn stream_glob(
                         .any(|matcher| matcher.matches_with(child_path, options))
                     && seen.insert(child_path.to_owned())
                     && tx
-                        .send(Ok(serde_json::json!(format!("vfs://{child_path}"))))
+                        .send(Ok(serde_json::json!(
+                            storage
+                                .canonical_uri(child_path)
+                                .map_err(|e| Error::Execution(e.to_string()))?
+                        )))
                         .await
                         .is_err()
                 {
@@ -552,7 +565,11 @@ async fn stream_glob(
                     .any(|matcher| matcher.matches_with(path, options))
                     && seen.insert(path.to_owned())
                     && tx
-                        .send(Ok(serde_json::json!(format!("vfs://{path}"))))
+                        .send(Ok(serde_json::json!(
+                            storage
+                                .canonical_uri(&path)
+                                .map_err(|e| Error::Execution(e.to_string()))?
+                        )))
                         .await
                         .is_err()
                 {

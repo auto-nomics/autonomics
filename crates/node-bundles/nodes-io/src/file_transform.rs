@@ -85,10 +85,13 @@ fn normalize_and_source(ctx: &NodeCtx, path: &str) -> String {
 }
 
 async fn read_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
-    if let Some(virtual_path) = vfs::uri::virtual_path(path) {
+    if let Some(virtual_path) = vfs::uri::storage_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!("VFS input `{path}` requires a mounted runtime VFS"))
         })?;
+        storage
+            .check_readable(virtual_path)
+            .map_err(|e| DagError::Schedule(e.to_string()))?;
         let operator = storage.resolve(virtual_path);
         return operator
             .read(&storage.resolve_path(virtual_path))
@@ -105,15 +108,14 @@ async fn read_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
 }
 
 async fn write_bytes(ctx: &NodeCtx, path: &str, bytes: Vec<u8>) -> Result<(), DagError> {
-    if let Some(virtual_path) = vfs::uri::virtual_path(path) {
+    if let Some(virtual_path) = vfs::uri::storage_path(path) {
         let storage = ctx.opendal.as_ref().ok_or_else(|| {
             DagError::Schedule(format!(
                 "VFS output `{path}` requires a mounted runtime VFS"
             ))
         })?;
-        let operator = storage.resolve(virtual_path);
-        return operator
-            .write(&storage.resolve_path(virtual_path), bytes)
+        return storage
+            .write_bytes(virtual_path, bytes)
             .await
             .map_err(|error| DagError::Schedule(format!("cannot write VFS file `{path}`: {error}")))
             .map(|_| ());
@@ -370,7 +372,8 @@ impl DagNode for FileTransformNode {
                 DagError::Schedule("file_transform requires an upstream file or src".into())
             })?;
         let source = normalize_and_source(ctx, &source);
-        let destination = normalize_and_source(ctx, &self.dst);
+        let destination =
+            crate::file_decompress::canonical_output(ctx, &normalize_and_source(ctx, &self.dst))?;
         let input = read_bytes(ctx, &source).await?;
         let output = match self.spec.op {
             FileTransformOp::Gunzip => decompress_if_gzip(&source, input)?,

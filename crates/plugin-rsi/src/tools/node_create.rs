@@ -19,7 +19,7 @@ use super::manifest::{editable_manifest, load_manifest, save_manifest};
                    whole manifest compiled before it lands."
 )]
 pub(super) struct PluginNodeCreateInput {
-    /// Plugin workspace path, such as `/plugins/dev/hello-world`.
+    /// Plugin workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
     /// Complete NodeDefinition as a standalone TOML document.
     node_toml: String,

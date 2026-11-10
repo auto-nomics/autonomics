@@ -25,7 +25,7 @@ try {
       { path: '/data/ldsc', name: 'ldsc', is_dir: true, size: 0 },
     ], returned: 1, truncated: false },
     '/data/ldsc': { path: '/data/ldsc', entries: [
-      { path: '/data/ldsc/readme.txt', name: 'readme.txt', is_dir: false, size: 6 },
+      { path: '/data/ldsc/readme.txt', uri: 'ht://readme.txt', name: 'readme.txt', is_dir: false, size: 6 },
     ], returned: 1, truncated: false },
   };
   const listed = [];
@@ -39,7 +39,7 @@ try {
     if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [], contexts: {}, display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false } } });
     if (path === '/vfs/mounts') return route.fulfill({ json: { mounts: [
       { path: '/', backend: 'default', source: '/', read_only: false },
-      { path: '/data/ldsc', backend: 'default', source: 'ldsc', read_only: true },
+      { path: '/data/ldsc', domain: 'ht', backend: 'default', source: 'ldsc', read_only: true },
     ], count: 2 } });
     if (path === '/vfs/list') {
       const dir = url.searchParams.get('path') ?? '/';
@@ -51,7 +51,7 @@ try {
     if (path === '/vfs/text' && route.request().method() === 'GET') {
       const file = url.searchParams.get('path');
       if (file === '/notes.md') return route.fulfill({ json: { path: file, contents: '# Notes\nhello vfs', size: 14, truncated: false } });
-      if (file === '/data/ldsc/readme.txt') return route.fulfill({ json: { path: file, contents: 'panel', size: 5, truncated: false } });
+      if (file === 'ht://readme.txt') return route.fulfill({ json: { path: file, contents: 'panel', size: 5, truncated: false } });
       return route.fulfill({ status: 404, json: { error: 'not found' } });
     }
     if (path === '/vfs/stat') return route.fulfill({ json: { path: '/notes.md', name: 'notes.md', is_dir: false, size: 12, read_only: false } });
@@ -162,8 +162,8 @@ try {
   await page.locator('[data-vfs-path="/data/ldsc"]').click();
   await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').waitFor();
   await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').click();
-  await page.locator('[data-vfs-file-path="/data/ldsc/readme.txt"]').waitFor();
-  await page.locator('header', { has: page.locator('[data-vfs-file-path="/data/ldsc/readme.txt"]') })
+  await page.locator('[data-vfs-file-path="ht://readme.txt"]').waitFor();
+  await page.locator('header', { has: page.locator('[data-vfs-file-path="ht://readme.txt"]') })
     .getByText('只读挂载', { exact: true }).waitFor();
 
   assert.equal(errors.length, 0, `page errors: ${errors.join('; ')}`);

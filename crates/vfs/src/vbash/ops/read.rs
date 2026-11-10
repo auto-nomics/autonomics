@@ -23,13 +23,15 @@ pub async fn op_read(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "read")?;
-    // DAG FileRefs name this same mounted namespace with a vfs:// URI.
-    // Strip only that scheme before the usual principal and mount checks.
+    // Accept legacy virtual URIs as well as canonical domain addresses.
+    // Domain resolution and confinement remain mount-aware.
     let raw_path = require_path(
         Some(crate::uri::virtual_path(raw_path).unwrap_or(raw_path)),
         "read",
     )?;
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     storage
         .check_readable(&vpath)
         .map_err(|error| error.to_string())?;
@@ -67,7 +69,9 @@ pub async fn op_cat(
         });
     }
 
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!(
             "cat: '{raw_path}': {error}"
@@ -143,7 +147,9 @@ pub async fn op_head(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "head")?;
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     let n = limit.unwrap_or(10);
     let start = offset.unwrap_or(1).saturating_sub(1);
     if let Err(error) = storage.check_readable(&vpath) {
@@ -203,7 +209,9 @@ pub async fn op_tail(
     limit: Option<usize>,
 ) -> Result<AgentToolResult, ToolError> {
     let raw_path = require_path(path, "tail")?;
-    let vpath = storage.resolve_virtual(raw_path);
+    let vpath = storage
+        .try_resolve_virtual(raw_path)
+        .map_err(|e| e.to_string())?;
     let n = limit.unwrap_or(10);
     if let Err(error) = storage.check_readable(&vpath) {
         return Ok(AgentToolResult::error(format!(

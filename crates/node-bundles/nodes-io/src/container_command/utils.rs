@@ -296,6 +296,9 @@ pub(crate) fn input_path(value: &NodeValue) -> Result<String, String> {
 }
 
 pub(crate) fn virtual_path(path: &str) -> Option<String> {
+    if vfs::uri::domain(path).is_some() {
+        return Some(path.to_string());
+    }
     if let Some(rest) = vfs::uri::virtual_path(path) {
         return Some(vfs::OpendalFileStorage::normalize_path(rest));
     }

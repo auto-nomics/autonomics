@@ -175,7 +175,10 @@ pub const VAULT_ALIAS_ENV: &str = "AUTONOMICS_VAULT_ALIAS";
 
 /// Password prompts are allowed only when a vault-backed responder is available.
 pub fn batch_mode_option() -> &'static str {
-    if VAULT_SOCKET.read().expect("ssh channel lock poisoned").is_some()
+    if VAULT_SOCKET
+        .read()
+        .expect("ssh channel lock poisoned")
+        .is_some()
         && askpass_executable().is_some()
     {
         "BatchMode=no"

@@ -104,7 +104,7 @@ async fn plugin_store_develops_one_repository_in_place() {
     );
     assert_eq!(
         store.development_vfs_path("direct-plugin").unwrap(),
-        "/plugins/dev/direct-plugin"
+        "local://plugins/dev/direct-plugin"
     );
 
     let tools = plugin_rsi::plugin_development_tool_registrations("direct-plugin-agent");

@@ -4,7 +4,9 @@
 //! file-operation handlers. Every handler talks directly to the OpenDAL
 //! [`Operator`]; no subprocess is ever spawned.
 
+mod address;
 mod ops;
+pub use address::{AgentMount, agent_mounts};
 mod search;
 mod space;
 mod text_page;
@@ -40,7 +42,12 @@ const VFS_IMAGE_MAX_COUNT: usize = 4;
         write, edit, patch, head, tail, wc, grep, glob, tree, mount_list, df, temp_space, read_chunk. \
         For long lines or minified HTML, use read_chunk; follow next_offset with source_version \
         until eof=true. It returns bounded UTF-8 text, not parsed HTML. \
-        Paths may be covered by VFS mounts (see mount_list). Read-only \
+        Use canonical domain://path addresses: local://work/file or ht://share/file; \
+        domain:// is the domain root, and all text after :// is a path, not a hostname. \
+        Discover actual domains and permission submounts with mount_list; never infer a domain \
+        from the selected compute target. local means the coordinator namespace, not a worker disk. \
+        Bare virtual paths and vfs:// are legacy inputs; reuse returned uri/path addresses. \
+        Cross-domain cp/mv use explicit src and dst domains. Read-only \
         mounts reject writes. df(path) reports the selected local filesystem capacity; \
         temp_space takes no path and reports the daemon runtime temp filesystem. \
         Capacity snapshots are not quota, physical Btrfs allocation, container /tmp, or admission. \
@@ -51,11 +58,11 @@ const VFS_IMAGE_MAX_COUNT: usize = 4;
 pub struct VfsBashInput {
     #[desc = "Operation: read|cat|ls|cp|mv|rm|mkdir|stat|touch|write|edit|patch|head|tail|wc|grep|glob|tree|mount_list|df|temp_space|read_chunk"]
     pub op: String,
-    #[desc = "Primary VFS path (file or directory), required for df; forbidden for temp_space."]
+    #[desc = "Canonical domain://path (file or directory), e.g. local://work/input.tsv. Domain root: local://. Discover domains with mount_list. Required for df; forbidden for temp_space."]
     pub path: Option<String>,
-    #[desc = "Source path for cp/mv."]
+    #[desc = "Source domain://path for cp/mv."]
     pub src: Option<String>,
-    #[desc = "Destination path for cp/mv."]
+    #[desc = "Destination domain://path for cp/mv; may use a different domain."]
     pub dst: Option<String>,
     #[desc = "Content to write (for write op)."]
     pub content: Option<String>,
@@ -68,7 +75,7 @@ pub struct VfsBashInput {
     #[desc = "Replace all occurrences (for edit op). Default false."]
     pub replace_all: Option<bool>,
     #[desc = "Codex-format patch text (for patch op). Multi-file add/delete/update \
-        with fuzzy line matching. Format: '*** Begin Patch\\n*** Update File: path\\n@@\\n-old\\n+new\\n*** End Patch'"]
+        with fuzzy line matching. Format: '*** Begin Patch\\n*** Update File: local://work/file.txt\\n@@\\n-old\\n+new\\n*** End Patch'"]
     pub patch: Option<String>,
     #[desc = "List recursively (for ls/tree). Default varies by op."]
     pub recursive: Option<bool>,
@@ -217,6 +224,7 @@ impl ToolFunction for VfsBashTool {
         };
 
         result
+            .and_then(|result| address::publish_result(storage, result))
             .map(bound_vfs_output)
             .map_err(|error| bound_tool_error(&error))
     }
@@ -904,6 +912,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_unknown_domain_is_refused() {
+        let tool = make_tool();
+        let mut patch = input("patch");
+        patch.patch = Some(
+            "*** Begin Patch\n*** Add File: missing://file.txt\n+content\n*** End Patch".into(),
+        );
+        assert!(tool.run(patch).await.is_err());
+        assert!(
+            tool.storage
+                .content_length("/missing:/file.txt")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn patch_update_file() {
         let tool = make_tool();
         let mut w = input("write");
@@ -914,7 +938,7 @@ mod tests {
         let mut p = input("patch");
         p.patch = Some(
             "*** Begin Patch\n\
-             *** Update File: /p.txt\n\
+             *** Update File: local://p.txt\n\
              @@\n\
              -bar\n\
              +BAR\n\
@@ -945,9 +969,9 @@ mod tests {
         let mut p = input("patch");
         p.patch = Some(
             "*** Begin Patch\n\
-             *** Add File: /new.txt\n\
+             *** Add File: local://new.txt\n\
              +hello world\n\
-             *** Delete File: /old.txt\n\
+             *** Delete File: local://old.txt\n\
              *** End Patch"
                 .into(),
         );
@@ -979,8 +1003,8 @@ mod tests {
         let mut p = input("patch");
         p.patch = Some(
             "*** Begin Patch\n\
-             *** Update File: /src.txt\n\
-             *** Move to: /dst.txt\n\
+             *** Update File: local://src.txt\n\
+             *** Move to: local://dst.txt\n\
              @@\n\
              -data\n\
              +DATA\n\
@@ -2145,7 +2169,7 @@ mod tests {
             .map(|e| e["name"].as_str().unwrap())
             .collect();
         assert!(
-            names.contains(&"/data"),
+            names.contains(&"data"),
             "expected synthetic ancestor for deep mount, got: {names:?}"
         );
 
@@ -2160,7 +2184,7 @@ mod tests {
             .map(|e| e["name"].as_str().unwrap())
             .collect();
         assert!(
-            names.contains(&"/data/ldsc"),
+            names.contains(&"ldsc"),
             "expected child mount point, got: {names:?}"
         );
 
@@ -2175,7 +2199,7 @@ mod tests {
             .map(|e| e["name"].as_str().unwrap())
             .collect();
         assert!(
-            names.contains(&"/data/ldsc/panel.parquet"),
+            names.contains(&"panel.parquet"),
             "expected nested mounted file, got: {names:?}"
         );
     }
@@ -2192,7 +2216,7 @@ mod tests {
         let json = result_json(result);
         let entries = json["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["name"], "/data");
+        assert_eq!(entries[0]["name"], "data");
         assert_eq!(json["truncated"], true);
     }
 

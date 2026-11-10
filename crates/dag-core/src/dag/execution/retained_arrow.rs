@@ -39,9 +39,13 @@ pub(super) async fn load_retained_arrow(
     origin: &FileRef,
     ctx: &NodeCtx,
 ) -> Result<DataFrame, DagError> {
-    let location = ListingTableUrl::parse(&origin.path)
+    let datafusion_path = vfs::uri::datafusion_uri(&origin.path);
+    let location = ListingTableUrl::parse(&datafusion_path)
         .map_err(|error| DagError::Schedule(error.to_string()))?;
-    if location.scheme() != "vfs" || location.is_collection() || location.get_glob().is_some() {
+    if vfs::uri::storage_path(&origin.path).is_none()
+        || location.is_collection()
+        || location.get_glob().is_some()
+    {
         return Err(DagError::Schedule(
             "retained Arrow origin must be one exact VFS IPC file".into(),
         ));
@@ -76,7 +80,7 @@ pub(super) async fn load_retained_arrow(
     })?;
     let frame = session
         .read_arrow(
-            &origin.path,
+            &datafusion_path,
             ArrowReadOptions {
                 schema: Some(schema.as_ref()),
                 file_extension: "",
@@ -188,7 +192,7 @@ pub fn pure_retained_arrow_origin(frame: &DataFrame) -> Option<FileRef> {
     }
     let provider = source_as_provider(&scan.source).ok()?;
     let retained = provider.as_any().downcast_ref::<RetainedArrowProvider>()?;
-    if !vfs::uri::is_uri(&retained.origin.path)
+    if vfs::uri::storage_path(&retained.origin.path).is_none()
         || scan.projected_schema.as_arrow() != retained.inner.schema().as_ref()
     {
         return None;

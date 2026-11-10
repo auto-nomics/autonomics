@@ -119,12 +119,7 @@ fn source_value(value: &serde_json::Value) -> NodeValue {
     })
 }
 fn file_value(path: &str) -> NodeValue {
-    NodeValue::File(FileRef {
-        domain: dag_core::DomainId::local(),
-        path: path.to_owned(),
-        format: None,
-        fingerprint: None,
-    })
+    NodeValue::File(FileRef::new(path, None))
 }
 fn coerce_file_inputs(inputs: &mut [NodeInput], node: &dyn dag_core::node::DagNode) {
     use dag_core::value::PortType;
@@ -161,14 +156,7 @@ fn coerce_file_inputs(inputs: &mut [NodeInput], node: &dyn dag_core::node::DagNo
                 let paths: Option<Vec<_>> = channel
                     .items
                     .iter()
-                    .map(|v| {
-                        v.as_str().map(|path| FileRef {
-                            domain: dag_core::DomainId::local(),
-                            path: path.to_owned(),
-                            format: None,
-                            fingerprint: None,
-                        })
-                    })
+                    .map(|v| v.as_str().map(|path| FileRef::new(path, None)))
                     .collect();
                 if let Some(paths) = paths {
                     input.data = NodeValue::FileSet(paths);
@@ -1244,7 +1232,7 @@ fn input_fingerprint_with_files(
         if let Some(identity) = identities.get(&f.path) {
             return Some(identity.clone());
         }
-        if f.path.starts_with("vfs://")
+        if vfs::uri::storage_path(&f.path).is_some()
             || f.fingerprint.as_ref().is_some_and(|fp| fp.immutable_remote)
         {
             return None;
@@ -1389,7 +1377,7 @@ fn input_fingerprint_with_files(
 fn cacheable_outputs(outputs: &dag_core::dag::PortOutputs) -> bool {
     fn reusable(file: &FileRef) -> bool {
         file.fingerprint.as_ref().is_some_and(|fp| {
-            if file.path.starts_with("vfs://") {
+            if vfs::uri::storage_path(&file.path).is_some() {
                 fp.content_hash.is_some()
             } else {
                 !fp.immutable_remote
@@ -3096,7 +3084,7 @@ async fn validated_vfs_inputs(
             continue;
         }
         if let Ok((size, hash)) = storage
-            .sha256(path.strip_prefix("vfs://").unwrap_or(&path))
+            .sha256(vfs::uri::storage_path(&path).unwrap_or(&path))
             .await
         {
             identities.insert(path.clone(), serde_json::json!([path, size, hash]));
@@ -3120,7 +3108,7 @@ async fn fingerprint_cache_outputs(
             _ => continue,
         };
         for file in files {
-            if let Some(path) = file.path.strip_prefix("vfs://")
+            if let Some(path) = vfs::uri::storage_path(&file.path)
                 && let Some(storage) = storage
                 && let Ok((size, hash)) = storage.sha256(path).await
             {
@@ -3135,7 +3123,7 @@ async fn fingerprint_cache_outputs(
                     immutable_remote,
                 });
             }
-            if !file.path.starts_with("vfs://") {
+            if vfs::uri::storage_path(&file.path).is_none() {
                 let path = file.path.strip_prefix("file://").unwrap_or(&file.path);
                 if let Some(expected) = file.fingerprint.as_mut()
                     && !expected.immutable_remote
@@ -3166,7 +3154,7 @@ async fn outputs_unchanged_with_storage(
             _ => return false,
         };
         for file in files {
-            if let Some(path) = file.path.strip_prefix("vfs://") {
+            if let Some(path) = vfs::uri::storage_path(&file.path) {
                 let (Some(storage), Some(expected)) = (storage, file.fingerprint.as_ref()) else {
                     return false;
                 };
@@ -3803,31 +3791,33 @@ mod vfs_cache_regression_tests {
 
     #[tokio::test]
     async fn changed_or_deleted_virtual_output_never_reuses() {
-        let storage = vfs::OpendalFileStorage::new_temp();
-        storage
-            .write_bytes("data/result.txt", b"first".to_vec())
-            .await
-            .unwrap();
-        let mut outputs = dag_core::dag::PortOutputs::new();
-        outputs.insert(
-            0,
-            NodeValue::File(FileRef {
-                domain: Default::default(),
-                path: "vfs://data/result.txt".into(),
-                format: None,
-                fingerprint: None,
-            }),
-        );
-        fingerprint_cache_outputs(&mut outputs, Some(&storage)).await;
-        assert!(cacheable_outputs(&outputs));
-        assert!(outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
-        assert!(!outputs_unchanged_with_storage(&outputs, None).await);
-        storage
-            .write_bytes("data/result.txt", b"other".to_vec())
-            .await
-            .unwrap();
-        assert!(!outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
-        storage.delete_object("data/result.txt").await.unwrap();
-        assert!(!outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
+        for address in ["vfs://data/result.txt", "local://data/result.txt"] {
+            let storage = vfs::OpendalFileStorage::new_temp();
+            storage
+                .write_bytes("data/result.txt", b"first".to_vec())
+                .await
+                .unwrap();
+            let mut outputs = dag_core::dag::PortOutputs::new();
+            outputs.insert(
+                0,
+                NodeValue::File(FileRef {
+                    domain: Default::default(),
+                    path: address.into(),
+                    format: None,
+                    fingerprint: None,
+                }),
+            );
+            fingerprint_cache_outputs(&mut outputs, Some(&storage)).await;
+            assert!(cacheable_outputs(&outputs));
+            assert!(outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
+            assert!(!outputs_unchanged_with_storage(&outputs, None).await);
+            storage
+                .write_bytes("data/result.txt", b"other".to_vec())
+                .await
+                .unwrap();
+            assert!(!outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
+            storage.delete_object("data/result.txt").await.unwrap();
+            assert!(!outputs_unchanged_with_storage(&outputs, Some(&storage)).await);
+        }
     }
 }
