@@ -1,0 +1,72 @@
+// Real catalog/model refinement of an existing scientific candidate, without early adoption.
+import assert from 'node:assert/strict';
+import {readFile, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {currentCandidateLeaf} from './canvas-live-scientific.mjs';
+export async function runCandidateMaterialization({page,call,path,send,persist,directory,turns,until,source}) {
+  const artifact=JSON.parse(await readFile(source,'utf8'));
+  const document=artifact.scene?.document??artifact.document??artifact;
+  assert.ok(document.elements?.length&&document.files,'explicit saved scientific scene required');
+  const receptor=document.elements.find(e=>!e.isDeleted&&e.customData?.scientificId==='egfr');
+  assert.ok(receptor,'input contains the declared EGFR semantic anchor');
+  assert.ok(!document.elements.some(e=>e.type==='image'&&!e.isDeleted),'use the unillustrated scientific case');
+  const head=await call('GET',path);
+  await call('PUT',path,{expected_revision:head.metadata.revision,title:'Live figure',document});
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();
+  const before=await call('GET',path),revision=before.metadata.revision;
+  const bottom=Math.max(...document.elements.filter(e=>!e.isDeleted).map(e=>e.y+e.height));
+  const note='Generic receptor artwork; not an EGFR molecular structure.';
+  const draft=await call('POST',`${path}/proposals`,{expected_revision:revision,summary:'Explain generic receptor artwork',operations:[{op:'add_wrapped_text',id:'art-specificity-note',text:note,x:0,y:bottom+36,max_width:1160,font_size:16}]});
+  const parent=await call('GET',`${path}/proposals/${draft.id}`);
+  await persist('materialization-before.json',before);await persist('materialization-parent.json',parent);
+  await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();
+  const review=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});
+  await review.getByRole('button',{name:`${parent.summary} · v${revision}`,exact:true}).click();
+  await review.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();
+  const feedback=review.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();
+  await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill(`请继续加工当前待审候选，而不是正式图。先 read_proposal 核对界面提供的候选上下文。只把 EGFR 节点（对象 ID=${receptor.id}）的占位外观升级为一份 BioIcons 或 NIH BioArt 通用膜受体插图。先检索、预览同一素材并核对作者/许可与图意；通用图不代表 EGFR 特异分子结构，保留候选已有的“${note}”说明，不补写机制。使用素材工具 replace，并传下方候选上下文的 proposal_id 与 document_sha256，markup_ids:[]，创建其子候选；不要在正式图另起根提案，也不要先采用父候选。保留所有科学标签、节点身份、证据 URL、关系、其他对象及图下说明。读取最终子候选 PNG，检查插图和标签可读后留待用户采用。如果找不到合适素材，明确说明并保留原图，不捏造来源。`);
+  await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();
+  const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const prepared=await composer.inputValue();
+  assert.ok(prepared.includes(parent.id)&&prepared.includes(parent.document_sha256)&&prepared.includes('bioicons replace'),'actual candidate feedback includes exact identity and materialization guidance');
+  assert.equal(turns.length,0,'preparing feedback never sends');assert.deepEqual(await call('GET',path),before);
+  await send(1);
+  const calls=turns[0].calls;
+  const replacements=calls.filter(c=>['bioart','bioicons'].includes(c.name)&&c.input.action==='replace');
+  assert.equal(replacements.length,1,'one explicitly scoped materialization');
+  const replacement=replacements[0];
+  assert.equal(replacement.input.proposal_id,parent.id);assert.equal(replacement.input.document_sha256,parent.document_sha256);assert.equal(replacement.input.element_id,receptor.id);assert.deepEqual(replacement.input.markup_ids,[]);
+  const replaceIndex=calls.indexOf(replacement);
+  assert.ok(calls.slice(0,replaceIndex).some(c=>c.name==='visualization'&&c.input.action==='read_proposal'&&c.input.proposal_id===parent.id));
+  assert.ok(calls.slice(0,replaceIndex).some(c=>c.name===replacement.name&&c.input.action==='search'));
+  assert.ok(calls.slice(0,replaceIndex).some(c=>c.name===replacement.name&&c.input.action==='preview'&&c.input.asset_id===replacement.input.asset_id),'same asset visually inspected before selection');
+  const child=currentCandidateLeaf(await call('GET',`${path}/proposals`),revision);
+  assert.equal(child.parent_proposal_id,parent.id);assert.equal(child.parent_document_sha256,parent.document_sha256);
+  const elements=child.document.elements,images=elements.filter(e=>e.type==='image'&&!e.isDeleted);assert.equal(images.length,1);const image=images[0];
+  assert.equal(image.customData.semanticAnchorId,receptor.id);const provenance=image.customData.asset;
+  assert.equal(provenance.id,replacement.input.asset_id);
+  if(replacement.name==='bioicons'){assert.ok(provenance.author&&provenance.license);assert.ok(child.document.files[image.fileId].dataURL.startsWith('data:image/svg+xml;base64,'));}
+  else {assert.ok(provenance.creators.length&&provenance.licenses.length);assert.ok(provenance.source_url.startsWith('https://bioart.niaid.nih.gov/'));}
+  const oldLabel=parent.document.elements.find(e=>e.type==='text'&&e.containerId===receptor.id);assert.ok(oldLabel);
+  const anchor=elements.find(e=>e.id===receptor.id),label=elements.find(e=>e.id===oldLabel.id);
+  for(const key of ['scientificId','evidence'])assert.deepEqual(anchor.customData[key],receptor.customData[key]);
+  for(const key of ['x','y','width','height','angle','frameId'])assert.deepEqual(anchor[key],receptor[key]);
+  assert.equal(label.originalText,oldLabel.originalText);assert.equal(label.text,oldLabel.text);assert.equal(label.containerId,null);
+  assert.ok(anchor.customData.visualLabelIds.includes(label.id));assert.equal(anchor.customData.visualAssetElementId,image.id);
+  for(const original of parent.document.elements.filter(e=>![receptor.id,oldLabel.id].includes(e.id)))assert.deepEqual(elements.find(e=>e.id===original.id),original,`candidate materialization preserves ${original.id}`);
+  assert.equal(elements.length,parent.document.elements.length+1);
+  for(const [id,file] of Object.entries(parent.document.files))assert.deepEqual(child.document.files[id],file);
+  assert.deepEqual(await call('GET',path),before);assert.deepEqual(await call('GET',`${path}/proposals/${parent.id}`),parent);
+  assert.ok(calls.some(c=>c.name==='visualization'&&c.input.action==='read_proposal_preview'&&c.input.proposal_id===child.id));
+  let png;await until(async()=>{png=await call('GET',`${path}/proposals/${child.id}/preview?expected_revision=${revision}`);assert.notEqual(png.render_status,'failed');return png.render_status==='ready';},'materialized candidate PNG');assert.equal(png.document_sha256,child.document_sha256);
+  await writeFile(join(directory,'materialization-candidate.png'),Buffer.from(png.dataURL.split(',')[1],'base64'));await persist('materialization-child.json',child);
+  await page.getByRole('tab',{name:'Live figure',exact:true}).click();await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();
+  const dialog=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});await dialog.getByRole('button',{name:`${child.summary} · v${revision} · 修订`,exact:true}).click();await dialog.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();await page.screenshot({path:join(directory,'materialization-review.png'),animations:'disabled'});
+  await dialog.getByRole('button',{name:'采用提案',exact:true}).click();await dialog.waitFor({state:'hidden'});const final=await call('GET',path);assert.equal(final.metadata.revision,revision+1);assert.deepEqual(final.scene.document,child.document);
+  const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出 源文件',exact:true}).click();const exported=JSON.parse(await readFile(await(await download).path(),'utf8'));await persist('materialization-source.json',exported);
+  // Native restore supplies ordering and editing clocks, not new artwork.
+  const nativeContent=elements=>elements.map(element=>Object.fromEntries(Object.entries(element).filter(([key])=>!['index','version','versionNonce','updated'].includes(key)&&!(key==='lastCommittedPoint'&&element[key]===null))));
+  assert.deepEqual(nativeContent(exported.elements),nativeContent(child.document.elements),'source export preserves all content, geometry, styles, scientific metadata and bindings');assert.deepEqual(exported.files,child.document.files);
+  await persist('final.json',final);await persist('materialization-source.json',exported);
+  return {asset_provider:replacement.name,asset_id:replacement.input.asset_id,parent_proposal_id:parent.id,child_proposal_id:child.id,scope:'independent materialization from an explicit saved scientific scene; generic artwork does not verify molecular structure'};
+}

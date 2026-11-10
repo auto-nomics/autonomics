@@ -60,6 +60,15 @@ impl Ord for Entry {
             .then_with(|| o.state.cmp(&self.state))
     }
 }
+// Side order matches Rect::ports: left, right, top, bottom.
+fn port_outward(side: usize, port: [f64; 2], outside: [f64; 2]) -> bool {
+    match side {
+        0 => outside[0] < port[0] && outside[1] == port[1],
+        1 => outside[0] > port[0] && outside[1] == port[1],
+        2 => outside[1] < port[1] && outside[0] == port[0],
+        _ => outside[1] > port[1] && outside[0] == port[0],
+    }
+}
 struct Grid {
     xs: Vec<f64>,
     ys: Vec<f64>,
@@ -110,7 +119,13 @@ impl Grid {
     fn point(&self, i: usize) -> [f64; 2] {
         [self.xs[i % self.xs.len()], self.ys[i / self.xs.len()]]
     }
-    fn route(&self, starts: &[[f64; 2]], ends: &[[f64; 2]]) -> Result<Vec<[f64; 2]>, InvalidPlan> {
+    fn route(
+        &self,
+        starts: &[[f64; 2]],
+        ends: &[[f64; 2]],
+        source_ports: Option<[bool; 4]>,
+        target_ports: Option<[bool; 4]>,
+    ) -> Result<Vec<[f64; 2]>, InvalidPlan> {
         let count = self.xs.len() * self.ys.len();
         let mut dist = vec![f64::INFINITY; count * 2];
         let mut prev = vec![usize::MAX; count * 2];
@@ -122,8 +137,11 @@ impl Grid {
                 .fold(f64::INFINITY, f64::min)
         };
         let mut queue = BinaryHeap::new();
-        for p in starts {
+        for (side, p) in starts.iter().enumerate() {
             for dir in 0..2 {
+                if source_ports.is_some_and(|ports| !ports[side] || dir != usize::from(side >= 2)) {
+                    continue;
+                }
                 let s = self.index(*p) * 2 + dir;
                 dist[s] = 0.;
                 queue.push(Entry {
@@ -137,7 +155,7 @@ impl Grid {
             if score > dist[state] + heuristic(i) + 0.001 {
                 continue;
             }
-            if targets.contains(&i) {
+            if targets.contains(&i) && prev[state] != usize::MAX {
                 let mut path = vec![self.point(i)];
                 let mut s = state;
                 while prev[s] != usize::MAX {
@@ -178,6 +196,19 @@ impl Grid {
             for (next, dir) in neighbors {
                 let p = self.point(i);
                 let q = self.point(next);
+                if source_ports.is_some() && prev[state] == usize::MAX && dist[state] == 0. {
+                    let side = starts.iter().position(|start| *start == p).unwrap();
+                    if !port_outward(side, p, q) {
+                        continue;
+                    }
+                }
+                if let Some(allowed) = target_ports {
+                    if let Some(side) = targets.iter().position(|target| *target == next) {
+                        if !allowed[side] || !port_outward(side, q, p) {
+                            continue;
+                        }
+                    }
+                }
                 let cost = dist[state]
                     + (p[0] - q[0]).abs()
                     + (p[1] - q[1]).abs()
@@ -254,6 +285,47 @@ fn center_label(route: &mut Vec<[f64; 2]>, segment: usize) -> [f64; 2] {
     }
     center
 }
+fn preferred_ports(elements: &[Value], node: &Value, opposite: &str, excluded: &str) -> [bool; 4] {
+    let mut available = [true; 4];
+    for arrow in elements.iter().filter(|e| {
+        e["type"] == "arrow"
+            && e["isDeleted"] != true
+            && e["id"] != excluded
+            && e[opposite]["elementId"] == node["id"]
+            && e["angle"].as_f64() == Some(0.)
+    }) {
+        let Some(points) = arrow["points"].as_array().filter(|p| p.len() >= 2) else {
+            continue;
+        };
+        let point = if opposite == "endBinding" {
+            points.last().unwrap()
+        } else {
+            &points[0]
+        };
+        let (Some(x), Some(y), Some(px), Some(py), Some(gap)) = (
+            arrow["x"].as_f64(),
+            arrow["y"].as_f64(),
+            point[0].as_f64(),
+            point[1].as_f64(),
+            arrow[opposite]["gap"].as_f64(),
+        ) else {
+            continue;
+        };
+        if ![x, y, px, py, gap].iter().all(|v| v.is_finite()) || !(0. ..=100.).contains(&gap) {
+            continue;
+        }
+        for (side, p) in Rect::element(node, gap).ports().iter().enumerate() {
+            if (p[0] - x - px).abs() < 1e-6 && (p[1] - y - py).abs() < 1e-6 {
+                available[side] = false;
+            }
+        }
+    }
+    if available.iter().any(|v| *v) {
+        available
+    } else {
+        [true; 4]
+    }
+}
 fn route_between(
     source: Rect,
     target: Rect,
@@ -261,16 +333,46 @@ fn route_between(
     obstacles: &[Rect],
     lane: f64,
     label_size: Option<[f64; 2]>,
+    ports: ([bool; 4], [bool; 4]),
 ) -> Result<(Vec<[f64; 2]>, [f64; 2]), InvalidPlan> {
-    let mut route = grid.route(&source.ports(), &target.ports())?;
+    let result = route_between_ports(source, target, grid, obstacles, lane, label_size, ports);
+    if result.is_ok() || ports == ([true; 4], [true; 4]) {
+        result
+    } else {
+        route_between_ports(
+            source,
+            target,
+            grid,
+            obstacles,
+            lane,
+            label_size,
+            ([true; 4], [true; 4]),
+        )
+    }
+}
+fn route_between_ports(
+    source: Rect,
+    target: Rect,
+    grid: &Grid,
+    obstacles: &[Rect],
+    lane: f64,
+    label_size: Option<[f64; 2]>,
+    ports: ([bool; 4], [bool; 4]),
+) -> Result<(Vec<[f64; 2]>, [f64; 2]), InvalidPlan> {
+    let mut route = grid.route(
+        &source.ports(),
+        &target.ports(),
+        Some(ports.0),
+        Some(ports.1),
+    )?;
     let segment = if let Some([width, height]) = label_size {
         if let Some(index) = label_position(&route, width, height, obstacles) {
             index
         } else {
             let left = grid.xs[0];
             let right = *grid.xs.last().unwrap();
-            let mut first = grid.route(&source.ports(), &[[left, lane]])?;
-            let second = grid.route(&[[right, lane]], &target.ports())?;
+            let mut first = grid.route(&source.ports(), &[[left, lane]], Some(ports.0), None)?;
+            let second = grid.route(&[[right, lane]], &target.ports(), None, Some(ports.1))?;
             let index = first.len() - 1;
             first.extend(second);
             route = first;
@@ -296,6 +398,59 @@ fn valid_box(element: &Value) -> bool {
             .is_some_and(|v| v.is_finite() && v.abs() <= 1e6)
     }) && element["width"].as_f64().unwrap_or(0.) > 0.
         && element["height"].as_f64().unwrap_or(0.) > 0.
+}
+// The explicit fitted anchor is the reviewed visual obstacle for its own
+// endpoint. Its transparent image viewport must not seal all four ports.
+fn fitted_endpoint_visual(image: &Value, nodes: [&Value; 2]) -> bool {
+    if image["type"] != "image"
+        || !valid_box(image)
+        || image["angle"].as_f64() != Some(0.)
+        || !image["crop"].is_null()
+        || !image["scale"]
+            .as_array()
+            .is_some_and(|s| s.len() == 2 && s.iter().all(|v| v.as_f64() == Some(1.)))
+    {
+        return false;
+    }
+    nodes.iter().any(|node| {
+        let fit = &node["customData"]["visualAnchorFit"];
+        if node["customData"]["visualAssetElementId"] != image["id"]
+            || image["customData"]["semanticAnchorId"] != node["id"]
+            || fit["fileId"] != image["fileId"]
+        {
+            return false;
+        }
+        let Some(bounds) = fit["normalizedBounds"].as_array().filter(|b| b.len() == 4) else {
+            return false;
+        };
+        let Some(b) = bounds.iter().map(Value::as_f64).collect::<Option<Vec<_>>>() else {
+            return false;
+        };
+        if !b.iter().all(|v| v.is_finite())
+            || b[0] < 0.
+            || b[1] < 0.
+            || b[2] <= 0.
+            || b[3] <= 0.
+            || b[0] + b[2] > 1. + 1e-9
+            || b[1] + b[3] > 1. + 1e-9
+        {
+            return false;
+        }
+        let expected = [
+            image["x"].as_f64().unwrap() + b[0] * image["width"].as_f64().unwrap(),
+            image["y"].as_f64().unwrap() + b[1] * image["height"].as_f64().unwrap(),
+            b[2] * image["width"].as_f64().unwrap(),
+            b[3] * image["height"].as_f64().unwrap(),
+        ];
+        ["x", "y", "width", "height"]
+            .iter()
+            .zip(expected)
+            .all(|(key, value)| {
+                node[*key]
+                    .as_f64()
+                    .is_some_and(|n| (n - value).abs() < 1e-6)
+            })
+    })
 }
 /// Explicit geometry edit: reads current bindings and current label bounds,
 /// never regenerates the figure from its potentially stale scientific plan.
@@ -335,8 +490,10 @@ pub(crate) fn reroute(elements: &mut [Value], id: &str) -> Result<(), InvalidPla
         }
         Ok(node)
     };
-    let source = Rect::element(node("startBinding")?, 12.);
-    let target = Rect::element(node("endBinding")?, 12.);
+    let source_node = node("startBinding")?;
+    let target_node = node("endBinding")?;
+    let source = Rect::element(source_node, 12.);
+    let target = Rect::element(target_node, 12.);
     let labels = elements
         .iter()
         .enumerate()
@@ -361,11 +518,11 @@ pub(crate) fn reroute(elements: &mut [Value], id: &str) -> Result<(), InvalidPla
         None
     };
     let mut obstacles = Vec::new();
-    for (_, e) in elements
-        .iter()
-        .enumerate()
-        .filter(|(i, e)| Some(*i) != label_index && obstacle(e))
-    {
+    for (_, e) in elements.iter().enumerate().filter(|(i, e)| {
+        Some(*i) != label_index
+            && obstacle(e)
+            && !fitted_endpoint_visual(e, [source_node, target_node])
+    }) {
         if !valid_box(e) || !e["angle"].as_f64().unwrap_or(0.).is_finite() {
             return Err(fail("obstacles must have valid finite geometry"));
         }
@@ -380,7 +537,18 @@ pub(crate) fn reroute(elements: &mut [Value], id: &str) -> Result<(), InvalidPla
     let top = obstacles.iter().map(|r| r.t).fold(f64::INFINITY, f64::min);
     let lane = top - label_size.map_or(160., |s| s[1] / 2. + 100.);
     let grid = Grid::new(&obstacles, &[lane], left, right);
-    let (route, center) = route_between(source, target, &grid, &obstacles, lane, label_size)?;
+    let (route, center) = route_between(
+        source,
+        target,
+        &grid,
+        &obstacles,
+        lane,
+        label_size,
+        (
+            preferred_ports(elements, source_node, "endBinding", id),
+            preferred_ports(elements, target_node, "startBinding", id),
+        ),
+    )?;
     let start = route[0];
     let min_x = route.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
     let max_x = route.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
@@ -494,6 +662,26 @@ pub(crate) fn connect(plan: &Plan, elements: &mut Vec<Value>) -> Result<(), Inva
             } else {
                 Some([width, height])
             },
+            (
+                preferred_ports(
+                    elements,
+                    elements
+                        .iter()
+                        .find(|e| e["id"] == format!("node-{a}"))
+                        .unwrap(),
+                    "endBinding",
+                    &format!("edge-{index}"),
+                ),
+                preferred_ports(
+                    elements,
+                    elements
+                        .iter()
+                        .find(|e| e["id"] == format!("node-{b}"))
+                        .unwrap(),
+                    "startBinding",
+                    &format!("edge-{index}"),
+                ),
+            ),
         )?;
         let start = route[0];
         let bb = route.iter().fold(

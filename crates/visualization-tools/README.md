@@ -76,3 +76,9 @@ sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格�
 
 
 FigureTool 的输入反序列化错误会报告具体字段（例如 `input.markup_ids`），操作解析报告操作下标。`markup_ids` 必须是 JSON 数组；不自动把 `{}`、item 包装或字符串转换成 `[]`。省略字段不代表解除父候选已有的审阅关联，显式 `[]` 才可解除，且不关闭原审阅。18 项工具回归覆盖错误输入无子提案、显式保留/解除关联、父候选和正式版本不变。
+
+BioArt 和 BioIcons 的 `replace` 支持可选 `proposal_id` 与 `document_sha256`，须成对提供，均来自 `visualization read_proposal`。此时在待审候选上替换素材并创建子候选，不要求先采用草图。传原正式基础版本作为 `expected_revision`；子候选响应包含父 ID、父哈希及自身哈希。若父候选有关联审阅，必须明确传 `markup_ids`，保留 IDs 或用 `[]` 解除。完成后读取子候选预览并留待用户审阅。
+
+这些候选参数和 `markup_ids` 仅用于 `replace`，其他动作拒绝它们，避免将候选定位信息静默忽略后操作正式图。未传候选参数时沿用原有入口：BioArt replace 和 BioIcons insert/replace 生成根提案；BioArt insert 保留既有直接保存语义。通用素材不构成特异分子结构或新科学机制的证据。
+
+`visualization` operations 新增 `fit_illustration_anchor {id,file_id,normalized_bounds:[x,y,width,height]}`。先读取当前图片/候选和文件身份，检查图片或 SVG parts，再明确提供相对整张图片的范围；不把路径边界当成分子域。该操作调整语义锚点与局部正交连接、保留图片字节和科学关系，沿用候选审阅和哈希约束。新素材替换后旧贴合失效，按新素材重新贴合再重路由。旋转、裁剪、翻转、复杂连线或固定端口须使用原生编辑；检查候选后再采用。

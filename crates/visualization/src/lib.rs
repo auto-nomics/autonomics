@@ -1,9 +1,10 @@
 //! Project-scoped visualization persistence, independent of GUI and rendering engine.
-pub mod annotation;
+mod annotation;
 pub mod arrange;
 mod duplicate;
 pub mod error;
 mod font_metrics;
+mod illustration_fit;
 pub mod image;
 pub mod inset;
 pub mod inset_refresh;

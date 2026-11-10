@@ -460,6 +460,13 @@ impl Context {
         self.remember(response_message.clone())?;
         self.token_budget.add_pending_message(&response_message);
 
+        if response_message.stop_reason == Some(agentik_types::StopReason::MaxTokens) {
+            // A truncated answer is not a completed turn, even if it contains
+            // some text or an earlier complete tool block. Preserve the evidence
+            // and fail explicitly instead of silently stopping or executing a prefix.
+            return Err(AgentError::ModelOutputTruncated);
+        }
+
         let toolcalls = self.extract_toolcalls(&response_message);
 
         if toolcalls.is_empty() {
@@ -1709,6 +1716,71 @@ mod tests {
                 });
         }
         agentik_sdk::model::Model::with_client(dummy_model_info(name), mock)
+    }
+
+    #[tokio::test]
+    async fn truncated_responses_fail_the_turn_retain_evidence_and_execute_no_tool_prefix() {
+        use agentik_types::{AgentLifecycleStatus, StopReason};
+        let mut thinking = Message::assistant_text("");
+        thinking.content = vec![ContentBlock::Thinking {
+            thinking: "partial reasoning".into(),
+            signature: String::new(),
+        }];
+        for response in [
+            thinking,
+            Message::assistant_text("unfinished answer"),
+            Message::assistant_tool_use(
+                "partial-call",
+                "view_task_status",
+                serde_json::json!({"task":1}),
+            ),
+        ] {
+            let response = response.with_stop_reason(StopReason::MaxTokens);
+            let model = scripted_model("truncated-turn", vec![response.clone()]);
+            let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+            let tasks = Arc::new(tokio::sync::RwLock::new(crate::tools::TaskStore::new()));
+            let mut registry = crate::tools::ToolRegistry::new();
+            registry
+                .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
+                .unwrap();
+            let core = turn_test_shared_with(model, tx, registry, Some(tasks));
+            let mut session = Context::new_for_tests(core, agentik_types::AgentPath::root());
+            session.remember(Message::user("continue work")).unwrap();
+            let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
+            session
+                .run_context(&internal_tx, &mut internal_rx, None)
+                .await;
+            assert_eq!(*session.lifecycle.status(), AgentLifecycleStatus::Error);
+            assert!(
+                session
+                    .messages
+                    .iter()
+                    .any(|message| message.id == response.id
+                        && message.content == response.content
+                        && message.stop_reason == Some(StopReason::MaxTokens))
+            );
+            let mut failed = 0;
+            let mut done = 0;
+            let mut errors = 0;
+            while let Ok(event) = events.try_recv() {
+                match event {
+                    AgentEvent::TurnCompleted { status, .. } => {
+                        assert_eq!(status, TurnExecutionStatus::Failed);
+                        failed += 1;
+                    }
+                    AgentEvent::ToolCall { .. } => {
+                        panic!("no prefix tools may run from a truncated response")
+                    }
+                    AgentEvent::Error(message) => {
+                        assert!(message.contains("max_tokens"));
+                        errors += 1;
+                    }
+                    AgentEvent::Done => done += 1,
+                    _ => {}
+                }
+            }
+            assert_eq!((failed, done, errors), (1, 1, 1));
+        }
     }
 
     /// Collect the turn lifecycle events in order.

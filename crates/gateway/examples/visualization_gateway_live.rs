@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("use a fresh existing output directory".into());
     }
     let connection = Connection::open_with_flags(&args[1], OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut model = runtime::model_bootstrap::resolve_model_spec(
+    let model = runtime::model_bootstrap::resolve_model_spec(
         &connection,
         &format!("{}:{}", args[2], args[3]),
     )
@@ -26,7 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("configured model requires vision, tools and streaming".into());
     }
-    model.model_info.max_output_tokens = model.model_info.max_output_tokens.clamp(1024, 8192);
+    // Match the configured production model; test-only caps can truncate reasoning.
+    let max_output_tokens = model.model_info.max_output_tokens;
     drop(connection);
     let server = start_mock_gateway_with_model(model).await;
     let agent = server
@@ -34,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .spawn_agent("figure", "/root", "researcher", None, None)
         .await?;
     let ready = serde_json::to_vec(
-        &serde_json::json!({"origin":format!("http://{}",server.addr),"token":server.token,"agent":agent}),
+        &serde_json::json!({"origin":format!("http://{}",server.addr),"token":server.token,"agent":agent,"max_output_tokens":max_output_tokens}),
     )?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);

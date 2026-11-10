@@ -29,6 +29,8 @@ pub struct Part {
 }
 #[derive(Debug, Serialize)]
 pub struct Inspection {
+    pub bounds_kind: &'static str,
+    pub bounds_note: &'static str,
     pub sha256: String,
     pub width: u32,
     pub height: u32,
@@ -210,6 +212,8 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection> {
     annotated.insert_str(end, &overlay);
     let annotated = vector::normalize(annotated.as_bytes())?;
     Ok(Inspection {
+        bounds_kind: "svg_root_stroke_aabb",
+        bounds_note: "Includes path strokes and ancestor transforms in normalized SVG root coordinates; not biological domains or an exact clipped-pixel mask.",
         sha256: hash,
         width: vector.width,
         height: vector.height,

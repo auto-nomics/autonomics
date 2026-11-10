@@ -9,6 +9,15 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 type Response = Result<Json<Value>, (StatusCode, Json<Value>)>;
+use visualization_assets::candidate::{self, Inspection, Reference, SvgEdit, SvgRefinement};
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SvgRead {
+    element_id: String,
+    expected_revision: i64,
+    proposal_id: Option<String>,
+    document_sha256: Option<String>,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Palette {
@@ -18,6 +27,9 @@ pub(crate) struct Palette {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Colors {
+    proposal_id: Option<String>,
+    document_sha256: Option<String>,
+    markup_ids: Option<Vec<String>>,
     element_id: String,
     expected_revision: i64,
     colors: BTreeMap<String, String>,
@@ -62,15 +74,21 @@ async fn work(
 pub(crate) async fn palette(
     State(shared): State<Shared>,
     Path((project, id)): Path<(String, String)>,
-    Query(input): Query<Palette>,
+    Query(input): Query<SvgRead>,
 ) -> Response {
     work(shared, move |store| {
-        visualization_assets::palette(
+        let reference = Reference::optional(
+            input.proposal_id.as_deref(),
+            input.document_sha256.as_deref(),
+        )?;
+        candidate::inspect_svg(
             store,
             &project,
             &id,
             input.expected_revision,
+            reference,
             &input.element_id,
+            Inspection::Palette,
         )
     })
     .await
@@ -81,13 +99,21 @@ pub(crate) async fn recolor(
     Json(input): Json<Colors>,
 ) -> Response {
     work(shared, move |store| {
-        Ok(json!(visualization_assets::recolor(
+        let reference = Reference::optional(
+            input.proposal_id.as_deref(),
+            input.document_sha256.as_deref(),
+        )?;
+        Ok(json!(candidate::refine_svg(
             store,
             &project,
             &id,
             input.expected_revision,
-            &input.element_id,
-            &input.colors
+            SvgRefinement {
+                reference,
+                target: &input.element_id,
+                edit: SvgEdit::Recolor(&input.colors),
+                markup_ids: input.markup_ids.as_deref()
+            }
         )?))
     })
     .await
@@ -96,6 +122,9 @@ pub(crate) async fn recolor(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PartsEdit {
+    proposal_id: Option<String>,
+    document_sha256: Option<String>,
+    markup_ids: Option<Vec<String>>,
     element_id: String,
     expected_revision: i64,
     sha256: String,
@@ -104,15 +133,21 @@ pub(crate) struct PartsEdit {
 pub(crate) async fn parts(
     State(shared): State<Shared>,
     Path((project, id)): Path<(String, String)>,
-    Query(input): Query<Palette>,
+    Query(input): Query<SvgRead>,
 ) -> Response {
     work(shared, move |store| {
-        visualization_assets::parts(
+        let reference = Reference::optional(
+            input.proposal_id.as_deref(),
+            input.document_sha256.as_deref(),
+        )?;
+        candidate::inspect_svg(
             store,
             &project,
             &id,
             input.expected_revision,
+            reference,
             &input.element_id,
+            Inspection::Parts,
         )
     })
     .await
@@ -123,14 +158,24 @@ pub(crate) async fn edit_parts(
     Json(input): Json<PartsEdit>,
 ) -> Response {
     work(shared, move |store| {
-        Ok(json!(visualization_assets::edit_parts(
+        let reference = Reference::optional(
+            input.proposal_id.as_deref(),
+            input.document_sha256.as_deref(),
+        )?;
+        Ok(json!(candidate::refine_svg(
             store,
             &project,
             &id,
             input.expected_revision,
-            &input.element_id,
-            &input.sha256,
-            &input.edits
+            SvgRefinement {
+                reference,
+                target: &input.element_id,
+                edit: SvgEdit::Parts {
+                    sha256: &input.sha256,
+                    edits: &input.edits
+                },
+                markup_ids: input.markup_ids.as_deref()
+            }
         )?))
     })
     .await
@@ -139,6 +184,8 @@ pub(crate) async fn edit_parts(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct GeometryQuery {
+    proposal_id: Option<String>,
+    document_sha256: Option<String>,
     element_id: String,
     expected_revision: i64,
     sha256: String,
@@ -150,14 +197,21 @@ pub(crate) async fn geometry(
     Query(input): Query<GeometryQuery>,
 ) -> Response {
     work(shared, move |store| {
-        visualization_assets::geometry(
+        let reference = Reference::optional(
+            input.proposal_id.as_deref(),
+            input.document_sha256.as_deref(),
+        )?;
+        candidate::inspect_svg(
             store,
             &project,
             &id,
             input.expected_revision,
+            reference,
             &input.element_id,
-            &input.sha256,
-            &input.part_id,
+            Inspection::Geometry {
+                sha256: &input.sha256,
+                part_id: &input.part_id,
+            },
         )
     })
     .await

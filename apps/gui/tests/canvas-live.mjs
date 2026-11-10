@@ -3,6 +3,8 @@
 // Model responses are never scripted.
 import { chromium } from 'playwright';
 import { runCandidateRevision } from './helpers/canvas-live-candidate.mjs';
+import { runLiveIllustrationFit } from './helpers/canvas-live-fit.mjs';
+import { runCandidateMaterialization } from './helpers/canvas-live-materialize.mjs';
 import { runScientificCase } from './helpers/canvas-live-scientific.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -11,15 +13,22 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const liveFit=process.env.VISUALIZATION_LIVE_FIT==='1';
+const fitSource=process.env.VISUALIZATION_LIVE_FIT_SCENE||fileURLToPath(new URL('./fixtures/scientific-egfr-mapk-illustrated.json',import.meta.url));
+const materializationSource=process.env.VISUALIZATION_LIVE_MATERIALIZE_SCENE;
+assert.ok(process.env.VISUALIZATION_LIVE_MATERIALIZE!=='1'||materializationSource,'materialization requires VISUALIZATION_LIVE_MATERIALIZE_SCENE pointing to an explicit saved scientific scene');
 const scientificCase=process.env.VISUALIZATION_LIVE_SCIENTIFIC;
 const candidateMode=process.env.VISUALIZATION_LIVE_CANDIDATE==='1';
 const gatewayMode=process.env.VISUALIZATION_LIVE_GATEWAY==='1';
 const reviewSource=process.env.VISUALIZATION_LIVE_REVIEW_SCENE, prepareOnly=process.env.VISUALIZATION_LIVE_PREPARE_ONLY==='1';
+assert.ok(!liveFit || (gatewayMode&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live fit requires a separate Gateway evaluation');
+assert.ok(!materializationSource || (gatewayMode&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'materialization requires a separate Gateway evaluation');
 assert.ok(!scientificCase || (gatewayMode&&!reviewSource&&!candidateMode&&!prepareOnly),'scientific case requires an empty Gateway evaluation');
 assert.ok(!candidateMode || (gatewayMode&&reviewSource&&!prepareOnly),'candidate case requires Gateway mode and an explicit saved illustrated scene');
 assert.ok(!gatewayMode || !prepareOnly, 'gateway mode uses a real configured model');
 assert.ok(!prepareOnly || reviewSource, 'prepare-only requires an explicit saved review scene');
 const provider = process.env.VISUALIZATION_LIVE_PROVIDER, model = process.env.VISUALIZATION_LIVE_MODEL;
+const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||(liveFit?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
 assert.ok(prepareOnly || (provider && model), 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
 const config = process.env.VISUALIZATION_LIVE_CONFIG || join(homedir(), '.autonomics/config.db');
 const binary = gatewayMode ? (process.env.VISUALIZATION_LIVE_GATEWAY_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_gateway_live',import.meta.url))) : prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
@@ -91,15 +100,18 @@ try {
     const history=async()=>{const state=await call('GET','/api/v1/state'),actor=state.agents.find(a=>a.path===gatewayReady.agent);assert.ok(actor);const session=state.contexts[gatewayReady.agent]?.id;const messages=session?await call('GET',`/api/v1/agents/${actor.agent_id}/sessions/${session}/history`):[];for(const block of messages.flatMap(message=>message.content)){if(block.type==='tool_use'&&!seenGatewayTools.has(block.id)){seenGatewayTools.add(block.id);console.log(`LIVE_GATEWAY_TOOL_CALL=${block.name} action=${block.input?.action??''}`);}}return {actor,messages};};
     if(gatewayMode){const before=await history();oldIds=new Set(before.messages.map(m=>m.id));oldToolIds=new Set(before.messages.flatMap(m=>m.content).filter(b=>b.type==='tool_use').map(b=>b.id));}
     await page.getByRole('button', { name: '发送', exact: true }).click();
-    if(gatewayMode){let finished;await until(async()=>{const current=await history();if(String(current.actor.status).toUpperCase()!=='IDLE'||!current.messages.some(m=>!oldIds.has(m.id)&&m.role==='assistant'&&m.content.some(b=>b.type==='text'&&b.text.trim())))return false;finished=current.messages;return true;},`production agent turn ${number}`,250000);
+    if(gatewayMode){let finished;await until(async()=>{const current=await history();const status=String(current.actor.status).toUpperCase();if(['ERROR','CANCELLED'].includes(status)) {await persist('session-history.json',JSON.parse(JSON.stringify(current.messages,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value)));await persist(`turn-${number}-failure.json`,{status,terminal_stop_reason:current.messages.filter(m=>m.role==='assistant').at(-1)?.stop_reason??null});throw new Error(`production agent turn ${number} ended with ${status}; terminal history retained`);}if(status!=='IDLE'||!current.messages.some(m=>!oldIds.has(m.id)&&m.role==='assistant'&&m.content.some(b=>b.type==='text'&&b.text.trim())))return false;finished=current.messages;return true;},`production agent turn ${number}`,turnTimeout);
+      // Preserve terminal evidence even when the model returns no final text.
+      const redactedHistory=JSON.parse(JSON.stringify(finished,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value));
+      await persist('session-history.json',redactedHistory);
       const finalAssistant=finished.filter(m=>!oldIds.has(m.id)&&m.role==='assistant').at(-1),expectedReply=finalAssistant.content.filter(b=>b.type==='text').map(b=>b.text).join('\n');
-      assert.ok(expectedReply.trim());
+      assert.ok(expectedReply.trim(),`production agent ended without final text; stop_reason=${finalAssistant.stop_reason??'missing'}; terminal blocks: ${finalAssistant.content.map(b=>b.type).join(',')}`);
       const displayed=page.locator('[data-agent-workspace]:visible').getByRole('button',{name:'复制助手回复',exact:true}).last();
       await until(async()=>{if(!await displayed.count())return false;await displayed.click();return await page.evaluate(()=>navigator.clipboard.readText())===expectedReply;},'actual final assistant reply matches session history through production SSE');
       const calls=finished.flatMap(m=>m.content).filter(b=>b.type==='tool_use'&&!oldToolIds.has(b.id)).map(b=>({name:b.name,input:b.input}));assert.ok(calls.length,'actual session records registered tool calls');turns.push({calls});await persist(`turn-${number}.json`,{calls,transport:'production_gateway'});
       const redacted=JSON.parse(JSON.stringify(finished,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value));await persist('session-history.json',redacted);
     }
-    await until(() => turns.length >= number || errors.length, `live turn ${number} completion`, 250000); assert.deepEqual(errors, []);
+    await until(() => turns.length >= number || errors.length, `live turn ${number} completion`, turnTimeout); assert.deepEqual(errors, []);
     console.log(`LIVE_CHECKPOINT turn=${number}`);
   };
   const handoff = async request => {
@@ -109,7 +121,17 @@ try {
   };
   const normalized = text => text.replace(/\s/g, '');
   const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
-  if(scientificCase){
+  if(liveFit){
+    assert.ok(Number.isSafeInteger(gatewayReady.max_output_tokens)&&gatewayReady.max_output_tokens>0,'rebuild the configured-model host; output-limit metadata is required');
+    await persist('fit-model-settings.json',{provider,model,max_output_tokens:gatewayReady.max_output_tokens});
+    const evidence=await runLiveIllustrationFit({page,call,path,send,persist,directory,turns,until,source:fitSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_illustration_fit',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent illustration fit passed; artifacts=${directory}`);
+  }else if(materializationSource){
+    const evidence=await runCandidateMaterialization({page,call,path,handoff,send,persist,directory,turns,until,source:materializationSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'candidate_materialization',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: materialization passed; artifacts=${directory}`);
+  }else if(scientificCase){
     const spec=JSON.parse(await readFile(scientificCase,'utf8'));await persist('scientific-case.json',spec);
     const evidence=await runScientificCase({page,call,path,handoff,send,persist,directory,turns,until,spec});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});

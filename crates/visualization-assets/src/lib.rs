@@ -1,4 +1,5 @@
 //! Shared API/agent operations over current SVG files, independent of web UI.
+pub mod candidate;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -46,16 +47,21 @@ pub fn palette(
     target: &str,
 ) -> Result<Value> {
     let document = current(store, project, figure, revision)?;
-    let bytes = svg(&document, target)?;
+    let mut value = palette_document(&document, target)?;
+    value["revision"] = json!(revision);
+    Ok(value)
+}
+pub fn palette_document(document: &Value, target: &str) -> Result<Value> {
+    let bytes = svg(document, target)?;
     let vector = bioicons::vector::normalize(&bytes)?;
     if vector.text_outlined {
         return Err(Error::Invalid(
             "outline SVG text before recoloring; font substitution is not part of a colour edit",
         ));
     }
-    let element = image::element(&document, target)?;
+    let element = image::element(document, target)?;
     Ok(
-        json!({"element_id":element["id"],"revision":revision,"file_id":element["fileId"],"colors":vector.colors,"previewDataURL":vector.preview_data_url,"provenance":element["customData"]}),
+        json!({"element_id":element["id"],"file_id":element["fileId"],"colors":vector.colors,"previewDataURL":vector.preview_data_url,"provenance":element["customData"]}),
     )
 }
 pub fn recolor_document(
@@ -135,13 +141,17 @@ pub fn parts(
     target: &str,
 ) -> Result<Value> {
     let document = current(store, project, figure, revision)?;
-    let bytes = svg(&document, target)?;
+    let mut value = parts_document(&document, target)?;
+    value["revision"] = json!(revision);
+    Ok(value)
+}
+pub fn parts_document(document: &Value, target: &str) -> Result<Value> {
+    let bytes = svg(document, target)?;
     let mut value = serde_json::to_value(bioicons::parts::inspect(&bytes)?)
         .map_err(|_| Error::Invalid("cannot serialize SVG parts"))?;
-    let element = image::element(&document, target)?;
+    let element = image::element(document, target)?;
     value["element_id"] = element["id"].clone();
     value["file_id"] = element["fileId"].clone();
-    value["revision"] = json!(revision);
     Ok(value)
 }
 pub fn edit_parts_document(
@@ -183,11 +193,22 @@ pub fn geometry(
     part_id: &str,
 ) -> Result<Value> {
     let document = current(store, project, figure, revision)?;
-    let geometry = bioicons::geometry::inspect(&svg(&document, target)?, sha256, part_id)?;
+    let mut value = geometry_document(&document, target, sha256, part_id)?;
+    value["revision"] = json!(revision);
+    Ok(value)
+}
+pub fn geometry_document(
+    document: &Value,
+    target: &str,
+    sha256: &str,
+    part_id: &str,
+) -> Result<Value> {
+    let geometry = bioicons::geometry::inspect(&svg(document, target)?, sha256, part_id)?;
     let mut value = serde_json::to_value(geometry)
         .map_err(|_| Error::Invalid("cannot serialize path geometry"))?;
-    value["revision"] = json!(revision);
-    value["element_id"] = image::element(&document, target)?["id"].clone();
+    let image = image::element(document, target)?;
+    value["element_id"] = image["id"].clone();
+    value["file_id"] = image["fileId"].clone();
     Ok(value)
 }
 

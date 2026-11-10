@@ -19,7 +19,7 @@ fn missing(field: &str) -> ToolError {
 }
 #[tool(
     name = "bioart",
-    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. replace creates a reviewable proposal while preserving layout, labels and arrow anchors; it does not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and reload the canvas after insertion."
+    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. replace creates a reviewable proposal while preserving layout, labels and arrow anchors; it does not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and reload the canvas after insertion. For replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Do not infer protein-specific structure or additional mechanism from generic artwork."
 )]
 pub struct Input {
     #[desc = "search | preview | insert | replace"]
@@ -34,6 +34,12 @@ pub struct Input {
     pub figure_id: Option<String>,
     #[desc = "Placeholder, semantic anchor or image object ID; required for replace"]
     pub element_id: Option<String>,
+    #[desc = "Optional pending candidate ID for replace; requires document_sha256 from visualization read_proposal. Creates a child candidate, preserving the parent."]
+    pub proposal_id: Option<String>,
+    #[desc = "Exact parent candidate document_sha256; use only with proposal_id on replace"]
+    pub document_sha256: Option<String>,
+    #[desc = "Explicit review IDs to retain/address; [] explicitly drops links; omission rejects a candidate with open linked reviews"]
+    pub markup_ids: Option<Vec<String>>,
     #[desc = "Current figure revision from visualization read; required for insert"]
     pub expected_revision: Option<i64>,
     #[desc = "Scene x coordinate, defaults to zero"]
@@ -48,6 +54,13 @@ struct BioArtTool {
 impl ToolFunction for BioArtTool {
     type Input = Input;
     async fn run(&self, input: Input) -> Result<ToolResult, ToolError> {
+        crate::asset_candidate::validate(
+            &input.action,
+            input.proposal_id.as_deref(),
+            input.document_sha256.as_deref(),
+            input.markup_ids.as_deref(),
+        )
+        .map_err(missing)?;
         let client = bioart::BioArtClient::new().map_err(error)?;
         if input.action == "search" {
             let query = input.query.ok_or_else(|| missing("query required"))?;
@@ -91,6 +104,9 @@ impl ToolFunction for BioArtTool {
             figure,
             revision,
             replacement,
+            proposal_id: input.proposal_id,
+            document_sha256: input.document_sha256,
+            markup_ids: input.markup_ids,
             element_id: input.element_id,
             x: input.x.unwrap_or(0.0),
             y: input.y.unwrap_or(0.0),
@@ -126,6 +142,9 @@ struct Placement {
     figure: String,
     revision: i64,
     replacement: bool,
+    proposal_id: Option<String>,
+    document_sha256: Option<String>,
+    markup_ids: Option<Vec<String>>,
     element_id: Option<String>,
     x: f64,
     y: f64,
@@ -140,6 +159,9 @@ fn persist_asset(
         figure,
         revision,
         replacement,
+        proposal_id,
+        document_sha256,
+        markup_ids,
         element_id,
         x,
         y,
@@ -150,7 +172,7 @@ fn persist_asset(
     if metadata.revision != revision {
         return Err(error(visualization::Error::Conflict));
     }
-    let current = store.revision(&project, &figure, revision).map_err(error)?;
+
     let summary = format!("Replace placeholder with {}", asset.asset.title);
     let image = visualization::image::Image {
         file_id: &asset.sha256,
@@ -159,6 +181,29 @@ fn persist_asset(
         height: asset.height,
         provenance: json!({"source":"NIH BioArt","asset":asset.asset,"file":asset.file,"sha256":asset.sha256}),
     };
+    if let (Some(parent_id), Some(hash)) = (&proposal_id, &document_sha256) {
+        let (proposal, element_id) = visualization_assets::candidate::replace(
+            &store,
+            &project,
+            &figure,
+            revision,
+            visualization_assets::candidate::Replacement {
+                parent_id,
+                parent_document_sha256: hash,
+                target: element_id
+                    .as_deref()
+                    .ok_or_else(|| missing("element_id required"))?,
+                image,
+                summary: &summary,
+                markup_ids: markup_ids.as_deref(),
+            },
+        )
+        .map_err(error)?;
+        return Ok(
+            json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending","parent_proposal_id":proposal.parent_proposal_id,"parent_document_sha256":proposal.parent_document_sha256,"document_sha256":proposal.document_sha256}),
+        );
+    }
+    let current = store.revision(&project, &figure, revision).map_err(error)?;
     if replacement {
         let (document, element_id) = visualization::image::illustrate(
             &current.document,
@@ -167,7 +212,14 @@ fn persist_asset(
         )
         .map_err(error)?;
         let proposal = store
-            .propose(&project, &figure, revision, &summary, &document)
+            .propose_with_markups(
+                &project,
+                &figure,
+                revision,
+                &summary,
+                &document,
+                markup_ids.as_deref().unwrap_or(&[]),
+            )
             .map_err(error)?;
         return Ok(
             json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending"}),
@@ -209,6 +261,9 @@ mod tests {
             figure: figure.id.clone(),
             revision: 1,
             replacement: true,
+            proposal_id: None,
+            document_sha256: None,
+            markup_ids: None,
             element_id: Some("node-0".into()),
             x: 0.0,
             y: 0.0,
@@ -229,6 +284,44 @@ mod tests {
                 .unwrap()["customData"]["asset"]["licenses"][0],
             "Public Domain"
         );
+        let mut on_candidate = placement();
+        on_candidate.proposal_id = Some(proposal.id.clone());
+        on_candidate.document_sha256 = Some(proposal.document_sha256.clone());
+        on_candidate.markup_ids = Some(vec![]);
+        on_candidate.element_id = Some("node-1".into());
+        let child_result = persist_asset(path.clone(), on_candidate, asset.clone()).unwrap();
+        let child = store
+            .proposal(
+                "p",
+                &figure.id,
+                child_result["proposal_id"].as_str().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            child.parent_proposal_id.as_deref(),
+            Some(proposal.id.as_str())
+        );
+        assert_eq!(
+            child.document["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["type"] == "image")
+                .count(),
+            2
+        );
+        assert_eq!(
+            store
+                .proposal("p", &figure.id, &proposal.id)
+                .unwrap()
+                .document,
+            proposal.document
+        );
+        assert_eq!(
+            store.revision("p", &figure.id, 1).unwrap().document,
+            original
+        );
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
         store
             .accept_proposal("p", &figure.id, &proposal.id)
             .unwrap();

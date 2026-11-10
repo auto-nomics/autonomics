@@ -38,3 +38,7 @@ The normalized SVG root includes explicit dimensions and viewBox in the editor-c
 `geometry::inspect(bytes, sha256, part_id)` 返回规范化 SVG 当前路径的端点/控制点编号、SVG 根坐标、M/L/Q/C/Z 命令结构与编号 PNG。编号依赖当前文件快照。`parts::Edit.points` 是稀疏的 `[{index,position:[x,y]}]` 修改，保持未指定点与路径命令结构；单条路径最多 512 个点，一次最多修改 64 个不同编号。坐标须为有限数且在 ±1000000 内；无法稳定逆变换的局部坐标会被拒绝。超限路径明确标出不可编辑，不截断点列表。
 
 每个点在 SVG 根坐标中定位，后台逆变换回所属路径坐标，支持旋转、镜像与非等比缩放。控制点修改不自动带动相邻端点/控制点，不自动平滑曲线，不移动共享绘制资源或上层裁剪；形状改变后仍使用原有绘制坐标。一个路径的 `points` 与 `translate` 须分两份提案采用，避免混淆绝对位置与相对位移。归一化后会再次核对路径数量和命令拓扑，退化导致路径消失或结构变化时拒绝修改。当前不增删点、子路径或命令。
+
+Path inspection returns `bounds_kind: "svg_root_stroke_aabb"` and a `bounds_note` alongside path boxes. `bounds` already include path strokes and ancestor transforms in normalized SVG root coordinates; callers should not add the stroke width again. These are geometric boxes, not exact clipped-pixel masks or biological-domain annotations. The additional result fields do not change snapshot IDs or edit semantics.
+
+“Normalized SVG root” refers to the canonical SVG coordinate system, not a unit interval. Use the returned `width`/`height` when converting path boxes to 0..1 fractions for an illustration-anchor operation.

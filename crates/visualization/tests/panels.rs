@@ -407,3 +407,192 @@ fn reroute_failures_leave_the_original_scene_unchanged() {
         .contains("detached")
     );
 }
+
+#[test]
+fn reroute_after_fitting_an_illustration_uses_the_anchor_instead_of_its_transparent_viewport() {
+    let scene = sketch::compile(&cross_plan()).unwrap();
+    let (illustrated, image_id) = image::illustrate(
+        &scene,
+        "node-1",
+        image::Image {
+            file_id: "transparent-art",
+            data_url: "data:image/png;base64,fixture",
+            width: 100,
+            height: 100,
+            provenance: json!({"source":"fixture"}),
+        },
+    )
+    .unwrap();
+    let fitted = scene::apply(
+        &illustrated,
+        &[Operation::FitIllustrationAnchor {
+            id: image_id.clone(),
+            file_id: "transparent-art".into(),
+            normalized_bounds: [0.3, 0.3, 0.4, 0.4],
+        }],
+    )
+    .unwrap();
+    let mut unrelated_obstacle = fitted.clone();
+    let mut foreign = find(&fitted, &image_id).clone();
+    foreign["id"] = json!("foreign-image");
+    foreign["customData"]["semanticAnchorId"] = json!("foreign-owner");
+    unrelated_obstacle["elements"]
+        .as_array_mut()
+        .unwrap()
+        .push(foreign);
+    assert!(
+        scene::apply(
+            &unrelated_obstacle,
+            &[Operation::Reroute {
+                id: "edge-2".into()
+            }]
+        )
+        .is_err(),
+        "unrelated images remain obstacles"
+    );
+    let mut stale = fitted.clone();
+    stale["elements"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"] == image_id)
+        .unwrap()["fileId"] = json!("changed-file");
+    assert!(
+        scene::apply(
+            &stale,
+            &[Operation::Reroute {
+                id: "edge-2".into()
+            }]
+        )
+        .is_err(),
+        "stale file fits cannot ignore the image viewport"
+    );
+    let routed = scene::apply(
+        &fitted,
+        &[Operation::Reroute {
+            id: "edge-2".into(),
+        }],
+    )
+    .expect("an endpoint's own viewport must not block its explicitly fitted port");
+    assert_eq!(find(&routed, &image_id), find(&fitted, &image_id));
+    assert_eq!(find(&routed, "node-1"), find(&fitted, "node-1"));
+    assert_eq!(routed["files"], fitted["files"]);
+    for key in [
+        "startBinding",
+        "endBinding",
+        "startArrowhead",
+        "endArrowhead",
+        "customData",
+    ] {
+        assert_eq!(find(&routed, "edge-2")[key], find(&fitted, "edge-2")[key]);
+    }
+}
+
+#[test]
+fn generated_and_rerouted_arrows_enter_and_leave_ports_normally() {
+    let initial = sketch::compile(&cross_plan()).unwrap();
+    let rerouted = scene::apply(
+        &initial,
+        &[Operation::Reroute {
+            id: "edge-2".into(),
+        }],
+    )
+    .unwrap();
+    for scene in [&initial, &rerouted] {
+        for arrow in scene["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["customData"]["crossPanel"] == true)
+        {
+            let points = arrow["points"].as_array().unwrap();
+            for (key, start) in [("startBinding", true), ("endBinding", false)] {
+                let node = find(scene, arrow[key]["elementId"].as_str().unwrap());
+                let gap = arrow[key]["gap"].as_f64().unwrap();
+                let x = node["x"].as_f64().unwrap();
+                let y = node["y"].as_f64().unwrap();
+                let w = node["width"].as_f64().unwrap();
+                let h = node["height"].as_f64().unwrap();
+                let port = endpoint(arrow, !start);
+                let n = if start {
+                    &points[1]
+                } else {
+                    &points[points.len() - 2]
+                };
+                let outside = [
+                    arrow["x"].as_f64().unwrap() + n[0].as_f64().unwrap(),
+                    arrow["y"].as_f64().unwrap() + n[1].as_f64().unwrap(),
+                ];
+                let normal = ((port[0] - (x - gap)).abs() < 1e-6
+                    && outside[0] < port[0]
+                    && (outside[1] - port[1]).abs() < 1e-6)
+                    || ((port[0] - (x + w + gap)).abs() < 1e-6
+                        && outside[0] > port[0]
+                        && (outside[1] - port[1]).abs() < 1e-6)
+                    || ((port[1] - (y - gap)).abs() < 1e-6
+                        && outside[1] < port[1]
+                        && (outside[0] - port[0]).abs() < 1e-6)
+                    || ((port[1] - (y + h + gap)).abs() < 1e-6
+                        && outside[1] > port[1]
+                        && (outside[0] - port[0]).abs() < 1e-6);
+                assert!(
+                    normal,
+                    "{} / {key} must point into the component rather than along its edge",
+                    arrow["id"]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn available_ports_do_not_reverse_over_an_existing_incoming_connection() {
+    let plan:Plan=serde_json::from_value(json!({"message":"Explicit reduced relay","audience":"Researchers","layout":"vertical","panels":[{"id":"a","title":"A","column":0,"row":0},{"id":"b","title":"B","column":1,"row":0}],"nodes":[{"id":"ligand","label":"Ligand","panel":"a"},{"id":"receptor","label":"Receptor","panel":"a"},{"id":"relay","label":"Relay","panel":"b"}],"edges":[{"from":"ligand","to":"receptor","label":"binds"},{"from":"receptor","to":"relay","label":"recruits"}]})).unwrap();
+    let initial = sketch::compile(&plan).unwrap();
+    let (art, image_id) = image::illustrate(
+        &initial,
+        "node-1",
+        image::Image {
+            file_id: "art",
+            data_url: "data:image/png;base64,fixture",
+            width: 100,
+            height: 100,
+            provenance: json!({"source":"fixture"}),
+        },
+    )
+    .unwrap();
+    let fitted = scene::apply(
+        &art,
+        &[Operation::FitIllustrationAnchor {
+            id: image_id,
+            file_id: "art".into(),
+            normalized_bounds: [0.3, 0.3, 0.4, 0.4],
+        }],
+    )
+    .unwrap();
+    let routed = scene::apply(
+        &fitted,
+        &[Operation::Reroute {
+            id: "edge-1".into(),
+        }],
+    )
+    .unwrap();
+    for scene in [&initial, &routed] {
+        let node = find(scene, "node-1");
+        let incoming = endpoint(find(scene, "edge-0"), true);
+        let outgoing = endpoint(find(scene, "edge-1"), false);
+        assert!(
+            (incoming[0] - node["x"].as_f64().unwrap() - node["width"].as_f64().unwrap() / 2.)
+                .abs()
+                < 1e-6
+        );
+        assert!((incoming[1] - node["y"].as_f64().unwrap() + 10.).abs() < 1e-6);
+        assert!(
+            (outgoing[0] - node["x"].as_f64().unwrap() - node["width"].as_f64().unwrap() / 2.)
+                .abs()
+                > 1e-6
+                || (outgoing[1] - node["y"].as_f64().unwrap() + 12.).abs() > 1e-6,
+            "do not overlap the existing incoming arrow in reverse when other ports are available"
+        );
+    }
+}

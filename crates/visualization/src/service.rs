@@ -276,7 +276,7 @@ mod tests {
             1,
             "Parent",
             &[],
-            &[review.id.clone()],
+            std::slice::from_ref(&review.id),
         )?;
         let mut input = ProposalRevisionInput {
             parent_proposal_id: parent.id.clone(),

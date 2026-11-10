@@ -168,18 +168,8 @@ pub fn illustrate(
     ) {
         return Err(InvalidImage("target must be a shape or image"));
     }
-    let number = |key: &str| {
-        target[key]
-            .as_f64()
-            .filter(|value| value.is_finite())
-            .ok_or(InvalidImage("target geometry"))
-    };
-    let (x, y, width, height) = (
-        number("x")?,
-        number("y")?,
-        number("width")?,
-        number("height")?,
-    );
+    let [x, y, width, height] = crate::illustration_fit::layout_slot(target)
+        .map_err(|_| InvalidImage("invalid or rotated fitted visual layout slot"))?;
     if width <= 0.0 || height <= 0.0 {
         return Err(InvalidImage("target dimensions"));
     }
@@ -267,7 +257,17 @@ pub fn illustrate(
     anchor["type"] = json!("rectangle");
     anchor["strokeColor"] = json!("transparent");
     anchor["backgroundColor"] = json!("transparent");
-    anchor["strokeWidth"] = json!(0);
+    // Excalidraw treats zero as a missing stroke width during restore. Keep a
+    // valid native width; the transparent paint hides the semantic anchor.
+    anchor["strokeWidth"] = target
+        .get("strokeWidth")
+        .filter(|value| {
+            value
+                .as_f64()
+                .is_some_and(|width| width.is_finite() && width > 0.)
+        })
+        .cloned()
+        .unwrap_or(json!(2));
     anchor["groupIds"] = json!(groups);
     if let Some(bindings) = anchor
         .get_mut("boundElements")
@@ -278,6 +278,11 @@ pub fn illustrate(
     if !anchor.get("customData").is_some_and(Value::is_object) {
         anchor["customData"] = json!({});
     }
+    // A new illustration must be reviewed/refitted against its own pixels.
+    anchor["customData"]
+        .as_object_mut()
+        .unwrap()
+        .remove("visualAnchorFit");
     anchor["customData"]["visualAssetElementId"] = json!(visual_id);
     anchor["customData"]["visualAssetGroupId"] = json!(group);
     anchor["customData"]["visualLabelIds"] = json!(label_ids);

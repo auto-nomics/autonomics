@@ -58,7 +58,10 @@
     "test:canvas:gateway:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 node tests/canvas-live.mjs",
     "test:canvas:candidate:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_CANDIDATE=1 node tests/canvas-live.mjs",
     "test:canvas:scientific:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_SCIENTIFIC=tests/fixtures/scientific-egfr-mapk.json node tests/canvas-live.mjs",
-    "test:canvas:scientific:contract": "cargo build -p api-server --example visualization_native && node tests/canvas-scientific-contract.mjs"
+    "test:canvas:scientific:contract": "cargo build -p api-server --example visualization_native && node tests/canvas-scientific-contract.mjs",
+    "test:canvas:materialize:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_MATERIALIZE=1 node tests/canvas-live.mjs",
+    "test:canvas:illustration-fit": "cargo build -p api-server --example visualization_native && node tests/canvas-illustration-fit.mjs",
+    "test:canvas:illustration-fit:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_FIT=1 node tests/canvas-live.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

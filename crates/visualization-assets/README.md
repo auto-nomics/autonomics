@@ -32,3 +32,9 @@ Normalized SVG uses an editor-compatible root namespace/viewBox and document ser
 `image_info` reads actual embedded SVG/PNG/JPEG/WebP dimensions, current crop, SHA-256 and provenance at the exact saved revision. `inset` compiles a fractional visible region into a pending editable crop/region/callout proposal, preserving source objects and files. `inset_status` compares the source with its recorded historical version; a later figure revision alone is not considered a source change. `refresh_inset` retains inset identities, panel, title, styles and local notes while proposing refreshed content and region/callout geometry inside the existing panel. The same fractional region is applied to the current source viewport and needs scientific review if the source content changed. Local file/crop edits require `discard_detail_edits:true`; missing sources/members, ambiguous identities and rotated panels fail before proposal creation. The source and unrelated insets remain unchanged. Every refresh records current and previous source revisions/file hashes, and remains a fixed snapshot until explicitly adopted and refreshed again.
 
 HTTP: `GET .../image-info`, `POST .../insets`, `GET .../inset-status`, `POST .../insets/refresh`. Read queries use `element_id` and `expected_revision`; refresh accepts the same fields plus optional `discard_detail_edits` (false by default). Native editor Delete uses ordinary engine rules; the GUI's reviewed delete operation and Agent removal of the inset anchor also clean reciprocal region/callout decorations.
+
+## 在候选图上继续插图化
+
+`candidate::replace` 接收现有候选 ID、精确文档哈希、正式基础版本、目标对象和已下载的图片，创建具有父来源记录的子候选。替换基于父候选文档，因此此前的文字、布局、文件及其他素材修改得以累计；父候选和正式图稿不变。保留语义锚点、标签身份、原有关系绑定及科学依据。图片的来源、作者、许可和哈希仍由具体目录适配器提供。
+
+父候选必须属于当前项目/画布，仍待审且基础版本和哈希完全匹配。有关联的开放审阅时，必须显式给出 `markup_ids`：提供 IDs 表示继续关联，`[]` 表示明确解除；省略不会悄悄丢失关联。操作不完成审阅，也不自动采用。三项集成测试覆盖连续两次插图化、历史和无关元素保留、正式版本隔离，以及过期/错误来源和审阅失败时不写入。

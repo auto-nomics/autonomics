@@ -4,6 +4,22 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 const normalized=value=>value.replace(/\s/g,'');
 const sameRefs=(actual,expected)=>assert.deepEqual([...(actual??[])].sort(),[...expected].sort(),'exact supplied source URLs survive');
+export function currentCandidateLeaf(proposals, revision) {
+  const pending = proposals.filter(p => p.status === 'pending' && p.base_revision === revision);
+  const leaves = pending.filter(p => !pending.some(child => child.parent_proposal_id === p.id));
+  assert.equal(leaves.length, 1, 'one unambiguous candidate lineage at the current revision');
+  const seen = new Set();
+  let current = leaves[0];
+  while (current) {
+    assert.ok(!seen.has(current.id), 'candidate lineage cannot contain cycles');
+    seen.add(current.id);
+    if (!current.parent_proposal_id) break;
+    current = pending.find(p => p.id === current.parent_proposal_id);
+    assert.ok(current, 'current candidate ancestry must remain available at the same revision');
+  }
+  assert.equal(seen.size, pending.length, 'all current candidates belong to the same lineage');
+  return leaves[0];
+}
 export function checkScientificPlan(plan,spec) {
   assert.equal(plan.nodes.length,spec.brief.nodes.length);assert.equal(plan.edges.length,spec.brief.edges.length);assert.equal(plan.panels.length,spec.brief.panels.length);
   const concepts=new Map(),panels=new Map();
@@ -31,11 +47,13 @@ export function checkScientificScene(document,plan,spec,{edited=false}={}) {
   return {target,caption};
 }
 export async function runScientificCase({page,call,path,handoff,send,persist,directory,turns,until,spec}) {
-  const caseText=JSON.stringify(spec,null,2);
+  // Future review instructions must not leak into the generation turn.
+  const {local_edit: _laterEdit, ...generationSpec} = spec;
+  const caseText=JSON.stringify(generationSpec,null,2);
   await handoff(`请根据下面已核对的来源和明确边界，制作一张可编辑的人类信号通路简化图。先 read_plan，再用 save_plan 的 planning 参数保存给定 brief 并 sketch_plan 生成待审候选。所有需要的事实已提供，不扩展其他分子/调控，不添加新引文。严格保留给定节点/关系英文标签、evidence 原始 URL、assumptions 和三个从左到右的阶段面板（不是细胞区室）。在图下方添加 scope_caption 的完整可编辑文字，它是独立注释而不是生物节点、关系或第四面板；使用默认科学字体（fontFamily 9）并在整图宽度内排版；message 中存有说明不能代替可见说明。若草图缺少说明，读取该候选及哈希后用 revise_proposal 的 add_wrapped_text 操作补齐（传文本、坐标、宽度和字号，服务生成完整原生文字，不手写 element 对象），保留父候选，不在正式图上重做。读取最终候选预览检查标签和连线，不采用。\n${caseText}`);
   const original=await call('GET',path);assert.equal(original.scene.document.elements.length,0);await send(1);
   const planning=await call('GET',`${path}/planning`);await persist('scientific-plan.json',planning);assert.ok(planning&&['ready','proposed'].includes(planning.status));assert.equal(planning.issues.length,0);checkScientificPlan(planning.document,spec);await persist('scientific-plan.json',planning);
-  const leaf=async()=>{const pending=(await call('GET',`${path}/proposals`)).filter(p=>p.status==='pending');const leaves=pending.filter(p=>!pending.some(c=>c.parent_proposal_id===p.id));assert.equal(leaves.length,1,'one unambiguous candidate lineage');const seen=new Set();let current=leaves[0];while(current){assert.ok(!seen.has(current.id));seen.add(current.id);current=current.parent_proposal_id?pending.find(p=>p.id===current.parent_proposal_id):null;}assert.equal(seen.size,pending.length);return leaves[0];};
+  const leaf=async()=>{const head=await call('GET',path);return currentCandidateLeaf(await call('GET',`${path}/proposals`),head.metadata.revision);};
   const dialog=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});
   const preview=async(candidate,name)=>{assert.ok(turns.at(-1).calls.some(c=>c.name==='visualization'&&c.input.action==='read_proposal_preview'&&c.input.proposal_id===candidate.id),'model checks final candidate PNG');let image;await until(async()=>{image=await call('GET',`${path}/proposals/${candidate.id}/preview?expected_revision=${candidate.base_revision}`);assert.notEqual(image.render_status,'failed');return image.render_status==='ready';},'scientific candidate render');assert.equal(image.document_sha256,candidate.document_sha256);await writeFile(join(directory,name),Buffer.from(image.dataURL.split(',')[1],'base64'));};
   const show=async candidate=>{await page.getByRole('tab',{name:'Live figure',exact:true}).click();await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();await dialog.getByRole('button',{name:`${candidate.summary} · v${candidate.base_revision}${candidate.parent_proposal_id?' · 修订':''}`,exact:true}).click();await dialog.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();};

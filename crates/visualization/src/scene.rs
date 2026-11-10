@@ -7,6 +7,12 @@ use std::collections::HashSet;
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Fit a semantic anchor to explicitly reviewed bounds inside its illustration.
+    FitIllustrationAnchor {
+        id: String,
+        file_id: String,
+        normalized_bounds: [f64; 4],
+    },
     /// Add complete native scientific-font text with validated geometry and wrapping.
     AddWrappedText {
         id: String,
@@ -93,6 +99,8 @@ pub enum SceneError {
     InvalidCopy(String),
     #[error("cannot sync inset region: {0}")]
     InvalidInset(String),
+    #[error("cannot fit illustration anchor: {0}")]
+    InvalidIllustration(String),
     #[error("element id cannot be changed")]
     ImmutableId,
 }
@@ -270,6 +278,13 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     }
     for operation in operations {
         match operation {
+            Operation::FitIllustrationAnchor {
+                id,
+                file_id,
+                normalized_bounds,
+            } => {
+                crate::illustration_fit::apply(elements, id, file_id, *normalized_bounds)?;
+            }
             Operation::AddWrappedText {
                 id,
                 text,
@@ -492,6 +507,24 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     Ok(result)
 }
 
+fn editable_relation<'a>(elements: &'a mut [Value], id: &str) -> Result<&'a mut Value, SceneError> {
+    let element = elements
+        .iter_mut()
+        .find(|element| element["id"].as_str() == Some(id))
+        .ok_or_else(|| SceneError::NotFound(id.into()))?;
+    let metadata = &element["customData"];
+    if element["type"] != "arrow"
+        || element["isDeleted"] == true
+        || element["locked"] == true
+        || (!metadata.is_null() && !metadata.is_object())
+        || metadata.get("annotationKind").is_some_and(|v| !v.is_null())
+        || metadata.get("inset").is_some_and(|v| !v.is_null())
+    {
+        return Err(SceneError::InvalidRelation("requires a live unlocked relation arrow; annotation/inset arrows and opaque metadata are not supported".into()));
+    }
+    Ok(element)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,22 +733,4 @@ mod tests {
             Err(SceneError::ImmutableId)
         );
     }
-}
-
-fn editable_relation<'a>(elements: &'a mut [Value], id: &str) -> Result<&'a mut Value, SceneError> {
-    let element = elements
-        .iter_mut()
-        .find(|element| element["id"].as_str() == Some(id))
-        .ok_or_else(|| SceneError::NotFound(id.into()))?;
-    let metadata = &element["customData"];
-    if element["type"] != "arrow"
-        || element["isDeleted"] == true
-        || element["locked"] == true
-        || (!metadata.is_null() && !metadata.is_object())
-        || metadata.get("annotationKind").is_some_and(|v| !v.is_null())
-        || metadata.get("inset").is_some_and(|v| !v.is_null())
-    {
-        return Err(SceneError::InvalidRelation("requires a live unlocked relation arrow; annotation/inset arrows and opaque metadata are not supported".into()));
-    }
-    Ok(element)
 }
