@@ -107,7 +107,7 @@ export function HpcJobsEditorView() {
                   <span className="flex-1" />
                   <span className="text-xs text-muted-foreground">
                     {monitor.target_id
-                      ? `${monitor.target_id} r${monitor.target_revision}`
+                      ? monitor.target_id
                       : "legacy"}
                   </span>
                 </div>

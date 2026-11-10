@@ -118,6 +118,8 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 
 ## DAG 调度与容器执行
 
+计算目标支持 `local`、`ssh` 与 `slurm`，按 `id` 保存当前配置。保存选中目标后，新 DAG 自动使用更新后的配置，已有 DAG 保持原执行器；API 无需传配置 revision。旧注册表在启动时迁移。
+
 计算节点使用独立的 `autonomics-worker`。通过 `cargo build --release -p autonomics-worker` 单独构建，并将其绝对路径传给 `compute enroll --deploy`。worker 复用分析引擎，文献与写作节点留在 coordinator 执行。构建、版本校验和安装方式见[独立 worker 部署说明](docs/engineering/analysis-worker.md)。
 
 两套机制让系统在生物医学工作中可信：

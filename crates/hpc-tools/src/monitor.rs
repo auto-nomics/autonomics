@@ -60,8 +60,6 @@ pub struct MonitorRecord {
 pub struct MonitorView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_revision: Option<u64>,
     pub id: String,
     pub agent_id: String,
     pub agent_path: String,
@@ -120,7 +118,6 @@ impl MonitorRecord {
             .and_then(|r| r["state"].as_str());
         MonitorView {
             target_id: None,
-            target_revision: None,
             id: self.id.clone(),
             agent_id: self.owner.agent_id.clone(),
             agent_path: self.owner.agent_path.clone(),

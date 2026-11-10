@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
-let state = { version: 1, revision: 1, policy: { revision: 1, target_id: "local", target_revision: 1 }, targets: [], data_sources: [] };
-const streams = [], requests = [];
+let state = { version: 2, policy: { target_id: "local" }, targets: [], data_sources: [] };
+const streams = [], requests = [], targetWrites = [], policyWrites = [];
 const mock = createServer((req, res) => {
   if (req.url === "/api/v1/compute/enroll/stream") {
     let body = "";
@@ -13,6 +13,21 @@ const mock = createServer((req, res) => {
       requests.push(JSON.parse(body));
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       res.flushHeaders(); res.write(": keepalive\r\n\r\n"); streams.push(res);
+    });
+  } else if (req.method === "PUT" && ["/api/v1/compute/targets", "/api/v1/compute/policy"].includes(req.url)) {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      const request = JSON.parse(body);
+      if (req.url.endsWith("/targets")) {
+        targetWrites.push(request);
+        state = { ...state, targets: [...state.targets.filter(target => target.id !== request.id), request] };
+      } else {
+        policyWrites.push(request);
+        state = { ...state, policy: { target_id: request.target_id } };
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(state));
     });
   } else {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -62,6 +77,7 @@ try {
   const panel = page.getByRole("region", { name: "计算目标安装进度" });
   send(0, { type: "progress", stage: "authenticate", message: "正在认证" });
   await panel.getByRole("status").getByText("SSH 身份认证", { exact: true }).waitFor();
+  assert.equal("expected_revision" in requests[0], false);
   assert.equal(requests[0].deploy_worker, "/opt/autonomics"); assert.equal(requests[0].python, "/opt/python3.12");
   send(0, { type: "progress", stage: "upload", message: "上传中", uploaded_bytes: 52428800, total_bytes: 104857600 });
   await panel.getByRole("progressbar").waitFor();
@@ -85,11 +101,11 @@ try {
   await panel.getByRole("status").getByText("保存计算目标", { exact: true }).waitFor();
   assert.equal(await panel.getByText("安装完成", { exact: true }).count(), 0);
   await page.screenshot({ path: "/tmp/autonomics-compute-install.png", fullPage: true });
-  state = { ...state, revision: 2, policy: { revision: 2, target_id: "Csu", target_revision: 1 },
-    targets: [{ id: "Csu", revision: 1, name: "Csu", enabled: true, backend: { type: "slurm", settings: { ssh_host: "Csu" } }, data_domains: [] }] };
+  state = { ...state, policy: { target_id: "Csu" },
+    targets: [{ id: "Csu", name: "Csu", enabled: true, backend: { type: "slurm", settings: { ssh_host: "Csu" } }, data_domains: [] }] };
   send(1, { type: "result", state }); streams[1].end();
   await panel.getByText("安装完成", { exact: true }).waitFor();
-  await page.getByText("Csu r1", { exact: true }).waitFor();
+  await page.getByText("Csu", { exact: true }).first().waitFor();
   assert.equal(await panel.getByRole("progressbar").getAttribute("aria-valuenow"), "100");
   assert.equal(await panel.getByText("upload refused: disk full", { exact: true }).count(), 0);
   await page.setViewportSize({ width: 390, height: 844 });
@@ -101,8 +117,33 @@ try {
   await panel.getByText(/安装进度连接已断开/).waitFor();
   await panel.getByText("状态待确认", { exact: true }).waitFor();
   assert.equal(requests.length, 3, "dropped streams must not replay deployments");
+  await page.setViewportSize({ width: 1100, height: 1000 });
+  await page.getByRole("button", { name: "新建 SSH 目标", exact: true }).click();
+  let targetForm = page.locator("section").filter({ has: page.getByText("新建目标", { exact: true }) });
+  await targetForm.getByLabel("标识 (id)").fill("ssh-test");
+  await targetForm.getByLabel("名称", { exact: true }).fill("SSH test");
+  await targetForm.getByLabel("SSH 主机 (别名)", { exact: true }).fill("worker");
+  await targetForm.getByRole("button", { name: "保存配置", exact: true }).click();
+  await until(() => targetWrites.length === 1);
+  const targetRow = page.locator("li").filter({ has: page.getByText("ssh-test", { exact: true }) });
+  await targetRow.getByRole("button", { name: "选择", exact: true }).click();
+  await page.getByText("当前执行目标:ssh-test", { exact: true }).waitFor();
+  await targetRow.getByRole("button", { name: "编辑", exact: true }).click();
+  targetForm = page.locator("section").filter({ has: page.getByText("编辑目标 ssh-test", { exact: true }) });
+  await targetForm.getByLabel("名称", { exact: true }).fill("Updated SSH target");
+  await targetForm.getByRole("button", { name: "保存配置", exact: true }).click();
+  await targetRow.getByText("Updated SSH target", { exact: true }).waitFor();
+  assert.equal(targetWrites.length, 2);
+  assert.equal(state.targets.filter(target => target.id === "ssh-test").length, 1);
+  assert.equal(targetWrites[0].backend.type, "ssh");
+  assert.equal(targetWrites.every(request => !("expected_revision" in request)), true);
+  assert.deepEqual(policyWrites, [{ target_id: "ssh-test" }], "editing the selected target must not require reselection");
   assert.deepEqual(errors, []);
   console.log("Compute installation: streaming, percentage, navigation, UTF-8/CRLF, failure and retry passed.");
+} catch (error) {
+  const page = browser?.contexts()[0]?.pages()[0];
+  console.error(await page?.locator("body").innerText());
+  throw error;
 } finally {
   await browser?.close(); vite.kill(); streams.forEach(stream => stream.end()); mock.closeAllConnections(); await new Promise(resolve => mock.close(resolve));
 }

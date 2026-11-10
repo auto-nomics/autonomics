@@ -2,7 +2,7 @@
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
 use axum::{Json, extract::State, http::StatusCode};
-use runtime::compute::{ComputeBackend, SaveTarget, SelectTarget};
+use runtime::compute::{ComputeBackend, SaveTarget};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -20,21 +20,16 @@ pub(crate) async fn show(State(state): State<GatewayState>) -> GatewayResult<Jso
     let target = snapshot
         .targets
         .iter()
-        .find(|target| {
-            target.id == snapshot.policy.target_id
-                && target.revision == snapshot.policy.target_revision
-        })
-        .ok_or_else(|| conflict("selected target revision missing"))?;
+        .find(|target| target.id == snapshot.policy.target_id)
+        .ok_or_else(|| conflict("selected target missing"))?;
     let settings = match &target.backend {
         ComputeBackend::Slurm { settings } => settings,
         _ => {
-            return Ok(Json(
-                json!({"target_id":target.id,"target_revision":target.revision,"registry_revision":snapshot.revision,"editable":false}),
-            ));
+            return Ok(Json(json!({"target_id":target.id,"editable":false})));
         }
     };
     Ok(Json(
-        json!({"target_id":target.id,"target_revision":target.revision,"registry_revision":snapshot.revision,"editable":true,"config":settings}),
+        json!({"target_id":target.id,"editable":true,"config":settings}),
     ))
 }
 
@@ -42,8 +37,6 @@ pub(crate) async fn show(State(state): State<GatewayState>) -> GatewayResult<Jso
 #[serde(deny_unknown_fields)]
 pub(crate) struct Update {
     target_id: String,
-    target_revision: u64,
-    expected_revision: u64,
     config: Value,
 }
 
@@ -57,17 +50,14 @@ pub(crate) async fn update(
         .as_ref()
         .ok_or_else(|| conflict("compute registry unavailable"))?;
     let snapshot = registry.state();
-    if snapshot.revision != request.expected_revision
-        || snapshot.policy.target_id != request.target_id
-        || snapshot.policy.target_revision != request.target_revision
-    {
+    if snapshot.policy.target_id != request.target_id {
         return Err(conflict("compute selection changed; refresh before saving"));
     }
     let target = snapshot
         .targets
         .iter()
-        .find(|target| target.id == request.target_id && target.revision == request.target_revision)
-        .ok_or_else(|| conflict("selected target revision missing"))?;
+        .find(|target| target.id == request.target_id)
+        .ok_or_else(|| conflict("selected target missing"))?;
     let settings = match &target.backend {
         ComputeBackend::Slurm { settings } => settings,
         _ => return Err(conflict("selected target is not Slurm")),
@@ -91,7 +81,6 @@ pub(crate) async fn update(
         serde_json::from_value(merged).map_err(|e| conflict(format!("invalid settings: {e}")))?;
     let saved = registry
         .save_target(SaveTarget {
-            expected_revision: snapshot.revision,
             id: target.id.clone(),
             name: target.name.clone(),
             enabled: target.enabled,
@@ -99,18 +88,6 @@ pub(crate) async fn update(
             data_domains: target.data_domains.clone(),
         })
         .map_err(conflict)?;
-    let selected = registry
-        .select(SelectTarget {
-            expected_revision: saved.revision,
-            target_id: target.id.clone(),
-        })
-        .map_err(|e| {
-            conflict(format!(
-                "target saved, but selection failed: {e}; select the new revision manually"
-            ))
-        })?;
-    super::compute::changed(&state, &selected);
-    Ok(Json(
-        json!({"target_id":target.id,"target_revision":selected.policy.target_revision,"registry_revision":selected.revision}),
-    ))
+    super::compute::changed(&state, &saved);
+    Ok(Json(json!({"target_id":target.id})))
 }

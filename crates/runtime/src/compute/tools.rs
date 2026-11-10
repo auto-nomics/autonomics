@@ -48,7 +48,7 @@ impl agentik_core::context::ContextProvider for ComputeContext {
         }).collect();
         let deployment = self
             .registry
-            .target(&state.policy.target_id, Some(state.policy.target_revision))
+            .target(&state.policy.target_id)
             .ok()?
             .deployment();
         let status = serde_json::to_string(&json!({
@@ -61,7 +61,7 @@ impl agentik_core::context::ContextProvider for ComputeContext {
         }
         *last = Some(status.clone());
         Some(format!(
-            "[Operator compute policy]\n{status}\nNew DAG runs bind this target once. Existing runs and jobs retain their original target/revision. If deployment.source_compatible is false, report both source revisions: the operator must deploy a measured matching worker and enroll a new target revision. Retrying a DAG or approving a download cannot repair that mismatch. Data-source VFS mounts are independent and remain accessible after compute switches. Use canonical domain://path URIs from filesystem_domains/data_sources for VFS and DAG inputs. local:// is the coordinator namespace; compute target names are not filesystem domains. Use vfs mount_list for current canonical mount URIs and permission submounts, and compute_status for bindings. Never repeat uncertain work on another server."
+            "[Operator compute policy]\n{status}\nNew DAG runs bind this target once. Existing runs and jobs retain their original target configuration. If deployment.source_compatible is false, report both source revisions: the operator must deploy a measured matching worker and update the target. Retrying a DAG or approving a download cannot repair that mismatch. Data-source VFS mounts are independent and remain accessible after compute switches. Use canonical domain://path URIs from filesystem_domains/data_sources for VFS and DAG inputs. local:// is the coordinator namespace; compute target names are not filesystem domains. Use vfs mount_list for current canonical mount URIs and permission submounts, and compute_status for bindings. Never repeat uncertain work on another server."
         ))
     }
 }
@@ -145,14 +145,14 @@ impl DynToolFunction for EnvironmentTool {
 
 #[agentik_proc::tool(
     name = "compute_status",
-    description = "Read the operator's current compute target, immutable target revisions, independent data-source mounts and recorded run bindings. Compute selection does not remove data access. Use canonical domain://path URIs discovered with vfs mount_list; mount virtual_path values are compatibility metadata, and filesystem domains need not match compute target names. Agents cannot change the global target. Existing jobs must be observed at their original target_id and target_revision; never repeat an uncertain submission on another target."
+    description = "Read the operator's current compute target, target configurations, independent data-source mounts and recorded run bindings. Compute selection does not remove data access. Use canonical domain://path URIs discovered with vfs mount_list; mount virtual_path values are compatibility metadata, and filesystem domains need not match compute target names. Agents cannot change the global target. Existing jobs must be observed at their original target_id; never repeat an uncertain submission on another target."
 )]
 pub struct StatusInput {}
 struct StatusTool(Arc<ComputeRegistry>);
 
 #[agentik_proc::tool(
     name = "compute_readiness",
-    description = "Inspect requested plugin/node addresses, optional exact expected resident manifest/script/image identities, and OCI-to-SIF mappings on the selected immutable target. Returns blockers and next actions. CONFIGURATION_READY is not remote execution, data access, dependency or end-to-end acceptance. Use this before claiming a workflow is deployed; source_compatible and registered alone are insufficient. No jobs or mutations."
+    description = "Inspect requested plugin/node addresses, optional exact expected resident manifest/script/image identities, and OCI-to-SIF mappings on the selected target. Returns blockers and next actions. CONFIGURATION_READY is not remote execution, data access, dependency or end-to-end acceptance. Use this before claiming a workflow is deployed; source_compatible and registered alone are insufficient. No jobs or mutations."
 )]
 pub struct ReadinessInput {
     pub nodes: Vec<String>,
@@ -188,12 +188,11 @@ impl ToolFunction for ReadinessTool {
 
 #[agentik_proc::tool(
     name = "compute_image_evidence",
-    description = "Read the resident OCI to SIF mapping for an explicit compute target revision, even when its private images.json is outside VFS. Returns the exact requested/resolved reference, SIF path/SHA, target identity and profile hashes held by that runtime. Does not execute, hash remote SIF bytes, submit work, alter placement or certify dependencies."
+    description = "Read the resident OCI to SIF mapping for an explicit compute target, even when its private images.json is outside VFS. Returns the exact requested/resolved reference, SIF path/SHA, target identity and profile hashes held by that runtime. Does not execute, hash remote SIF bytes, submit work, alter placement or certify dependencies."
 )]
 #[serde(deny_unknown_fields)]
 pub struct ImageEvidenceInput {
     pub target_id: String,
-    pub target_revision: u64,
     pub reference: String,
 }
 struct ImageEvidenceTool(Arc<ComputeRegistry>);
@@ -203,7 +202,7 @@ impl ToolFunction for ImageEvidenceTool {
     async fn run(&self, input: ImageEvidenceInput) -> Result<ToolResult, ToolError> {
         let evidence = self
             .0
-            .image_evidence(&input.target_id, input.target_revision, &input.reference)
+            .image_evidence(&input.target_id, &input.reference)
             .map_err(error)?;
         Ok(ToolResult::success_json(
             serde_json::to_value(evidence).map_err(|e| error(e.to_string()))?,
@@ -249,19 +248,16 @@ pub(crate) fn hpc_registrations(
 ) -> Vec<ToolRegistration> {
     // Definitions need no live connection or state-directory creation.
     let state = registry.state();
-    let candidate = state.targets.iter().find_map(|t| {
-        registry
-            .target(&t.id, Some(t.revision))
-            .ok()
-            .and_then(|b| b.hpc.clone())
-    });
+    let candidate = state
+        .targets
+        .iter()
+        .find_map(|t| registry.target(&t.id).ok().and_then(|b| b.hpc.clone()));
     let client = candidate.unwrap_or_else(|| Arc::new(hpc_tools::HpcClient::definition_only()));
     let templates = hpc_tools::registrations(client);
     let mut tools = Vec::with_capacity(templates.len());
     for mut template in templates {
         template.definition.input_schema.properties.insert("target_id".into(), json!({"type":"string","description":"Operator compute target owning this account or existing job. Required when multiple remote targets exist. submit must match the global target."}));
-        template.definition.input_schema.properties.insert("target_revision".into(), json!({"type":"integer","minimum":1,"description":"Original immutable target revision for existing jobs. Obtain from compute_status or monitor records."}));
-        template.definition.description.push_str(" Target selection is operator-controlled. Supply target_id and target_revision to access old targets after switching. Data reads/transfers remain available when a target stops accepting computation.");
+        template.definition.description.push_str(" Target selection is operator-controlled. Supply target_id to access old targets after switching. Data reads/transfers remain available when a target stops accepting computation.");
         tools.push(ToolRegistration::new(
             template.definition.clone(),
             Arc::new(RoutedTool {
@@ -297,15 +293,6 @@ impl RoutedTool {
                 v.as_str()
                     .map(str::to_owned)
                     .ok_or_else(|| error("invalid target_id"))
-            })
-            .transpose()?;
-        let revision = object
-            .remove("target_revision")
-            .filter(|v| !v.is_null())
-            .map(|v| {
-                v.as_u64()
-                    .filter(|n| *n > 0)
-                    .ok_or_else(|| error("invalid target_revision"))
             })
             .transpose()?;
         let name = self.template.definition.name.as_str();
@@ -347,10 +334,8 @@ impl RoutedTool {
         let submit = name == "hpc_jobs" && matches!(action, "submit" | "requeue" | "release");
         let mut admission = None;
         let target = if submit {
-            let (selected, policy) = self.registry.selected().map_err(error)?;
-            if id.as_ref().is_some_and(|id| id != &selected.target.id)
-                || revision.is_some_and(|r| r != selected.target.revision)
-            {
+            let (selected, _) = self.registry.selected().map_err(error)?;
+            if id.as_ref().is_some_and(|id| id != &selected.target.id) {
                 return Err(error(
                     "new computation must use the global compute target; inspect the old submission before switching",
                 ));
@@ -387,31 +372,17 @@ impl RoutedTool {
                             r.state.as_str(),
                             "awaiting_submission" | "submission_uncertain"
                         )
-                        && (r.target_id.as_deref() != Some(selected.target.id.as_str())
-                            || r.target_revision != Some(selected.target.revision))
+                        && r.target_id.as_deref() != Some(selected.target.id.as_str())
                 }) {
                     return Err(error(
-                        "submission_key has an unresolved intent at another target revision; recover that original intent without cross-target resubmission",
+                        "submission_key has an unresolved intent at another target; recover that original intent without cross-target resubmission",
                     ));
                 }
             }
-            admission = Some(
-                self.registry
-                    .record_binding(&selected, &policy)
-                    .map_err(error)?,
-            );
+            admission = Some(self.registry.record_binding(&selected).map_err(error)?);
             selected
         } else if let Some(id) = id {
-            let state = self.registry.state();
-            if revision.is_none()
-                && name == "hpc_jobs"
-                && state.targets.iter().filter(|t| t.id == id).count() > 1
-            {
-                return Err(error(
-                    "existing job management requires its original target_revision",
-                ));
-            }
-            self.registry.target(&id, revision).map_err(error)?
+            self.registry.target(&id).map_err(error)?
         } else {
             let state = self.registry.state();
             let remote: Vec<_> = state
@@ -425,14 +396,10 @@ impl RoutedTool {
                         )
                 })
                 .collect();
-            if remote.len() != 1 || revision.is_some() {
-                return Err(error(
-                    "specify target_id and original target_revision; consult compute_status",
-                ));
+            if remote.len() != 1 {
+                return Err(error("specify target_id; consult compute_status"));
             }
-            self.registry
-                .target(&remote[0].id, Some(remote[0].revision))
-                .map_err(error)?
+            self.registry.target(&remote[0].id).map_err(error)?
         };
         let name = self.template.definition.name.as_str();
         // The remaining account tools are scheduler-bound. Filesystem duties
@@ -466,7 +433,7 @@ impl RoutedTool {
         let hub = self
             .registry
             .monitors
-            .target_hub(&target.monitor_key)
+            .target_hub(&target.target.id)
             .map_err(error)?;
         registrations.extend(hpc_tools::jobs::monitored_registrations(
             client.clone(),
@@ -490,7 +457,7 @@ impl RoutedTool {
                 .ok_or_else(|| error("target returned a non-object tool response"))?;
             value.insert(
                 "compute_target".into(),
-                json!({"target_id":target.target.id,"target_revision":target.target.revision}),
+                json!({"target_id":target.target.id}),
             );
             if let Some(binding) = admission {
                 value.insert(

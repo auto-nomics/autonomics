@@ -38,12 +38,11 @@ pub(crate) async fn readiness(
 #[serde(deny_unknown_fields)]
 pub(crate) struct ImageQuery {
     target_id: String,
-    target_revision: u64,
     reference: String,
 }
 #[utoipa::path(
     get, path="/api/v1/compute/image-evidence", tag="compute",
-    params(("target_id"=String,Query),("target_revision"=u64,Query),("reference"=String,Query)),
+    params(("target_id"=String,Query),("reference"=String,Query)),
     responses((status=200,body=Object),(status=409,description="Resident mapping unavailable"))
 )]
 pub(crate) async fn image_evidence(
@@ -51,7 +50,7 @@ pub(crate) async fn image_evidence(
     Query(query): Query<ImageQuery>,
 ) -> GatewayResult<Json<runtime::compute::ComputeImageEvidence>> {
     registry(&state)?
-        .image_evidence(&query.target_id, query.target_revision, &query.reference)
+        .image_evidence(&query.target_id, &query.reference)
         .map(Json)
         .map_err(|e| GatewayError::Status(StatusCode::CONFLICT, e))
 }
@@ -78,7 +77,10 @@ pub(crate) async fn repair_worker(
     State(gateway): State<GatewayState>,
     Json(request): Json<runtime::compute::RepairWorkerRequest>,
 ) -> GatewayResult<Json<ComputeRegistryState>> {
-    let result = registry(&gateway)?.repair_worker(request).await.map_err(compute_error)?;
+    let result = registry(&gateway)?
+        .repair_worker(request)
+        .await
+        .map_err(compute_error)?;
     changed(&gateway, &result);
     Ok(Json(result))
 }
@@ -138,7 +140,10 @@ pub(crate) async fn repair_worker_stream(
         let _ = updates.try_send(value);
     });
     tokio::spawn(async move {
-        let result = match registry.repair_worker_with_progress(request, progress).await {
+        let result = match registry
+            .repair_worker_with_progress(request, progress)
+            .await
+        {
             Ok(result) => {
                 changed(&state, &result);
                 serde_json::json!({"type":"result", "state":result})
@@ -166,19 +171,12 @@ pub(crate) async fn target(
         .map_err(compute_error)
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DeleteTarget {
-    expected_revision: u64,
-}
-
 pub(crate) async fn delete_target(
     State(gateway): State<GatewayState>,
     Path(id): Path<String>,
-    Json(request): Json<DeleteTarget>,
 ) -> GatewayResult<Json<ComputeRegistryState>> {
     registry(&gateway)?
-        .delete_target(&id, request.expected_revision)
+        .delete_target(&id)
         .map(|snapshot| {
             changed(&gateway, &snapshot);
             Json(snapshot)
@@ -227,17 +225,13 @@ pub(crate) async fn check(
 pub(super) fn changed(gateway: &GatewayState, state: &ComputeRegistryState) {
     gateway.hub.publish(crate::hub::EventKind::Notice(
         crate::proto::GatewayNotice::ComputeChanged {
-            registry_revision: state.revision,
             target_id: state.policy.target_id.clone(),
-            target_revision: state.policy.target_revision,
         },
     ));
 }
 
 fn compute_error(message: String) -> GatewayError {
-    if message.starts_with("stale compute revision") {
-        GatewayError::Status(StatusCode::CONFLICT, message)
-    } else if message.starts_with("compute persistence outcome uncertain") {
+    if message.starts_with("compute persistence outcome uncertain") {
         GatewayError::Status(StatusCode::SERVICE_UNAVAILABLE, message)
     } else {
         GatewayError::Message(message)

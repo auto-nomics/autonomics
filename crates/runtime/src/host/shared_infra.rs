@@ -208,7 +208,7 @@ impl SharedInfra {
     pub async fn open(config: &RuntimeConfig) -> Result<Self> {
         tracing::info!("SharedInfra::open: starting");
 
-        // A selected ordinary compute target revision controls placement for
+        // A selected ordinary compute target controls placement for
         // new runs once a catalog exists; environment changes cannot
         // retarget historical work.
         let resolved_config = crate::compute::startup_config(config).map_err(Error::Other)?;

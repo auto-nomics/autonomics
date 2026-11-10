@@ -121,6 +121,8 @@ Every plugin runs against an **environment**: a host-approved, digest-pinned bas
 
 Compute nodes use the standalone `autonomics-worker` binary. Build it separately with `cargo build --release -p autonomics-worker` and pass its absolute path to `compute enroll --deploy`. It shares the analysis engine with the coordinator; literature and writing nodes stay on the coordinator. See the [worker deployment guide](docs/engineering/analysis-worker.md) for version pins and installation details.
 
+Compute targets support `local`, `ssh`, and `slurm`, with one current configuration per `id`. Saving the selected target updates subsequent DAG runs while active runs keep their original executor. Configuration APIs require no revision counters; older registries migrate on startup.
+
 Two mechanisms make the system trustworthy for biomedical work:
 
 - **DAG-based dispatch.** A research request is parsed by the Researcher, planned as a typed DAG of JSON-Schema-validated nodes, and assembled through one registry. The same DAG can mix fast in-process DataFusion / Arrow transforms with heavy external containers; the scheduler dispatches asynchronously through a pluggable executor contract (`local`, `process`, and a coordinator-side `remote` executor with an artifact store, so batch schedulers can slot in later) and retains outputs for snapshot, diff, and branch operations.

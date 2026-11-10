@@ -373,7 +373,9 @@ impl App {
                 panel.loading = false;
                 match result {
                     Ok(status) => {
-                        if panel.status.as_deref() == Some("Reloading gateway snapshot (no connection test)…") {
+                        if panel.status.as_deref()
+                            == Some("Reloading gateway snapshot (no connection test)…")
+                        {
                             panel.status = None;
                         }
                         panel.load_dashboard(&status);
@@ -417,7 +419,6 @@ impl App {
                                     .unwrap_or_default();
                                 rows.push(crate::widgets::hpc_panel_widget::HpcTargetRow {
                                     id: target["id"].as_str().unwrap_or("?").to_string(),
-                                    revision: target["revision"].as_u64().unwrap_or_default(),
                                     selected: target["id"].as_str() == Some(selected.as_str()),
                                     enabled: target["enabled"].as_bool().unwrap_or(false),
                                     backend: backend.to_string(),
@@ -462,14 +463,20 @@ impl App {
                 self.state.hpc_panel.loading = false;
                 match result {
                     Ok(reply) => {
-                        self.state.hpc_panel.push_repair_event("[ready] 连接恢复完成".into());
+                        self.state
+                            .hpc_panel
+                            .push_repair_event("[ready] 连接恢复完成".into());
                         self.apply_hpc_save_reply(reply);
-                        self.state.hpc_panel.status = Some("Connection recovery complete · Esc returns to details".into());
+                        self.state.hpc_panel.status =
+                            Some("Connection recovery complete · Esc returns to details".into());
                     }
                     Err(error) => {
-                        self.state.hpc_panel.push_repair_event(format!("[error] {error}"));
+                        self.state
+                            .hpc_panel
+                            .push_repair_event(format!("[error] {error}"));
                         self.state.hpc_panel.dashboard_pending_id = None;
-                        self.state.hpc_panel.status = Some(format!("Connection recovery failed: {error}"));
+                        self.state.hpc_panel.status =
+                            Some(format!("Connection recovery failed: {error}"));
                     }
                 }
                 self.dirty = true;

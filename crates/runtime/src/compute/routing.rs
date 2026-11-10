@@ -84,7 +84,7 @@ impl TaskExecutor for BoundExecutor {
         // not to have been submitted by this call.
         Err(DagError::Schedule(
             serde_json::json!({"state":"WORKFLOW_BLOCKED",
-            "target_id":self.binding.target_id,"target_revision":self.binding.target_revision,
+            "target_id":self.binding.target_id,
             "blockers":blockers,"blocked_nodes_submitted":false})
             .to_string(),
         ))
@@ -174,7 +174,7 @@ impl container_runtime::ImageBuildConnection for ImageBuilder {
         &self,
         request: container_runtime::ImageBuildRequest,
     ) -> Result<container_runtime::ImageBuildResult, ContainerRuntimeError> {
-        let (target, policy) = self
+        let (target, _) = self
             .registry
             .selected()
             .map_err(ContainerRuntimeError::Invalid)?;
@@ -182,7 +182,7 @@ impl container_runtime::ImageBuildConnection for ImageBuilder {
             return Err(ContainerRuntimeError::Invalid("image preparation is unavailable on the selected remote target; prepare and admit its environment separately".into()));
         }
         self.registry
-            .record_binding(&target, &policy)
+            .record_binding(&target)
             .map_err(ContainerRuntimeError::Invalid)?;
         self.local.build(request).await
     }

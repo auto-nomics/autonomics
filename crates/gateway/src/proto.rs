@@ -173,11 +173,7 @@ pub enum GatewayNotice {
     /// source was saved or the selection policy moved. Live agents receive
     /// the refreshed policy through the compute context provider; runs in
     /// flight keep their original pinned target.
-    ComputeChanged {
-        registry_revision: u64,
-        target_id: String,
-        target_revision: u64,
-    },
+    ComputeChanged { target_id: String },
     /// The daemon-wide default model slot changed (set-default, ChatGPT
     /// login/refresh rebuilding an openai model). `spec` is the new
     /// `provider:model` string; `reason` names the trigger.

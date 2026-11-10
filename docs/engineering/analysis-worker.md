@@ -29,11 +29,17 @@ cargo build --release -p autonomics-worker
 
 GUI 的“安装包路径”也填写 gateway 主机上的 `target/release/autonomics-worker` 绝对路径。远端 Python 继续用于 SSH 文件传输辅助程序；Rust worker 本身不需要 Python。容器分析按原配置使用 Podman 或 Apptainer，镜像和数据包独立准备。
 
-更新主程序后需重启 gateway，使安装握手生效。gateway 与 worker 的 `source_revision` 必须一致；已有 ComputeTarget 的可执行文件哈希仍然固定，替换远端文件后需重新注册目标，生成新的配置修订。保留历史任务对应的旧路径时，应将新 worker 安装到另一条版本化路径。
+更新主程序后需重启 gateway，使安装握手生效。gateway 与 worker 的 `source_revision` 必须一致；已有 ComputeTarget 的可执行文件哈希仍然固定，替换远端文件后需更新目标配置。保留历史任务对应的旧路径时，应将新 worker 安装到另一条版本化路径。
 
-TUI 的 Compute Dashboard 中，选择 Slurm 目标后按 `w` 可直接恢复连接。系统使用已保存的 SSH、Python、worker 和站点配置重新连接并校验；远端 worker 已匹配时直接完成。需要更新时，gateway 自动读取与自身可执行文件同目录的 `autonomics-worker`，验证其身份后部署到新的远端路径，生成目标新修订并恢复原有选择。发布和安装 gateway 时须将同一源码构建的独立 worker 一起安装到该目录；修复过程无需填写路径或重新配置目标。
+TUI 的 Compute Dashboard 中，选择 Slurm 目标后按 `w` 可直接恢复连接。系统使用已保存的 SSH、Python、worker 和站点配置重新连接并校验；远端 worker 已匹配时直接完成。需要更新时，gateway 自动读取与自身可执行文件同目录的 `autonomics-worker`，验证其身份后部署到新的远端路径，更新该目标的当前配置；正在运行的 DAG 继续使用启动时的执行器。发布和安装 gateway 时须将同一源码构建的独立 worker 一起安装到该目录；修复过程无需填写路径或重新配置目标。
 
 恢复期间 Dashboard 右侧显示实时事件，包括 SSH 认证、stdout/stderr、worker 身份检查、上传进度及目标激活结果。显示保留最近 200 条事件，长行自动换行并跟随最新输出；失败信息保留在事件视图中。完成后按 Esc 返回目标详情。进度连接中断时不会自动重放修复请求，应先刷新检查目标状态。
+
+## 计算目标配置
+
+计算目标按 `id` 保存一份当前配置，不再区分 target、policy 或 registry revision。保存同一 `id` 会替换配置；如果该目标已经选中，之后启动的 DAG 自动使用更新后的配置，无需再次选择。现有 DAG 保持启动时绑定的执行器和环境。API 的保存、选择、删除、注册与修复请求均不再传 `expected_revision` 或 `target_revision`。
+
+`compute/registry.json` 使用格式版本 2。加载旧格式时，当前选中的目标保留其原先激活的配置，其余目标保留各自最后保存的配置，之后每个 `id` 只有一条记录。原作业记录迁入按目标 `id` 命名的目录；原执行证据目录继续以只读方式提供访问。已有作业所属的 SSH 连接不能改成另一账户，另一个账户应使用新的目标 `id`。worker 源码版本、程序 SHA256、环境与产物哈希仍用于兼容性校验和溯源。
 
 ## 执行边界
 

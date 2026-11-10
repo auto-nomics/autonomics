@@ -647,8 +647,12 @@ impl GatewayClient {
         self.get("/compute").await
     }
 
-    pub async fn repair_compute_worker(&self, request: &serde_json::Value) -> Result<runtime::compute::ComputeRegistryState> {
-        self.repair_compute_worker_with_progress(request, |_, _| {}).await
+    pub async fn repair_compute_worker(
+        &self,
+        request: &serde_json::Value,
+    ) -> Result<runtime::compute::ComputeRegistryState> {
+        self.repair_compute_worker_with_progress(request, |_, _| {})
+            .await
     }
 
     pub async fn repair_compute_worker_with_progress(
@@ -656,7 +660,8 @@ impl GatewayClient {
         request: &serde_json::Value,
         progress: impl FnMut(&str, &str),
     ) -> Result<runtime::compute::ComputeRegistryState> {
-        self.compute_operation_with_progress("/compute/repair-worker/stream", request, progress).await
+        self.compute_operation_with_progress("/compute/repair-worker/stream", request, progress)
+            .await
     }
 
     /// One-shot composite enrollment from minimal operator input: probes
@@ -675,7 +680,8 @@ impl GatewayClient {
         request: &runtime::compute::EnrollRequest,
         progress: impl FnMut(&str, &str),
     ) -> Result<runtime::compute::ComputeRegistryState> {
-        self.compute_operation_with_progress("/compute/enroll/stream", request, progress).await
+        self.compute_operation_with_progress("/compute/enroll/stream", request, progress)
+            .await
     }
 
     async fn compute_operation_with_progress(
@@ -720,7 +726,11 @@ impl GatewayClient {
                             .into(),
                     });
                 }
-                _ => return Err(ClientError::Protocol("unknown compute operation event".into())),
+                _ => {
+                    return Err(ClientError::Protocol(
+                        "unknown compute operation event".into(),
+                    ));
+                }
             }
         }
         Err(ClientError::Transport(
@@ -742,18 +752,17 @@ impl GatewayClient {
     pub async fn compute_image_evidence(
         &self,
         target_id: &str,
-        target_revision: u64,
         reference: &str,
     ) -> Result<runtime::compute::ComputeImageEvidence> {
         self.get(&format!(
-            "/compute/image-evidence?target_id={}&target_revision={target_revision}&reference={}",
+            "/compute/image-evidence?target_id={}&reference={}",
             encode_segment(target_id),
             encode_segment(reference)
         ))
         .await
     }
 
-    /// Save a compute target revision (optimistic `expected_revision`).
+    /// Save the current compute target configuration.
     pub async fn save_compute_target(
         &self,
         request: &runtime::compute::SaveTarget,
@@ -773,17 +782,16 @@ impl GatewayClient {
     pub async fn delete_compute_target(
         &self,
         id: &str,
-        revision: u64,
     ) -> Result<runtime::compute::ComputeRegistryState> {
         self.request(
             reqwest::Method::DELETE,
             &format!("/compute/targets/{}", encode_segment(id)),
-            Some(&serde_json::json!({"expected_revision":revision})),
+            None::<&serde_json::Value>,
         )
         .await
     }
 
-    /// Select a target revision for subsequent runs.
+    /// Select a target for subsequent runs.
     pub async fn select_compute_target(
         &self,
         request: &runtime::compute::SelectTarget,
@@ -792,17 +800,13 @@ impl GatewayClient {
             .await
     }
 
-    /// Select a target using its registry revision and id.
+    /// Select a target by id.
     pub async fn select_compute_target_by_id(
         &self,
-        expected_revision: u64,
         target_id: String,
     ) -> Result<runtime::compute::ComputeRegistryState> {
-        self.select_compute_target(&runtime::compute::SelectTarget {
-            expected_revision,
-            target_id,
-        })
-        .await
+        self.select_compute_target(&runtime::compute::SelectTarget { target_id })
+            .await
     }
 
     /// Enroll a data source mount.
@@ -1102,7 +1106,7 @@ mod tests {
         });
         let client = GatewayClient::new(&addr.to_string(), None).unwrap();
         let request = serde_json::from_value(serde_json::json!({
-            "expected_revision":0,"id":"test","login_alias":"test","worker_executable":"/bin/worker"
+            "id":"test","login_alias":"test","worker_executable":"/bin/worker"
         }))
         .unwrap();
         let mut stages = Vec::new();
@@ -1160,7 +1164,7 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         let client = GatewayClient::new(&addr.to_string(), None).unwrap();
-        let request = serde_json::json!({"expected_revision":0,"target_id":"test"});
+        let request = serde_json::json!({"target_id":"test"});
         let mut stages = Vec::new();
         let result = tokio::time::timeout(
             Duration::from_secs(5),

@@ -74,14 +74,14 @@ impl App {
                 self.state.hpc_panel.status = Some("Saving…".into());
                 self.save_hpc_config(profile);
             }
-            Some(HpcPanelCommand::SelectTarget(id, revision)) => {
+            Some(HpcPanelCommand::SelectTarget(id)) => {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.status = Some("Selecting target…".into());
                 let client = self.client.clone();
                 let event_tx = self.app_event_tx.clone();
                 self.spawn_client_task("compute_select", move || async move {
                     let result = client
-                        .select_compute_target_by_id(revision, id)
+                        .select_compute_target_by_id(id)
                         .await
                         .map_err(|error| error.to_string())
                         .and_then(|state| {
@@ -99,13 +99,13 @@ impl App {
                 let event_tx = self.app_event_tx.clone();
                 self.spawn_client_task("compute_save", move || async move {
                     let result = async {
-                        let saved = client.save_compute_target_json(&request).await.map_err(|error| error.to_string())?;
-                        let id = request["id"].as_str().unwrap_or_default();
-                        let state = if saved.policy.target_id == id {
-                            client.select_compute_target_by_id(saved.revision, id.to_string()).await.map_err(|error| format!("Target saved, but activating the new revision failed: {error}"))?
-                        } else { saved };
+                        let state = client
+                            .save_compute_target_json(&request)
+                            .await
+                            .map_err(|error| error.to_string())?;
                         serde_json::to_value(state).map_err(|error| error.to_string())
-                    }.await;
+                    }
+                    .await;
                     event_tx.send(crate::app_event::AppEvent::HpcProfileSaved(result));
                 });
             }
@@ -113,28 +113,37 @@ impl App {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.repair_show_events = true;
                 self.state.hpc_panel.repair_events.clear();
-                self.state.hpc_panel.push_repair_event("[start] 正在恢复连接…".into());
-                self.state.hpc_panel.dashboard_pending_id = request["target_id"].as_str().map(str::to_owned);
+                self.state
+                    .hpc_panel
+                    .push_repair_event("[start] 正在恢复连接…".into());
+                self.state.hpc_panel.dashboard_pending_id =
+                    request["target_id"].as_str().map(str::to_owned);
                 self.state.hpc_panel.status = Some("Reconnecting and repairing worker automatically; this may take several minutes…".into());
                 let client = self.client.clone();
                 let event_tx = self.app_event_tx.clone();
                 self.spawn_client_task("compute_repair_worker", move || async move {
-                    let result = client.repair_compute_worker_with_progress(&request, |stage, message| {
-                        event_tx.send(crate::app_event::AppEvent::HpcRepairProgress(format!("[{stage}] {message}")));
-                    }).await
+                    let result = client
+                        .repair_compute_worker_with_progress(&request, |stage, message| {
+                            event_tx.send(crate::app_event::AppEvent::HpcRepairProgress(format!(
+                                "[{stage}] {message}"
+                            )));
+                        })
+                        .await
                         .map_err(|error| error.to_string())
-                        .and_then(|state| serde_json::to_value(state).map_err(|error| error.to_string()));
+                        .and_then(|state| {
+                            serde_json::to_value(state).map_err(|error| error.to_string())
+                        });
                     event_tx.send(crate::app_event::AppEvent::HpcRepairFinished(result));
                 });
             }
-            Some(HpcPanelCommand::DeleteTarget(id, revision)) => {
+            Some(HpcPanelCommand::DeleteTarget(id)) => {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.status = Some("Deleting target…".into());
                 let client = self.client.clone();
                 let event_tx = self.app_event_tx.clone();
                 self.spawn_client_task("compute_delete", move || async move {
                     let result = client
-                        .delete_compute_target(&id, revision)
+                        .delete_compute_target(&id)
                         .await
                         .map_err(|error| error.to_string())
                         .and_then(|state| {
@@ -144,7 +153,8 @@ impl App {
                 });
             }
             Some(HpcPanelCommand::RefreshSnapshot) => {
-                self.state.hpc_panel.status = Some("Reloading gateway snapshot (no connection test)…".into());
+                self.state.hpc_panel.status =
+                    Some("Reloading gateway snapshot (no connection test)…".into());
                 self.fetch_hpc_targets();
                 self.fetch_hpc_jobs();
             }
@@ -157,7 +167,7 @@ impl App {
     pub(super) fn apply_hpc_save_reply(&mut self, reply: serde_json::Value) {
         self.state.hpc_panel.status = Some("Compute target updated.".into());
         let _ = reply;
-        // Reload the selected target and its current registry revision.
+        // Reload the selected target and its current configuration.
         self.fetch_hpc_targets();
         self.dirty = true;
     }

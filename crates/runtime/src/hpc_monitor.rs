@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 pub use hpc_tools::monitor::{MonitorView, Owner};
 
-/// All target revisions remain observed after changing the default target.
+/// All targets remain observed after changing the default target.
 pub struct MonitorHub {
     hubs:
         std::sync::RwLock<std::collections::BTreeMap<String, Arc<hpc_tools::monitor::MonitorHub>>>,
@@ -31,7 +31,7 @@ impl MonitorHub {
     }
     pub fn open(client: Arc<hpc_tools::HpcClient>, cadence: Duration) -> Result<Arc<Self>, String> {
         let hub = Self::empty();
-        hub.add("legacy-slurm-r1", client, cadence)?;
+        hub.add("legacy-slurm", client, cadence)?;
         Ok(hub)
     }
     pub fn add(
@@ -41,8 +41,12 @@ impl MonitorHub {
         cadence: Duration,
     ) -> Result<(), String> {
         let mut hubs = self.hubs.write().map_err(|_| "monitor registry poisoned")?;
-        if hubs.contains_key(key) {
-            return Ok(());
+        if let Some(existing) = hubs.get(key) {
+            // Retain the client that owns these job intents. Empty hubs can be
+            // replaced when an operator changes the target's connection.
+            if !existing.records()?.is_empty() {
+                return Ok(());
+            }
         }
         let hub = hpc_tools::monitor::MonitorHub::open(client, cadence)?;
         let mut receiver = hub.subscribe();
@@ -112,17 +116,14 @@ impl MonitorHub {
         owner: Owner,
         plan: serde_json::Value,
     ) -> Result<MonitorRecord, String> {
-        self.target_hub("legacy-slurm-r1")?
+        self.target_hub("legacy-slurm")?
             .watch_existing(cluster, key, owner, plan)
             .await
     }
 }
 
 fn annotate_target(key: &str, view: &mut MonitorView) {
-    if let Some((id, revision)) = key.rsplit_once("-r") {
-        view.target_id = Some(id.into());
-        view.target_revision = revision.parse().ok();
-    }
+    view.target_id = Some(key.into());
 }
 
 struct TargetSink {
@@ -145,8 +146,7 @@ impl CompletionSink for TargetSink {
     ) -> Result<CompletionDelivery, String> {
         let mut view = record.view();
         annotate_target(&self.key, &mut view);
-        let binding =
-            serde_json::json!({"target_id":view.target_id,"target_revision":view.target_revision});
+        let binding = serde_json::json!({"target_id":view.target_id});
         self.inner
             .deliver(
                 record,

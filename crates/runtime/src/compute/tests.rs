@@ -68,7 +68,7 @@ fn save_local(registry: &ComputeRegistry, id: &str, enabled: bool) {
     registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: registry.state().revision,
+
             id: id.into(),
             name: id.into(),
             enabled,
@@ -79,36 +79,24 @@ fn save_local(registry: &ComputeRegistry, id: &str, enabled: bool) {
 fn select(registry: &ComputeRegistry, id: &str) {
     registry
         .select(SelectTarget {
-            expected_revision: registry.state().revision,
             target_id: id.into(),
         })
         .unwrap();
 }
 
 #[tokio::test]
-async fn deleting_target_retains_bound_revision_and_prevents_reuse() {
+async fn deleting_target_preserves_bound_executor_and_reserves_identity() {
     let f = fixture();
     save_local(&f.registry, "other", true);
     select(&f.registry, "other");
-    let (_, binding) = f.registry.bind().unwrap();
-    assert!(
-        f.registry
-            .delete_target("other", f.registry.state().revision)
-            .is_err()
-    );
+    let (bound, binding) = f.registry.bind().unwrap();
+    assert!(f.registry.delete_target("other").is_err());
     select(&f.registry, "local");
-    let before = f.registry.state().revision;
-    assert!(f.registry.delete_target("other", before - 1).is_err());
-    f.registry.delete_target("other", before).unwrap();
-    assert!(
-        f.registry
-            .target(&binding.target_id, Some(binding.target_revision))
-            .is_ok()
-    );
+    f.registry.delete_target("other").unwrap();
+    assert_eq!(bound.target.id, binding.target_id);
     assert!(
         f.registry
             .select(SelectTarget {
-                expected_revision: f.registry.state().revision,
                 target_id: "other".into()
             })
             .is_err()
@@ -116,7 +104,6 @@ async fn deleting_target_retains_bound_revision_and_prevents_reuse() {
     assert!(
         f.registry
             .save_target(SaveTarget {
-                expected_revision: f.registry.state().revision,
                 id: "other".into(),
                 name: "reused".into(),
                 enabled: true,
@@ -135,12 +122,8 @@ async fn deleting_target_retains_bound_revision_and_prevents_reuse() {
     )
     .unwrap();
     assert!(reopened.state().deleted_target_ids.contains("other"));
-    assert!(
-        reopened
-            .target("other", Some(binding.target_revision))
-            .is_ok()
-    );
 }
+
 fn remote_settings(root: &Path, host: &str) -> SlurmConfig {
     let profile = root.join(format!("{host}-worker.json"));
     write_new(&profile,&serde_json::json!({"worker":{"executable":"/cluster/autonomics","executable_sha256":"a".repeat(64),"expected_source_revision":dag_core::source_revision()},"local_kinds":["channel","dynamic_fanout"]})).unwrap();
@@ -159,15 +142,15 @@ fn remote_settings(root: &Path, host: &str) -> SlurmConfig {
 }
 
 #[tokio::test]
-async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profiles() {
+async fn execution_evidence_is_visible_to_existing_clients_without_exposing_profiles() {
     let f = fixture();
     let reader = f.registry.storage.clone();
     let settings = remote_settings(&f.config.state_dir, "evidence");
-    for revision in 1..=2 {
+    for _ in 1..=2 {
         f.registry
             .save_target(SaveTarget {
                 data_domains: Vec::new(),
-                expected_revision: f.registry.state().revision,
+
                 id: "evidence".into(),
                 name: "evidence".into(),
                 enabled: true,
@@ -176,11 +159,7 @@ async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profi
                 },
             })
             .unwrap();
-        let root = f
-            .registry
-            .root
-            .join("targets")
-            .join(key("evidence", revision));
+        let root = f.registry.root.join("targets").join("evidence");
         for directory in ["tasks", "artifacts"] {
             let file = root.join(directory).join("attempt/task.json");
             fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -211,7 +190,7 @@ async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profi
     .unwrap();
     let historical = reopened
         .root
-        .join("targets/evidence-r1/artifacts/attempt/task.json");
+        .join("targets/evidence/artifacts/attempt/task.json");
     assert_eq!(
         storage
             .read_range(&historical.to_string_lossy(), 0..18)
@@ -223,7 +202,7 @@ async fn revision_evidence_is_visible_to_existing_clients_without_exposing_profi
 }
 
 #[tokio::test]
-async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
+async fn image_evidence_tracks_resident_configuration_not_mutable_catalog_files() {
     let f = fixture();
     let reference = format!("example/toy@sha256:{}", "a".repeat(64));
     let inventory = f.config.state_dir.join("toy-images.json");
@@ -238,7 +217,7 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
         f.registry
             .save_target(SaveTarget {
                 data_domains: Vec::new(),
-                expected_revision: f.registry.state().revision,
+
                 id: "mapping".into(),
                 name: "mapping".into(),
                 enabled: true,
@@ -247,7 +226,7 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
             .unwrap()
     };
     save(settings.clone());
-    let first = f.registry.image_evidence("mapping", 1, &reference).unwrap();
+    let first = f.registry.image_evidence("mapping", &reference).unwrap();
     assert_eq!(first.resolution.sif_sha256, "b".repeat(64));
     assert!(!first.sif_bytes_verified && !first.node_execution_performed);
     assert!(first.capsule_sha256.contains_key("images.json"));
@@ -257,13 +236,13 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
     )
     .unwrap();
     save(settings);
-    let second = f.registry.image_evidence("mapping", 2, &reference).unwrap();
+    let second = f.registry.image_evidence("mapping", &reference).unwrap();
     assert_eq!(second.resolution.sif_sha256, "c".repeat(64));
     assert_ne!(first.target_sha256, second.target_sha256);
     assert_ne!(first.capsule_sha256, second.capsule_sha256);
     select(&f.registry, "mapping");
     // Even corrupting the on-disk frozen profile cannot rewrite resident evidence.
-    let old = f.registry.target("mapping", Some(1)).unwrap();
+    let old = f.registry.target("mapping").unwrap();
     let ComputeBackend::Slurm { settings } = &old.target.backend else {
         unreachable!()
     };
@@ -272,23 +251,18 @@ async fn image_evidence_tracks_resident_revisions_not_mutable_catalog_files() {
         b"invalid replacement",
     )
     .unwrap();
-    let retained = f.registry.image_evidence("mapping", 1, &reference).unwrap();
-    assert_eq!(retained.resolution, first.resolution);
-    assert_eq!(retained.target_sha256, first.target_sha256);
+    let retained = f.registry.image_evidence("mapping", &reference).unwrap();
+    assert_eq!(retained.resolution, second.resolution);
+    assert_eq!(retained.target_sha256, second.target_sha256);
     assert!(
         f.registry
-            .image_evidence("mapping", 99, &reference)
+            .image_evidence("mapping", "example/toy:latest")
             .is_err()
     );
+    assert!(f.registry.image_evidence("local", &reference).is_err());
     assert!(
         f.registry
-            .image_evidence("mapping", 2, "example/toy:latest")
-            .is_err()
-    );
-    assert!(f.registry.image_evidence("local", 1, &reference).is_err());
-    assert!(
-        f.registry
-            .image_evidence("mapping", 2, &format!("other@sha256:{}", "d".repeat(64)))
+            .image_evidence("mapping", &format!("other@sha256:{}", "d".repeat(64)))
             .is_err()
     );
     assert_eq!(f.registry.status().unwrap().runs.len(), 0);
@@ -330,7 +304,7 @@ async fn agent_context_and_environment_tools_follow_live_operator_policy() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "remote".into(),
             name: "remote".into(),
             enabled: true,
@@ -361,40 +335,28 @@ async fn agent_context_and_environment_tools_follow_live_operator_policy() {
 }
 
 #[tokio::test]
-async fn durable_policy_uses_compare_and_swap_and_keeps_old_revisions() {
+async fn saving_replaces_target_and_bound_runs_keep_their_configuration() {
     let f = fixture();
-    let (old, old_binding) = f.registry.bind().unwrap();
     save_local(&f.registry, "second", true);
-    assert!(
-        f.registry
-            .select(SelectTarget {
-                expected_revision: 1,
-                target_id: "second".into()
-            })
-            .is_err()
-    );
     select(&f.registry, "second");
-    assert_eq!(old.target.id, "local");
-    assert_eq!(old_binding.target_id, "local");
-    assert_eq!(f.registry.bind().unwrap().1.target_id, "second");
+    let (old, binding) = f.registry.bind().unwrap();
     save_local(&f.registry, "second", false);
+    assert!(old.target.enabled);
+    assert_eq!(binding.target_id, "second");
+    assert!(!f.registry.target("second").unwrap().target.enabled);
     assert!(f.registry.bind().is_err());
-    assert!(
-        f.registry
-            .select(SelectTarget {
-                expected_revision: f.registry.state().revision,
-                target_id: "second".into()
-            })
-            .is_err()
-    );
     assert_eq!(
         f.registry
-            .target("second", Some(1))
-            .unwrap()
-            .target
-            .revision,
+            .state()
+            .targets
+            .iter()
+            .filter(|t| t.id == "second")
+            .count(),
         1
     );
+    save_local(&f.registry, "second", true);
+    let current = f.registry.bind().unwrap().0;
+    assert!(!Arc::ptr_eq(&old, &current));
     let (vfs, storage) = mounts(&f.config);
     let restored = ComputeRegistry::open(
         &f.config,
@@ -405,8 +367,17 @@ async fn durable_policy_uses_compare_and_swap_and_keeps_old_revisions() {
     )
     .unwrap();
     assert_eq!(restored.state().policy.target_id, "second");
-    assert!(restored.bind().is_err());
-    assert_eq!(restored.status().unwrap().runs.len(), 2);
+    assert!(restored.bind().is_ok());
+    let json = serde_json::to_value(restored.state()).unwrap();
+    assert!(json.get("revision").is_none());
+    assert_eq!(json["policy"], serde_json::json!({"target_id":"second"}));
+    assert!(
+        json["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|target| target.get("revision").is_none())
+    );
 }
 
 #[tokio::test]
@@ -432,7 +403,6 @@ async fn sources_survive_switches_and_restart_and_reach_existing_agent_views() {
     };
     f.registry
         .add_source(SaveDataSource {
-            expected_revision: 1,
             source: source.clone(),
         })
         .await
@@ -459,10 +429,7 @@ async fn sources_survive_switches_and_restart_and_reach_existing_agent_views() {
     assert!(old_agent.check_writable("/data/sjtu/input.txt").is_err());
     assert!(
         f.registry
-            .add_source(SaveDataSource {
-                expected_revision: f.registry.state().revision,
-                source
-            })
+            .add_source(SaveDataSource { source })
             .await
             .is_err()
     );
@@ -501,7 +468,6 @@ async fn new_source_cannot_hide_root_mount_files_directories_or_symlinks() {
         let error = f
             .registry
             .add_source(SaveDataSource {
-                expected_revision: 1,
                 source: DataSource {
                     domain: None,
                     id: id.into(),
@@ -517,7 +483,7 @@ async fn new_source_cannot_hide_root_mount_files_directories_or_symlinks() {
             .await
             .unwrap_err();
         assert!(error.contains("shadow existing VFS data"), "{error}");
-        assert_eq!(f.registry.state().revision, 1);
+        assert_eq!(f.registry.state().targets.len(), 1);
         assert!(f.registry.state().data_sources.is_empty());
     }
     assert_eq!(
@@ -588,14 +554,14 @@ async fn target_profiles_are_frozen_and_tampering_is_rejected_on_restart() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: 1,
+
             id: "remote".into(),
             name: "remote".into(),
             enabled: true,
             backend: ComputeBackend::Slurm { settings },
         })
         .unwrap();
-    let target = f.registry.target("remote", Some(1)).unwrap();
+    let target = f.registry.target("remote").unwrap();
     let ComputeBackend::Slurm { settings } = &target.target.backend else {
         panic!()
     };
@@ -684,7 +650,7 @@ fn install_capture(
     calls: Arc<Mutex<Vec<String>>>,
     switch: bool,
 ) {
-    let old = registry.target(id, Some(1)).unwrap();
+    let old = registry.target(id).unwrap();
     let target = Arc::new(BuiltTarget {
         typed_worker_revision: None,
         network_policy_sha256: None,
@@ -698,13 +664,12 @@ fn install_capture(
         }),
         hpc: None,
         ssh_probe: None,
-        monitor_key: old.monitor_key.clone(),
     });
     registry
         .built
         .write()
         .unwrap()
-        .insert(target.monitor_key.clone(), target);
+        .insert(target.target.id.clone(), target);
 }
 #[tokio::test]
 async fn scheduler_binds_once_and_existing_agent_graphs_follow_next_run_policy() {
@@ -763,7 +728,7 @@ async fn invalid_sources_and_failed_persistence_do_not_publish_configuration() {
             f.registry
                 .save_target(SaveTarget {
                     data_domains: Vec::new(),
-                    expected_revision: 1,
+
                     id: id.into(),
                     name: "invalid".into(),
                     enabled: true,
@@ -779,17 +744,16 @@ async fn invalid_sources_and_failed_persistence_do_not_publish_configuration() {
     assert!(
         f.registry
             .select(SelectTarget {
-                expected_revision: 1,
                 target_id: "local".into()
             })
             .is_err()
     );
-    assert_eq!(f.registry.state().revision, 1);
+    assert_eq!(f.registry.state().targets.len(), 1);
     assert!(f.registry.bind().is_err());
 }
 
 #[tokio::test]
-async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
+async fn all_target_monitors_survive_selection_and_disabled_target_configurations() {
     use hpc_tools::monitor::{MonitorRecord, Owner};
     let f = fixture();
     for (id, host) in [("a", "server-a"), ("b", "server-b")] {
@@ -797,14 +761,14 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
         f.registry
             .save_target(SaveTarget {
                 data_domains: Vec::new(),
-                expected_revision: f.registry.state().revision,
+
                 id: id.into(),
                 name: id.into(),
                 enabled: true,
                 backend: ComputeBackend::Slurm { settings },
             })
             .unwrap();
-        let target = f.registry.target(id, Some(1)).unwrap();
+        let target = f.registry.target(id).unwrap();
         let nonce = "a".repeat(32);
         let record = MonitorRecord {
             version: 1,
@@ -847,24 +811,35 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
         .unwrap();
     }
     select(&f.registry, "b");
-    let old = f.registry.target("a", Some(1)).unwrap();
+    let old = f.registry.target("a").unwrap();
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "a".into(),
             name: "disabled a".into(),
             enabled: false,
             backend: old.target.backend.clone(),
         })
         .unwrap();
+    let other_connection = remote_settings(&f.config.state_dir, "other-account");
+    let error = f
+        .registry
+        .save_target(SaveTarget {
+            id: "a".into(),
+            name: "repointed".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm {
+                settings: other_connection,
+            },
+            data_domains: vec![],
+        })
+        .unwrap_err();
+    assert!(error.contains("retained jobs"));
     let jobs = f.registry.monitors.views(None).unwrap();
     assert_eq!(jobs.len(), 2);
     assert!(jobs.iter().all(|j| j.completion_pending()));
-    assert!(
-        jobs.iter()
-            .any(|j| j.target_id.as_deref() == Some("a") && j.target_revision == Some(1))
-    );
+    assert!(jobs.iter().any(|j| j.target_id.as_deref() == Some("a")));
     assert!(crate::hpc_monitor::owner_has_pending_jobs(
         &jobs,
         uuid::Uuid::nil(),
@@ -876,7 +851,7 @@ async fn all_target_monitors_survive_selection_and_disabled_target_revisions() {
     let mut uncertain = f
         .registry
         .monitors
-        .target_hub("a-r1")
+        .target_hub("a")
         .unwrap()
         .records()
         .unwrap()
@@ -970,7 +945,7 @@ async fn connection_identity_is_retained_when_alias_configuration_changes() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: 1,
+
             id: "a".into(),
             name: "a".into(),
             enabled: true,
@@ -982,7 +957,7 @@ async fn connection_identity_is_retained_when_alias_configuration_changes() {
         b"#!/bin/sh\nprintf 'hostname replacement.example\\nuser other\\nport 2222\\n'\n",
     )
     .unwrap();
-    let target = f.registry.target("a", Some(1)).unwrap();
+    let target = f.registry.target("a").unwrap();
     let endpoint = &target.target.endpoints["alias-a"];
     assert_eq!(endpoint.hostname, "toy.example");
     assert_eq!(endpoint.user, "toy");
@@ -1007,14 +982,14 @@ else:
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: 1,
+
             id: "a".into(),
             name: "a".into(),
             enabled: true,
             backend: ComputeBackend::Slurm { settings },
         })
         .unwrap();
-    let target = f.registry.target("a", Some(1)).unwrap();
+    let target = f.registry.target("a").unwrap();
     let storage = Arc::new(TursoAgentStorage::open_in_memory().await.unwrap());
     let tools = super::tools::hpc_registrations(f.registry.clone(), "/root/test", storage);
     // Tool objects predate the switch and the disabling revision.
@@ -1023,7 +998,7 @@ else:
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "a".into(),
             name: "a".into(),
             enabled: false,
@@ -1036,7 +1011,7 @@ else:
         .iter()
         .find(|t| t.definition.name == "hpc_jobs")
         .unwrap();
-    assert!(jobs.implementation.execute(serde_json::json!({"target_id":"a","target_revision":1,"action":"submit","submission_key":"no-fallback"})).await.is_err());
+    assert!(jobs.implementation.execute(serde_json::json!({"target_id":"a","action":"submit","submission_key":"no-fallback"})).await.is_err());
     assert!(tools.iter().all(|t| t.definition.name != "hpc_files"));
     assert!(tools.iter().all(|t| t.definition.name != "hpc_transfer"));
 }
@@ -1162,7 +1137,7 @@ async fn containers_use_the_same_target_snapshot_as_the_dag_run() {
     let f = fixture();
     save_local(&f.registry, "b", true);
     for id in ["local", "b"] {
-        let previous = f.registry.target(id, Some(1)).unwrap();
+        let previous = f.registry.target(id).unwrap();
         let target = Arc::new(BuiltTarget {
             typed_worker_revision: None,
             network_policy_sha256: None,
@@ -1178,13 +1153,12 @@ async fn containers_use_the_same_target_snapshot_as_the_dag_run() {
             }),
             hpc: None,
             ssh_probe: None,
-            monitor_key: previous.monitor_key.clone(),
         });
         f.registry
             .built
             .write()
             .unwrap()
-            .insert(target.monitor_key.clone(), target);
+            .insert(target.target.id.clone(), target);
     }
     let graph = FlowGraph::builder()
         .process(Process::new(
@@ -1237,7 +1211,7 @@ async fn restart_uses_enrolled_profiles_instead_of_mutable_legacy_paths() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: 1,
+
             id: "remote".into(),
             name: "remote".into(),
             enabled: true,
@@ -1311,7 +1285,7 @@ async fn background_image_builds_cannot_bypass_remote_compute_policy() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "remote".into(),
             name: "remote".into(),
             enabled: true,
@@ -1347,99 +1321,58 @@ async fn first_enrollment_preserves_explicit_legacy_container_placement() {
     .unwrap();
     assert_eq!(registry.state().policy.target_id, "legacy-slurm");
     assert_eq!(
-        registry
-            .target("legacy-slurm", Some(1))
-            .unwrap()
-            .containers
-            .name(),
+        registry.target("legacy-slurm").unwrap().containers.name(),
         containers.runtime.name()
     );
     assert_eq!(f.registry.state().policy.target_id, "local");
 }
 
 #[tokio::test]
-async fn reopening_legacy_seed_labels_preserves_catalog_bytes_and_historical_revisions() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut config = RuntimeConfig::default();
-    config.state_dir = dir.path().to_path_buf();
-    config.data_dir = dir.path().join("data");
-    fs::create_dir(&config.data_dir).unwrap();
-    config.slurm.enabled = true;
-    config.slurm.tools_enabled = false;
-    config.slurm.typed_worker_config = None;
-    config.slurm.apptainer_manifest = None;
-    let containers = ContainerExecutionInfra::from_config(
-        container_runtime::PodmanConfig::for_state_dir(dir.path()),
-    );
+async fn legacy_registry_migrates_once_and_preserves_selected_configuration() {
+    let f = fixture();
+    let mut value = serde_json::to_value(f.registry.state()).unwrap();
+    value["version"] = 1.into();
+    value["revision"] = 42.into();
+    value["policy"] = serde_json::json!({"revision":7,"target_id":"local","target_revision":2});
+    let mut first = value["targets"][0].clone();
+    first["revision"] = 1.into();
+    first["name"] = "first".into();
+    let mut selected = first.clone();
+    selected["revision"] = 2.into();
+    selected["name"] = "selected".into();
+    let mut latest = first.clone();
+    latest["revision"] = 3.into();
+    latest["name"] = "unselected edit".into();
+    latest["enabled"] = false.into();
+    value["targets"] = serde_json::json!([latest, first, selected]);
+    let path = f.registry.root.join("registry.json");
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     let open = || {
-        let (vfs, storage) = mounts(&config);
+        let (vfs, storage) = mounts(&f.config);
         ComputeRegistry::open(
-            &config,
+            &f.config,
             storage,
             vfs,
-            &containers,
+            &f.containers,
             crate::hpc_monitor::MonitorHub::empty(),
         )
-    };
-    let registry = open().unwrap();
-    let mut retained = registry.state();
-    assert_eq!(
-        retained
-            .targets
-            .iter()
-            .find(|t| t.id == "local")
-            .unwrap()
-            .name,
-        "Local"
-    );
-    assert_eq!(
-        retained
-            .targets
-            .iter()
-            .find(|t| t.id == "legacy-slurm")
-            .unwrap()
-            .name,
-        "SJTU"
-    );
-    let mut historical = retained
-        .targets
-        .iter()
-        .find(|t| t.id == "legacy-slurm")
         .unwrap()
-        .clone();
-    drop(registry);
-    for target in &mut retained.targets {
-        target.name = if target.id == "local" {
-            "本地"
-        } else {
-            "交我算（原配置）"
-        }
-        .into();
-    }
-    for (revision, name) in [(2, "交我算"), (3, "Operator's retained cluster")] {
-        historical.revision = revision;
-        historical.name = name.into();
-        retained.targets.push(historical.clone());
-    }
-    retained.policy.target_revision = 2;
-    let root = config.state_dir.join("compute");
-    let catalog_path = root.join("registry.json");
-    let pending = root.join(".legacy-fixture");
-    write_new(&pending, &retained).unwrap();
-    fs::rename(&pending, &catalog_path).unwrap();
-    let before = read_private(&catalog_path).unwrap();
-    for _ in 0..2 {
-        let reopened = open().unwrap();
-        assert_eq!(
-            serde_json::to_value(reopened.state()).unwrap(),
-            serde_json::to_value(&retained).unwrap()
-        );
-        assert_eq!(
-            read_private(&catalog_path).unwrap(),
-            before,
-            "opening the registry must preserve all target revisions, policy and deployment CAS bytes"
-        );
-    }
+    };
+    let migrated = open();
+    assert_eq!(migrated.state().targets.len(), 1);
+    assert!(
+        migrated.bind().is_err(),
+        "migration must preserve a later disable"
+    );
+    assert_eq!(migrated.target("local").unwrap().target.name, "selected");
+    let bytes = read_private(&path).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["version"], 2);
+    assert!(json.get("revision").is_none());
+    drop(migrated);
+    let reopened = open();
+    assert_eq!(reopened.target("local").unwrap().target.name, "selected");
+    assert_eq!(bytes, read_private(&path).unwrap());
 }
 
 #[tokio::test]
@@ -1454,7 +1387,7 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
         .registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "old-worker".into(),
             name: "Old worker".into(),
             enabled: true,
@@ -1464,12 +1397,14 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     let error = f
         .registry
         .select(SelectTarget {
-            expected_revision: catalog.revision,
             target_id: "old-worker".into(),
         })
         .unwrap_err();
     assert!(error.contains("previous-release") && error.contains(dag_core::source_revision()));
-    assert_eq!(f.registry.state().revision, catalog.revision);
+    assert_eq!(
+        serde_json::to_value(f.registry.state()).unwrap(),
+        serde_json::to_value(&catalog).unwrap()
+    );
     assert_eq!(f.registry.state().policy.target_id, "local");
     // The SSH fixture always fails: an incompatible profile must stop before SSH.
     let check = f.registry.check_target("old-worker").await.unwrap();
@@ -1479,7 +1414,6 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     // Simulate an enrolled policy retained across a coordinator upgrade.
     let mut retained = f.registry.state();
     retained.policy.target_id = "old-worker".into();
-    retained.policy.target_revision = 1;
     f.registry.persist(&retained).unwrap();
     let (vfs, storage) = mounts(&f.config);
     let reopened = ComputeRegistry::open(
@@ -1496,31 +1430,21 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     );
     assert!(reopened.bind().is_err());
     assert!(reopened.status().unwrap().runs.is_empty());
-    // Historical target identity remains available for inspection and recovery.
-    assert_eq!(
-        reopened
-            .target("old-worker", Some(1))
-            .unwrap()
-            .target
-            .revision,
-        1
-    );
+    let old_runtime = reopened.target("old-worker").unwrap();
     // Register a measured matching replacement, preserving the old capsule.
-    let old = reopened
-        .target("old-worker", Some(1))
-        .unwrap()
-        .target
-        .clone();
+    let old = reopened.target("old-worker").unwrap().target.clone();
     let old_bytes = fs::read(match &old.backend {
         ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
         ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
     })
     .unwrap();
-    let replacement = remote_settings(&f.config.state_dir, "matching-worker");
+    let replacement_root = f.config.state_dir.join("replacement");
+    fs::create_dir(&replacement_root).unwrap();
+    let replacement = remote_settings(&replacement_root, "old-worker");
     reopened
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: reopened.state().revision,
+
             id: "old-worker".into(),
             name: "Matching replacement".into(),
             enabled: true,
@@ -1532,10 +1456,10 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     select(&reopened, "old-worker");
     let status = reopened.status().unwrap();
     assert_eq!(status.deployment["source_compatible"], true);
-    assert_eq!(status.deployment["target_revision"], 2);
+    assert_eq!(status.deployment["target_id"], "old-worker");
     assert!(reopened.bind().is_ok());
     assert_eq!(reopened.status().unwrap().runs.len(), 1);
-    let historical = reopened.target("old-worker", Some(1)).unwrap();
+    let historical = old_runtime;
     assert_eq!(historical.target.capsule_sha256, old.capsule_sha256);
     assert_eq!(
         fs::read(match &historical.target.backend {
@@ -1601,7 +1525,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "readiness".into(),
             name: "readiness".into(),
             enabled: true,
@@ -1707,7 +1631,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
 #[tokio::test]
 async fn readiness_reports_unregistered_candidate_and_local_unknown_without_mutation() {
     let f = fixture();
-    let before = f.registry.state().revision;
+    let before = serde_json::to_value(f.registry.state()).unwrap();
     let report = f
         .registry
         .readiness(
@@ -1728,7 +1652,7 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
     assert_eq!(empty["requested_images"], 0);
     assert_eq!(empty["requested_identities"], 0);
     assert!(!empty["verification_gaps"].as_array().unwrap().is_empty());
-    assert_eq!(f.registry.state().revision, before);
+    assert_eq!(serde_json::to_value(f.registry.state()).unwrap(), before);
     assert!(f.registry.status().unwrap().runs.is_empty());
 }
 
@@ -1739,7 +1663,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "network".into(),
             name: "network".into(),
             enabled: true,
@@ -1781,7 +1705,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "network".into(),
             name: "network".into(),
             enabled: true,
@@ -1822,7 +1746,7 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     f.registry
         .save_target(SaveTarget {
             data_domains: Vec::new(),
-            expected_revision: f.registry.state().revision,
+
             id: "ht-direct".into(),
             name: "Direct SSH host".into(),
             enabled: true,
@@ -2088,7 +2012,6 @@ async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
     settings.scratch_remote_dir = "/lustre/share/scratch".into();
     let saved = registry
         .save_target(SaveTarget {
-            expected_revision: 1,
             id: "dom".into(),
             name: "dom".into(),
             enabled: true,
@@ -2107,7 +2030,6 @@ async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
     // A second domain is rejected: the transport admits exactly one.
     let err = registry
         .save_target(SaveTarget {
-            expected_revision: saved.revision,
             id: "dom2".into(),
             name: "dom2".into(),
             enabled: true,
@@ -2141,7 +2063,6 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
     let catalog = f
         .registry
         .enroll(super::EnrollRequest {
-            expected_revision: 1,
             id: "hpc-b".into(),
             name: None,
             login_alias: "hpc-b-login".into(),
@@ -2207,11 +2128,10 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
     assert_eq!(source.mount_path(), "/data/hpc-b");
 
     // One-key repair reconnects and verifies a healthy worker without a package
-    // path, configuration changes, or an unnecessary target revision.
+    // path or unnecessary configuration changes.
     let repaired = f
         .registry
         .repair_worker(super::RepairWorkerRequest {
-            expected_revision: catalog.revision,
             target_id: "hpc-b".into(),
         })
         .await
@@ -2228,7 +2148,6 @@ async fn enroll_rejects_partial_data_home_inputs() {
     let error = f
         .registry
         .enroll(super::EnrollRequest {
-            expected_revision: 1,
             id: "broken".into(),
             name: None,
             login_alias: "alias".into(),
@@ -2249,13 +2168,13 @@ async fn enroll_rejects_partial_data_home_inputs() {
 }
 
 #[tokio::test]
-async fn filesystem_domain_context_refreshes_without_a_compute_revision_change() {
+async fn filesystem_domain_context_refreshes_without_a_compute_change() {
     use agentik_core::context::ContextProvider;
     let f = fixture();
     let context = super::tools::ComputeContext::new(f.registry.clone());
     assert!(context.poll().await.unwrap().contains("local://"));
     assert!(context.poll().await.is_none());
-    let revision = f.registry.state().revision;
+    let before = serde_json::to_value(f.registry.state()).unwrap();
     let remote = tempfile::tempdir().unwrap();
     let manifest = vfs::VfsManifest::from_toml(&format!(
         "[[backend]]\nid='context-remote'\ntype='local'\nroot={}\n[[mount]]\npath='/data/Csu'\nbackend='context-remote'\nsource='/'\ndomain='csu'\nread_only=true\n",
@@ -2268,7 +2187,7 @@ async fn filesystem_domain_context_refreshes_without_a_compute_revision_change()
     assert!(domains.iter().any(|d| d["uri"] == "csu://"
         && d["virtual_path"] == "/data/Csu"
         && d["read_only"] == true));
-    assert_eq!(f.registry.state().revision, revision);
+    assert_eq!(serde_json::to_value(f.registry.state()).unwrap(), before);
     assert!(context.poll().await.is_none());
     let status_tool = super::tools::registrations(f.registry.clone())
         .into_iter()
@@ -2288,5 +2207,153 @@ async fn filesystem_domain_context_refreshes_without_a_compute_revision_change()
             .unwrap()
             .iter()
             .any(|m| m["path"] == "csu://" && m["virtual_path"] == "/data/Csu")
+    );
+}
+
+#[tokio::test]
+async fn legacy_jobs_and_evidence_survive_migration_and_restart() {
+    for (target_id, legacy_revision) in [("account", 1), ("legacy-slurm", 2)] {
+        let f = fixture();
+        let settings = remote_settings(&f.config.state_dir, "migration-host");
+        f.registry
+            .save_target(SaveTarget {
+                id: target_id.into(),
+                name: "Account".into(),
+                enabled: true,
+                backend: ComputeBackend::Slurm { settings },
+                data_domains: vec![],
+            })
+            .unwrap();
+        let legacy_root = f
+            .registry
+            .root
+            .join("targets")
+            .join(format!("{target_id}-r{legacy_revision}"));
+        private_dir(&legacy_root).unwrap();
+        fs::rename(
+            if target_id == "legacy-slurm" {
+                f.config.state_dir.join("hpc-account")
+            } else {
+                f.registry
+                    .root
+                    .join("targets")
+                    .join(target_id)
+                    .join("hpc-account")
+            },
+            legacy_root.join("hpc-account"),
+        )
+        .unwrap();
+        let nonce = "a".repeat(32);
+        let monitor_id = format!(
+            "{:x}",
+            Sha256::digest(format!("migration-host\0{nonce}").as_bytes())
+        );
+        let record = serde_json::json!({
+            "version":1,"id":monitor_id,"owner":{"agent_id":uuid::Uuid::nil(),"agent_path":"/root/test","session_id":uuid::Uuid::nil()},
+            "ssh_host":"migration-host","cluster":"default","submission_key":"retained", "nonce":nonce,
+            "request_sha256":"b".repeat(64),"job_id":"123","state":"watching","observation":null,"notification":"none",
+            "verification_plan":{},"next_poll":u64::MAX,"failures":0,"last_error":null,"revision":1,"created_at":1,"updated_at":1,
+        });
+        write_new(
+            &legacy_root
+                .join("hpc-account/job-monitors")
+                .join(format!("{monitor_id}.json")),
+            &record,
+        )
+        .unwrap();
+        let evidence = legacy_root.join("tasks/attempt/task.json");
+        fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+        fs::write(&evidence, b"legacy receipt").unwrap();
+        let mut legacy = serde_json::to_value(f.registry.state()).unwrap();
+        legacy["version"] = 1.into();
+        legacy["revision"] = 9.into();
+        legacy["policy"] =
+            serde_json::json!({"revision":3,"target_id":"local","target_revision":1});
+        for target in legacy["targets"].as_array_mut().unwrap() {
+            target["revision"] = if target["id"] == target_id {
+                legacy_revision
+            } else {
+                1
+            }
+            .into();
+        }
+        fs::write(
+            f.registry.root.join("registry.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let (vfs, storage) = mounts(&f.config);
+            let registry = ComputeRegistry::open(
+                &f.config,
+                storage.clone(),
+                vfs,
+                &f.containers,
+                crate::hpc_monitor::MonitorHub::empty(),
+            )
+            .unwrap();
+            let views = registry.monitors.views(None).unwrap();
+            assert_eq!(views.len(), 1);
+            assert_eq!(views[0].target_id.as_deref(), Some(target_id));
+            assert_eq!(views[0].id, monitor_id);
+            assert!(
+                serde_json::to_value(&views[0])
+                    .unwrap()
+                    .get("target_revision")
+                    .is_none()
+            );
+            assert_eq!(
+                storage
+                    .read_range(&evidence.to_string_lossy(), 0..14)
+                    .await
+                    .unwrap()
+                    .to_vec(),
+                b"legacy receipt"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn connection_changes_wait_for_existing_bindings() {
+    let f = fixture();
+    let first = remote_settings(&f.config.state_dir, "first-host");
+    let second = remote_settings(&f.config.state_dir, "second-host");
+    let save = |settings: SlurmConfig| {
+        f.registry.save_target(SaveTarget {
+            id: "remote".into(),
+            name: "Remote".into(),
+            enabled: true,
+            backend: ComputeBackend::Slurm { settings },
+            data_domains: vec![],
+        })
+    };
+    save(first).unwrap();
+    select(&f.registry, "remote");
+    let (running, _) = f.registry.bind().unwrap();
+    assert!(
+        save(second.clone())
+            .unwrap_err()
+            .contains("target is in use")
+    );
+    let ComputeBackend::Slurm { settings } = &running.target.backend else {
+        unreachable!()
+    };
+    assert_eq!(settings.ssh_host, "first-host");
+    drop(running);
+    save(second).unwrap();
+    let (next, _) = f.registry.bind().unwrap();
+    let ComputeBackend::Slurm { settings } = &next.target.backend else {
+        unreachable!()
+    };
+    assert_eq!(settings.ssh_host, "second-host");
+    assert_eq!(
+        f.registry
+            .state()
+            .targets
+            .iter()
+            .filter(|t| t.id == "remote")
+            .count(),
+        1
     );
 }

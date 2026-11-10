@@ -5,8 +5,7 @@
 //! executor. Credentials stay in the operator's ssh setup (the transport
 //! forces `BatchMode`) — nothing here carries secrets. Every field has an
 //! `AUTONOMICS_SLURM_*` env override for legacy deployment and first enrollment.
-//! Once an ordinary compute catalog exists, its selected immutable target
-//! revision controls placement. Operator API changes affect new runs;
+//! Once an ordinary compute catalog exists, its selected target controls placement. Operator API changes affect new runs;
 //! environment changes cannot retarget historical work.
 
 use std::path::PathBuf;

@@ -760,30 +760,28 @@ async fn deleting_compute_target_keeps_history_and_requires_another_active_targe
     let daemon = start_mock_gateway("ok").await;
     let client = daemon.client();
     let initial = client.compute_status().await.unwrap();
-    let saved = client.save_compute_target_json(&serde_json::json!({"expected_revision":initial.state.revision,"id":"other","name":"Other","enabled":true,"backend":{"type":"local"}})).await.unwrap();
-    let selected = client
-        .select_compute_target_by_id(saved.revision, "other".into())
-        .await
-        .unwrap();
     assert!(
-        client
-            .delete_compute_target("other", selected.revision)
-            .await
-            .is_err()
+        serde_json::to_value(initial.state)
+            .unwrap()
+            .get("revision")
+            .is_none()
     );
-    let selected = client
-        .select_compute_target_by_id(selected.revision, "local".into())
+    let _saved = client.save_compute_target_json(&serde_json::json!({"id":"other","name":"Other","enabled":true,"backend":{"type":"local"}})).await.unwrap();
+    let _selected = client
+        .select_compute_target_by_id("other".into())
         .await
         .unwrap();
-    let deleted = client
-        .delete_compute_target("other", selected.revision)
+    assert!(client.delete_compute_target("other").await.is_err());
+    let _selected = client
+        .select_compute_target_by_id("local".into())
         .await
         .unwrap();
+    let deleted = client.delete_compute_target("other").await.unwrap();
     assert!(deleted.deleted_target_ids.contains("other"));
     assert!(deleted.targets.iter().any(|target| target.id == "other"));
     assert!(
         client
-            .select_compute_target_by_id(deleted.revision, "other".into())
+            .select_compute_target_by_id("other".into())
             .await
             .is_err()
     );
@@ -802,7 +800,11 @@ async fn hpc_config_round_trip_marks_pending_restart() {
     let before = client.hpc_config().await.unwrap();
     assert_eq!(before["target_id"], "local");
     assert_eq!(before["editable"], false);
-    let bad = client.update_hpc_config(&serde_json::json!({"target_id":"local","target_revision":before["target_revision"],"expected_revision":before["registry_revision"],"config":{"ssh_host":"example"}})).await;
+    let bad = client
+        .update_hpc_config(
+            &serde_json::json!({"target_id":"local","config":{"ssh_host":"example"}}),
+        )
+        .await;
     assert!(bad.is_err(), "a local target cannot be edited as Slurm");
     gateway_daemon.stop().await;
 }

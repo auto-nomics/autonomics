@@ -44,7 +44,6 @@ export type SshEndpoint = {
 
 export type ComputeTarget = {
   id: string;
-  revision: number;
   name: string;
   enabled: boolean;
   backend: ComputeBackend;
@@ -76,15 +75,12 @@ export type DataSource = {
 };
 
 export type ComputePolicy = {
-  revision: number;
   target_id: string;
-  target_revision: number;
 };
 
 export type ComputeRegistryState = {
   deleted_target_ids?: string[];
   version: number;
-  revision: number;
   policy: ComputePolicy;
   targets: ComputeTarget[];
   data_sources: DataSource[];
@@ -93,8 +89,6 @@ export type ComputeRegistryState = {
 export type ExecutionBinding = {
   id: string;
   target_id: string;
-  target_revision: number;
-  policy_revision: number;
   target_sha256: string;
 };
 
@@ -126,7 +120,6 @@ export type ReadinessReport = {
 
 export type MonitorView = {
   target_id?: string;
-  target_revision?: number;
   id: string;
   agent_id: string;
   agent_path: string;

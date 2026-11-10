@@ -66,7 +66,6 @@ impl EnrollProgress {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollRequest {
-    pub expected_revision: u64,
     pub id: String,
     /// Display name; defaults to the id.
     #[serde(default)]
@@ -116,7 +115,6 @@ pub struct EnrollRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RepairWorkerRequest {
-    pub expected_revision: u64,
     pub target_id: String,
 }
 
@@ -217,9 +215,6 @@ impl ComputeRegistry {
     ) -> Result<ComputeRegistryState, String> {
         progress.report("validate", "正在读取目标已有配置");
         let state = self.state();
-        if state.revision != request.expected_revision {
-            return Err("stale compute revision; reload settings".into());
-        }
         let target = state
             .targets
             .iter()
@@ -237,7 +232,7 @@ impl ComputeRegistry {
         if let Some(pinned) = target.endpoints.get(&settings.ssh_host) {
             let current = vfs::SshEndpoint::capture(&settings.ssh_command, &settings.ssh_host)?;
             if &current != pinned {
-                return Err("SSH endpoint changed since this target revision; review the target configuration before repair".into());
+                return Err("SSH endpoint changed since this target was saved; review the target configuration before repair".into());
             }
         }
         let profile_path = settings
@@ -276,27 +271,13 @@ impl ComputeRegistry {
             if profile["worker"]["executable_sha256"] != sha
                 || profile["worker"]["expected_source_revision"] != dag_core::source_revision()
             {
-                return Err("worker pin needs an updated target revision".to_string());
+                return Err("worker pin needs updating".to_string());
             }
             Ok::<_, String>(())
         }
         .await;
         match existing_worker {
             Ok(()) => {
-                if self.state().revision != request.expected_revision {
-                    return Err(
-                        "compute registry changed during repair; reload the dashboard".into(),
-                    );
-                }
-                if state.policy.target_id == target.id
-                    && state.policy.target_revision != target.revision
-                {
-                    progress.report("select_target", "正在激活已验证的目标修订");
-                    return self.select(SelectTarget {
-                        expected_revision: state.revision,
-                        target_id: target.id,
-                    });
-                }
                 progress.report("ready", "连接及 worker 校验通过，无需更新");
                 return Ok(state);
             }
@@ -337,25 +318,15 @@ impl ComputeRegistry {
             &serde_json::to_vec(&profile).map_err(|e| e.to_string())?,
         )?;
         settings.typed_worker_config = Some(path);
-        progress.report("save_target", "正在保存已验证的 worker 新修订");
+        progress.report("save_target", "正在保存已验证的 worker 配置");
         let saved = self.save_target(SaveTarget {
-            expected_revision: request.expected_revision,
             id: target.id.clone(),
             name: target.name,
             enabled: target.enabled,
             backend: ComputeBackend::Slurm { settings },
             data_domains: target.data_domains,
         })?;
-        if state.policy.target_id == target.id {
-            progress.report("select_target", "正在激活修复后的目标");
-            self.select(SelectTarget {
-                expected_revision: saved.revision,
-                target_id: target.id,
-            })
-            .map_err(|e| format!("worker revision saved but activation failed: {e}"))
-        } else {
-            Ok(saved)
-        }
+        Ok(saved)
     }
     /// Enroll (or upgrade) one cluster target from minimal input. The
     /// sequence is: worker probe → profile generation → data-source
@@ -488,7 +459,6 @@ impl ComputeRegistry {
 
         // 4. The domain's read-only mount must exist before the target's
         //    domain validation runs, so the data source goes first.
-        let mut revision = request.expected_revision;
         if let Some((alias, root)) = &data {
             progress.report("data_source", "正在注册集群数据源");
             tracing::info!(
@@ -510,14 +480,9 @@ impl ComputeRegistry {
                 endpoint: None,
                 permissions: Default::default(),
             };
-            let state = self
-                .add_source(SaveDataSource {
-                    expected_revision: revision,
-                    source,
-                })
+            self.add_source(SaveDataSource { source })
                 .await
                 .map_err(|error| format!("data source creation failed: {error}"))?;
-            revision = state.revision;
         }
 
         // 5. The target, with every derived field filled in.
@@ -537,7 +502,6 @@ impl ComputeRegistry {
             .unwrap_or_default();
         let mut state = self
             .save_target(SaveTarget {
-                expected_revision: revision,
                 id: request.id.clone(),
                 name: request.name.clone().unwrap_or_else(|| request.id.clone()),
                 enabled: true,
@@ -552,12 +516,11 @@ impl ComputeRegistry {
             tracing::info!(stage = "select_target", "cluster enrollment step started");
             state = self
                 .select(SelectTarget {
-                    expected_revision: state.revision,
                     target_id: request.id.clone(),
                 })
                 .map_err(|error| format!("policy switch failed: {error}"))?;
         }
-        tracing::info!(revision = state.revision, "cluster enrollment finished");
+        tracing::info!("cluster enrollment finished");
         Ok(state)
     }
 }

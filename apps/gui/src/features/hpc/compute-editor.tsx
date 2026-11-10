@@ -1,7 +1,6 @@
 /**
  * 计算目标编辑器:管理 compute registry state(目标/策略/数据源)、检查目标、
- * 查看部署就绪与运行绑定。操作员级操作,经网关 HTTP 完成;目录修订采用
- * 乐观并发(expected_revision),409 冲突时提示并自动重载。
+ * 查看部署就绪与运行绑定。操作员级操作,经网关 HTTP 完成;每个目标按 id 保存当前配置。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { GatewayHttpError } from "@/gateway";
@@ -145,7 +144,6 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
   }, [reload]);
 
   const state = status?.state ?? null;
-  const revision = state?.revision ?? 0;
   const selectedId = state?.policy.target_id ?? "";
 
   const run = useCallback(
@@ -155,15 +153,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
       try {
         await action();
       } catch (error) {
-        if (error instanceof GatewayHttpError && error.status === 409) {
-          setNotice({
-            kind: "error",
-            text: "计算目录已被其他操作修改,已重新加载;请重试本操作。",
-          });
-          await reload();
-        } else {
-          setNotice({ kind: "error", text: errorText(error) });
-        }
+        setNotice({ kind: "error", text: errorText(error) });
       } finally {
         setBusy(null);
       }
@@ -196,8 +186,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
           <div>
             <h2 className="text-base font-semibold">计算目标</h2>
             <p className="text-xs text-muted-foreground">
-              目录修订 r{revision} · 当前策略:{selectedId} r
-              {state.policy.target_revision}(policy r{state.policy.revision})
+              当前执行目标:{selectedId}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -312,16 +301,15 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
           <ul className="divide-y">
             {targets.map((target) => {
               const selected =
-                target.id === selectedId &&
-                target.revision === state.policy.target_revision;
+                target.id === selectedId;
               return (
                 <li
-                  key={`${target.id}-r${target.revision}`}
+                  key={target.id}
                   className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm"
                 >
                   <span className="font-medium">{target.name}</span>
                   <code className="text-xs text-muted-foreground">
-                    {target.id} r{target.revision}
+                    {target.id}
                   </code>
                   <Badge variant="outline">{backendLabel(target)}</Badge>
                   {!target.enabled ? <Badge variant="destructive">停用</Badge> : null}
@@ -334,10 +322,10 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
                       disabled={busy !== null || !target.enabled}
                       onClick={() =>
                         void run(`select:${target.id}`, async () => {
-                          await selectComputeTarget(revision, target.id);
+                          await selectComputeTarget(target.id);
                           setNotice({
                             kind: "ok",
-                            text: `已切换计算策略到 ${target.name} r${target.revision};进行中的运行保持原目标。`,
+                            text: `已切换计算策略到 ${target.name};进行中的运行保持原目标。`,
                           });
                           await reload();
                         })
@@ -405,7 +393,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
               void run("enroll", async () => {
                 try {
                   await startEnrollment({
-                    expected_revision: revision, id: enroll.id.trim(), login_alias: enroll.login.trim(),
+                    id: enroll.id.trim(), login_alias: enroll.login.trim(),
                     worker_executable: enroll.worker.trim(), name: enroll.name.trim() || undefined,
                     data_alias: enroll.dataAlias.trim() || undefined, data_root: enroll.dataRoot.trim() || undefined,
                     partition: enroll.partition.trim() || undefined, account: enroll.account.trim() || undefined,
@@ -470,7 +458,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
                       settings: cleanSettings(next.remote.settings),
                     }
                   : { type: "local" };
-                await saveComputeTarget(revision, {
+                await saveComputeTarget({
                   id: next.id,
                   name: next.name,
                   enabled: next.enabled,
@@ -478,7 +466,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
                   data_domains: next.dataDomains,
                 });
                 setDraft(null);
-                setNotice({ kind: "ok", text: "目标已保存为新的不可变修订。" });
+                setNotice({ kind: "ok", text: "目标配置已保存。" });
                 await reload();
               })
             }
@@ -577,7 +565,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
                   disabled={busy !== null}
                   onClick={() =>
                     void run("add-source", async () => {
-                      await addComputeDataSource(revision, {
+                      await addComputeDataSource({
                         id: sourceDraft.id,
                         name: sourceDraft.name,
                         backend: {
@@ -612,7 +600,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
               {runs.map((binding) => (
                 <li key={binding.id} className="flex gap-2 px-3 py-2">
                   <code className="text-muted-foreground">
-                    {binding.target_id} r{binding.target_revision}
+                    {binding.target_id}
                   </code>
                   <span className="flex-1 truncate" title={binding.id}>
                     {binding.id}
@@ -794,7 +782,7 @@ function TargetForm({
           disabled={busy || !current.id || !current.name}
           onClick={() => onSave(current)}
         >
-          保存(新修订)
+          保存配置
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>
           取消

@@ -152,7 +152,6 @@ pub enum HpcTab {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HpcTargetRow {
     pub id: String,
-    pub revision: u64,
     pub selected: bool,
     pub enabled: bool,
     /// `local` / `slurm` / `ssh`.
@@ -206,8 +205,6 @@ pub struct HpcPanelState {
     pub status: Option<String>,
     pub loading: bool,
     pub target_id: Option<String>,
-    pub target_revision: u64,
-    pub registry_revision: u64,
     pub target_editable: bool,
     pub dashboard_ready: bool,
     pub dashboard_targets: Vec<serde_json::Value>,
@@ -226,9 +223,13 @@ pub struct HpcPanelState {
 
 impl HpcPanelState {
     pub fn push_repair_event(&mut self, message: String) {
-        if self.repair_events.len() >= 200 { self.repair_events.remove(0); }
+        if self.repair_events.len() >= 200 {
+            self.repair_events.remove(0);
+        }
         let mut bounded: String = message.chars().take(8192).collect();
-        if bounded.len() < message.len() { bounded.push_str("… [truncated]"); }
+        if bounded.len() < message.len() {
+            bounded.push_str("… [truncated]");
+        }
         self.repair_events.push(bounded);
     }
     fn dashboard_visible_fields(&self) -> Vec<usize> {
@@ -338,30 +339,15 @@ impl HpcPanelState {
                 .and_then(|t| t["id"].as_str())
                 .map(str::to_owned)
         });
-        let mut latest = std::collections::BTreeMap::<String, serde_json::Value>::new();
-        if let Some(targets) = registry["targets"].as_array() {
-            for target in targets {
-                if let Some(id) = target["id"].as_str() {
-                    if latest
-                        .get(id)
-                        .and_then(|t| t["revision"].as_u64())
-                        .unwrap_or(0)
-                        < target["revision"].as_u64().unwrap_or(0)
-                    {
-                        latest.insert(id.to_string(), target.clone());
-                    }
-                }
-            }
-        }
-        if let Some(deleted) = registry["deleted_target_ids"].as_array() {
-            for id in deleted.iter().filter_map(|v| v.as_str()) {
-                latest.remove(id);
-            }
-        }
-        self.dashboard_targets = latest.into_values().collect();
-        self.registry_revision = registry["revision"].as_u64().unwrap_or(0);
+        let deleted = registry["deleted_target_ids"].as_array();
+        self.dashboard_targets = registry["targets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|target| !deleted.is_some_and(|ids| ids.iter().any(|id| id == &target["id"])))
+            .cloned()
+            .collect();
         self.target_id = registry["policy"]["target_id"].as_str().map(str::to_owned);
-        self.target_revision = registry["policy"]["target_revision"].as_u64().unwrap_or(0);
         self.selected_target = old_id
             .as_deref()
             .and_then(|id| {
@@ -560,7 +546,7 @@ impl HpcPanelState {
             return Err("Data domains must be a JSON array".into());
         }
         Ok(
-            serde_json::json!({"expected_revision":self.registry_revision,"id":id,"name":name,"enabled":enabled,"backend":backend,"data_domains":domains}),
+            serde_json::json!({"id":id,"name":name,"enabled":enabled,"backend":backend,"data_domains":domains}),
         )
     }
     /// Fill selected target settings from a `GET /hpc/config` reply.
@@ -569,14 +555,6 @@ impl HpcPanelState {
             .get("target_id")
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
-        self.target_revision = reply
-            .get("target_revision")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        self.registry_revision = reply
-            .get("registry_revision")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
         self.target_editable = reply
             .get("editable")
             .and_then(serde_json::Value::as_bool)
@@ -639,9 +617,7 @@ impl HpcPanelState {
                 }
             }
         }
-        Ok(
-            serde_json::json!({"target_id":self.target_id,"target_revision":self.target_revision,"expected_revision":self.registry_revision,"config":profile}),
-        )
+        Ok(serde_json::json!({"target_id":self.target_id,"config":profile}))
     }
 
     /// Fill job rows from a `GET /hpc/jobs` reply (newest first).
@@ -707,10 +683,10 @@ pub enum HpcPanelCommand {
     Close,
     /// Persist the profile as assembled by [`HpcPanelState::build_profile`].
     SaveProfile(serde_json::Value),
-    SelectTarget(String, u64),
+    SelectTarget(String),
     SaveTarget(serde_json::Value),
     RepairWorker(serde_json::Value),
-    DeleteTarget(String, u64),
+    DeleteTarget(String),
     /// Re-fetch the monitor inventory.
     /// Reload gateway registry and monitor records without probing the cluster.
     RefreshSnapshot,
@@ -824,9 +800,10 @@ impl HpcPanelState {
                         }
                     }
                 }
-                HpcTab::Targets => self.targets.get(self.selected_target).map(|target| {
-                    HpcPanelCommand::SelectTarget(target.id.clone(), self.registry_revision)
-                }),
+                HpcTab::Targets => self
+                    .targets
+                    .get(self.selected_target)
+                    .map(|target| HpcPanelCommand::SelectTarget(target.id.clone())),
                 HpcTab::Jobs => None,
             },
             KeyCode::Char('s') if self.tab == HpcTab::Config && self.target_editable => {
@@ -925,9 +902,7 @@ impl HpcPanelState {
                     .dashboard_targets
                     .get(self.selected_target)
                     .and_then(|target| target["id"].as_str())
-                    .map(|id| {
-                        HpcPanelCommand::DeleteTarget(id.to_string(), self.registry_revision)
-                    });
+                    .map(|id| HpcPanelCommand::DeleteTarget(id.to_string()));
             }
             self.status = Some("Delete cancelled".into());
             return None;
@@ -969,11 +944,20 @@ impl HpcPanelState {
                 return Some(HpcPanelCommand::RefreshSnapshot);
             }
             KeyCode::Char('w') if !self.dashboard_editing && self.tab == HpcTab::Targets => {
-                if self.dashboard_targets.get(self.selected_target).and_then(|t| t["backend"]["type"].as_str()) != Some("slurm") {
+                if self
+                    .dashboard_targets
+                    .get(self.selected_target)
+                    .and_then(|t| t["backend"]["type"].as_str())
+                    != Some("slurm")
+                {
                     self.status = Some("Select a Slurm target to repair its worker".into());
                 } else {
-                    let id = self.dashboard_targets[self.selected_target]["id"].as_str().unwrap_or_default();
-                    return Some(HpcPanelCommand::RepairWorker(serde_json::json!({"expected_revision": self.registry_revision, "target_id": id})));
+                    let id = self.dashboard_targets[self.selected_target]["id"]
+                        .as_str()
+                        .unwrap_or_default();
+                    return Some(HpcPanelCommand::RepairWorker(
+                        serde_json::json!({"target_id": id}),
+                    ));
                 }
             }
             KeyCode::Char('J') if !self.dashboard_editing => {
@@ -1033,9 +1017,7 @@ impl HpcPanelState {
                     .dashboard_targets
                     .get(self.selected_target)
                     .and_then(|target| target["id"].as_str())
-                    .map(|id| {
-                        HpcPanelCommand::SelectTarget(id.to_string(), self.registry_revision)
-                    });
+                    .map(|id| HpcPanelCommand::SelectTarget(id.to_string()));
             }
             KeyCode::Char('s') if self.dashboard_editing => return self.dashboard_save_command(),
             KeyCode::Up | KeyCode::Char('k')
@@ -1305,9 +1287,7 @@ impl HpcPanelWidget {
                         },
                         name,
                         id,
-                        if active && target["revision"].as_u64() != Some(state.target_revision) {
-                            " (active: older revision)"
-                        } else if active {
+                        if active {
                             " *"
                         } else if target["enabled"] == false {
                             " (disabled)"
@@ -1386,7 +1366,10 @@ impl HpcPanelWidget {
                 } else {
                     FIELD_DEFS[i - 4].label
                 };
-                let display = if state.dashboard_editing && i == state.dashboard_field && state.edit_buffer.is_some() {
+                let display = if state.dashboard_editing
+                    && i == state.dashboard_field
+                    && state.edit_buffer.is_some()
+                {
                     let buffer = state.edit_buffer.as_deref().unwrap_or("");
                     let offset = buffer
                         .char_indices()
@@ -1430,7 +1413,9 @@ impl HpcPanelWidget {
             }
         }
         let scroll = if state.repair_show_events {
-            form.len().saturating_sub(usize::from(form_area.height)).min(u16::MAX as usize) as u16
+            form.len()
+                .saturating_sub(usize::from(form_area.height))
+                .min(u16::MAX as usize) as u16
         } else if state.dashboard_show_jobs {
             state
                 .selected_job
@@ -1452,7 +1437,6 @@ impl HpcPanelWidget {
             .style(Style::default().fg(theme.text_faint))
             .wrap(ratatui::widgets::Wrap { trim: false })
             .render(rows[2], buf);
-
     }
     fn render_config(
         &self,
@@ -1467,9 +1451,8 @@ impl HpcPanelWidget {
             return;
         }
         lines.push(Line::from(format!(
-            "Target: {} r{}",
-            state.target_id.as_deref().unwrap_or("?"),
-            state.target_revision
+            "Target: {}",
+            state.target_id.as_deref().unwrap_or("?")
         )));
         for (index, def) in FIELD_DEFS.iter().enumerate() {
             let value = state
@@ -1594,10 +1577,7 @@ impl HpcPanelWidget {
                 ""
             };
             lines.push(Line::from(Span::styled(
-                format!(
-                    "{marker}{} r{} [{}]{}",
-                    target.id, target.revision, target.backend, state_tag
-                ),
+                format!("{marker}{} [{}]{}", target.id, target.backend, state_tag),
                 header_style,
             )));
             if selected_row {
@@ -1652,10 +1632,10 @@ mod tests {
     fn worker_repair_starts_without_configuration() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":7,"policy":{"target_id":"Csu"},"targets":[{"id":"Csu","name":"Csu","revision":1,"enabled":true,"backend":{"type":"slurm","settings":{}}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"Csu"},"targets":[{"id":"Csu","name":"Csu","enabled":true,"backend":{"type":"slurm","settings":{}}}]}}));
         match panel.handle_key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE)) {
             Some(HpcPanelCommand::RepairWorker(request)) => {
-                assert_eq!(request, serde_json::json!({"target_id":"Csu", "expected_revision":7}));
+                assert_eq!(request, serde_json::json!({"target_id":"Csu"}));
                 assert!(!panel.dashboard_editing);
                 assert!(panel.edit_buffer.is_none());
             }
@@ -1674,7 +1654,14 @@ mod tests {
         let area = Rect::new(0, 0, 120, 30);
         let mut buffer = Buffer::empty(area);
         HpcPanelWidget.render_ref(area, &mut buffer, &mut panel);
-        let rendered = (0..area.height).map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        let rendered = (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(rendered.contains("Connection recovery events"));
         assert!(rendered.contains("stdout: connected"));
         assert!(rendered.contains("16/32 MiB"));
@@ -1684,7 +1671,7 @@ mod tests {
     fn dashboard_edits_unicode_at_cursor_and_tabs_between_fields() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"中文","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"中文","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         panel.handle_key(key(KeyCode::Char('e')));
         panel.handle_key(key(KeyCode::Enter));
@@ -1701,7 +1688,7 @@ mod tests {
     fn dashboard_ctrl_save_commits_the_active_editor() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         panel.handle_key(key(KeyCode::Char('e')));
         panel.handle_key(key(KeyCode::Enter));
@@ -1717,7 +1704,7 @@ mod tests {
     fn dashboard_backend_selection_filters_ssh_and_validates_required_fields() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         panel.handle_key(key(KeyCode::Char('n')));
         panel.dashboard_field = 2;
@@ -1737,7 +1724,7 @@ mod tests {
     #[test]
     fn dashboard_edits_highlighted_target_without_changing_selection() {
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":7,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}, {"id":"remote","name":"Remote","revision":1,"enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server"}},"data_domains":[]}, {"id":"remote","name":"Remote 2","revision":2,"enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server"}},"data_domains":[]}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}, {"id":"remote","name":"Remote 2","enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server"}},"data_domains":[]}]}}));
         assert_eq!(panel.dashboard_targets.len(), 2);
         panel.selected_target = 1;
         panel.load_dashboard_draft();
@@ -1745,14 +1732,14 @@ mod tests {
         let request = panel.dashboard_save().unwrap();
         assert_eq!(request["id"], "remote");
         assert_eq!(request["name"], "Changed");
-        assert_eq!(request["expected_revision"], 7);
+
         assert_eq!(panel.target_id.as_deref(), Some("local"));
     }
 
     #[test]
     fn dashboard_hides_deleted_and_confirms_delete() {
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":4,"policy":{"target_id":"local"},"deleted_target_ids":["deleted"],"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}},{"id":"deleted","name":"Deleted","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"deleted_target_ids":["deleted"],"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}},{"id":"deleted","name":"Deleted","enabled":true,"backend":{"type":"local"}}]}}));
         assert_eq!(panel.dashboard_targets.len(), 1);
         let key = |c| {
             crossterm::event::KeyEvent::new(
@@ -1766,14 +1753,14 @@ mod tests {
         panel.handle_key(key('d'));
         assert_eq!(
             panel.handle_key(key('y')),
-            Some(HpcPanelCommand::DeleteTarget("local".into(), 4))
+            Some(HpcPanelCommand::DeleteTarget("local".into()))
         );
     }
 
     #[test]
     fn dashboard_renders_tabs_and_bottom_hints() {
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let area = Rect::new(0, 0, 80, 20);
         let mut buffer = Buffer::empty(area);
         HpcPanelWidget.render_ref(area, &mut buffer, &mut panel);
@@ -1796,7 +1783,7 @@ mod tests {
     fn dashboard_tabs_navigate_and_edit_target_in_place() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         assert_eq!(panel.tab, HpcTab::Targets);
         panel.handle_key(key(KeyCode::Right));
@@ -1817,7 +1804,7 @@ mod tests {
     #[test]
     fn local_form_skips_inapplicable_remote_settings() {
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":1,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         panel.dashboard_field = 3;
         panel.dashboard_move_field(true);
         assert_eq!(panel.dashboard_field, 4 + FIELD_DEFS.len());
@@ -1828,7 +1815,7 @@ mod tests {
     #[test]
     fn dashboard_creates_local_target_from_form() {
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"revision":2,"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","revision":1,"enabled":true,"backend":{"type":"local"}}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |c| {
             crossterm::event::KeyEvent::new(
                 crossterm::event::KeyCode::Char(c),
@@ -1843,7 +1830,6 @@ mod tests {
             Some(HpcPanelCommand::SaveTarget(request)) => {
                 assert_eq!(request["id"], "new-host");
                 assert_eq!(request["backend"]["type"], "local");
-                assert_eq!(request["expected_revision"], 2);
             }
             other => panic!("expected target save, got {other:?}"),
         }
@@ -1854,8 +1840,7 @@ mod tests {
         state.values = FIELD_DEFS.iter().map(|_| String::new()).collect();
         state.target_editable = true;
         state.target_id = Some("test".into());
-        state.target_revision = 1;
-        state.registry_revision = 1;
+
         state
     }
 
@@ -1873,7 +1858,7 @@ mod tests {
                 "poll_interval_secs": 15,
                 "account": null
             },
-            "target_id": "sjtu", "target_revision": 2, "registry_revision": 3, "editable": true
+            "target_id": "sjtu", "editable": true
         });
         let mut state = state_with_values();
         state.load_config(&reply);

@@ -1,6 +1,7 @@
 //! Operator-owned compute selection. Storage namespaces have an independent lifetime.
 mod cluster_connection;
 mod enroll;
+mod migration;
 mod readiness;
 mod routing;
 pub use readiness::ReadinessRequest;
@@ -53,14 +54,13 @@ pub enum ComputeBackend {
 #[serde(deny_unknown_fields)]
 pub struct ComputeTarget {
     pub id: String,
-    pub revision: u64,
     pub name: String,
     pub enabled: bool,
     pub backend: ComputeBackend,
     /// Filesystem domains this target references in place. Phase 1 of
     /// the placement model: the domain declaration moves from the
     /// typed-worker profile's free-form `data_home` field into the
-    /// immutable target record, where registry state pins endpoint
+    /// target record, where registry state pins endpoint
     /// identity alongside the other target aliases. Empty for local
     /// targets and pre-existing enrollments (the profile field remains
     /// the legacy fallback).
@@ -135,7 +135,7 @@ impl DataDomain {
 
     /// The transport-side placement record for this domain. Historical ids
     /// use the same URI spelling as their source mounts, without rewriting
-    /// immutable target records or their pinned profiles.
+    /// target records or their pinned profiles.
     pub fn data_home(&self) -> dag_core::SshDataHome {
         dag_core::SshDataHome {
             ssh_aliases: self.ssh_aliases.clone(),
@@ -146,6 +146,18 @@ impl DataDomain {
             retained_remote_root: self.retained_remote_root.clone(),
         }
     }
+}
+
+fn same_job_connection(left: &ComputeTarget, right: &ComputeTarget) -> bool {
+    let connection = |backend: &ComputeBackend| match backend {
+        ComputeBackend::Slurm { settings } => Some((
+            settings.ssh_host.clone(),
+            settings.data_ssh_host.clone(),
+            settings.pi_ssh_host.clone(),
+        )),
+        _ => None,
+    };
+    connection(&left.backend) == connection(&right.backend) && left.endpoints == right.endpoints
 }
 
 fn is_domain_absolute(path: &str) -> bool {
@@ -205,7 +217,7 @@ fn yes() -> bool {
 /// operator's site profile seeds the base config (file > env > default);
 /// persisted compute-registry state then overrides placement for enrolled
 /// deployments. Environment variables seed the initial state; they do not
-/// retarget an enrolled revision.
+/// retarget an enrolled target.
 pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, String> {
     let mut config = config.clone();
     let registry_path = config.state_dir.join("compute/registry.json");
@@ -227,16 +239,15 @@ pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, St
         Err(error) => return Err(error.to_string()),
         Ok(_) => (),
     }
-    let state: ComputeRegistryState =
-        serde_json::from_slice(&read_private(&path)?).map_err(|e| e.to_string())?;
-    if state.version != 1 {
+    let state: ComputeRegistryState = decode_state(&read_private(&path)?)?;
+    if state.version != 2 {
         return Err("unsupported compute registry state".into());
     }
     let target = state
         .targets
         .iter()
-        .find(|t| t.id == state.policy.target_id && t.revision == state.policy.target_revision)
-        .ok_or("selected target revision is missing")?;
+        .find(|t| t.id == state.policy.target_id)
+        .ok_or("selected target is missing")?;
     let mut resolved = config.clone();
     match &target.backend {
         ComputeBackend::Local => {
@@ -262,7 +273,7 @@ pub(crate) fn startup_config(config: &RuntimeConfig) -> Result<RuntimeConfig, St
 
 /// Compute/source identifiers predate URI domains and admit capitals,
 /// underscores and leading digits. Derive the address without renaming the
-/// saved source, mount path, or immutable target revision.
+/// saved source, mount path, or compute target.
 fn source_address_domain(id: &str) -> String {
     let scheme = id.to_ascii_lowercase().replace('_', "-");
     if vfs::uri::valid_domain_name(&scheme) && scheme != "local" {
@@ -344,9 +355,7 @@ impl DataSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComputePolicy {
-    pub revision: u64,
     pub target_id: String,
-    pub target_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -356,12 +365,85 @@ pub struct ComputePolicy {
 /// This is a storage/transport record, not a second compute-domain object.
 pub struct ComputeRegistryState {
     pub version: u32,
-    pub revision: u64,
     pub policy: ComputePolicy,
     pub targets: Vec<ComputeTarget>,
     pub data_sources: Vec<DataSource>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub deleted_target_ids: std::collections::BTreeSet<String>,
+}
+
+/// Collapse the old versioned registry into one current configuration per target.
+/// Preserve the selected configuration even when an unselected edit was newer.
+fn decode_state(bytes: &[u8]) -> Result<ComputeRegistryState, String> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    if value["version"] == 1 {
+        let selected = value["policy"]["target_id"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let selected_revision = value["policy"]["target_revision"].as_u64();
+        let targets = value["targets"]
+            .as_array()
+            .ok_or("invalid compute targets")?;
+        let selected_revision = selected_revision
+            .filter(|r| *r > 0)
+            .ok_or("invalid selected legacy target")?;
+        if !targets
+            .iter()
+            .any(|t| t["id"] == selected && t["revision"].as_u64() == Some(selected_revision))
+        {
+            return Err("selected legacy target is missing".into());
+        }
+        let mut current = BTreeMap::<String, serde_json::Value>::new();
+        let mut latest = BTreeMap::<String, (u64, bool)>::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for target in targets {
+            let id = target["id"].as_str().ok_or("invalid compute target id")?;
+            let revision = target["revision"]
+                .as_u64()
+                .filter(|r| *r > 0)
+                .ok_or("invalid legacy target revision")?;
+            if !seen.insert((id.to_owned(), revision)) {
+                return Err("duplicate legacy compute target".into());
+            }
+            let enabled = target["enabled"]
+                .as_bool()
+                .ok_or("invalid legacy target state")?;
+            if latest.get(id).is_none_or(|(r, _)| *r < revision) {
+                latest.insert(id.to_owned(), (revision, enabled));
+            }
+            let selected_entry = id == selected && revision == selected_revision;
+            let replace = current.get(id).is_none_or(|old| {
+                if id == selected && old["revision"].as_u64() == Some(selected_revision) {
+                    false
+                } else {
+                    selected_entry || Some(revision) > old["revision"].as_u64()
+                }
+            });
+            if replace {
+                current.insert(id.to_owned(), target.clone());
+            }
+        }
+        for (id, (_, enabled)) in latest {
+            current.get_mut(&id).unwrap()["enabled"] = enabled.into();
+        }
+        for target in current.values_mut() {
+            target.as_object_mut().unwrap().remove("revision");
+        }
+        value["targets"] = serde_json::to_value(current.into_values().collect::<Vec<_>>())
+            .map_err(|e| e.to_string())?;
+        value["policy"]
+            .as_object_mut()
+            .ok_or("invalid compute policy")?
+            .retain(|key, _| key == "target_id");
+        value.as_object_mut().unwrap().remove("revision");
+        value["version"] = 2.into();
+    }
+    let state: ComputeRegistryState = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    if state.version != 2 {
+        return Err("unsupported compute registry state".into());
+    }
+    Ok(state)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,15 +459,12 @@ pub struct ComputeStatus {
 pub struct ExecutionBinding {
     pub id: String,
     pub target_id: String,
-    pub target_revision: u64,
-    pub policy_revision: u64,
     pub target_sha256: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeImageEvidence {
     pub target_id: String,
-    pub target_revision: u64,
     pub target_sha256: String,
     pub capsule_sha256: BTreeMap<String, String>,
     pub resolution: container_runtime::ContainerImageResolution,
@@ -397,7 +476,6 @@ pub struct ComputeImageEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SaveTarget {
-    pub expected_revision: u64,
     pub id: String,
     pub name: String,
     pub enabled: bool,
@@ -410,13 +488,11 @@ pub struct SaveTarget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectTarget {
-    pub expected_revision: u64,
     pub target_id: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SaveDataSource {
-    pub expected_revision: u64,
     pub source: DataSource,
 }
 
@@ -430,7 +506,6 @@ pub(crate) struct BuiltTarget {
     /// The direct-host ssh identity, so a configuration check can observe
     /// the connection a run would actually use. Absent on other backends.
     pub ssh_probe: Option<dag_core::SshTarget>,
-    pub monitor_key: String,
 }
 
 impl BuiltTarget {
@@ -441,7 +516,7 @@ impl BuiltTarget {
             .is_none_or(|revision| revision == dag_core::source_revision());
         serde_json::json!({
             "target_id": self.target.id,
-            "target_revision": self.target.revision,
+            "target_sha256": serde_json::to_vec(&self.target).ok().map(|bytes| format!("{:x}", Sha256::digest(bytes))),
             "coordinator_source_revision": dag_core::source_revision(),
             "worker_source_revision": self.typed_worker_revision,
             "source_compatible": source_compatible,
@@ -457,9 +532,8 @@ impl BuiltTarget {
             && revision != dag_core::source_revision()
         {
             return Err(format!(
-                "compute target {} revision {} has typed-worker source {}; coordinator source is {}. Deploy the measured matching worker and enroll a new target revision before starting a run; preserve historical pins",
+                "compute target {} has typed-worker source {}; coordinator source is {}. Deploy the measured matching worker and update the target before starting a run",
                 self.target.id,
-                self.target.revision,
                 revision,
                 dag_core::source_revision(),
             ));
@@ -494,9 +568,6 @@ pub(crate) fn identifier(id: &str) -> Result<(), String> {
         );
     }
     Ok(())
-}
-fn key(id: &str, revision: u64) -> String {
-    format!("{id}-r{revision}")
 }
 
 pub(crate) fn private_dir(path: &Path) -> Result<(), String> {
@@ -627,22 +698,39 @@ fn write_binding(path: &Path, binding: &ExecutionBinding) -> Result<(), String> 
 }
 
 impl ComputeRegistry {
-    /// Inspect the same in-memory runtime used by runs bound to this revision.
+    /// Hold the owning target while attaching a monitor, including the period
+    /// before the monitor's durable record exists.
+    pub async fn watch_existing_job(
+        &self,
+        target_id: &str,
+        cluster: Option<&str>,
+        submission_key: &str,
+        owner: crate::hpc_monitor::Owner,
+        plan: serde_json::Value,
+    ) -> Result<hpc_tools::monitor::MonitorRecord, String> {
+        let target = self.target(target_id)?;
+        let hub = self.monitors.target_hub(&target.target.id)?;
+        let result = hub
+            .watch_existing(cluster, submission_key, owner, plan)
+            .await;
+        drop(target);
+        result
+    }
+
+    /// Inspect the current in-memory runtime and its admitted image mapping.
     /// Never reread a mutable inventory or expose private profile contents.
     pub fn image_evidence(
         &self,
         id: &str,
-        revision: u64,
         reference: &str,
     ) -> Result<ComputeImageEvidence, String> {
-        let target = self.target(id, Some(revision))?;
+        let target = self.target(id)?;
         let resolution = target
             .containers
             .image_resolution(reference)
             .map_err(|e| e.to_string())?;
         Ok(ComputeImageEvidence {
             target_id: target.target.id.clone(),
-            target_revision: target.target.revision,
             target_sha256: format!(
                 "{:x}",
                 Sha256::digest(serde_json::to_vec(&target.target).map_err(|e| e.to_string())?)
@@ -684,12 +772,16 @@ impl ComputeRegistry {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
             Err(error) => return Err(error.to_string()),
         };
+        let migrated = !is_new
+            && serde_json::from_slice::<serde_json::Value>(&read_private(&state_path)?)
+                .map_err(|e| e.to_string())?["version"]
+                == 1;
         let mut state: ComputeRegistryState = if !is_new {
-            serde_json::from_slice(&read_private(&state_path)?).map_err(|e| e.to_string())?
+            decode_state(&read_private(&state_path)?)?
         } else {
             let mut targets = vec![ComputeTarget {
                 id: "local".into(),
-                revision: 1,
+
                 name: "Local".into(),
                 enabled: true,
                 backend: ComputeBackend::Local,
@@ -703,7 +795,7 @@ impl ComputeRegistry {
             {
                 targets.push(ComputeTarget {
                     id: "legacy-slurm".into(),
-                    revision: 1,
+
                     name: "SJTU".into(),
                     enabled: config.slurm.enabled,
                     backend: ComputeBackend::Slurm {
@@ -720,24 +812,19 @@ impl ComputeRegistry {
                 "local"
             };
             ComputeRegistryState {
-                version: 1,
-                revision: 1,
+                version: 2,
+
                 policy: ComputePolicy {
-                    revision: 1,
                     target_id: target_id.into(),
-                    target_revision: 1,
                 },
                 targets,
                 data_sources: vec![],
                 deleted_target_ids: Default::default(),
             }
         };
-        if state.version != 1 || state.revision == 0 {
+        if state.version != 2 {
             return Err("unsupported compute registry state".into());
         }
-        // Names are part of saved target revisions. Presentation changes must
-        // not rewrite historical capsules or invalidate a prepared deployment
-        // registry state merely by opening the registry.
         // A single gateway already owns state_dir; mutations additionally serialize here.
         let local = Arc::new(container_runtime::PodmanRuntime::new(
             containers.config.clone(),
@@ -769,28 +856,34 @@ impl ComputeRegistry {
                 .add_data_mount(&source.manifest()?)
                 .map_err(|e| e.to_string())?;
         }
+        migration::mount_legacy_evidence(&registry)?;
+        if migrated {
+            migration::restore_execution_state(&registry, &read_private(&state_path)?)?;
+        }
         for target in &mut state.targets {
             if is_new {
-                registry.freeze_profile(target)?;
+                let pin_endpoints = target.id != "legacy-slurm";
+                registry.freeze_profile(target, pin_endpoints)?;
             }
             identifier(&target.id)?;
-            if target.revision == 0 || target.name.trim().is_empty() {
+            if target.name.trim().is_empty() {
                 return Err("invalid compute target".into());
             }
             let built = registry.build(target.clone())?;
+            registry.observe(&built)?;
             if registry
                 .built
                 .write()
                 .unwrap()
-                .insert(built.monitor_key.clone(), built)
+                .insert(built.target.id.clone(), built)
                 .is_some()
             {
-                return Err("duplicate compute target revision".into());
+                return Err("duplicate compute target id".into());
             }
         }
         *registry.state.write().unwrap() = state.clone();
-        registry.target(&state.policy.target_id, Some(state.policy.target_revision))?;
-        if is_new || loaded_legacy {
+        registry.target(&state.policy.target_id)?;
+        if is_new || loaded_legacy || migrated {
             registry.persist(&state)?;
         }
         Ok(registry)
@@ -825,10 +918,17 @@ impl ComputeRegistry {
             }
         }
         runs.sort_by(|a, b| a.id.cmp(&b.id));
-        let state = self.state();
-        let deployment = self
-            .target(&state.policy.target_id, Some(state.policy.target_revision))?
-            .deployment();
+        let (state, deployment) = {
+            let state = self.state.read().unwrap();
+            let target = self
+                .built
+                .read()
+                .unwrap()
+                .get(&state.policy.target_id)
+                .cloned()
+                .ok_or("selected target is missing")?;
+            (state.clone(), target.deployment())
+        };
         Ok(ComputeStatus {
             deployment,
             state,
@@ -842,15 +942,13 @@ impl ComputeRegistry {
 
     /// Read-only connection inspection. Never allocates a compute job.
     pub async fn check_target(&self, id: &str) -> Result<serde_json::Value, String> {
-        let target = self.target(id, None)?;
+        let target = self.target(id)?;
         let deployment = target.deployment();
         if let Err(error) = target.ensure_source_compatible() {
-            return Ok(
-                serde_json::json!({"target_id": id, "target_revision": target.target.revision,
+            return Ok(serde_json::json!({"target_id": id,
                 "configuration_valid": false, "deployment": deployment, "error": error,
                 "connection_observation": null, "worker_and_image_execution_verified": false,
-                "new_job_submitted": false, "scientific_admission_granted": false}),
-            );
+                "new_job_submitted": false, "scientific_admission_granted": false}));
         }
         let observation = if let Some(client) = &target.hpc {
             Some(client.run_json("import os,socket,json; print(json.dumps({'hostname':socket.gethostname(),'uid':os.getuid()}))", &serde_json::json!({}),false).await?)
@@ -874,7 +972,7 @@ impl ComputeRegistry {
             None
         };
         Ok(
-            serde_json::json!({"target_id":target.target.id,"target_revision":target.target.revision,"configuration_valid":true,"deployment":deployment,"connection_observation":observation,"worker_and_image_execution_verified":false,"new_job_submitted":false,"scientific_admission_granted":false}),
+            serde_json::json!({"target_id":target.target.id,"configuration_valid":true,"deployment":deployment,"connection_observation":observation,"worker_and_image_execution_verified":false,"new_job_submitted":false,"scientific_admission_granted":false}),
         )
     }
 
@@ -885,49 +983,29 @@ impl ComputeRegistry {
             .built
             .read()
             .unwrap()
-            .get(&key(&state.policy.target_id, state.policy.target_revision))
+            .get(&state.policy.target_id)
             .cloned()
-            .ok_or("selected target revision is missing")?;
-        // Admission checks current enabled state, while existing run bindings remain valid.
-        let latest = state
-            .targets
-            .iter()
-            .rev()
-            .find(|t| t.id == target.target.id)
-            .ok_or("target missing")?;
-        if !latest.enabled {
+            .ok_or("selected target is missing")?;
+        if !target.target.enabled || state.deleted_target_ids.contains(&target.target.id) {
             return Err("selected compute target is disabled; select another target".into());
         }
         target.ensure_source_compatible()?;
         Ok((target, state.policy.clone()))
     }
-    pub(crate) fn target(
-        &self,
-        id: &str,
-        revision: Option<u64>,
-    ) -> Result<Arc<BuiltTarget>, String> {
+    pub(crate) fn target(&self, id: &str) -> Result<Arc<BuiltTarget>, String> {
         self.healthy()?;
-        let state = self.state.read().unwrap();
-        let t = state
-            .targets
-            .iter()
-            .rev()
-            .find(|t| t.id == id && revision.is_none_or(|r| r == t.revision))
-            .ok_or("unknown target revision")?;
+        let _state = self.state.read().unwrap();
         self.built
             .read()
             .unwrap()
-            .get(&key(id, t.revision))
+            .get(id)
             .cloned()
-            .ok_or("target unavailable".into())
+            .ok_or("unknown target".into())
     }
     pub fn select(&self, request: SelectTarget) -> Result<ComputeRegistryState, String> {
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
         let mut next = self.state();
-        if next.revision != request.expected_revision {
-            return Err("stale compute revision; reload settings".into());
-        }
         if next.deleted_target_ids.contains(&request.target_id) {
             return Err("target is deleted".into());
         }
@@ -937,30 +1015,10 @@ impl ComputeRegistry {
             .rev()
             .find(|t| t.id == request.target_id && t.enabled)
             .ok_or("target is missing or disabled")?;
-        if next
-            .targets
-            .iter()
-            .rev()
-            .find(|t| t.id == request.target_id)
-            .is_some_and(|t| !t.enabled)
-        {
-            return Err("target is disabled".into());
-        }
-        self.target(&t.id, Some(t.revision))?
-            .ensure_source_compatible()?;
+        self.target(&t.id)?.ensure_source_compatible()?;
         next.policy = ComputePolicy {
-            revision: next
-                .policy
-                .revision
-                .checked_add(1)
-                .ok_or("policy revision overflow")?,
             target_id: t.id.clone(),
-            target_revision: t.revision,
         };
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or("registry revision overflow")?;
         self.persist(&next)?;
         *self.state.write().unwrap() = next.clone();
         Ok(next)
@@ -973,21 +1031,9 @@ impl ComputeRegistry {
             return Err("target name is required".into());
         }
         let mut next = self.state();
-        if next.revision != request.expected_revision {
-            return Err("stale compute revision; reload settings".into());
-        }
         if next.deleted_target_ids.contains(&request.id) {
             return Err("target id is reserved by deleted history".into());
         }
-        let revision = next
-            .targets
-            .iter()
-            .filter(|t| t.id == request.id)
-            .map(|t| t.revision)
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or("target revision overflow")?;
         if request.data_domains.len() > 1 {
             return Err("at most one data domain per target is supported".into());
         }
@@ -996,7 +1042,6 @@ impl ComputeRegistry {
         }
         let mut target = ComputeTarget {
             id: request.id,
-            revision,
             name: request.name,
             enabled: request.enabled,
             backend: request.backend,
@@ -1004,35 +1049,40 @@ impl ComputeRegistry {
             capsule_sha256: BTreeMap::new(),
             endpoints: BTreeMap::new(),
         };
-        self.freeze_profile(&mut target)?;
+        self.freeze_profile(&mut target, true)?;
+        // Block admission until the new configuration is published. Existing
+        // holders of the old executor remain independent of this lock.
+        let mut state = self.state.write().unwrap();
+        self.check_job_connection(&target)?;
         let built = self.build(target.clone())?;
-        // Publish the built revision first; it is unreachable by policy until the durable commit.
+        // Persist first. Bound runs keep their Arc while future runs see this configuration.
+        if let Some(existing) = next
+            .targets
+            .iter_mut()
+            .find(|existing| existing.id == target.id)
+        {
+            *existing = target;
+        } else {
+            next.targets.push(target);
+        }
+        self.persist(&next)?;
+        self.observe(&built).inspect_err(|_| {
+            self.poisoned
+                .store(true, std::sync::atomic::Ordering::Release);
+        })?;
         self.built
             .write()
             .unwrap()
-            .insert(built.monitor_key.clone(), built);
-        next.targets.push(target);
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or("registry revision overflow")?;
-        self.persist(&next)?;
-        *self.state.write().unwrap() = next.clone();
+            .insert(built.target.id.clone(), built);
+        *state = next.clone();
         Ok(next)
     }
 
-    /// Remove a target from future selection while retaining revisions used by runs.
-    pub fn delete_target(
-        &self,
-        id: &str,
-        expected_revision: u64,
-    ) -> Result<ComputeRegistryState, String> {
+    /// Disable selection while preserving access to existing job records.
+    pub fn delete_target(&self, id: &str) -> Result<ComputeRegistryState, String> {
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
         let mut next = self.state();
-        if next.revision != expected_revision {
-            return Err("stale compute revision; reload settings".into());
-        }
         if id == "local" {
             return Err("the local target cannot be deleted".into());
         }
@@ -1045,10 +1095,6 @@ impl ComputeRegistry {
             return Err("unknown target".into());
         }
         next.deleted_target_ids.insert(id.to_string());
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or("registry revision overflow")?;
         self.persist(&next)?;
         *self.state.write().unwrap() = next.clone();
         Ok(next)
@@ -1060,11 +1106,8 @@ impl ComputeRegistry {
         self.healthy()?;
         identifier(&request.source.id)?;
         request.source.domain = request.source.address_domain();
-        if self.state().revision != request.expected_revision {
-            return Err("stale compute revision; reload settings".into());
-        }
-        // Probe before taking the synchronous mutation lock. Recheck the
-        // revision and mount conflicts under that lock before publication.
+        // Probe before taking the synchronous mutation lock. Recheck
+        // mount conflicts under that lock before publication.
         self.storage
             .require_vacant_mount_path(&request.source.mount_path())
             .await
@@ -1072,9 +1115,6 @@ impl ComputeRegistry {
         let _guard = self.mutation.lock().map_err(|_| "compute lock poisoned")?;
         self.healthy()?;
         let mut next = self.state();
-        if next.revision != request.expected_revision {
-            return Err("stale compute revision; reload settings".into());
-        }
         if next.data_sources.iter().any(|s| s.id == request.source.id) {
             return Err("data source identity already exists; use a new namespace".into());
         }
@@ -1102,10 +1142,6 @@ impl ComputeRegistry {
             return Err("data source shadows an existing mount".into());
         }
         next.data_sources.push(request.source);
-        next.revision = next
-            .revision
-            .checked_add(1)
-            .ok_or("registry revision overflow")?;
         self.persist(&next)?;
         if let Err(e) = self.vfs.add_data_mount(&manifest) {
             self.poisoned
@@ -1116,20 +1152,20 @@ impl ComputeRegistry {
         Ok(next)
     }
 
-    fn freeze_profile(&self, target: &mut ComputeTarget) -> Result<(), String> {
+    fn freeze_profile(
+        &self,
+        target: &mut ComputeTarget,
+        pin_endpoints: bool,
+    ) -> Result<(), String> {
         let settings = match &mut target.backend {
             ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings,
             ComputeBackend::Local => return Ok(()),
         };
-        let dir = self
-            .root
-            .join("targets")
-            .join(key(&target.id, target.revision));
+        let dir = self.root.join("targets").join(&target.id);
         private_dir(&dir)?;
         let dir = dir.join(format!("profile-{}", uuid::Uuid::new_v4()));
         private_dir(&dir)?;
-        // Legacy installation starts offline and keeps historical bindings unchanged.
-        // New operator revisions resolve and freeze their non-secret endpoints.
+        // Resolve and freeze non-secret endpoints for each saved configuration.
         // Data-domain aliases are pinned with the same treatment: in-place
         // references re-verify identity against these frozen endpoints.
         let domain_aliases: Vec<&String> = target
@@ -1141,7 +1177,7 @@ impl ComputeRegistry {
             .chain(settings.data_ssh_host.iter())
             .chain(settings.pi_ssh_host.iter())
             .chain(domain_aliases.iter().copied())
-            .filter(|_| !(target.id == "legacy-slurm" && target.revision == 1))
+            .filter(|_| pin_endpoints)
         {
             target.endpoints.insert(
                 alias.clone(),
@@ -1189,8 +1225,39 @@ impl ComputeRegistry {
             .map_err(|error| error.to_string())
     }
 
+    fn observe(&self, target: &Arc<BuiltTarget>) -> Result<(), String> {
+        if let ComputeBackend::Slurm { settings } = &target.target.backend {
+            self.monitors.add(
+                &target.target.id,
+                target.hpc.clone().ok_or("missing account client")?,
+                std::time::Duration::from_secs(settings.poll_interval_secs),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn check_job_connection(&self, target: &ComputeTarget) -> Result<(), String> {
+        let Some(old) = self.built.read().unwrap().get(&target.id).cloned() else {
+            return Ok(());
+        };
+        if same_job_connection(&old.target, target) {
+            return Ok(());
+        }
+        // Include in-flight job-tool calls that have not written a monitor yet.
+        // The map and this local clone account for two strong references.
+        if Arc::strong_count(&old) > 2 {
+            return Err("target is in use; wait for its current operations before changing its SSH connection".into());
+        }
+        if let Ok(hub) = self.monitors.target_hub(&target.id) {
+            if !hub.records()?.is_empty() {
+                return Err("target has retained jobs; register a different target id to change its SSH connection".into());
+            }
+        }
+        Ok(())
+    }
+
     fn build(&self, target: ComputeTarget) -> Result<Arc<BuiltTarget>, String> {
-        let monitor_key = key(&target.id, target.revision);
+        let target_id = target.id.clone();
         let network_policy_sha256 = match &target.backend {
             ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => settings
                 .typed_worker_config
@@ -1251,14 +1318,11 @@ impl ComputeRegistry {
                 let mut config = self.config.clone();
                 config.slurm = settings.clone();
                 config.slurm.enabled = true;
-                if !(target.id == "legacy-slurm" && target.revision == 1)
+                if !(target.id == "legacy-slurm")
                     && config.slurm.artifact_root.as_os_str().is_empty()
                 {
-                    config.slurm.artifact_root = self
-                        .root
-                        .join("targets")
-                        .join(&monitor_key)
-                        .join("artifacts");
+                    config.slurm.artifact_root =
+                        self.root.join("targets").join(&target_id).join("artifacts");
                 }
                 let mut slurm = crate::host::shared_infra::slurm_settings(&config)
                     .map_err(|e| e.to_string())?;
@@ -1266,12 +1330,12 @@ impl ComputeRegistry {
                     slurm.ssh = slurm.ssh.with_endpoint(endpoint.clone());
                 }
                 slurm.ssh = slurm.ssh.with_shared_endpoints(target.endpoints.clone());
-                let workspace = if target.id == "legacy-slurm" && target.revision == 1 {
+                let workspace = if target.id == "legacy-slurm" {
                     config.state_dir.join("slurm-tasks")
                 } else {
-                    self.root.join("targets").join(&monitor_key).join("tasks")
+                    self.root.join("targets").join(&target_id).join("tasks")
                 };
-                // Receipts contain host-absolute paths. New revisions must
+                // Receipts contain host-absolute paths. Updated targets must
                 // expose their evidence to existing VFS clients as well.
                 // Never mount the enclosing worker/credential configuration.
                 self.mount_execution_evidence(&workspace)?;
@@ -1297,12 +1361,12 @@ impl ComputeRegistry {
                     let runtime = container_plugin::slurm_runtime::SlurmContainerRuntime::new(
                         slurm,
                         self.local.workspace_root().to_path_buf(),
-                        if target.id == "legacy-slurm" && target.revision == 1 {
+                        if target.id == "legacy-slurm" {
                             config.state_dir.join("slurm-containers")
                         } else {
                             self.root
                                 .join("targets")
-                                .join(&monitor_key)
+                                .join(&target_id)
                                 .join("containers")
                         },
                         settings.panel_cache_remote_dir.clone(),
@@ -1316,7 +1380,7 @@ impl ComputeRegistry {
                     })
                     .map_err(|e| e.to_string())?;
                     Arc::new(runtime)
-                } else if target.id == "legacy-slurm" && target.revision == 1 && {
+                } else if target.id == "legacy-slurm" && {
                     // Preserve the original operator placement, including
                     // explicitly local legacy container adapters. New
                     // Slurm targets never inherit this compatibility route.
@@ -1335,9 +1399,9 @@ impl ComputeRegistry {
                         root: self.local.workspace_root().to_path_buf(),
                     })
                 };
-                let dir = self.root.join("targets").join(&monitor_key);
+                let dir = self.root.join("targets").join(&target_id);
                 private_dir(&dir)?;
-                let state_dir = if target.id == "legacy-slurm" && target.revision == 1 {
+                let state_dir = if target.id == "legacy-slurm" {
                     config.state_dir.join("hpc-account")
                 } else {
                     dir.join("hpc-account")
@@ -1355,19 +1419,11 @@ impl ComputeRegistry {
                     })?
                     .with_endpoints(target.endpoints.clone())?,
                 );
-                self.monitors.add(
-                    &monitor_key,
-                    hpc.clone(),
-                    std::time::Duration::from_secs(settings.poll_interval_secs),
-                )?;
                 (executor, containers, Some(hpc), None)
             }
             ComputeBackend::Ssh { settings } => {
                 let artifact_root = if settings.artifact_root.as_os_str().is_empty() {
-                    self.root
-                        .join("targets")
-                        .join(&monitor_key)
-                        .join("artifacts")
+                    self.root.join("targets").join(&target_id).join("artifacts")
                 } else {
                     settings.artifact_root.clone()
                 };
@@ -1385,7 +1441,7 @@ impl ComputeRegistry {
                     ssh = ssh.with_endpoint(endpoint.clone());
                 }
                 ssh = ssh.with_shared_endpoints(target.endpoints.clone());
-                let workspace = self.root.join("targets").join(&monitor_key).join("tasks");
+                let workspace = self.root.join("targets").join(&target_id).join("tasks");
                 self.mount_execution_evidence(&workspace)?;
                 self.mount_execution_evidence(&artifact_root)?;
                 let default_time = crate::config::slurm::parse_walltime(&settings.default_time)
@@ -1436,7 +1492,7 @@ impl ComputeRegistry {
                 let account_state_dir = self
                     .root
                     .join("targets")
-                    .join(&monitor_key)
+                    .join(&target_id)
                     .join("hpc-account");
                 private_dir(&account_state_dir)?;
                 let account = Arc::new(
@@ -1470,24 +1526,20 @@ impl ComputeRegistry {
             containers,
             hpc,
             ssh_probe,
-            monitor_key,
         }))
     }
     pub(crate) fn bind(&self) -> Result<(Arc<BuiltTarget>, ExecutionBinding), String> {
-        let (target, policy) = self.selected()?;
-        let binding = self.record_binding(&target, &policy)?;
+        let (target, _) = self.selected()?;
+        let binding = self.record_binding(&target)?;
         Ok((target, binding))
     }
     pub(crate) fn record_binding(
         &self,
         target: &Arc<BuiltTarget>,
-        policy: &ComputePolicy,
     ) -> Result<ExecutionBinding, String> {
         let binding = ExecutionBinding {
             id: uuid::Uuid::new_v4().to_string(),
             target_id: target.target.id.clone(),
-            target_revision: target.target.revision,
-            policy_revision: policy.revision,
             target_sha256: format!(
                 "{:x}",
                 Sha256::digest(serde_json::to_vec(&target.target).map_err(|e| e.to_string())?)

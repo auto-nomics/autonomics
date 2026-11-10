@@ -19,8 +19,8 @@ use crate::GatewayClient;
 /// Inspect a target's configuration and perform a read-only connection probe.
 pub async fn compute_check_main(args: &[String]) -> i32 {
     let mut id = None;
-    let mut gateway = std::env::var("AUTONOMICS_HTTP_API_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:8765".into());
+    let mut gateway =
+        std::env::var("AUTONOMICS_HTTP_API_ADDR").unwrap_or_else(|_| "127.0.0.1:8765".into());
     let mut token = std::env::var("AUTONOMICS_HTTP_API_TOKEN").ok();
     let mut values = args.iter();
     while let Some(arg) = values.next() {
@@ -30,10 +30,17 @@ pub async fn compute_check_main(args: &[String]) -> i32 {
                     eprintln!("{arg} expects a value");
                     return 2;
                 };
-                if arg == "--gateway" { gateway = value.clone(); } else { token = Some(value.clone()); }
+                if arg == "--gateway" {
+                    gateway = value.clone();
+                } else {
+                    token = Some(value.clone());
+                }
             }
             value if !value.starts_with('-') && id.is_none() => id = Some(value.to_owned()),
-            _ => { eprintln!("usage: autonomics compute check <id> [--gateway ADDR] [--token TOKEN]"); return 2; }
+            _ => {
+                eprintln!("usage: autonomics compute check <id> [--gateway ADDR] [--token TOKEN]");
+                return 2;
+            }
         }
     }
     let Some(id) = id else {
@@ -42,14 +49,24 @@ pub async fn compute_check_main(args: &[String]) -> i32 {
     };
     let client = match GatewayClient::new(&gateway, token.as_deref()) {
         Ok(client) => client,
-        Err(error) => { eprintln!("invalid gateway configuration: {error}"); return 1; }
+        Err(error) => {
+            eprintln!("invalid gateway configuration: {error}");
+            return 1;
+        }
     };
     match client.check_compute_target(&id).await {
         Ok(result) => {
             println!("{}", serde_json::to_string_pretty(&result).unwrap());
-            if result["configuration_valid"] == false { 1 } else { 0 }
+            if result["configuration_valid"] == false {
+                1
+            } else {
+                0
+            }
         }
-        Err(error) => { eprintln!("compute target check failed: {error}"); 1 }
+        Err(error) => {
+            eprintln!("compute target check failed: {error}");
+            1
+        }
     }
 }
 
@@ -129,15 +146,7 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
         }
     };
     eprintln!("[gateway] 正在读取计算目标配置…");
-    let status = match client.compute_status().await {
-        Ok(status) => status,
-        Err(error) => {
-            eprintln!("cannot read compute registry state: {error}");
-            return 1;
-        }
-    };
     let request = runtime::compute::EnrollRequest {
-        expected_revision: status.state.revision,
         id,
         name,
         login_alias: login,
@@ -176,19 +185,9 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
         }
     };
     match result {
-        Ok(state) => {
+        Ok(_state) => {
             let selected = if select { " (selected)" } else { "" };
-            println!(
-                "enrolled `{}` at revision {}{selected}",
-                request.id,
-                state
-                    .targets
-                    .iter()
-                    .filter(|t| t.id == request.id)
-                    .map(|t| t.revision)
-                    .max()
-                    .unwrap_or_default()
-            );
+            println!("enrolled `{}`{selected}", request.id);
             0
         }
         Err(error) => {

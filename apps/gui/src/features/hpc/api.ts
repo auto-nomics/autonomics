@@ -16,17 +16,14 @@ export async function fetchComputeStatus(): Promise<ComputeStatus> {
 }
 
 export async function selectComputeTarget(
-  expectedRevision: number,
   targetId: string,
 ): Promise<ComputeRegistryState> {
   return gatewayRequest("PUT", "/compute/policy", {
-    expected_revision: expectedRevision,
     target_id: targetId,
   });
 }
 
 export async function saveComputeTarget(
-  expectedRevision: number,
   target: {
     id: string;
     name: string;
@@ -36,13 +33,11 @@ export async function saveComputeTarget(
   },
 ): Promise<ComputeRegistryState> {
   return gatewayRequest("PUT", "/compute/targets", {
-    expected_revision: expectedRevision,
     ...target,
   });
 }
 
 export type EnrollComputeRequest = {
-  expected_revision: number;
   id: string;
   name?: string;
   login_alias: string;
@@ -68,11 +63,9 @@ export async function enrollComputeTarget(
 }
 
 export async function addComputeDataSource(
-  expectedRevision: number,
   source: Record<string, unknown>,
 ): Promise<ComputeRegistryState> {
   return gatewayRequest("POST", "/compute/data-sources", {
-    expected_revision: expectedRevision,
     source,
   });
 }

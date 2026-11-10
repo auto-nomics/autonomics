@@ -31,7 +31,6 @@ pub(crate) async fn list(State(state): State<GatewayState>) -> GatewayResult<Jso
 #[serde(deny_unknown_fields)]
 pub(crate) struct WatchExisting {
     target_id: Option<String>,
-    target_revision: Option<u64>,
     agent_path: String,
     agent_id: uuid::Uuid,
     session_id: uuid::Uuid,
@@ -70,34 +69,51 @@ pub(crate) async fn watch(
     let hub = state.infra.hpc_monitor.as_ref().ok_or_else(|| {
         GatewayError::Status(StatusCode::CONFLICT, "HPC monitoring is disabled".into())
     })?;
-    let key = match (&input.target_id, input.target_revision) {
-        (Some(id), Some(revision)) => format!("{id}-r{revision}"),
-        (None, None) => "legacy-slurm-r1".into(),
-        _ => {
-            return Err(GatewayError::Message(
-                "target_id and target_revision must be supplied together".into(),
-            ));
-        }
+    let key = input
+        .target_id
+        .clone()
+        .unwrap_or_else(|| "legacy-slurm".into());
+    let owner = runtime::hpc_monitor::Owner {
+        agent_id: input.agent_id.to_string(),
+        agent_path: input.agent_path,
+        session_id: input.session_id.to_string(),
     };
-    let target_hub = hub.target_hub(&key).map_err(GatewayError::Message)?;
-    let record=target_hub.watch_existing(input.cluster.as_deref(),&input.submission_key,runtime::hpc_monitor::Owner{agent_id:input.agent_id.to_string(),agent_path:input.agent_path,session_id:input.session_id.to_string()},json!({"operator_attachment":"Verify the existing expected outputs under the original frozen contract; no new computation."})).await.map_err(|_|GatewayError::Status(StatusCode::CONFLICT,"Cannot bind the existing durable submission; no job was submitted".into()))?;
+    let plan = json!({"operator_attachment":"Verify the existing expected outputs under the original frozen contract; no new computation."});
+    let result = if let Some(registry) = &state.infra.compute {
+        registry
+            .watch_existing_job(
+                &key,
+                input.cluster.as_deref(),
+                &input.submission_key,
+                owner,
+                plan,
+            )
+            .await
+    } else {
+        hub.target_hub(&key)
+            .map_err(GatewayError::Message)?
+            .watch_existing(input.cluster.as_deref(), &input.submission_key, owner, plan)
+            .await
+    };
+    let record = result.map_err(|_| {
+        GatewayError::Status(
+            StatusCode::CONFLICT,
+            "Cannot bind the existing durable submission; no job was submitted".into(),
+        )
+    })?;
     let mut view = record.view();
-    if let Some((id, revision)) = key.rsplit_once("-r") {
-        view.target_id = Some(id.into());
-        view.target_revision = revision.parse().ok();
-    }
+    view.target_id = Some(key);
     Ok(Json(
         json!({"monitor":view,"new_job_submitted":false,"scientific_admission_granted":false}),
     ))
 }
 
 /// Operator control of observation only. The authenticated gateway owner must
-/// bind the exact target revision and original conversation, never a new job.
+/// bind the original target and original conversation, never a new job.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StopMonitor {
     target_id: String,
-    target_revision: u64,
     agent_id: uuid::Uuid,
     agent_path: String,
     session_id: uuid::Uuid,
@@ -125,7 +141,6 @@ pub(crate) async fn stop_monitor(
         .find(|view| {
             view.id == id
                 && view.target_id.as_deref() == Some(input.target_id.as_str())
-                && view.target_revision == Some(input.target_revision)
                 && view.agent_id == input.agent_id.to_string()
                 && view.agent_path == input.agent_path
                 && view.session_id == input.session_id.to_string()
@@ -138,7 +153,7 @@ pub(crate) async fn stop_monitor(
             )
         })?;
     let target = hub
-        .target_hub(&format!("{}-r{}", input.target_id, input.target_revision))
+        .target_hub(&input.target_id)
         .map_err(GatewayError::Message)?;
     let owner = runtime::hpc_monitor::Owner {
         agent_id: input.agent_id.to_string(),
@@ -150,7 +165,6 @@ pub(crate) async fn stop_monitor(
         .map_err(GatewayError::Message)?
         .view();
     view.target_id = Some(input.target_id);
-    view.target_revision = Some(input.target_revision);
     Ok(Json(
         json!({"monitor": view, "prior_monitor": prior, "operator_review": input.reason,
         "remote_job_cancelled": false, "new_job_submitted": false,
