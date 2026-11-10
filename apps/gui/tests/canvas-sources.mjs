@@ -21,6 +21,12 @@ for (const secret of ['PRIVATE-NOTE', 'PRIVATE-MODIFICATION-NOTE', 'PRIVATE-SHAP
 const nih = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'nih', type: 'image', customData: { source: 'NIH BioArt', asset: { title: 'Cell', creators: ['NIH Artist'], licenses: ['Public Domain'], source_url: 'https://bioart.niaid.nih.gov/bioart/82' } } }] }), title: '', unsaved_changes: false });
 assert.deepEqual(nih.assets[0].licenses, ['Public Domain']); assert.deepEqual(nih.assets[0].license_urls, [], 'do not infer a CC0 licence from Public Domain');
 assert.ok(nih.credits[0].includes('NIH Artist'));
+const local = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'local', type: 'image', customData: { modifications: [{ kind: 'path_edit', edits: [{ part_id: 'snapshot-part-1', translate: [12, -8], points: [{ index: 2, position: [3, 4], private_note: 'PRIVATE-PATH-NOTE' }], stroke: '#224466', opacity: 0.4, private_note: 'PRIVATE-PATH-NOTE' }] }] } }] }), title: '', unsaved_changes: false });
+assert.equal(local.assets[0].modifications[0].edits[0].stroke, '#224466');
+assert.equal(local.assets[0].modifications[0].edits[0].opacity, 0.4);
+assert.deepEqual(local.assets[0].modifications[0].edits[0].translate, [12, -8]);
+assert.deepEqual(local.assets[0].modifications[0].edits[0].points, [{ index: 2, position: [3, 4] }]);
+assert.ok(!JSON.stringify(local).includes('PRIVATE-PATH-NOTE'));
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
 function chunks(bytes) {
   const result = []; let offset = 8;

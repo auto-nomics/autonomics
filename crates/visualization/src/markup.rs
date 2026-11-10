@@ -27,6 +27,11 @@ pub struct Summary {
     pub created_at: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Page {
+    pub items: Vec<Summary>,
+    pub next_before: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Markup {
     #[serde(flatten)]
     pub summary: Summary,
@@ -92,11 +97,31 @@ impl Store {
         if self.connection.execute("INSERT INTO visualization_markups SELECT ?1,?2,?3,?4,?5,?6,?7,?8 WHERE EXISTS(SELECT 1 FROM visualizations WHERE id=?2 AND project_id=?9 AND revision=?3)", params![summary.id,id,revision,summary.note,serde_json::to_string(strokes)?,data_url,summary.status,summary.created_at,project])? == 0 { return Err(Error::Conflict); }
         Ok(summary)
     }
-    /// Latest 50 review records, without preview bytes or detailed geometry.
+    /// Compatibility view; use markups_page to traverse the complete history.
     pub fn markups(&self, project: &str, id: &str) -> Result<Vec<Summary>> {
+        Ok(self.markups_page(project, id, None, None, 50)?.items)
+    }
+    /// Stable descending (created_at, id) cursor, scoped to the figure.
+    /// Resolved records can be filtered before pagination so open reviews are not hidden.
+    pub fn markups_page(
+        &self,
+        project: &str,
+        id: &str,
+        before: Option<&str>,
+        status: Option<&str>,
+        limit: u32,
+    ) -> Result<Page> {
         self.get(project, id)?;
-        let mut statement = self.connection.prepare("SELECT id,at_revision,note,strokes,status,created_at FROM visualization_markups WHERE visualization_id=?1 ORDER BY created_at DESC,id DESC LIMIT 50")?;
-        let rows = statement.query_map([id], |row| {
+        if !(1..=100).contains(&limit) || status.is_some_and(|s| s != "open" && s != "resolved") {
+            return Err(Error::Invalid(
+                "markup page limit (1..100) or status (open/resolved)",
+            ));
+        }
+        let cursor: Option<String> = before.map(|cursor| self.connection.query_row(
+            "SELECT created_at FROM visualization_markups WHERE visualization_id=?1 AND id=?2", params![id,cursor], |row| row.get(0)
+        ).optional()?.ok_or(Error::NotFound)).transpose()?;
+        let mut statement = self.connection.prepare("SELECT id,at_revision,note,strokes,status,created_at FROM visualization_markups WHERE visualization_id=?1 AND (?2 IS NULL OR status=?2) AND (?3 IS NULL OR created_at < ?3 OR (created_at=?3 AND id < ?4)) ORDER BY created_at DESC,id DESC LIMIT ?5")?;
+        let rows = statement.query_map(params![id, status, cursor, before, limit + 1], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, i64>(1)?,
@@ -106,19 +131,27 @@ impl Store {
                 row.get::<_, String>(5)?,
             ))
         })?;
-        rows.map(|row| {
-            let (markup_id, at_revision, note, strokes, status, created_at) = row?;
-            Ok(Summary {
-                id: markup_id,
-                visualization_id: id.into(),
-                at_revision,
-                note,
-                stroke_count: serde_json::from_str::<Vec<Stroke>>(&strokes)?.len(),
-                status,
-                created_at,
+        let mut items = rows
+            .map(|row| {
+                let (markup_id, at_revision, note, strokes, status, created_at) = row?;
+                Ok(Summary {
+                    id: markup_id,
+                    visualization_id: id.into(),
+                    at_revision,
+                    note,
+                    stroke_count: serde_json::from_str::<Vec<Stroke>>(&strokes)?.len(),
+                    status,
+                    created_at,
+                })
             })
-        })
-        .collect()
+            .collect::<Result<Vec<_>>>()?;
+        let next_before = if items.len() > limit as usize {
+            items.truncate(limit as usize);
+            items.last().map(|item| item.id.clone())
+        } else {
+            None
+        };
+        Ok(Page { items, next_before })
     }
     pub fn markup(&self, project: &str, id: &str, markup_id: &str) -> Result<Markup> {
         self.get(project, id)?;
@@ -196,6 +229,75 @@ mod tests {
                 |row| row.get::<_, i64>(0)
             )?,
             0
+        );
+        Ok(())
+    }
+    #[test]
+    fn pages_reach_old_open_reviews_without_duplicates_or_foreign_cursors() -> Result<()> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let figure = store.create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))?;
+        let other = store.create("p", "Other", "excalidraw/v2", &json!({"elements":[]}))?;
+        let strokes = [Stroke {
+            kind: Kind::Cross,
+            points: vec![[0., 0.], [10., 10.]],
+        }];
+        let oldest = store.create_markup("p", &figure.id, 1, "Still outstanding", &strokes, PNG)?;
+        for _ in 0..54 {
+            let record = store.create_markup("p", &figure.id, 1, "Done", &strokes, PNG)?;
+            store.resolve_markup("p", &figure.id, &record.id)?;
+        }
+        // Force equal timestamps to prove the UUID tie breaker works across pages.
+        store.connection.execute(
+            "UPDATE visualization_markups SET created_at='2026-01-01T00:00:00Z'",
+            [],
+        )?;
+        let mut before = None;
+        let mut ids = std::collections::BTreeSet::new();
+        loop {
+            let page = store.markups_page("p", &figure.id, before.as_deref(), None, 7)?;
+            for item in page.items {
+                assert!(ids.insert(item.id));
+            }
+            before = page.next_before;
+            if before.is_none() {
+                break;
+            }
+        }
+        assert_eq!(ids.len(), 55);
+        assert!(ids.contains(&oldest.id));
+        let open = store.markups_page("p", &figure.id, None, Some("open"), 50)?;
+        assert_eq!(open.items.len(), 1);
+        assert_eq!(open.items[0].id, oldest.id);
+        assert!(open.next_before.is_none());
+        assert!(matches!(
+            store.markups_page("p", &other.id, Some(&oldest.id), None, 7),
+            Err(Error::NotFound)
+        ));
+        for limit in [0, 101] {
+            assert!(
+                store
+                    .markups_page("p", &figure.id, None, None, limit)
+                    .is_err()
+            );
+        }
+        assert!(
+            store
+                .markups_page("p", &figure.id, None, Some("unknown"), 7)
+                .is_err()
+        );
+        // A cursor record remains usable when its status changes between requests.
+        let page = store.markups_page("p", &figure.id, None, Some("resolved"), 1)?;
+        let cursor = page.next_before.unwrap();
+        store.connection.execute(
+            "UPDATE visualization_markups SET status='open' WHERE id=?1",
+            [&cursor],
+        )?;
+        assert!(
+            !store
+                .markups_page("p", &figure.id, Some(&cursor), Some("resolved"), 1)?
+                .items
+                .is_empty()
         );
         Ok(())
     }

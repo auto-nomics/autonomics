@@ -1,6 +1,7 @@
 use axum::{
     Router,
-    http::header,
+    extract::Path,
+    http::{StatusCode, header},
     response::{Html, IntoResponse},
     routing::get,
 };
@@ -26,6 +27,10 @@ pub fn router() -> Router {
         .route("/assets/gui.js", get(gui_javascript))
         .route("/assets/gui.mjs", get(gui_worker))
         .route("/assets/gui.css", get(gui_stylesheet))
+        .route(
+            "/excalidraw/fonts/Liberation/{file}",
+            get(gui_scientific_font),
+        )
 }
 
 async fn gui_index() -> Html<&'static str> {
@@ -60,6 +65,42 @@ async fn gui_stylesheet() -> impl IntoResponse {
         ],
         GUI_STYLESHEET,
     )
+}
+
+// Excalidraw resolves its pinned font through EXCALIDRAW_ASSET_PATH. Keep
+// this allowlist embedded alongside the GUI; no runtime filesystem or CDN.
+async fn gui_scientific_font(Path(file): Path<String>) -> axum::response::Response {
+    let (mime, bytes): (&str, &'static [u8]) = match file.as_str() {
+        "LiberationSans-Regular.woff2" => (
+            "font/woff2",
+            include_bytes!(
+                "../../gui-dist/excalidraw/fonts/Liberation/LiberationSans-Regular.woff2"
+            ),
+        ),
+        "LiberationSans-Regular.sources.json" => (
+            "application/json",
+            include_bytes!(
+                "../../gui-dist/excalidraw/fonts/Liberation/LiberationSans-Regular.sources.json"
+            ),
+        ),
+        "OFL.txt" => (
+            "text/plain; charset=utf-8",
+            include_bytes!("../../gui-dist/excalidraw/fonts/Liberation/OFL.txt"),
+        ),
+        "NotoSansSC-OFL.txt" => (
+            "text/plain; charset=utf-8",
+            include_bytes!("../../gui-dist/excalidraw/fonts/Liberation/NotoSansSC-OFL.txt"),
+        ),
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -133,5 +174,49 @@ mod tests {
                 .unwrap();
             assert!(response.status().is_success(), "{uri}");
         }
+    }
+    #[tokio::test]
+    async fn serves_pinned_scientific_font_and_notices_without_filesystem_fallback() {
+        for (file, mime) in [
+            ("LiberationSans-Regular.woff2", "font/woff2"),
+            ("LiberationSans-Regular.sources.json", "application/json"),
+            ("OFL.txt", "text/plain; charset=utf-8"),
+            ("NotoSansSC-OFL.txt", "text/plain; charset=utf-8"),
+        ] {
+            let response = router()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/excalidraw/fonts/Liberation/{file}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], mime);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            if file.ends_with("woff2") {
+                assert!(body.starts_with(b"wOF2"));
+                assert_eq!(
+                    &body[..],
+                    include_bytes!(
+                        "../../gui-dist/excalidraw/fonts/Liberation/LiberationSans-Regular.woff2"
+                    )
+                );
+            }
+        }
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .uri("/excalidraw/fonts/Liberation/private.ttf")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

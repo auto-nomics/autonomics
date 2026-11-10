@@ -92,3 +92,73 @@ pub(crate) async fn recolor(
     })
     .await
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PartsEdit {
+    element_id: String,
+    expected_revision: i64,
+    sha256: String,
+    edits: Vec<bioicons::parts::Edit>,
+}
+pub(crate) async fn parts(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Query(input): Query<Palette>,
+) -> Response {
+    work(shared, move |store| {
+        visualization_assets::parts(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.element_id,
+        )
+    })
+    .await
+}
+pub(crate) async fn edit_parts(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Json(input): Json<PartsEdit>,
+) -> Response {
+    work(shared, move |store| {
+        Ok(json!(visualization_assets::edit_parts(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.element_id,
+            &input.sha256,
+            &input.edits
+        )?))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GeometryQuery {
+    element_id: String,
+    expected_revision: i64,
+    sha256: String,
+    part_id: String,
+}
+pub(crate) async fn geometry(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Query(input): Query<GeometryQuery>,
+) -> Response {
+    work(shared, move |store| {
+        visualization_assets::geometry(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.element_id,
+            &input.sha256,
+            &input.part_id,
+        )
+    })
+    .await
+}

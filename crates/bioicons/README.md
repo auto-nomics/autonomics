@@ -22,3 +22,19 @@ The GUI's vector panel uses `/api/v1/visualization/bioicons/search` and `/bioico
 Opt-in browser validation (live public HTTP requests, no model calls): build the native example, then run `VISUALIZATION_BIOICONS_LIVE=1 node tests/canvas-native.mjs` from `apps/gui`. It checks real catalogue search, preview, insertion, metadata, save/reload and that figure SVG export retains an SVG image. The normal native suite remains independent of the public catalogue.
 
 The normalized SVG root includes explicit dimensions and viewBox in the editor-compatible serialization. Repeated normalization retains identical vector bytes, hash and preview; browser tests also check that Excalidraw loading does not rewrite those bytes.
+
+
+### SVG 内部路径样式
+
+`parts::inspect` 为当前文件快照返回最多 256 条非资源路径、稳定编号、原 SVG 标识（若有）、填充/描边、边界和编号 PNG。编号由当前文件哈希及顺序构成，不是生物学身份，采用修改后须重新读取。裁剪、遮罩和图案定义中的共享路径不列为编辑组件；复杂素材明确报错，不截断路径列表。
+
+`parts::edit` 校验原文件哈希及 1..32 条唯一的路径修改，只接受填充/描边 `#RRGGBB` 或 `none`，以及 0..1 的局部透明度系数、`translate:[dx,dy]` 的平移。平移单位是规范化 SVG 根坐标，不是画布像素，后台补偿上层旋转、非等比缩放和镜像；渐变随路径移动，上层共享裁剪与 SVG 视口保持原位，超出部分仍会被裁掉。位移须为有限数且每轴不超过 ±100000；不可逆变换或过大的局部变换被拒绝。系数相对当前效果叠加：1 保持、0 隐藏；分组的合成透明度继续生效，恢复原效果可使用原文件/图稿历史。未指定属性、其他路径及仍在使用的渐变/裁剪定义保持原有语义。替换某条路径的渐变填充为实色是显式操作，不影响其他渐变使用者。文字须已转为轮廓；该接口不会因换色替换字体。
+
+路径仍在一个可缩放的 SVG 图片对象中，已提供独立路径平移；当前不提供控制点、路径形变或拆成原生画布对象后的拖动。带编号 PNG 是审阅材料，不写入正式素材。测试覆盖同色路径隔离、变换后边界、共享资源、真实受体与文字轮廓、旋转/缩放/镜像下平移、渐变跟随及固定共享裁剪的像素验证、透明度像素、快照过期、非法操作和容量限制。
+
+
+### 端点与 Bezier 控制点
+
+`geometry::inspect(bytes, sha256, part_id)` 返回规范化 SVG 当前路径的端点/控制点编号、SVG 根坐标、M/L/Q/C/Z 命令结构与编号 PNG。编号依赖当前文件快照。`parts::Edit.points` 是稀疏的 `[{index,position:[x,y]}]` 修改，保持未指定点与路径命令结构；单条路径最多 512 个点，一次最多修改 64 个不同编号。坐标须为有限数且在 ±1000000 内；无法稳定逆变换的局部坐标会被拒绝。超限路径明确标出不可编辑，不截断点列表。
+
+每个点在 SVG 根坐标中定位，后台逆变换回所属路径坐标，支持旋转、镜像与非等比缩放。控制点修改不自动带动相邻端点/控制点，不自动平滑曲线，不移动共享绘制资源或上层裁剪；形状改变后仍使用原有绘制坐标。一个路径的 `points` 与 `translate` 须分两份提案采用，避免混淆绝对位置与相对位移。归一化后会再次核对路径数量和命令拓扑，退化导致路径消失或结构变化时拒绝修改。当前不增删点、子路径或命令。

@@ -43,7 +43,7 @@ try {
       previews.set(revision, { revision, dataURL }); return route.fulfill({ json: { revision } });
     }
     if (path === '/visualization/projects/study/figures/figure/planning') return route.fulfill({ json: null });
-    if (path === '/visualization/projects/study/figures/figure/markups') return route.fulfill({ json: [] });
+    if (path === '/visualization/projects/study/figures/figure/markups') return route.fulfill({ json: new URL(route.request().url()).searchParams.get('page') === 'true' ? { items: [], next_before: null } : [] });
     if (path === '/visualization/projects/study/figures/figure/annotations') {
       if (route.request().method() === 'GET') return route.fulfill({ json: annotations });
       const body = route.request().postDataJSON();

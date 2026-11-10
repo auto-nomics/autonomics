@@ -72,3 +72,7 @@ http-body-util = "0.1"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "visualization_workflow"
+required-features = ["test-util"]

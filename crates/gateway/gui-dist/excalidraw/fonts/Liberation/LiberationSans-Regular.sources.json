@@ -1,0 +1,57 @@
+{
+  "family": "Autonomics Scientific Sans",
+  "css_alias": "Liberation Sans",
+  "font_family_id": 9,
+  "fonttools": "4.63.0",
+  "latin_source": "crates/bioicons/fonts/LiberationSans-Regular.ttf",
+  "latin_sha256": "4d2ea5a728942328eb19054219ad0f277640322aedd65fed9073ef343c499930",
+  "cjk_source_url": "https://raw.githubusercontent.com/google/fonts/a85815a42757630ce188fdad368c2dfc444d4773/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+  "cjk_source_sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+  "cjk_weight": 400,
+  "cjk_ranges": [
+    [
+      "0x2e80",
+      "0x2fff"
+    ],
+    [
+      "0x3000",
+      "0x303f"
+    ],
+    [
+      "0x3100",
+      "0x312f"
+    ],
+    [
+      "0x31a0",
+      "0x31bf"
+    ],
+    [
+      "0x3400",
+      "0x9fff"
+    ],
+    [
+      "0xf900",
+      "0xfaff"
+    ],
+    [
+      "0xfe10",
+      "0xfe1f"
+    ],
+    [
+      "0xfe30",
+      "0xfe4f"
+    ],
+    [
+      "0xff00",
+      "0xffef"
+    ],
+    [
+      "0x20000",
+      "0x323af"
+    ]
+  ],
+  "latin_codepoints": 2327,
+  "added_cjk_codepoints": 28642,
+  "glyphs": 30853,
+  "sha256": "02b768546998e43f538442bbc1209c5154c3e9988255dbf2dad72a9396411261"
+}

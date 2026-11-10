@@ -5,7 +5,7 @@ import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { markupColor, renderMarkup, type MarkupPoint, type MarkupRecord, type MarkupStroke, type MarkupSummary } from "./canvas-markup-render";
+import { markupColor, renderMarkup, type MarkupPage, type MarkupPoint, type MarkupRecord, type MarkupStroke, type MarkupSummary } from "./canvas-markup-render";
 
 type Draft = { key: string; revision: number; serialized: string; document: ExcalidrawInitialDataState };
 export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensureSaved }: {
@@ -14,6 +14,8 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
 }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [items, setItems] = useState<MarkupSummary[]>([]), [selected, setSelected] = useState<MarkupRecord | null>(null);
+  const [nextBefore, setNextBefore] = useState<string | null>(null);
+  const [status, setStatus] = useState("all");
   const [draft, setDraft] = useState<Draft | null>(null), [note, setNote] = useState("");
   const [strokes, setStrokes] = useState<MarkupStroke[]>([]), [active, setActive] = useState<MarkupStroke | null>(null);
   const [navigating, setNavigating] = useState(false);
@@ -29,7 +31,14 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
     setDocumentDirty(resource, Boolean(draft && (strokes.length || active || note.trim())));
     return () => setDocumentDirty(resource, false);
   }, [projectId, canvasId, draft, strokes.length, active, note]);
-  const load = async () => setItems(await gatewayRequest("GET", path) as MarkupSummary[]);
+  const load = async (before?: string, filter = status) => {
+    const query = new URLSearchParams({ page: "true" });
+    if (filter !== "all") query.set("status", filter);
+    if (before) query.set("before", before);
+    const page = await gatewayRequest("GET", `${path}?${query}`) as MarkupPage;
+    setItems(previous => before ? [...previous, ...page.items.filter(item => !previous.some(existing => existing.id === item.id))] : page.items);
+    setNextBefore(page.next_before);
+  };
   async function start() {
     if (!discard()) return;
     setBusy(true); setError("");
@@ -66,7 +75,11 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
       {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
       <div className="flex min-h-0 flex-1"><aside className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r p-3">
         <Button size="sm" disabled={busy} onClick={() => void start()}>新建标记</Button>
-        <p className="text-xs text-muted-foreground">笔迹与说明独立保存，不进入正式图稿或导出。列出最近 50 组标记。</p>
+        <p className="text-xs text-muted-foreground">笔迹与说明独立保存，不进入正式图稿或导出。可筛选待处理意见并加载更早记录。</p>
+        <label className="text-sm">标记状态<select aria-label="标记状态" className="mt-1 w-full rounded border bg-background p-1" value={status} disabled={busy} onChange={async event => {
+          const filter = event.target.value; setBusy(true); setError("");
+          try { await load(undefined, filter); setStatus(filter); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+        }}><option value="all">全部标记</option><option value="open">待处理</option><option value="resolved">已处理</option></select></label>
         {draft && <><p className="text-xs">正在审阅 v{draft.revision}</p><div className="flex flex-wrap gap-1">{([['draw', '补画'], ['cross', '划除'], ['emphasis', '强调']] as const).map(([kind, label]) => <Button key={kind} size="sm" variant={!navigating && mode === kind ? "default" : "outline"} disabled={busy} onClick={() => { setMode(kind); setNavigating(false); }}>{label}</Button>)}</div>
           <Button size="sm" variant={navigating ? "default" : "outline"} disabled={busy} onClick={() => setNavigating(value => !value)}>浏览与缩放</Button>
           <Button size="sm" variant="outline" disabled={busy || !strokes.length} onClick={() => setStrokes(items => items.slice(0, -1))}>撤销笔迹</Button>
@@ -90,6 +103,9 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
         }}>查看标记</Button>{item.status !== "resolved" && <Button size="sm" variant="outline" disabled={busy} onClick={async () => {
           setBusy(true); setError(""); try { await gatewayRequest("POST", `${path}/${encodeURIComponent(item.id)}/resolve`); await load(); setSelected(current => current?.id === item.id ? { ...current, status: "resolved" } : current); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
         }}>完成标记</Button>}</div></article>)}
+        {nextBefore && <Button size="sm" variant="outline" disabled={busy} onClick={async () => {
+          setBusy(true); setError(""); try { await load(nextBefore); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+        }}>加载更早标记</Button>}
       </aside><section aria-label="草图标记预览" className="relative min-h-0 min-w-0 flex-1 bg-white">
         {draft ? <><Excalidraw key={draft.key} initialData={draft.document} excalidrawAPI={api => { reviewApi.current = api; }} viewModeEnabled zenModeEnabled handleKeyboardGlobally={false} langCode="zh-CN" onChange={(elements, state, files) => {
             setReady(Boolean(reviewApi.current) && elements.every(element => element.type !== "image" || Boolean(element.fileId && files[element.fileId])));

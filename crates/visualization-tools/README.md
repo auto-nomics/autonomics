@@ -30,3 +30,15 @@ sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格�
 `bioicons` 提供 search/preview/insert/replace，用于开放 SVG 素材。preview 返回 PNG 图像块与逐素材作者/许可/转换说明；insert 与 replace 都生成待审阅提案，要求 project_id、figure_id、expected_revision，replace 还需 element_id。保留原文件和规范化文件哈希；SVG 内部路径不是独立画布对象。`visualization read_image` 可将保存的 SVG 安全转换为 PNG 供视觉模型查看，原文件保持 SVG。
 
 `bioicons palette` 需 project_id、figure_id、expected_revision、element_id，可读取图片或语义锚点的实际颜色与 PNG 视觉预览；`recolor` 另需 colors 对象（`#RRGGBB` 映射），创建配色提案。动作不访问目录网络，也不需要 asset_id。仅修改目标 SVG 实例，保留来源许可、文字路径、位置与其他实例，并记录前后哈希及颜色映射。先读 palette，勿猜测源颜色；相同颜色的路径一起替换，不能单独指定同色路径。
+
+
+`visualization list_markups` 可按 `status: "open" | "resolved"` 筛选审阅历史，并通过 `limit`（1..100，默认 50）和 `before` 翻页。结果为 `{items,next_before}`；重复使用返回的游标直到 null，避免把最近一页当作完整历史。`read` 中的 `markups_pagination.next_before` 表示仍有较早标记。列表只包含摘要，具体笔迹与图像仍通过 `read_markup` 读取并核对历史版本。
+
+
+`visualization propose` 的可选 `markup_ids` 关联实际回应的待处理意见（最多 50 个不同 ID）。先使用 `read_markup` 查看并核对历史图稿，再关联对应 ID；不要关联尚未处理的意见。结果包含无图像字节的 `review_markups` 摘要。该操作不关闭意见，GUI 用户可在采用时显式选择完成关联标记；`apply` 不接受非空 `markup_ids`，不能绕过审阅采用来关闭意见。
+
+
+`bioicons parts` 读取当前 SVG 的路径编号、边界及编号视觉结果；`edit_parts` 使用该结果的 `sha256` 和 `edits:[{part_id,fill?,stroke?,opacity?,translate?}]` 生成局部样式提案。`fill/stroke` 允许 `#RRGGBB` 或 `none`；`opacity` 是相对当前效果叠加的 0..1 系数。先查看编号图，不得把路径编号当成科学组件名称。采用后编号失效，必须重新读取；每次最多 32 条编辑，素材最多 256 条非资源路径。`translate:[dx,dy]` 使用 SVG 根坐标，后台补偿上层缩放、旋转与镜像；视口和共享上层裁剪不移动，移动后的超出部分仍会裁掉。路径控制点与形变暂不支持，图片对象外部的标签、绑定和其他实例保持不变。
+
+
+`bioicons geometry` 使用 `project_id/figure_id/expected_revision/element_id` 及 `parts` 返回的 `sha256/part_id` 读取端点与曲线控制点（编号 PNG + 无图像字节的 JSON 摘要）。`edit_parts` 可传 `points:[{index,position:[x,y]}]`，坐标为当前快照的 SVG 根坐标。只改指定点，不自动平滑；同一路径不可同时传 `points` 和 `translate`，采用后重新读取编号。路径最多 512 个点，单次最多改 64 个不同点，退化导致拓扑改变会被拒绝。编号是图形坐标，不是生物学身份。

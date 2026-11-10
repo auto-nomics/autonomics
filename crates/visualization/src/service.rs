@@ -35,15 +35,31 @@ impl VisualizationService {
         summary: &str,
         operations: &[scene::Operation],
     ) -> Result<crate::proposal::Proposal, ServiceError> {
+        self.propose_with_markups(project_id, id, expected_revision, summary, operations, &[])
+    }
+    pub fn propose_with_markups(
+        &self,
+        project_id: &str,
+        id: &str,
+        expected_revision: i64,
+        summary: &str,
+        operations: &[scene::Operation],
+        markup_ids: &[String],
+    ) -> Result<crate::proposal::Proposal, ServiceError> {
         let metadata = self.store.get(project_id, id)?;
         if metadata.revision != expected_revision {
             return Err(crate::Error::Conflict.into());
         }
         let current = self.store.revision(project_id, id, expected_revision)?;
         let document = scene::apply(&current.document, operations)?;
-        Ok(self
-            .store
-            .propose(project_id, id, expected_revision, summary, &document)?)
+        Ok(self.store.propose_with_markups(
+            project_id,
+            id,
+            expected_revision,
+            summary,
+            &document,
+            markup_ids,
+        )?)
     }
     /// Apply a batch against the exact scene revision observed by the caller.
     pub fn apply(

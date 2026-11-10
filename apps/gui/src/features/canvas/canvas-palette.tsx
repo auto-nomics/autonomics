@@ -1,3 +1,4 @@
+import { CanvasPartStyles } from "./canvas-part-styles";
 import { useState } from "react";
 import { serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
@@ -14,7 +15,7 @@ export function CanvasPalette({ projectId, canvasId, disabled, getApi, getRevisi
   const [observed, setObserved] = useState("");
   const path = `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}`;
   const snapshot = () => { const api = getApi(); return api ? serializeAsJSON(api.getSceneElements(), api.getAppState(), api.getFiles(), "local") : ""; };
-  return <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><Button size="sm" variant="outline" disabled={disabled || busy} title="选中一个 SVG 素材，预览配色修改；PNG 图片不支持内部换色" onClick={async () => {
+  return <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><Button size="sm" variant="outline" disabled={disabled || busy} title="选中一个 SVG 素材，编辑整体配色或内部路径；PNG 不支持内部路径编辑" onClick={async () => {
     setOpen(true); setBusy(true); setError(""); setPalette(null); setColors({});
     try {
       if (!await ensureSaved()) throw new Error("请先解决画布保存错误。");
@@ -28,13 +29,14 @@ export function CanvasPalette({ projectId, canvasId, disabled, getApi, getRevisi
       if (snapshot() !== before || getRevision() !== revision || isDirty()) throw new Error("读取配色期间画布发生变化，请重新打开配色面板。");
       setObserved(before); setPalette(value); setColors(Object.fromEntries(value.colors.map(color => [color, color])));
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-  }}>素材配色</Button><DialogContent showCloseButton={false} className="flex max-h-[85vh] w-[min(650px,95vw)] flex-col overflow-hidden"><DialogTitle>矢量素材配色</DialogTitle>
+  }}>素材编辑</Button><DialogContent showCloseButton={false} className="flex max-h-[85vh] w-[min(650px,95vw)] flex-col overflow-hidden"><DialogTitle>矢量素材编辑</DialogTitle>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    {busy && !palette ? <p role="status">读取素材配色…</p> : palette && <div className="min-h-0 overflow-auto"><img src={palette.previewDataURL} alt="配色前的矢量素材" className="my-2 max-h-64 w-full rounded bg-white object-contain" /><p className="mb-3 text-sm text-muted-foreground">相同颜色的填充、描边和渐变色将一起替换，每次最多 32 种；SVG 内的文字须已转为路径。只修改当前素材实例，不改变其他实例、文字标记形状或布局。修改后先预览提案。</p>
+    {busy && !palette ? <p role="status">读取素材配色…</p> : palette && <div className="min-h-0 overflow-auto"><p className="text-sm font-medium">整体配色</p><img src={palette.previewDataURL} alt="配色前的矢量素材" className="my-2 max-h-64 w-full rounded bg-white object-contain" /><p className="mb-3 text-sm text-muted-foreground">相同颜色的填充、描边和渐变色将一起替换，每次最多 32 种；SVG 内的文字须已转为路径。只修改当前素材实例，不改变其他实例、文字标记形状或布局。修改后先预览提案。</p>
       {!palette.colors.length && <p>没有可替换的实色。</p>}
       <div className="grid grid-cols-2 gap-3">{palette.colors.map(color => <label key={color} className="flex items-center justify-between gap-3 rounded border p-2 text-sm"><span>{color}</span><input type="color" aria-label={`替换颜色 ${color}`} disabled={busy} value={colors[color] ?? color} onChange={event => setColors(current => ({ ...current, [color]: event.target.value }))} /></label>)}</div>
+      <CanvasPartStyles key={palette.file_id} path={path} elementId={palette.element_id} revision={palette.revision} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onProposed={id => { setOpen(false); onProposed(id); }} />
     </div>}
-    <div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setOpen(false)}>取消配色</Button><Button size="sm" disabled={busy || !palette || !Object.entries(colors).some(([from, to]) => from !== to)} onClick={async () => {
+    <div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setOpen(false)}>关闭素材编辑</Button><Button size="sm" disabled={busy || !palette || !Object.entries(colors).some(([from, to]) => from !== to)} onClick={async () => {
       if (!palette || busy) return; setBusy(true); setError("");
       try {
         if (isDirty() || getRevision() !== palette.revision || snapshot() !== observed) throw new Error("画布发生变化，请取消后重新读取素材配色。");

@@ -5,6 +5,8 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::sync::OnceCell;
 use url::Url;
 pub mod vector;
+pub mod parts;
+pub mod geometry;
 pub const DEFAULT_ENDPOINT: &str = "https://bioicons.com/";
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

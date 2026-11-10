@@ -3,6 +3,7 @@ pub mod annotation;
 pub mod error;
 mod font_metrics;
 pub mod image;
+pub mod inset;
 mod layout;
 pub mod markup;
 mod panel_routes;

@@ -57,36 +57,47 @@ pub(crate) fn text_width(label: &str, font_size: f64) -> f64 {
         })
         .fold(0., f64::max)
 }
-/// Pinned Liberation Sans advances and pair kerning. Complex shaping and
-/// characters outside its cmap retain a conservative fallback, not exact shaping.
+/// UAX #14 opportunities keep CJK punctuation and ordinary words together.
+/// A single overlong token still breaks by characters to fit the canvas.
 pub(crate) fn wrap(label: &str, width: f64, font_size: f64) -> String {
     let mut lines = Vec::new();
-    for paragraph in label.split('\n') {
-        let mut line = String::new();
-        for word in paragraph.split_whitespace() {
-            let candidate = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if !line.is_empty() && text_width(&candidate, font_size) > width {
-                lines.push(std::mem::take(&mut line));
-            }
-            if !line.is_empty() {
-                line.push(' ');
-            }
-            for c in word.chars() {
-                let candidate = format!("{line}{c}");
-                if !line.is_empty() && text_width(&candidate, font_size) > width {
-                    lines.push(std::mem::take(&mut line));
-                }
-                line.push(c);
-            }
+    let normalized = label
+        .replace("\r\n", "\n")
+        .replace(['\r', '\u{2028}', '\u{2029}'], "\n");
+    for paragraph in normalized.split('\n') {
+        let mut remaining = paragraph.trim_matches(' ');
+        if remaining.is_empty() {
+            lines.push(String::new());
+            continue;
         }
-        lines.push(line);
+        while !remaining.is_empty() {
+            let mut end = 0;
+            for (position, opportunity) in unicode_linebreak::linebreaks(remaining) {
+                if text_width(remaining[..position].trim_end_matches(' '), font_size) <= width {
+                    end = position;
+                    if opportunity == unicode_linebreak::BreakOpportunity::Mandatory {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            if end == 0 {
+                for (index, c) in remaining.char_indices() {
+                    let next = index + c.len_utf8();
+                    if end != 0 && text_width(&remaining[..next], font_size) > width {
+                        break;
+                    }
+                    end = next;
+                }
+            }
+            lines.push(remaining[..end].trim_end_matches(' ').to_owned());
+            remaining = remaining[end..].trim_start_matches(' ');
+        }
     }
     lines.join("\n")
 }
+
 fn ranks(plan: &Plan, indices: &HashMap<&str, usize>) -> Vec<usize> {
     let n = plan.nodes.len();
     let mut reach = vec![vec![false; n]; n];
@@ -430,6 +441,14 @@ mod tests {
         );
         assert!(text_width("AV", 20.) < text_width("A", 20.) + text_width("V", 20.));
         assert_eq!(wrap("α β", 100., 20.), "α β");
+        assert_eq!(text_width("细胞核", 20.), 60.);
+        assert_eq!(text_width("（受体）", 20.), 80.);
+        assert_eq!(wrap("细胞信号传导", 60., 20.), "细胞信\n号传导");
+        assert_eq!(wrap("核内（受体）响应", 80., 20.), "核内（受\n体）响应");
+        assert_eq!(
+            wrap("Dose 10\u{a0}μM response", 130., 20.),
+            "Dose 10\u{a0}μM\nresponse"
+        );
     }
     fn plan(layout: &str) -> Plan {
         serde_json::from_value(json!({"message":"Explicit conceptual relations","audience":"researchers","layout":layout,

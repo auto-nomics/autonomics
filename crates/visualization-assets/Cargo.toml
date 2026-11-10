@@ -10,6 +10,7 @@ description = "Shared figure asset editing and reviewed vector colour changes"
 visualization = { path = "../visualization" }
 bioicons = { path = "../bioicons" }
 serde_json.workspace = true
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }
 thiserror.workspace = true
 base64 = "0.23"
 chrono.workspace = true

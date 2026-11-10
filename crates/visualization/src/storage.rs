@@ -72,6 +72,10 @@ impl Store {
               status TEXT NOT NULL, created_at TEXT NOT NULL,
               FOREIGN KEY(visualization_id, at_revision) REFERENCES visualization_revisions(visualization_id, revision) ON DELETE CASCADE);
             CREATE INDEX IF NOT EXISTS visualization_markups_figure ON visualization_markups(visualization_id, created_at);
+            CREATE TABLE IF NOT EXISTS visualization_proposal_markups (
+              proposal_id TEXT NOT NULL REFERENCES visualization_proposals(id) ON DELETE CASCADE,
+              markup_id TEXT NOT NULL REFERENCES visualization_markups(id) ON DELETE CASCADE,
+              PRIMARY KEY(proposal_id,markup_id));
             CREATE TABLE IF NOT EXISTS visualization_previews (
               visualization_id TEXT NOT NULL, revision INTEGER NOT NULL, data_url TEXT NOT NULL,
               PRIMARY KEY(visualization_id, revision),

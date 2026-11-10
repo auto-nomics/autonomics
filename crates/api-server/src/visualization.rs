@@ -47,6 +47,14 @@ where
 pub fn router(store: Store) -> Router {
     Router::new()
         .route(
+            "/projects/{project}/figures/{id}/vector-geometry",
+            get(crate::visualization_assets::geometry),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/vector-parts",
+            get(crate::visualization_assets::parts).post(crate::visualization_assets::edit_parts),
+        )
+        .route(
             "/projects/{project}/figures/{id}/vector-palette",
             get(crate::visualization_assets::palette),
         )
@@ -409,6 +417,41 @@ mod tests {
         assert_eq!(status, 200);
         assert!(review.get("dataURL").is_none());
         let review_path = format!("{path}/markups/{}", review["id"].as_str().unwrap());
+        let (_, page) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/markups?page=true&status=open&limit=1"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(page["items"][0]["id"], review["id"]);
+        assert!(page["next_before"].is_null());
+        assert!(page["items"][0].get("dataURL").is_none());
+        for query in ["limit=0", "status=unknown", "limit=101"] {
+            assert_eq!(
+                request(
+                    app.clone(),
+                    "GET",
+                    &format!("{path}/markups?{query}"),
+                    Value::Null
+                )
+                .await
+                .0,
+                400
+            );
+        }
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!("{path}/markups?page=true&before=missing"),
+                Value::Null
+            )
+            .await
+            .0,
+            404
+        );
+
         assert_eq!(
             request(app.clone(), "GET", &review_path, Value::Null)
                 .await
@@ -541,6 +584,46 @@ mod tests {
                 .1["title"],
             "Edited"
         );
+    }
+    #[tokio::test]
+    async fn linked_review_completion_requires_explicit_adoption() {
+        let app = router(visualization::Store::in_memory().unwrap());
+        request(
+            app.clone(),
+            "POST",
+            "/projects",
+            json!({"id":"p","title":"Study"}),
+        )
+        .await;
+        let (_, figure) = request(
+            app.clone(),
+            "POST",
+            "/projects/p/figures",
+            json!({"title":"Figure","format":"excalidraw/v2","document":{"elements":[]}}),
+        )
+        .await;
+        let path = format!("/projects/p/figures/{}", figure["id"].as_str().unwrap());
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let (_, review) = request(app.clone(), "POST", &format!("{path}/markups"), json!({"expected_revision":1,"note":"Add step","strokes":[{"kind":"draw","points":[[0,0],[10,10]]}],"dataURL":png})).await;
+        let input = json!({"expected_revision":1,"summary":"Address review","operations":[{"op":"add","element":{"id":"step","type":"rectangle"}}],"markup_ids":[review["id"]]});
+        let (status, proposal) =
+            request(app.clone(), "POST", &format!("{path}/proposals"), input).await;
+        assert_eq!(status, 200);
+        assert_eq!(proposal["review_markups"][0]["note"], "Add step");
+        assert!(!proposal.to_string().contains("iVBOR"));
+        let (_, notes) = request(app.clone(), "GET", &format!("{path}/markups"), Value::Null).await;
+        assert_eq!(notes[0]["status"], "open");
+        let accept = format!(
+            "{path}/proposals/{}/accept?resolve_markups=true",
+            proposal["id"].as_str().unwrap()
+        );
+        assert_eq!(
+            request(app.clone(), "POST", &accept, Value::Null).await.1["revision"],
+            2
+        );
+        let (_, notes) = request(app.clone(), "GET", &format!("{path}/markups"), Value::Null).await;
+        assert_eq!(notes[0]["status"], "resolved");
+        assert_eq!(request(app, "POST", &accept, Value::Null).await.0, 409);
     }
     #[tokio::test]
     async fn proposal_acceptance_is_version_checked() {
@@ -716,6 +799,8 @@ struct ProposalInput {
     expected_revision: i64,
     summary: String,
     operations: Vec<visualization::scene::Operation>,
+    #[serde(default)]
+    markup_ids: Vec<String>,
 }
 async fn proposals(
     State(s): State<Shared>,
@@ -738,26 +823,35 @@ async fn propose(
         ));
     }
     work(s, move |service| {
-        Ok(json!(service.propose(
+        Ok(json!(service.propose_with_markups(
             &project,
             &id,
             input.expected_revision,
             &input.summary,
-            &input.operations
+            &input.operations,
+            &input.markup_ids
         )?))
     })
     .await
 }
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcceptanceQuery {
+    #[serde(default)]
+    resolve_markups: bool,
+}
 async fn accept(
     State(s): State<Shared>,
     Path((project, id, proposal)): Path<(String, String, String)>,
+    Query(query): Query<AcceptanceQuery>,
 ) -> Response {
     work(s, move |service| {
-        Ok(json!(
-            service
-                .store_mut()
-                .accept_proposal(&project, &id, &proposal)?
-        ))
+        Ok(json!(service.store_mut().accept_proposal_with_reviews(
+            &project,
+            &id,
+            &proposal,
+            query.resolve_markups
+        )?))
     })
     .await
 }
@@ -874,9 +968,33 @@ struct MarkupInput {
     #[serde(rename = "dataURL")]
     data_url: String,
 }
-async fn markups(State(s): State<Shared>, Path((project, id)): Path<(String, String)>) -> Response {
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MarkupQuery {
+    #[serde(default)]
+    page: bool,
+    before: Option<String>,
+    status: Option<String>,
+    limit: Option<u32>,
+}
+async fn markups(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Query(query): Query<MarkupQuery>,
+) -> Response {
     work(s, move |service| {
-        Ok(json!(service.store().markups(&project, &id)?))
+        let page = service.store().markups_page(
+            &project,
+            &id,
+            query.before.as_deref(),
+            query.status.as_deref(),
+            query.limit.unwrap_or(50),
+        )?;
+        Ok(if query.page {
+            json!(page)
+        } else {
+            json!(page.items)
+        })
     })
     .await
 }

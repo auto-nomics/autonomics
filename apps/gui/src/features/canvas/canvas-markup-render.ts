@@ -3,6 +3,7 @@ import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 export type MarkupPoint = [number, number];
 export type MarkupStroke = { kind: "draw" | "cross" | "emphasis"; points: MarkupPoint[] };
 export type MarkupSummary = { id: string; at_revision: number; note: string; stroke_count: number; status: string };
+export type MarkupPage = { items: MarkupSummary[]; next_before: string | null };
 export type MarkupRecord = MarkupSummary & { strokes: MarkupStroke[]; dataURL: string };
 export const markupColor = (kind: MarkupStroke["kind"]) => kind === "draw" ? "#1971c2" : kind === "cross" ? "#e03131" : "#e67700";
 /** Transient render elements: they are never inserted into the editable scene. */

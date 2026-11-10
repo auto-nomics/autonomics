@@ -21,3 +21,9 @@ The GUI's “素材配色” control reads one selected SVG, allows exact colour
 Normalized SVG uses an editor-compatible root namespace/viewBox and document serialization so file loading does not change content-addressed bytes. Browser validation checks the hash of the inserted and reloaded bytes against the recorded file hash.
 
 配色要求 SVG 内文字已转为路径；BioIcons 导入时已处理该转换。含原始文字的其他导入 SVG 会明确报错，避免配色动作悄悄替换字体或改变字形。
+
+
+`parts` 和 `edit_parts` 在相同的保存版本及目标图片/语义锚点上提供逐路径样式和平移编辑，使用 `bioicons::parts` 的快照哈希和路径编号。更新仍只替换当前实例文件引用，保留布局、来源许可、共享原文件及历史修订，追加 `path_style` 或包含平移的 `path_edit` 修改记录（路径 ID、样式、位移、前后哈希及时间），结果为待审阅提案。GUI 与 Agent 共用这些函数，无须目录或网络访问。
+
+
+`geometry` 按同一版本、目标图片、文件 SHA 与路径 ID 返回端点/控制点及编号视觉材料。端点编辑沿用 `edit_parts` 的提案、单实例替换、不可变历史和来源记录机制，新增 `points` 记录进入 `path_edit` 历史；不改变外部标签、箭头、裁剪或其他素材实例。

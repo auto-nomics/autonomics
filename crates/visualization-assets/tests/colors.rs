@@ -100,3 +100,171 @@ fn stale_invalid_and_wrong_project_requests_do_not_create_proposals() {
     assert!(store.proposals("p", &figure).unwrap().is_empty());
     assert_eq!(store.get("p", &figure).unwrap().revision, 1);
 }
+
+#[test]
+fn path_style_proposals_preserve_shared_instances_and_source_history() {
+    let (mut store, figure, target, other) = fixture();
+    let original = store.revision("p", &figure, 1).unwrap().document;
+    let read = visualization_assets::parts(&store, "p", &figure, 1, "node-0").unwrap();
+    let edit = bioicons::parts::Edit {
+        part_id: read["parts"][0]["part_id"].as_str().unwrap().into(),
+        fill: Some("#7744aa".into()),
+        stroke: None,
+        opacity: None,
+        translate: Some([5., -4.]),
+        points: None,
+    };
+    let sha = read["sha256"].as_str().unwrap();
+    let proposal = visualization_assets::edit_parts(
+        &store,
+        "p",
+        &figure,
+        1,
+        "node-0",
+        sha,
+        std::slice::from_ref(&edit),
+    )
+    .unwrap();
+    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
+    for old in original["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["id"] != target)
+    {
+        assert_eq!(
+            element(&proposal.document, old["id"].as_str().unwrap()),
+            old
+        );
+    }
+    assert_eq!(
+        element(&proposal.document, &other),
+        element(&original, &other)
+    );
+    let after = element(&proposal.document, &target);
+    for (key, value) in element(&original, &target).as_object().unwrap() {
+        if !["fileId", "customData", "updated", "version", "versionNonce"].contains(&key.as_str()) {
+            assert_eq!(&after[key], value);
+        }
+    }
+    assert_eq!(
+        after["customData"]["asset"],
+        element(&original, &target)["customData"]["asset"]
+    );
+    assert_eq!(after["customData"]["user_note"], "keep this note");
+    assert_eq!(
+        after["customData"]["source_sha256"],
+        "original-upstream-hash"
+    );
+    assert_eq!(after["customData"]["modifications"][0]["kind"], "path_edit");
+    assert_eq!(
+        after["customData"]["modifications"][0]["edits"][0]["part_id"],
+        edit.part_id
+    );
+    assert!(
+        visualization_assets::edit_parts(
+            &store,
+            "p",
+            &figure,
+            1,
+            &target,
+            "stale",
+            std::slice::from_ref(&edit)
+        )
+        .is_err()
+    );
+    assert_eq!(store.proposals("p", &figure).unwrap().len(), 1);
+    store.accept_proposal("p", &figure, &proposal.id).unwrap();
+    assert_eq!(
+        visualization_assets::parts(&store, "p", &figure, 2, &target).unwrap()["parts"][0]["fill"],
+        "#7744aa"
+    );
+    let moved = visualization_assets::parts(&store, "p", &figure, 2, &target).unwrap();
+    assert_eq!(moved["parts"][0]["bounds"][0], 5.);
+    assert_eq!(moved["parts"][0]["bounds"][1], -4.);
+    assert_eq!(
+        after["customData"]["modifications"][0]["edits"][0]["translate"],
+        json!([5., -4.])
+    );
+    assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
+    assert!(visualization_assets::parts(&store, "p", &figure, 1, &target).is_err());
+}
+
+#[test]
+fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
+    let (mut store, figure, target, other) = fixture();
+    let original = store.revision("p", &figure, 1).unwrap().document;
+    let list = visualization_assets::parts(&store, "p", &figure, 1, &target).unwrap();
+    let sha = list["sha256"].as_str().unwrap();
+    let part = list["parts"][0]["part_id"].as_str().unwrap();
+    let geometry =
+        visualization_assets::geometry(&store, "p", &figure, 1, "node-0", sha, part).unwrap();
+    let edit = bioicons::parts::Edit {
+        part_id: part.into(),
+        fill: None,
+        stroke: None,
+        opacity: None,
+        translate: None,
+        points: Some(vec![bioicons::geometry::PointEdit {
+            index: 0,
+            position: [7., 9.],
+        }]),
+    };
+    let proposal = visualization_assets::edit_parts(
+        &store,
+        "p",
+        &figure,
+        1,
+        &target,
+        sha,
+        std::slice::from_ref(&edit),
+    )
+    .unwrap();
+    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
+    for old in original["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["id"] != target)
+    {
+        assert_eq!(
+            element(&proposal.document, old["id"].as_str().unwrap()),
+            old
+        );
+    }
+    assert_eq!(
+        element(&proposal.document, &other),
+        element(&original, &other)
+    );
+    let after = element(&proposal.document, &target);
+    assert_eq!(
+        after["customData"]["asset"],
+        element(&original, &target)["customData"]["asset"]
+    );
+    assert_eq!(after["customData"]["modifications"][0]["kind"], "path_edit");
+    assert_eq!(
+        after["customData"]["modifications"][0]["edits"][0]["points"][0]["position"],
+        serde_json::json!([7., 9.])
+    );
+    store.accept_proposal("p", &figure, &proposal.id).unwrap();
+    let next = visualization_assets::parts(&store, "p", &figure, 2, &target).unwrap();
+    let changed = visualization_assets::geometry(
+        &store,
+        "p",
+        &figure,
+        2,
+        &target,
+        next["sha256"].as_str().unwrap(),
+        next["parts"][0]["part_id"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        changed["points"][0]["position"],
+        serde_json::json!([7., 9.])
+    );
+    for index in 1..geometry["points"].as_array().unwrap().len() {
+        assert_eq!(changed["points"][index], geometry["points"][index]);
+    }
+    assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
+    assert!(visualization_assets::geometry(&store, "p", &figure, 2, &target, sha, part).is_err());
+}

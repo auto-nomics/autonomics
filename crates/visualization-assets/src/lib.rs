@@ -64,9 +64,22 @@ pub fn recolor_document(
     colors: &BTreeMap<String, String>,
 ) -> Result<Value> {
     let bytes = svg(document, target)?;
-    let before = image::element(document, target)?;
-    let based_on_sha256 = format!("{:x}", Sha256::digest(&bytes));
     let vector = bioicons::vector::recolor(&bytes, colors)?;
+    replace_vector(
+        document,
+        target,
+        vector,
+        json!({"kind":"recolor","colors":colors}),
+    )
+}
+fn replace_vector(
+    document: &Value,
+    target: &str,
+    vector: bioicons::vector::PreparedSvg,
+    mut change: Value,
+) -> Result<Value> {
+    let before = image::element(document, target)?;
+    let based_on_sha256 = format!("{:x}", Sha256::digest(svg(document, target)?));
     let mut provenance = before
         .get("customData")
         .filter(|v| v.is_object())
@@ -78,7 +91,14 @@ pub fn recolor_document(
     if provenance.get("modifications").is_none() {
         provenance["modifications"] = json!([]);
     }
-    provenance["modifications"].as_array_mut().ok_or(Error::Invalid("image modifications must be a list"))?.push(json!({"kind":"recolor","based_on_file_id":before["fileId"],"based_on_sha256":based_on_sha256,"colors":colors,"result_sha256":vector.sha256,"created_at":chrono::Utc::now().to_rfc3339()}));
+    change["based_on_file_id"] = before["fileId"].clone();
+    change["based_on_sha256"] = json!(based_on_sha256);
+    change["result_sha256"] = json!(vector.sha256);
+    change["created_at"] = json!(chrono::Utc::now().to_rfc3339());
+    provenance["modifications"]
+        .as_array_mut()
+        .ok_or(Error::Invalid("image modifications must be a list"))?
+        .push(change);
     provenance["sha256"] = json!(vector.sha256);
     provenance["colors"] = json!(vector.colors);
     Ok(image::replace_file(
@@ -104,4 +124,132 @@ pub fn recolor(
     let document = current(store, project, figure, revision)?;
     let next = recolor_document(&document, target, colors)?;
     Ok(store.propose(project, figure, revision, "调整矢量素材配色", &next)?)
+}
+
+/// Read paths from this exact saved file, including a numbered review visual.
+pub fn parts(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    target: &str,
+) -> Result<Value> {
+    let document = current(store, project, figure, revision)?;
+    let bytes = svg(&document, target)?;
+    let mut value = serde_json::to_value(bioicons::parts::inspect(&bytes)?)
+        .map_err(|_| Error::Invalid("cannot serialize SVG parts"))?;
+    let element = image::element(&document, target)?;
+    value["element_id"] = element["id"].clone();
+    value["file_id"] = element["fileId"].clone();
+    value["revision"] = json!(revision);
+    Ok(value)
+}
+pub fn edit_parts_document(
+    document: &Value,
+    target: &str,
+    sha256: &str,
+    edits: &[bioicons::parts::Edit],
+) -> Result<Value> {
+    let vector = bioicons::parts::edit(&svg(document, target)?, sha256, edits)?;
+    replace_vector(
+        document,
+        target,
+        vector,
+        json!({"kind":if edits.iter().any(|e|e.translate.is_some() || e.points.is_some()) {"path_edit"}else{"path_style"},"edits":edits}),
+    )
+}
+pub fn edit_parts(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    target: &str,
+    sha256: &str,
+    edits: &[bioicons::parts::Edit],
+) -> Result<visualization::proposal::Proposal> {
+    let document = current(store, project, figure, revision)?;
+    let next = edit_parts_document(&document, target, sha256, edits)?;
+    Ok(store.propose(project, figure, revision, "调整矢量素材局部路径", &next)?)
+}
+
+/// Read endpoint/control handles for one exact file snapshot.
+pub fn geometry(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    target: &str,
+    sha256: &str,
+    part_id: &str,
+) -> Result<Value> {
+    let document = current(store, project, figure, revision)?;
+    let geometry = bioicons::geometry::inspect(&svg(&document, target)?, sha256, part_id)?;
+    let mut value = serde_json::to_value(geometry)
+        .map_err(|_| Error::Invalid("cannot serialize path geometry"))?;
+    value["revision"] = json!(revision);
+    value["element_id"] = image::element(&document, target)?["id"].clone();
+    Ok(value)
+}
+
+/// Stored file dimensions plus the current visible crop; no dimensions are guessed by the agent.
+pub fn image_info(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    target: &str,
+) -> Result<Value> {
+    let document = current(store, project, figure, revision)?;
+    let source = image::element(&document, target)?;
+    let file = source["fileId"]
+        .as_str()
+        .ok_or(Error::Invalid("image has no file"))?;
+    let url = document["files"][file]["dataURL"]
+        .as_str()
+        .ok_or(Error::Invalid("image file is missing"))?;
+    let (header, data) = url
+        .split_once(',')
+        .ok_or(Error::Invalid("invalid image data"))?;
+    if !header.ends_with(";base64") || data.len() > 48 * 1024 * 1024 {
+        return Err(Error::Invalid("requires an embedded image under 36 MiB"));
+    }
+    let bytes = STANDARD
+        .decode(data)
+        .map_err(|_| Error::Invalid("invalid image encoding"))?;
+    let (width, height) = if header == "data:image/svg+xml;base64" {
+        let v = bioicons::vector::normalize(&bytes)?;
+        (v.width, v.height)
+    } else {
+        ::image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format()
+            .map_err(|_| Error::Invalid("invalid image header"))?
+            .into_dimensions()
+            .map_err(|_| Error::Invalid("unsupported image dimensions"))?
+    };
+    if width == 0 || height == 0 || width > 100000 || height > 100000 {
+        return Err(Error::Invalid("invalid natural image size"));
+    }
+    let crop = visualization::inset::crop(source, width, height)?;
+    Ok(
+        json!({"element_id":source["id"],"revision":revision,"natural_width":width,"natural_height":height,"visible_crop":crop,"scale":source["scale"],"angle":source["angle"],"sha256":format!("{:x}",Sha256::digest(&bytes)),"dataURL":url,"provenance":source["customData"]}),
+    )
+}
+pub fn inset(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    spec: &visualization::inset::Spec,
+) -> Result<visualization::proposal::Proposal> {
+    let info = image_info(store, project, figure, revision, &spec.element_id)?;
+    let document = current(store, project, figure, revision)?;
+    let next = visualization::inset::compile(
+        &document,
+        spec,
+        info["natural_width"].as_u64().unwrap() as u32,
+        info["natural_height"].as_u64().unwrap() as u32,
+        revision,
+        info["sha256"].as_str().unwrap(),
+    )?;
+    Ok(store.propose(project, figure, revision, "添加局部放大快照", &next)?)
 }

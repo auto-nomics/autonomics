@@ -317,3 +317,6 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         infra,
     }
 }
+
+mod figure_workflow;
+pub use figure_workflow::{FigureTrace, scripted_figure_model};

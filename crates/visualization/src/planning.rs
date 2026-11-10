@@ -294,6 +294,7 @@ impl Store {
                         document: serde_json::from_str(&document)?,
                         status,
                         created_at,
+                        review_markups: Vec::new(),
                     });
                 }
             }
@@ -306,6 +307,7 @@ impl Store {
             document,
             status: "pending".into(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            review_markups: Vec::new(),
         };
         transaction.execute(
             "INSERT INTO visualization_proposals VALUES(?1,?2,?3,?4,?5,?6,?7)",

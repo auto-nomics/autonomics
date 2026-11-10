@@ -123,7 +123,7 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
         shape["customData"] = json!({"scientificId":node.id,"evidence":node.evidence});
         if index == 0 {
             shape["customData"]["scientificPlan"] = json!(plan);
-            shape["customData"]["layoutInfo"] = json!({"kind":plan.layout,"feedback_edges":drawing.feedback_edges,"font_family":9,"font_sha256":crate::font_metrics::SHA256});
+            shape["customData"]["layoutInfo"] = json!({"kind":plan.layout,"feedback_edges":drawing.feedback_edges,"font_family":9,"font_name":crate::font_metrics::FONT_NAME,"font_sha256":crate::font_metrics::SHA256});
         }
         let mut label = text(
             &label_id,

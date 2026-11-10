@@ -13,6 +13,8 @@ pub struct Proposal {
     pub document: Value,
     pub status: String,
     pub created_at: String,
+    #[serde(default)]
+    pub review_markups: Vec<crate::markup::Summary>,
 }
 impl Store {
     pub fn propose(
@@ -23,13 +25,36 @@ impl Store {
         summary: &str,
         document: &Value,
     ) -> Result<Proposal> {
+        self.propose_with_markups(project, id, base_revision, summary, document, &[])
+    }
+    /// Attach only explicitly addressed open reviews. Links do not resolve them.
+    pub fn propose_with_markups(
+        &self,
+        project: &str,
+        id: &str,
+        base_revision: i64,
+        summary: &str,
+        document: &Value,
+        markup_ids: &[String],
+    ) -> Result<Proposal> {
+        if markup_ids.len() > 50
+            || markup_ids
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != markup_ids.len()
+        {
+            return Err(Error::Invalid("at most 50 distinct review markup IDs"));
+        }
+        let transaction =
+            rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         if summary.trim().is_empty() {
             return Err(Error::Invalid("proposal summary"));
         }
         if self.get(project, id)?.revision != base_revision {
             return Err(Error::Conflict);
         }
-        let proposal = Proposal {
+        let mut proposal = Proposal {
             id: uuid::Uuid::new_v4().to_string(),
             visualization_id: id.into(),
             base_revision,
@@ -37,6 +62,7 @@ impl Store {
             document: document.clone(),
             status: "pending".into(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            review_markups: Vec::new(),
         };
         let inserted = self.connection.execute(
             "INSERT INTO visualization_proposals SELECT ?1,?2,?3,?4,?5,?6,?7 WHERE EXISTS (SELECT 1 FROM visualizations WHERE id=?2 AND project_id=?8 AND revision=?3)",
@@ -54,7 +80,52 @@ impl Store {
         if inserted == 0 {
             return Err(Error::Conflict);
         }
+        for markup_id in markup_ids {
+            let status: Option<String> = transaction
+                .query_row(
+                    "SELECT status FROM visualization_markups WHERE visualization_id=?1 AND id=?2",
+                    params![id, markup_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if status.ok_or(Error::NotFound)? != "open" {
+                return Err(Error::Conflict);
+            }
+            transaction.execute(
+                "INSERT INTO visualization_proposal_markups VALUES (?1,?2)",
+                params![proposal.id, markup_id],
+            )?;
+        }
+        proposal.review_markups = self.proposal_markups(&proposal.id)?;
+        transaction.commit()?;
         Ok(proposal)
+    }
+    fn proposal_markups(&self, proposal_id: &str) -> Result<Vec<crate::markup::Summary>> {
+        let mut statement = self.connection.prepare("SELECT m.id,m.visualization_id,m.at_revision,m.note,m.strokes,m.status,m.created_at FROM visualization_markups m JOIN visualization_proposal_markups p ON p.markup_id=m.id WHERE p.proposal_id=?1 ORDER BY m.created_at,m.id")?;
+        let rows = statement.query_map([proposal_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (id, visualization_id, at_revision, note, strokes, status, created_at) = row?;
+            Ok(crate::markup::Summary {
+                id,
+                visualization_id,
+                at_revision,
+                note,
+                stroke_count: serde_json::from_str::<Vec<crate::markup::Stroke>>(&strokes)?.len(),
+                status,
+                created_at,
+            })
+        })
+        .collect()
     }
     pub fn proposals(&self, project: &str, id: &str) -> Result<Vec<Proposal>> {
         self.get(project, id)?;
@@ -71,6 +142,7 @@ impl Store {
         })?;
         rows.map(|row| {
             let (proposal_id, base_revision, summary, document, status, created_at) = row?;
+            let review_markups = self.proposal_markups(&proposal_id)?;
             Ok(Proposal {
                 id: proposal_id,
                 visualization_id: id.into(),
@@ -79,6 +151,7 @@ impl Store {
                 document: serde_json::from_str(&document)?,
                 status,
                 created_at,
+                review_markups,
             })
         })
         .collect()
@@ -88,6 +161,16 @@ impl Store {
         project: &str,
         id: &str,
         proposal_id: &str,
+    ) -> Result<Visualization> {
+        self.accept_proposal_with_reviews(project, id, proposal_id, false)
+    }
+    /// Closing review notes is an explicit user choice and shares the scene transaction.
+    pub fn accept_proposal_with_reviews(
+        &mut self,
+        project: &str,
+        id: &str,
+        proposal_id: &str,
+        resolve_markups: bool,
     ) -> Result<Visualization> {
         let transaction = self
             .connection
@@ -116,6 +199,9 @@ impl Store {
             "UPDATE visualization_proposals SET status='accepted' WHERE id=?1",
             [proposal_id],
         )?;
+        if resolve_markups {
+            transaction.execute("UPDATE visualization_markups SET status='resolved' WHERE visualization_id=?1 AND id IN (SELECT markup_id FROM visualization_proposal_markups WHERE proposal_id=?2)", params![id,proposal_id])?;
+        }
         transaction.commit()?;
         Ok(metadata)
     }
@@ -129,6 +215,170 @@ impl Store {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn linked_reviews_close_only_on_explicit_atomic_adoption() -> Result<()> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let figure = store.create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))?;
+        let other = store.create("p", "Other", "excalidraw/v2", &json!({"elements":[]}))?;
+        let ink = [crate::markup::Stroke {
+            kind: crate::markup::Kind::Cross,
+            points: vec![[0., 0.], [10., 10.]],
+        }];
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let review =
+            store.create_markup("p", &figure.id, 1, "Remove the crossed object", &ink, png)?;
+        let unrelated = store.create_markup("p", &figure.id, 1, "Unaddressed", &ink, png)?;
+        let ids = vec![review.id.clone()];
+        for bad in [
+            vec!["missing".into()],
+            vec![review.id.clone(), review.id.clone()],
+            vec![review.id.clone(); 51],
+        ] {
+            assert!(
+                store
+                    .propose_with_markups(
+                        "p",
+                        &figure.id,
+                        1,
+                        "Invalid",
+                        &json!({"elements":[]}),
+                        &bad
+                    )
+                    .is_err()
+            );
+        }
+        assert!(matches!(
+            store.propose_with_markups("p", &other.id, 1, "Foreign", &json!({"elements":[]}), &ids),
+            Err(Error::NotFound)
+        ));
+        assert!(store.proposals("p", &figure.id)?.is_empty());
+        let rejected = store.propose_with_markups(
+            "p",
+            &figure.id,
+            1,
+            "Rejected",
+            &json!({"elements":[]}),
+            &ids,
+        )?;
+        assert_eq!(rejected.review_markups[0].note, review.note);
+        assert!(!serde_json::to_string(&rejected)?.contains("iVBOR"));
+        store.reject_proposal("p", &figure.id, &rejected.id)?;
+        assert_eq!(
+            store.markup("p", &figure.id, &review.id)?.summary.status,
+            "open"
+        );
+        let plain = store.propose_with_markups(
+            "p",
+            &figure.id,
+            1,
+            "Artwork only",
+            &json!({"elements":[]}),
+            &ids,
+        )?;
+        store.accept_proposal("p", &figure.id, &plain.id)?;
+        assert_eq!(
+            store.markup("p", &figure.id, &review.id)?.summary.status,
+            "open"
+        );
+        // Historical reviews may be reconciled with the current scene and linked.
+        let candidate = store.propose_with_markups(
+            "p",
+            &figure.id,
+            2,
+            "Address review",
+            &json!({"elements":[{"id":"new"}]}),
+            &ids,
+        )?;
+        // A failure in review completion rolls back artwork, revision and proposal status.
+        store.connection.execute_batch("CREATE TRIGGER fail_review BEFORE UPDATE OF status ON visualization_markups BEGIN SELECT RAISE(ABORT,'test failure'); END;")?;
+        assert!(
+            store
+                .accept_proposal_with_reviews("p", &figure.id, &candidate.id, true)
+                .is_err()
+        );
+        assert_eq!(store.get("p", &figure.id)?.revision, 2);
+        assert!(matches!(
+            store.revision("p", &figure.id, 3),
+            Err(Error::NotFound)
+        ));
+        assert_eq!(
+            store
+                .proposals("p", &figure.id)?
+                .iter()
+                .find(|p| p.id == candidate.id)
+                .unwrap()
+                .status,
+            "pending"
+        );
+        store
+            .connection
+            .execute_batch("DROP TRIGGER fail_review;")?;
+        store.accept_proposal_with_reviews("p", &figure.id, &candidate.id, true)?;
+        assert_eq!(store.get("p", &figure.id)?.revision, 3);
+        assert_eq!(
+            store.markup("p", &figure.id, &review.id)?.summary.status,
+            "resolved"
+        );
+        assert_eq!(
+            store.markup("p", &figure.id, &unrelated.id)?.summary.status,
+            "open"
+        );
+        assert!(matches!(
+            store.propose_with_markups("p", &figure.id, 3, "Closed", &json!({"elements":[]}), &ids),
+            Err(Error::Conflict)
+        ));
+        store.delete("p", &figure.id, 3)?;
+        assert_eq!(
+            store.connection.query_row(
+                "SELECT count(*) FROM visualization_proposal_markups",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            0
+        );
+        Ok(())
+    }
+    #[test]
+    fn stale_review_proposals_leave_notes_open() -> Result<()> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let figure = store.create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))?;
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let ink = [crate::markup::Stroke {
+            kind: crate::markup::Kind::Cross,
+            points: vec![[0., 0.], [10., 10.]],
+        }];
+        let review = store.create_markup("p", &figure.id, 1, "Review", &ink, png)?;
+        let candidate = store.propose_with_markups(
+            "p",
+            &figure.id,
+            1,
+            "Candidate",
+            &json!({"elements":[]}),
+            std::slice::from_ref(&review.id),
+        )?;
+        store.save(
+            "p",
+            &figure.id,
+            1,
+            "Manual edit",
+            &json!({"elements":[{"id":"keep"}]}),
+        )?;
+        assert!(matches!(
+            store.accept_proposal_with_reviews("p", &figure.id, &candidate.id, true),
+            Err(Error::Conflict)
+        ));
+        assert_eq!(
+            store.markup("p", &figure.id, &review.id)?.summary.status,
+            "open"
+        );
+        assert_eq!(
+            store.revision("p", &figure.id, 2)?.document["elements"][0]["id"],
+            "keep"
+        );
+        Ok(())
+    }
     #[test]
     fn independent_writers_accept_only_one_candidate_per_revision() -> Result<()> {
         use std::sync::{Arc, Barrier};

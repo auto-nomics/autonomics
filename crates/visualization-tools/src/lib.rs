@@ -23,6 +23,7 @@ enum ActionSchema {
     ReadImage,
     ReadPreview,
     ReadMarkup,
+    ListMarkups,
     ReadPlan,
     SavePlan,
     SketchPlan,
@@ -51,10 +52,10 @@ struct SceneSchema {
 }
 #[tool(
     name = "visualization",
-    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, read_markup, read_plan, save_plan, sketch_plan, create, sketch, propose, apply. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries and object-linked review annotations as well as the scene; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
+    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, read_markup, list_markups, read_plan, save_plan, sketch_plan, create, sketch, propose, apply. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. When a proposed change addresses review markup, pass its IDs in markup_ids after reading and reconciling those reviews; this links the candidate to those notes without closing them. The user can explicitly close linked notes when adopting the proposal. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries, markups_pagination.next_before and object-linked review annotations as well as the scene. Use list_markups with before, limit (1..100) and optional status open/resolved to retrieve older reviews; repeat next_before until null. Filter status open to find outstanding reviews even when newer records are resolved; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
 )]
 pub struct FigureInput {
-    #[desc = "projects | list | read | read_image | read_preview | read_markup | read_plan | save_plan | sketch_plan | create | sketch | propose | apply"]
+    #[desc = "projects | list | read | read_image | read_preview | read_markup | list_markups | read_plan | save_plan | sketch_plan | create | sketch | propose | apply"]
     #[schemars(with = "ActionSchema")]
     pub action: String,
     #[desc = "Opaque project ID: copy verbatim from the active tab context or projects. Never compose or guess IDs."]
@@ -65,6 +66,14 @@ pub struct FigureInput {
     pub element_id: Option<String>,
     #[desc = "Review markup ID from read or the user handoff; required for read_markup"]
     pub markup_id: Option<String>,
+    #[desc = "For propose only: IDs of open review markups actually addressed by these edits. Read each with read_markup first; include only addressed reviews, including historical reviews reconciled with the current scene. Does not resolve notes; the user chooses whether to close them when accepting the proposal."]
+    pub markup_ids: Option<Vec<String>>,
+    #[desc = "list_markups cursor: copy next_before from the previous page; omit for the newest page"]
+    pub before: Option<String>,
+    #[desc = "list_markups status filter: open or resolved; omit for all records"]
+    pub status: Option<String>,
+    #[desc = "list_markups page size, 1..100 (default 50)"]
+    pub limit: Option<u32>,
     #[desc = "Expected planning version for save_plan/sketch_plan; use zero to create a brief, otherwise the version from read_plan"]
     pub planning_version: Option<i64>,
     #[desc = "Required for create/sketch; proposal summary required for propose and sketch_plan"]
@@ -99,6 +108,11 @@ fn required(value: Option<String>, name: &str) -> Result<String, ToolError> {
 }
 fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
     let mut service = VisualizationService::new(Store::open(path).map_err(failure)?);
+    if input.action != "propose" && input.markup_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+        return Err(invalid(
+            "markup_ids is only supported for propose; review resolution requires user acceptance",
+        ));
+    }
     if input.action == "projects" {
         return Ok(json!(service.store().projects().map_err(failure)?));
     }
@@ -198,6 +212,18 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
             Ok(proposal)
         }
 
+        "list_markups" => Ok(json!(
+            service
+                .store()
+                .markups_page(
+                    &project,
+                    &id,
+                    input.before.as_deref(),
+                    input.status.as_deref(),
+                    input.limit.unwrap_or(50)
+                )
+                .map_err(failure)?
+        )),
         "read" => {
             let metadata = service.store().get(&project, &id).map_err(failure)?;
             let mut scene = service
@@ -215,9 +241,13 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
                     }
                 }
             }
+            let markups = service
+                .store()
+                .markups_page(&project, &id, None, None, 50)
+                .map_err(failure)?;
             let planning=service.store().planning(&project,&id).map_err(failure)?.map(|p|json!({"version":p.version,"based_on_revision":p.based_on_revision,"status":p.status,"issue_count":p.issues.len(),"proposal_id":p.proposal_id}));
             Ok(
-                json!({"metadata":metadata,"scene":scene,"image_data_omitted":true,"annotations":service.store().annotations(&project,&id).map_err(failure)?,"markups":service.store().markups(&project,&id).map_err(failure)?,"planning":planning}),
+                json!({"metadata":metadata,"scene":scene,"image_data_omitted":true,"annotations":service.store().annotations(&project,&id).map_err(failure)?,"markups":markups.items,"markups_pagination":{"next_before":markups.next_before},"planning":planning}),
             )
         }
         "read_markup" => {
@@ -320,7 +350,14 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
                 let summary = required(input.title, "title must summarize the proposal")?;
                 let mut proposal = json!(
                     service
-                        .propose(&project, &id, revision, &summary, &operations)
+                        .propose_with_markups(
+                            &project,
+                            &id,
+                            revision,
+                            &summary,
+                            &operations,
+                            input.markup_ids.as_deref().unwrap_or(&[])
+                        )
                         .map_err(failure)?
                 );
                 proposal.as_object_mut().unwrap().remove("document");
@@ -513,6 +550,29 @@ mod tests {
         let read = serde_json::to_value(read).unwrap();
         assert_eq!(read["content"]["markups"][0]["id"], review.id);
         assert!(!read.to_string().contains("iVBOR"));
+        let page = serde_json::to_value(tool.implementation.execute(json!({"action":"list_markups","project_id":"p","figure_id":figure.id,"status":"open","limit":1})).await.unwrap()).unwrap();
+        assert_eq!(page["content"]["items"][0]["id"], review.id);
+        assert!(page["content"]["next_before"].is_null());
+        assert!(!page.to_string().contains("iVBOR"));
+        assert!(tool.implementation.execute(json!({"action":"list_markups","project_id":"p","figure_id":figure.id,"status":"unknown"})).await.is_err());
+
+        let linked = json!({"action":"propose","project_id":"p","figure_id":figure.id,"expected_revision":2,"title":"Address historical review","operations":[{"op":"add","element":{"id":"step","type":"rectangle"}}],"markup_ids":[review.id]});
+        let candidate =
+            serde_json::to_value(tool.implementation.execute(linked.clone()).await.unwrap())
+                .unwrap();
+        assert_eq!(candidate["content"]["review_markups"][0]["id"], review.id);
+        assert!(!candidate.to_string().contains("iVBOR"));
+        assert_eq!(
+            store
+                .markup("p", &figure.id, &review.id)
+                .unwrap()
+                .summary
+                .status,
+            "open"
+        );
+        let mut direct = linked;
+        direct["action"] = json!("apply");
+        assert!(tool.implementation.execute(direct).await.is_err());
         let input = json!({"action":"read_markup","project_id":"p","figure_id":figure.id,"markup_id":review.id,"expected_revision":2});
         let result =
             serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
@@ -662,6 +722,10 @@ mod tests {
             figure_id: Some(figure.id.clone()),
             element_id: None,
             markup_id: None,
+            markup_ids: None,
+            before: None,
+            status: None,
+            limit: None,
             planning_version: None,
             title: None,
             document: None,

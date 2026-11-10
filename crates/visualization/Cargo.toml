@@ -9,6 +9,7 @@ description = "Project-scoped visualization documents and revision storage"
 
 [dependencies]
 schemars.workspace = true
+unicode-linebreak = "0.1.5"
 base64 = "0.23"
 rusqlite = "0.40.1"
 serde = { workspace = true, features = ["derive"] }
