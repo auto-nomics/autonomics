@@ -114,7 +114,7 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 
 ### 运行环境（镜像开发）
 
-每个插件都运行在某个**运行环境**上：一个由宿主审批、digest 钉死的基础镜像及其解释器，保存在预置了 39 个条目的目录中——基础 OS 镜像（alpine、debian、ubuntu、python、rocker-verse、bioconductor）、生物信息工具链（samtools、bcftools、bwa、minimap2、fastqc、salmon、gatk4、ensembl-vep、bedtools、macs2、blast、mafft、iqtree、kraken2 等）与医学影像（orthanc、ohif-viewer、monai）。用户可通过 gateway（Docker Hub 搜索 + 审批）批准更多镜像。新运行环境以 git 工作区形式在 `/environments/dev/<id>` 编写，含 `manifest.toml` 与 `Containerfile`；必须通过六道门禁（四道静态，加构建与冒烟测试）才能本地激活——构建产物的 digest 被钉进目录，随后后台蒸馏器可将其发布到 `ghcr.io/auto-nomics/environments`。构建与推送由宿主完成——智能体从不直接接触 Podman 或镜像仓库。
+每个插件都运行在某个**运行环境**上：一个由宿主审批、digest 钉死的基础镜像及其解释器，保存在预置了 6 个基础镜像条目的目录中——基础 OS 镜像（alpine、debian、ubuntu、python、rocker-verse、bioconductor）。工具镜像由本项目发布在 `ghcr.io/auto-nomics/autonomics` 之下，并由插件清单以 digest 钉死，因此目录不再预置第三方工具镜像，`prepare` 只会拉取基础镜像与已安装插件声明的 GHCR 镜像。用户可通过 gateway（Docker Hub 搜索 + 审批）批准更多镜像。新运行环境以 git 工作区形式在 `/environments/dev/<id>` 编写，含 `manifest.toml` 与 `Containerfile`；必须通过六道门禁（四道静态，加构建与冒烟测试）才能本地激活——构建产物的 digest 被钉进目录，随后后台蒸馏器可将其发布到 `ghcr.io/auto-nomics/environments`。构建与推送由宿主完成——智能体从不直接接触 Podman 或镜像仓库。
 
 ## DAG 调度与容器执行
 

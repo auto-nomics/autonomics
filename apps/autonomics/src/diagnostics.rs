@@ -145,6 +145,12 @@ pub async fn check_readiness(config: &gateway::RuntimeConfig) -> ReadinessReport
     // enumerate.
     let loaded = match &plugins {
         Category::Ok(_) => load_installed_plugins(&config.state_dir).ok(),
+        // No plugin family is declared at all (no `plugins.toml`):
+        // there is no plugin image to enumerate, but the environment
+        // catalogue and the built-in script pins still are. An empty
+        // family list keeps those checks alive instead of failing the
+        // whole report on a missing plugin declaration.
+        Category::Skipped(_) => Some(load_installed_plugins(&config.state_dir).unwrap_or_default()),
         _ => None,
     };
 
@@ -299,7 +305,7 @@ async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]
                 ));
             }
         };
-    let local = match container_runtime::images::local_digests_with_config(&infra.config).await {
+    let local = match container_runtime::images::local_images_with_config(&infra.config).await {
         Ok(local) => local,
         Err(error) => return Category::Failed(error.to_string()),
     };

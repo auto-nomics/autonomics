@@ -12,7 +12,7 @@
 //! is safe there (see the development-container section below).
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -180,8 +180,26 @@ impl PodmanConfig {
         config
     }
 
+    /// The runtime scratch directory Podman uses for `--tmpdir`: the
+    /// runroot's `libpod-tmp`.
+    pub fn tmpdir(&self) -> Option<PathBuf> {
+        self.run_root.as_ref().map(|root| root.join("libpod-tmp"))
+    }
+
     /// Construct a Podman command using this runtime's configured private store.
     pub fn async_command(&self) -> Command {
+        self.async_command_with_staging(None)
+    }
+
+    /// Construct a Podman command that stages image blob writes under
+    /// `staging` instead of the shared `libpod-tmp`.
+    ///
+    /// Podman downloads every layer into a temporary blob cache under
+    /// TMPDIR before committing it to the store. Concurrent pulls share
+    /// one TMPDIR, so a failed pull leaves gigabytes of scratch behind
+    /// that cannot be swept without touching a running pull's files.
+    /// A per-pull staging directory keeps that scratch attributable.
+    pub fn async_command_with_staging(&self, staging: Option<&Path>) -> Command {
         let mut command = async_podman_command(&self.program);
         if let Some(root) = &self.worker_runtime_dir {
             command.arg("--remote=false");
@@ -211,7 +229,9 @@ impl PodmanConfig {
                 // the host's tmpfs-backed /tmp (RAM pressure and hard
                 // ENOSPC under concurrent pulls). Workers keep their own
                 // redirect above.
-                let tmpdir = root.join("libpod-tmp");
+                let tmpdir = staging
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| root.join("libpod-tmp"));
                 let _ = std::fs::create_dir_all(&tmpdir);
                 command.env("TMPDIR", tmpdir);
             }
@@ -228,8 +248,14 @@ impl PodmanConfig {
         command
     }
 
-    /// Construct a blocking Podman command using this runtime's private store.
+    /// Construct a blocking Podman command using this runtime's configured private store.
     pub fn blocking_command(&self) -> std::process::Command {
+        self.blocking_command_with_staging(None)
+    }
+
+    /// Construct a blocking Podman command that stages image blob writes
+    /// under `staging` instead of the shared `libpod-tmp`.
+    pub fn blocking_command_with_staging(&self, staging: Option<&Path>) -> std::process::Command {
         let mut command = blocking_podman_command(&self.program);
         if let Some(root) = &self.worker_runtime_dir {
             command.arg("--remote=false");
@@ -253,7 +279,9 @@ impl PodmanConfig {
             if self.worker_runtime_dir.is_none() {
                 // Same disk-backed TMPDIR redirect as the async builder:
                 // pull staging must not hit the host's tmpfs /tmp.
-                let tmpdir = root.join("libpod-tmp");
+                let tmpdir = staging
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| root.join("libpod-tmp"));
                 let _ = std::fs::create_dir_all(&tmpdir);
                 command.env("TMPDIR", tmpdir);
             }
