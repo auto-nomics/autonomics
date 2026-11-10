@@ -315,13 +315,39 @@ fn moved(e: &Value, d: [f64; 2]) -> Result<Value> {
     scene::touch(&mut result);
     Ok(result)
 }
+#[derive(Clone, Copy)]
+enum Transform {
+    Arrange(Mode),
+    Translate([f64; 2]),
+}
 pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
+    compile_transform(document, &spec.element_ids, Transform::Arrange(spec.mode))
+}
+/// Move existing complete components once, without copying or changing IDs.
+pub fn translate(document: &Value, element_ids: &[String], dx: f64, dy: f64) -> Result<Value> {
+    if [dx, dy].iter().any(|v| !v.is_finite() || v.abs() > 1e6) {
+        return Err(InvalidArrangement(
+            "translation requires finite dx/dy within canvas range",
+        ));
+    }
+    compile_transform(document, element_ids, Transform::Translate([dx, dy]))
+}
+fn compile_transform(
+    document: &Value,
+    element_ids: &[String],
+    transform: Transform,
+) -> Result<Value> {
     scene::apply(document, &[]).map_err(|_| InvalidArrangement("invalid scene"))?;
-    if !(2..=100).contains(&spec.element_ids.len())
-        || spec.element_ids.iter().collect::<HashSet<_>>().len() != spec.element_ids.len()
+    if !(if matches!(transform, Transform::Translate(_)) {
+        1..=100
+    } else {
+        2..=100
+    })
+    .contains(&element_ids.len())
+        || element_ids.iter().collect::<HashSet<_>>().len() != element_ids.len()
     {
         return Err(InvalidArrangement(
-            "select 2..100 distinct existing object IDs",
+            "select distinct existing IDs (1..100 for translation, 2..100 for arrangement)",
         ));
     }
     let elements = document["elements"]
@@ -337,7 +363,7 @@ pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
         .collect::<HashMap<_, _>>();
     let ownership = Ownership::new(&elements);
     let mut units: Vec<HashSet<String>> = Vec::new();
-    for id in &spec.element_ids {
+    for id in element_ids {
         if !index.contains_key(id.as_str()) {
             return Err(InvalidArrangement("selected object is missing"));
         }
@@ -353,7 +379,7 @@ pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
         }
         units.push(unit);
     }
-    if units.len() < 2 {
+    if matches!(transform, Transform::Arrange(_)) && units.len() < 2 {
         return Err(InvalidArrangement(
             "selection collapses to fewer than two independent components",
         ));
@@ -389,7 +415,17 @@ pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
             }) {
                 continue;
             }
-            let b = member_bounds(e, &index)?;
+            let b = if matches!(transform, Transform::Translate(_)) {
+                // Rigid motion needs no linear connector bounds or arrow-label
+                // midpoint reflow. Preserve rough/curved native point geometry.
+                if matches!(e["type"].as_str(), Some("arrow" | "line" | "freedraw")) {
+                    point_bounds(e, &points(e)?)?
+                } else {
+                    bounds(e)?
+                }
+            } else {
+                member_bounds(e, &index)?
+            };
             bbox[0] = bbox[0].min(b[0]);
             bbox[1] = bbox[1].min(b[1]);
             bbox[2] = bbox[2].max(b[2]);
@@ -400,69 +436,10 @@ pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
         }
         boxes.push(bbox);
     }
-    let axis = if matches!(
-        spec.mode,
-        Mode::Top | Mode::Middle | Mode::Bottom | Mode::DistributeVertical
-    ) {
-        1
-    } else {
-        0
+    let offsets = match transform {
+        Transform::Translate(offset) => vec![offset; units.len()],
+        Transform::Arrange(mode) => arrangement_offsets(&boxes, mode)?,
     };
-    let start = boxes.iter().map(|b| b[axis]).fold(f64::INFINITY, f64::min);
-    let end = boxes
-        .iter()
-        .map(|b| b[axis + 2])
-        .fold(f64::NEG_INFINITY, f64::max);
-    let mut offsets = vec![[0., 0.]; units.len()];
-    if matches!(
-        spec.mode,
-        Mode::DistributeHorizontal | Mode::DistributeVertical
-    ) {
-        if units.len() < 3 {
-            return Err(InvalidArrangement(
-                "distribution needs at least three independent components",
-            ));
-        }
-        let mut order = (0..units.len()).collect::<Vec<_>>();
-        order.sort_by(|a, b| {
-            ((boxes[*a][axis] + boxes[*a][axis + 2]) / 2.)
-                .total_cmp(&((boxes[*b][axis] + boxes[*b][axis + 2]) / 2.))
-        });
-        let total = boxes.iter().map(|b| b[axis + 2] - b[axis]).sum::<f64>();
-        let gap = (end - start - total) / (units.len() - 1) as f64;
-        if gap < 0. {
-            // Match the editor's fallback: anchor the outer-boundary components,
-            // distribute remaining centers, rather than invent negative edge gaps.
-            let first = order.iter().position(|i| boxes[*i][axis] == start).unwrap();
-            let last = order
-                .iter()
-                .position(|i| boxes[*i][axis + 2] == end)
-                .unwrap();
-            let middle = |i: usize| (boxes[order[i]][axis] + boxes[order[i]][axis + 2]) / 2.;
-            let step = (middle(last) - middle(first)) / (units.len() - 1) as f64;
-            let mut cursor = middle(first);
-            for (position, i) in order.into_iter().enumerate() {
-                if position != first && position != last {
-                    cursor += step;
-                    offsets[i][axis] = cursor - (boxes[i][axis] + boxes[i][axis + 2]) / 2.;
-                }
-            }
-        } else {
-            let mut cursor = start;
-            for i in order {
-                offsets[i][axis] = cursor - boxes[i][axis];
-                cursor += boxes[i][axis + 2] - boxes[i][axis] + gap;
-            }
-        }
-    } else {
-        for (i, b) in boxes.iter().enumerate() {
-            offsets[i][axis] = match spec.mode {
-                Mode::Left | Mode::Top => start - b[axis],
-                Mode::Right | Mode::Bottom => end - b[axis + 2],
-                _ => (start + end - b[axis] - b[axis + 2]) / 2.,
-            };
-        }
-    }
     let mut moves = HashMap::new();
     for (unit, d) in units.iter().zip(offsets) {
         for id in unit {
@@ -595,6 +572,70 @@ pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
         }
     }
     Ok(next)
+}
+
+fn arrangement_offsets(boxes: &[[f64; 4]], mode: Mode) -> Result<Vec<[f64; 2]>> {
+    let axis = if matches!(
+        mode,
+        Mode::Top | Mode::Middle | Mode::Bottom | Mode::DistributeVertical
+    ) {
+        1
+    } else {
+        0
+    };
+    let start = boxes.iter().map(|b| b[axis]).fold(f64::INFINITY, f64::min);
+    let end = boxes
+        .iter()
+        .map(|b| b[axis + 2])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let mut offsets = vec![[0., 0.]; boxes.len()];
+    if matches!(mode, Mode::DistributeHorizontal | Mode::DistributeVertical) {
+        if boxes.len() < 3 {
+            return Err(InvalidArrangement(
+                "distribution needs at least three independent components",
+            ));
+        }
+        let mut order = (0..boxes.len()).collect::<Vec<_>>();
+        order.sort_by(|a, b| {
+            ((boxes[*a][axis] + boxes[*a][axis + 2]) / 2.)
+                .total_cmp(&((boxes[*b][axis] + boxes[*b][axis + 2]) / 2.))
+        });
+        let total = boxes.iter().map(|b| b[axis + 2] - b[axis]).sum::<f64>();
+        let gap = (end - start - total) / (boxes.len() - 1) as f64;
+        if gap < 0. {
+            // Match the editor's fallback: anchor the outer-boundary components,
+            // distribute remaining centers, rather than invent negative edge gaps.
+            let first = order.iter().position(|i| boxes[*i][axis] == start).unwrap();
+            let last = order
+                .iter()
+                .position(|i| boxes[*i][axis + 2] == end)
+                .unwrap();
+            let middle = |i: usize| (boxes[order[i]][axis] + boxes[order[i]][axis + 2]) / 2.;
+            let step = (middle(last) - middle(first)) / (boxes.len() - 1) as f64;
+            let mut cursor = middle(first);
+            for (position, i) in order.into_iter().enumerate() {
+                if position != first && position != last {
+                    cursor += step;
+                    offsets[i][axis] = cursor - (boxes[i][axis] + boxes[i][axis + 2]) / 2.;
+                }
+            }
+        } else {
+            let mut cursor = start;
+            for i in order {
+                offsets[i][axis] = cursor - boxes[i][axis];
+                cursor += boxes[i][axis + 2] - boxes[i][axis] + gap;
+            }
+        }
+    } else {
+        for (i, b) in boxes.iter().enumerate() {
+            offsets[i][axis] = match mode {
+                Mode::Left | Mode::Top => start - b[axis],
+                Mode::Right | Mode::Bottom => end - b[axis + 2],
+                _ => (start + end - b[axis] - b[axis + 2]) / 2.,
+            };
+        }
+    }
+    Ok(offsets)
 }
 
 #[cfg(test)]

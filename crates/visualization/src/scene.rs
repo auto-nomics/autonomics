@@ -37,6 +37,12 @@ pub enum Operation {
     SyncInsetRegion {
         id: String,
     },
+    /// Translate complete existing components rigidly, preserving IDs and metadata.
+    Translate {
+        element_ids: Vec<String>,
+        dx: f64,
+        dy: f64,
+    },
     /// Duplicate complete native components with new IDs and rigid offsets.
     Duplicate {
         element_ids: Vec<String>,
@@ -103,6 +109,8 @@ pub enum SceneError {
     InvalidText(String),
     #[error("cannot set relation direction: {0}")]
     InvalidRelation(String),
+    #[error("cannot translate components: {0}")]
+    InvalidTranslation(String),
     #[error("cannot duplicate components: {0}")]
     InvalidCopy(String),
     #[error("cannot sync inset region: {0}")]
@@ -322,6 +330,17 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
             }
             Operation::SyncInsetRegion { id } => {
                 crate::inset_sync::apply(elements, &document["files"], id)?
+            }
+            Operation::Translate {
+                element_ids,
+                dx,
+                dy,
+            } => {
+                let mut snapshot = document.clone();
+                snapshot["elements"] = Value::Array(elements.clone());
+                let translated = crate::arrange::translate(&snapshot, element_ids, *dx, *dy)
+                    .map_err(|error| SceneError::InvalidTranslation(error.to_string()))?;
+                *elements = translated["elements"].as_array().unwrap().clone();
             }
             Operation::Duplicate {
                 element_ids,

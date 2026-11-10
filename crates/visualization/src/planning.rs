@@ -1,5 +1,7 @@
 //! Versioned scientific figure briefs and explicit clarification before sketching.
 use crate::{Error, Result, Store, proposal::Proposal, sketch};
+mod graph;
+pub use graph::GraphReview;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +62,8 @@ pub struct Planning {
     pub based_on_revision: i64,
     pub document: Brief,
     pub issues: Vec<Issue>,
+    /// Recomputed from the brief; not stored and does not gate generation.
+    pub graph_review: GraphReview,
     pub status: String,
     pub proposal_id: Option<String>,
     pub created_at: String,
@@ -176,6 +180,7 @@ fn latest(connection: &Connection, id: &str) -> Result<Option<Planning>> {
             Ok(Planning {
                 version,
                 based_on_revision,
+                graph_review: document.graph_review(),
                 document,
                 issues,
                 status,

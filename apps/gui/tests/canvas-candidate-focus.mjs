@@ -34,6 +34,7 @@ try {
  const prepare=async p=>{
   const feedback=dialog.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill('请仅围绕当前核对对象讨论图形改进，保留科学含义。');await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();
   const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const draft=await composer.inputValue(),context=JSON.parse(draft.slice(draft.lastIndexOf('\n\n{')+2));
+  assert.deepEqual(context.follow_up_inputs.read_proposal,{action:'read_proposal',project_id:project,figure_id:figure,proposal_id:p.id,expected_revision:revision});assert.deepEqual(context.follow_up_inputs.read_proposal_preview,{action:'read_proposal_preview',project_id:project,figure_id:figure,proposal_id:p.id,expected_revision:revision});
   assert.equal(context.proposal_id,p.id);assert.equal(context.document_sha256,p.document_sha256);assert.deepEqual(await call('GET',path),formal);assert.deepEqual(await call('GET',`${path}/proposals/${p.id}`),p);assert.equal(sent,0,'preparing object feedback never sends a message');await composer.fill('');return context;
  };
  const unchanged=await make('Unchanged object focus',[add]);await show(unchanged);

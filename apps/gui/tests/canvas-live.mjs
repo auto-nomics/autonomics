@@ -1,3 +1,5 @@
+import { runLiveIfngArt } from "./helpers/canvas-live-ifng-art.mjs";
+import { runLiveSourceReview } from "./helpers/canvas-live-source-review.mjs";
 import { runLiveEvidencePlanning } from './helpers/canvas-live-evidence.mjs';
 import { runLiveComposition } from './helpers/canvas-live-compose.mjs';
 // Opt-in real Agent + configured provider + tools + SQLite + GUI integration.
@@ -16,6 +18,8 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const ifngArtSource=process.env.VISUALIZATION_LIVE_IFNG_ART_SCENE;
+const sourceReviewSource=process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE;
 const liveEvidence=process.env.VISUALIZATION_LIVE_EVIDENCE==='1';
 const liveCompose=process.env.VISUALIZATION_LIVE_COMPOSE==='1';
 const liveSvg=process.env.VISUALIZATION_LIVE_SVG==='1';
@@ -27,6 +31,8 @@ const scientificCase=process.env.VISUALIZATION_LIVE_SCIENTIFIC;
 const candidateMode=process.env.VISUALIZATION_LIVE_CANDIDATE==='1';
 const gatewayMode=process.env.VISUALIZATION_LIVE_GATEWAY==='1';
 const reviewSource=process.env.VISUALIZATION_LIVE_REVIEW_SCENE, prepareOnly=process.env.VISUALIZATION_LIVE_PREPARE_ONLY==='1';
+assert.ok(!ifngArtSource || (gatewayMode&&!sourceReviewSource&&!liveEvidence&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'IFNG art requires an explicit reviewed scene and a separate Gateway evaluation');
+assert.ok(!sourceReviewSource || (gatewayMode&&!liveEvidence&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'source review requires an explicit saved scene and a separate Gateway evaluation');
 assert.ok(!liveEvidence || (gatewayMode&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live evidence requires a separate Gateway evaluation');
 assert.ok(!liveCompose || (gatewayMode&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live composition requires a separate Gateway evaluation');
 assert.ok(!liveSvg || (gatewayMode&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live SVG requires a separate Gateway evaluation');
@@ -37,7 +43,7 @@ assert.ok(!candidateMode || (gatewayMode&&reviewSource&&!prepareOnly),'candidate
 assert.ok(!gatewayMode || !prepareOnly, 'gateway mode uses a real configured model');
 assert.ok(!prepareOnly || reviewSource, 'prepare-only requires an explicit saved review scene');
 const provider = process.env.VISUALIZATION_LIVE_PROVIDER, model = process.env.VISUALIZATION_LIVE_MODEL;
-const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||((liveFit||liveSvg||liveCompose||liveEvidence)?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
+const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||((liveFit||liveSvg||liveCompose||liveEvidence||sourceReviewSource||ifngArtSource)?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
 assert.ok(prepareOnly || (provider && model), 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
 const config = process.env.VISUALIZATION_LIVE_CONFIG || join(homedir(), '.autonomics/config.db');
 const binary = gatewayMode ? (process.env.VISUALIZATION_LIVE_GATEWAY_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_gateway_live',import.meta.url))) : prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
@@ -130,7 +136,15 @@ try {
   };
   const normalized = text => text.replace(/\s/g, '');
   const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
-  if(liveEvidence){
+  if(ifngArtSource){
+    const evidence=await runLiveIfngArt({page,call,path,send,persist,directory,turns,until,source:ifngArtSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_ifng_art',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent IFNG illustration passed; artifacts=${directory}`);
+  }else if(sourceReviewSource){
+    const evidence=await runLiveSourceReview({page,call,path,send,persist,directory,turns,until,source:sourceReviewSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_source_caption_review',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent source-caption review passed; artifacts=${directory}`);
+  }else if(liveEvidence){
     const evidence=await runLiveEvidencePlanning({page,call,path,handoff,send,persist,directory,turns,until});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
     await persist('result.json',{passed:true,case:'live_evidence_planning',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent source planning passed; artifacts=${directory}`);
@@ -332,7 +346,7 @@ try {
   }
 } catch (error) {
   await page?.screenshot({ path: join(directory, 'failure.png'), animations: 'disabled' }).catch(() => {});
-  await persist('result.json', { passed: false, case:liveEvidence?'live_evidence_planning':liveCompose?'live_composition':liveSvg?'live_svg_refinement':liveFit?'live_illustration_fit':materializationSource?'candidate_materialization':scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
+  await persist('result.json', { passed: false, case:ifngArtSource?'live_ifng_art':sourceReviewSource?'live_source_caption_review':liveEvidence?'live_evidence_planning':liveCompose?'live_composition':liveSvg?'live_svg_refinement':liveFit?'live_illustration_fit':materializationSource?'candidate_materialization':scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
   console.error(`canvas-live: failed; artifacts=${directory}`); throw error;
 } finally {
   await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await page?.unrouteAll({behavior:'ignoreErrors'}).catch(()=>{}); await browser?.close(); if(gatewayMode&&native.exitCode===null&&native.signalCode===null)await writeFile(join(directory,'stop'),'stop');else native.kill(); vite?.kill();

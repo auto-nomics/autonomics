@@ -1,0 +1,1396 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "http://127.0.0.1:41863",
+  "elements": [
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-0",
+          "type": "text"
+        },
+        {
+          "id": "edge-0",
+          "type": "arrow"
+        }
+      ],
+      "customData": {
+        "evidence": [
+          "R-HSA-873926 IFNG dimer binds IFNGR（IFNG dimer [extracellular region] + IFNGR1:JAK1:IFNGR2:JAK2 → IFNG:IFNGR1:JAK1:IFNGR2:JAK2）https://reactome.org/content/detail/R-HSA-873926 —— 该节点状态即此反应的产物"
+        ],
+        "layoutInfo": {
+          "feedback_edges": 0,
+          "font_family": 9,
+          "font_name": "Autonomics Scientific Sans",
+          "font_sha256": "02b768546998e43f538442bbc1209c5154c3e9988255dbf2dad72a9396411261",
+          "kind": "horizontal"
+        },
+        "planningSource": {
+          "based_on_revision": 2,
+          "document": {
+            "assumptions": [
+              "【组件合并抽象｜组件上限 6】受体复合物与 JAK 活化保留为两个状态；'STAT1 募集于 p-IFNGR1' 一个节点合并了 IFNGR1 Y440 磷酸化与 STAT1 SH2 募集两步（顺序：先 R-HSA-873924，后 R-HSA-873921）；'p-STAT1 同源二聚体 GAF' 节点承接 R-HSA-873927 中的二聚化与自受体解离两步。每一步的先后与各自记录均写入对应边的 evidence 与本说明，避免关系错后一位。",
+              "【IFN-γ 的 STAT1 同源二聚化没有独立反应记录｜来源不足点】Reactome 人 IFN-γ 通路（R-HSA-877300 https://reactome.org/content/detail/R-HSA-877300）的事件列表中，STAT1 同源二聚化仅以文字出现在 R-HSA-873927 的 summation：'The phosphorylated STAT1 on IFNGR1 chains homodimerize through reciprocal SH2-phosphotyrosine interactions to form p-STAT1 homodimer called gamma-activated-factor (GAF).'，该反应本身的 input 为 p-STAT1 dimer bound to p-IFNGR1、output 为 GAF [cytosol]。因此本图二聚化箭头引用反应级记录 R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927，而非一条独立的 dimerization 反应；这是来源本身没有更细粒度，非检索失败。",
+              "【已排除的「看似可用但亚型错配」记录】R-HSA-909718 'Formation of p-STAT1 homodimer'（产物 p-Y701-STAT1-1 dimer = IFNA-activated-factor (AAF)，催化活性为 IFNA/B:IFNAR2:p-JAK1:STAT2:p-IFNAR1:p-TYK2:p-STAT2，属 IFN-α/β 分支）https://reactome.org/content/detail/R-HSA-909718 ；R-HSA-909726 'Phosphorylation of STAT1'（催化活性同为 IFN-α/β 复合体）https://reactome.org/content/detail/R-HSA-909726 ；R-HSA-1470010 'Dimerization of STATs'（输入为 p-JAK2:SFKs:p-KIT complex:p-STATs，属 c-Kit 通路）https://reactome.org/content/detail/R-HSA-1470010 。三者都不可用于本图；若日后要画 IFN-α/β 对照则恰好适用。",
+              "【Y701 激酶归属不确定】R-HSA-873922 的 summation 为 'STAT1 pair recruited to the receptor complex is phosphorylated near the C-terminus at residue Y701, probably by JAK2'，catalystActivity 记为 'protein tyrosine kinase activity of STAT1 bound to p-IFNGR1'，未指定具体激酶；故边标签保留 'probably by JAK2' 的限定措辞，不写成确定归属。",
+              "【JAK1 反式磷酸化位点为推断】R-HSA-873918 明示 'Tyrosine 1033 in the activation loop of the JAK1 kinase domain may be the target for transphosphorylation (phosphorylation site mentioned here is based on sequence similarity with all the other JAK kinases)'；图中只标 JAK1 被反式磷酸化，不标位点。",
+              "【JAK2 磷酸化位点只表示 Y1007】R-HSA-873919 列出已报道位点 Y221/Y570/Y868/Y966/Y972/Y1007/Y1008，但反应中仅表示 Y1007（'Of all the predicted phosphorylation sites only tyrosine 1007 is represented in the reaction'）；图中不标位点。",
+              "【IFNGR1 位点 Y440 依据较直接】R-HSA-873924 的 summation：活化的 JAK1 磷酸化每条 IFNGR1 链的 Y440，形成两个相邻的 STAT1 SH2 停靠位点；该位点可写入读者可见说明。",
+              "【S727 二次磷酸化未画入图】R-HSA-909552 'Phosphorylation of STAT1 at Ser727'（催化活性为 CaMKII/PKCδ，input p-STAT1(Y701) bound to p-IFNGR1，output p-STAT1 dimer bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-909552 ；其 summation 明言 'This phosphorylation is not required for STAT1 homodimer formation, nuclear translocation and DNA binding'，故按范围省略，只在读者可见说明中提示 GAF 入核后仍可继续被磷酸化。",
+              "【核转位记录为 BlackBoxEvent】R-HSA-873917 的 schemaClass 为 BlackBoxEvent（未描述显式催化机制），input = IFNG-activated factor (GAF) [cytosol]，output = p-STAT1 homodimer [nucleoplasm]；其 summation 还提到 GAF 结合 GAS 元件并诱导转录，该部分按范围排除。",
+              "【通路总览仅作范围与命名参照，不作单条箭头证据】R-HSA-877300 'Interferon gamma signaling'（https://reactome.org/content/detail/R-HSA-877300）用于确认事件清单与受体组成：IFNGR1/IFNGR2 均无内源激酶/磷酸酶活性，依赖 JAK1、JAK2 与 STAT1 传递信号；每条箭头的证据均为反应级记录，未用总览代替。",
+              "【按范围排除的记录，不画、不作为箭头证据】核内转录：R-HSA-1031713（GAF 结合 GAS 启动子）、R-HSA-1031716（IFNG 刺激基因表达）；药物：R-HSA-9678561（JAK1/2 抑制剂结合）、R-HSA-9689680（IFNG 抑制剂结合）；反馈抑制：R-HSA-877312 'Regulation of IFNG signaling'（含 PTPN6、SOCS1/3 负调控，另见 R-HSA-873918、R-HSA-873919 的 regulatedBy 条目）；MAPK 支路：R-HSA-9732724、R-HSA-9734547、R-HSA-9736836（YBX1）。",
+              "【受体复合物组分的不确定性／教学性抽象】R-HSA-873926 的 summation：IFNGR1 与 IFNGR2 之间、两条 IFNGR2 链之间存在组成性相互作用，IFNGR 复合物为预组装四聚体；IFNGR1 为高亲和力链并直接结合 IFNG，IFNGR2 不独立结合 IFNG；未刺激时 JAK1 主要与 IFNGR1 结合、JAK2 与 IFNGR2 结合。图中把 IFNGR1/IFNGR2/JAK1/JAK2 合并为一个「受体复合物」组件，属教学性抽象，非反应级实体。",
+              "【来源核验状态】以上记录均通过 figure_evidence 读取，返回 verification = not_verified（检索式读取 Reactome 记录，未做独立实验核验）；全部 species = Homo sapiens（taxId 9606），reviewStatus 多为 'five stars'。图中的箭头只声称记录本身所陈述的转变；检索未命中、未读取或记录粒度不足均不证明机制不存在。"
+            ],
+            "audience": "研究生（生命科学/免疫学方向，组会或课程讲解）；已确认以人 IFN-γ 为教学示例，讲解口径按研究生可接受的通路图简化",
+            "edges": [
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873919 Phosphorylation of JAK2（IFNG:IFNGR1:JAK1:IFNGR2:JAK2 → IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873919 —— 对应 JAK2 自磷酸化这一步",
+                  "R-HSA-873918 Transphosphorylation of JAK1（IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2 → IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873918 —— 对应由 p-JAK2 反式磷酸化 JAK1 这一步（位点为推断）"
+                ],
+                "from": "n_receptor_complex",
+                "inhibitory": false,
+                "label": "JAK2 自磷酸化；p-JAK2 反式磷酸化 JAK1",
+                "to": "n_jak_active"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873924 Phosphorylation of IFNGR1 by JAK kinases（IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2 → IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2，p-JAK1 磷酸化 IFNGR1 Y440）https://reactome.org/content/detail/R-HSA-873924 —— 对应「受体侧磷酸化」这一步",
+                  "R-HSA-873921 Binding of STAT1 to p-IFNGR1（IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2 + STAT1-1 [cytosol] → STAT1 bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873921 —— 对应「STAT1 募集」这一步（顺序在 873924 之后）"
+                ],
+                "from": "n_jak_active",
+                "inhibitory": false,
+                "label": "p-JAK1 磷酸化 IFNGR1 Y440；STAT1 经 SH2 停靠位点募集",
+                "to": "n_stat1_recruited"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873922 Phosphorylation of STAT1 by JAK kinases（STAT1 bound to p-IFNGR1 → p-STAT1(Y701) bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873922 —— from/to 与本边两端状态完全一致；激酶归属为 probably JAK2"
+                ],
+                "from": "n_stat1_recruited",
+                "inhibitory": false,
+                "label": "Y701 磷酸化（记录：probably by JAK2）",
+                "to": "n_pstat1"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873927 Release of STAT1 dimer from active receptor unit（p-STAT1 dimer bound to p-IFNGR1 → IFNG-activated factor (GAF) [cytosol] = p-STAT1:p-STAT1 dimer）https://reactome.org/content/detail/R-HSA-873927 —— 记录 summation 明确二聚化经 reciprocal SH2-phosphotyrosine 互作形成 GAF 并脱离受体；该记录同时覆盖「二聚化」与「自受体解离」两步",
+                  "R-HSA-909552 Phosphorylation of STAT1 at Ser727（产物状态即 p-STAT1 dimer bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-909552 —— 仅用于界定二聚体状态边界；S727 磷酸化本身按范围不画"
+                ],
+                "from": "n_pstat1",
+                "inhibitory": false,
+                "label": "SH2-pTyr 互作同源二聚化 → 形成 GAF 并脱离受体",
+                "to": "n_gaf_cytosol"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873917 Translocation of STAT1 dimer to nucleus（IFNG-activated factor (GAF) [cytosol] → p-STAT1 homodimer [nucleoplasm]）https://reactome.org/content/detail/R-HSA-873917 —— from/to 与本边两端状态完全一致；记录类型为 BlackBoxEvent"
+                ],
+                "from": "n_gaf_cytosol",
+                "inhibitory": false,
+                "label": "GAF 转位入核",
+                "to": "n_gaf_nucleus"
+              }
+            ],
+            "layout": "horizontal",
+            "message": "已确认范围：人类（Homo sapiens）IFN-γ（IFNG）信号，从 IFNG 结合 IFNGR 受体复合物起，到 p-STAT1 同源二聚体（GAF）进入细胞核为止；不画核内转录、药物、反馈抑制与 MAPK 支路。画布当前为空（revision 2），本轮仍不画图、不生成候选、不添加素材，只交付已按反应级来源逐条核对过的就绪计划，供你确认后再生成候选。图意：一条自左向右、六个组件的教学链——IFN-γ–IFNGR1/IFNGR2 受体复合物 → 活化的受体相关 JAK1/JAK2 → 募集于 p-IFNGR1 的未修饰 STAT1 → p-STAT1（Y701）→ 胞质 p-STAT1 同源二聚体 GAF → 核内 p-STAT1 同源二聚体。分工原则：节点只承载状态，事件（结合、JAK 磷酸化、STAT1 募集、Y701 磷酸化、二聚化与解离、核转位）一律以关系表达，不重复写进节点标签；每条关系的 from 状态、to 状态、关系说明与 evidence 描述同一个转变，全部引用反应级记录（R-HSA-873926 / 873919 / 873918 / 873924 / 873921 / 873922 / 873927 / 873917），不使用通路总览 R-HSA-877300 充当任何一条箭头的证据（该总览仅用于确认事件清单与受体组成）。排版：横向六节点单行，节点短标签（≤12 字），边标签 ≤20 字；详细反应叙述、位点、限定词与全部不确定性写入 evidence 与假设，另加一处可编辑的读者可见说明框，写明物种/亚型/范围与关键不确定性（如 Y701 激酶归属为 probably JAK2、S727 未画、IFN-γ 二聚化在 Reactome 无独立反应记录）。",
+            "nodes": [
+              {
+                "evidence": [
+                  "R-HSA-873926 IFNG dimer binds IFNGR（IFNG dimer [extracellular region] + IFNGR1:JAK1:IFNGR2:JAK2 → IFNG:IFNGR1:JAK1:IFNGR2:JAK2）https://reactome.org/content/detail/R-HSA-873926 —— 该节点状态即此反应的产物"
+                ],
+                "id": "n_receptor_complex",
+                "label": "IFN-γ–IFNGR1/IFNGR2 受体复合物（含 JAK1/JAK2）",
+                "shape": "ellipse"
+              },
+              {
+                "evidence": [
+                  "R-HSA-873919 Phosphorylation of JAK2（产物 IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873919",
+                  "R-HSA-873918 Transphosphorylation of JAK1（产物 IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873918"
+                ],
+                "id": "n_jak_active",
+                "label": "受体相关 JAK1/JAK2 活化",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "R-HSA-873921 Binding of STAT1 to p-IFNGR1（产物 STAT1 bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873921",
+                  "前置状态：R-HSA-873924 Phosphorylation of IFNGR1 by JAK kinases（提供 Y440 停靠位点）https://reactome.org/content/detail/R-HSA-873924"
+                ],
+                "id": "n_stat1_recruited",
+                "label": "STAT1 募集于 p-IFNGR1（未修饰）",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "R-HSA-873922 Phosphorylation of STAT1 by JAK kinases（产物 p-STAT1(Y701) bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873922"
+                ],
+                "id": "n_pstat1",
+                "label": "p-STAT1（Y701 磷酸化）",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "R-HSA-873927 Release of STAT1 dimer from active receptor unit（产物 IFNG-activated factor (GAF) [cytosol] = p-STAT1:p-STAT1 dimer）https://reactome.org/content/detail/R-HSA-873927"
+                ],
+                "id": "n_gaf_cytosol",
+                "label": "p-STAT1 同源二聚体 GAF（胞质）",
+                "shape": "ellipse"
+              },
+              {
+                "evidence": [
+                  "R-HSA-873917 Translocation of STAT1 dimer to nucleus（产物 p-STAT1 homodimer [nucleoplasm]）https://reactome.org/content/detail/R-HSA-873917"
+                ],
+                "id": "n_gaf_nucleus",
+                "label": "核内 p-STAT1 同源二聚体（GAF）",
+                "shape": "ellipse"
+              }
+            ],
+            "questions": [
+              {
+                "answer": "人类（Homo sapiens，taxId 9606）。所有引用记录均已按人源读取。",
+                "blocking": true,
+                "id": "q_species",
+                "question": "本图针对哪个物种？（例如人、小鼠、大鼠或其他）Reactome 记录按物种分开，需据此锁定记录编号与物种前缀。"
+              },
+              {
+                "answer": "IFN-γ（IFNG），走 IFNGR1/IFNGR2 受体通路；受体相关激酶为 JAK1（与 IFNGR1 结合）与 JAK2（与 IFNGR2 结合），STAT1 在 Y701 被磷酸化后同源二聚化。已据此排除 IFN-α/β 分支记录（R-HSA-909726、R-HSA-909718）与 c-Kit 通路记录（R-HSA-1470010）。",
+                "blocking": true,
+                "id": "q_subtype",
+                "question": "刺激选用哪种干扰素亚型/受体通路？（例如 IFN-I：IFNAR1/IFNAR2 + JAK1/TYK2；IFN-γ：IFNGR1/IFNGR2 + JAK1/JAK2；或课程已指定）不同亚型对应不同受体、激酶与磷酸化模式。"
+              },
+              {
+                "answer": "自 IFNG 结合 IFNGR 受体复合物起，经受体相关 JAK 活化、STAT1 Y701 磷酸化、p-STAT1 同源二聚化，到 GAF 进入细胞核为止；不展开核内转录、药物、反馈抑制与 MAPK 支路。组件上限 6 个，允许合并复合物与中间态，排版由助手决定。",
+                "blocking": true,
+                "id": "q_endpoint",
+                "question": "教学终点画到哪里为止？（仅 STAT1 入核？是否包含核内 STAT1–IRF9/ISGF3 复合物与靶基因启动子结合？是否包含下游基因产物？）终点决定节点数量与末端的证据要求。"
+              },
+              {
+                "answer": "",
+                "blocking": false,
+                "id": "q_s727",
+                "question": "（可选，不阻塞）是否要在图中标注 STAT1 的 Ser727 二次磷酸化？默认按范围省略，仅在读者可见说明中提示 GAF 入核后仍可继续被磷酸化（R-HSA-909552：S727 磷酸化对二聚化、核转位与 DNA 结合非必需，但对完全转录激活必需）。"
+              }
+            ],
+            "relationship_note": "每条边都做了 from 状态 / to 状态 / 关系说明 / evidence 的同转变核对，逐条对应如下：(1) n_receptor_complex → n_jak_active：from 状态 = IFNG:IFNGR1:JAK1:IFNGR2:JAK2（873919 的 input），to 状态 = p-JAK1/p-JAK2（873919 与 873918 的 output），evidence 含 873919、873918。(2) n_jak_active → n_stat1_recruited：from 状态 = 含 p-JAK1/p-JAK2 的受体复合物（873924 的 input），to 状态 = STAT1 bound to p-IFNGR1（873921 的 output），evidence 含 873924（先）与 873921（后），顺序已写入标签与说明。(3) n_stat1_recruited → n_pstat1：873922 的 input/output 与两端状态完全一致（未修饰 STAT1 → p-STAT1(Y701)）。(4) n_pstat1 → n_gaf_cytosol：873927 覆盖二聚化与自受体解离（input = 受体结合的 p-STAT1 二聚体，output = 胞质 GAF），并以 909552 界定二聚体状态边界。(5) n_gaf_cytosol → n_gaf_nucleus：873917 的 input = GAF [cytosol]，output = p-STAT1 homodimer [nucleoplasm]，完全一致。特别声明：Phosphorylation of STAT1（R-HSA-909726）与 Formation of p-STAT1 homodimer（R-HSA-909718）属 IFN-α/β 分支，Dimerization of STATs（R-HSA-1470010）属 c-Kit 通路，均未被用作本图箭头的依据；通路总览 R-HSA-877300 仅用于确认事件清单，不充当任何单条箭头的证据。全部来源 URL 已逐条保存在对应节点与边的 evidence 中。"
+          },
+          "version": 2
+        },
+        "scientificId": "n_receptor_complex",
+        "scientificPlan": {
+          "assumptions": [
+            "【组件合并抽象｜组件上限 6】受体复合物与 JAK 活化保留为两个状态；'STAT1 募集于 p-IFNGR1' 一个节点合并了 IFNGR1 Y440 磷酸化与 STAT1 SH2 募集两步（顺序：先 R-HSA-873924，后 R-HSA-873921）；'p-STAT1 同源二聚体 GAF' 节点承接 R-HSA-873927 中的二聚化与自受体解离两步。每一步的先后与各自记录均写入对应边的 evidence 与本说明，避免关系错后一位。",
+            "【IFN-γ 的 STAT1 同源二聚化没有独立反应记录｜来源不足点】Reactome 人 IFN-γ 通路（R-HSA-877300 https://reactome.org/content/detail/R-HSA-877300）的事件列表中，STAT1 同源二聚化仅以文字出现在 R-HSA-873927 的 summation：'The phosphorylated STAT1 on IFNGR1 chains homodimerize through reciprocal SH2-phosphotyrosine interactions to form p-STAT1 homodimer called gamma-activated-factor (GAF).'，该反应本身的 input 为 p-STAT1 dimer bound to p-IFNGR1、output 为 GAF [cytosol]。因此本图二聚化箭头引用反应级记录 R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927，而非一条独立的 dimerization 反应；这是来源本身没有更细粒度，非检索失败。",
+            "【已排除的「看似可用但亚型错配」记录】R-HSA-909718 'Formation of p-STAT1 homodimer'（产物 p-Y701-STAT1-1 dimer = IFNA-activated-factor (AAF)，催化活性为 IFNA/B:IFNAR2:p-JAK1:STAT2:p-IFNAR1:p-TYK2:p-STAT2，属 IFN-α/β 分支）https://reactome.org/content/detail/R-HSA-909718 ；R-HSA-909726 'Phosphorylation of STAT1'（催化活性同为 IFN-α/β 复合体）https://reactome.org/content/detail/R-HSA-909726 ；R-HSA-1470010 'Dimerization of STATs'（输入为 p-JAK2:SFKs:p-KIT complex:p-STATs，属 c-Kit 通路）https://reactome.org/content/detail/R-HSA-1470010 。三者都不可用于本图；若日后要画 IFN-α/β 对照则恰好适用。",
+            "【Y701 激酶归属不确定】R-HSA-873922 的 summation 为 'STAT1 pair recruited to the receptor complex is phosphorylated near the C-terminus at residue Y701, probably by JAK2'，catalystActivity 记为 'protein tyrosine kinase activity of STAT1 bound to p-IFNGR1'，未指定具体激酶；故边标签保留 'probably by JAK2' 的限定措辞，不写成确定归属。",
+            "【JAK1 反式磷酸化位点为推断】R-HSA-873918 明示 'Tyrosine 1033 in the activation loop of the JAK1 kinase domain may be the target for transphosphorylation (phosphorylation site mentioned here is based on sequence similarity with all the other JAK kinases)'；图中只标 JAK1 被反式磷酸化，不标位点。",
+            "【JAK2 磷酸化位点只表示 Y1007】R-HSA-873919 列出已报道位点 Y221/Y570/Y868/Y966/Y972/Y1007/Y1008，但反应中仅表示 Y1007（'Of all the predicted phosphorylation sites only tyrosine 1007 is represented in the reaction'）；图中不标位点。",
+            "【IFNGR1 位点 Y440 依据较直接】R-HSA-873924 的 summation：活化的 JAK1 磷酸化每条 IFNGR1 链的 Y440，形成两个相邻的 STAT1 SH2 停靠位点；该位点可写入读者可见说明。",
+            "【S727 二次磷酸化未画入图】R-HSA-909552 'Phosphorylation of STAT1 at Ser727'（催化活性为 CaMKII/PKCδ，input p-STAT1(Y701) bound to p-IFNGR1，output p-STAT1 dimer bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-909552 ；其 summation 明言 'This phosphorylation is not required for STAT1 homodimer formation, nuclear translocation and DNA binding'，故按范围省略，只在读者可见说明中提示 GAF 入核后仍可继续被磷酸化。",
+            "【核转位记录为 BlackBoxEvent】R-HSA-873917 的 schemaClass 为 BlackBoxEvent（未描述显式催化机制），input = IFNG-activated factor (GAF) [cytosol]，output = p-STAT1 homodimer [nucleoplasm]；其 summation 还提到 GAF 结合 GAS 元件并诱导转录，该部分按范围排除。",
+            "【通路总览仅作范围与命名参照，不作单条箭头证据】R-HSA-877300 'Interferon gamma signaling'（https://reactome.org/content/detail/R-HSA-877300）用于确认事件清单与受体组成：IFNGR1/IFNGR2 均无内源激酶/磷酸酶活性，依赖 JAK1、JAK2 与 STAT1 传递信号；每条箭头的证据均为反应级记录，未用总览代替。",
+            "【按范围排除的记录，不画、不作为箭头证据】核内转录：R-HSA-1031713（GAF 结合 GAS 启动子）、R-HSA-1031716（IFNG 刺激基因表达）；药物：R-HSA-9678561（JAK1/2 抑制剂结合）、R-HSA-9689680（IFNG 抑制剂结合）；反馈抑制：R-HSA-877312 'Regulation of IFNG signaling'（含 PTPN6、SOCS1/3 负调控，另见 R-HSA-873918、R-HSA-873919 的 regulatedBy 条目）；MAPK 支路：R-HSA-9732724、R-HSA-9734547、R-HSA-9736836（YBX1）。",
+            "【受体复合物组分的不确定性／教学性抽象】R-HSA-873926 的 summation：IFNGR1 与 IFNGR2 之间、两条 IFNGR2 链之间存在组成性相互作用，IFNGR 复合物为预组装四聚体；IFNGR1 为高亲和力链并直接结合 IFNG，IFNGR2 不独立结合 IFNG；未刺激时 JAK1 主要与 IFNGR1 结合、JAK2 与 IFNGR2 结合。图中把 IFNGR1/IFNGR2/JAK1/JAK2 合并为一个「受体复合物」组件，属教学性抽象，非反应级实体。",
+            "【来源核验状态】以上记录均通过 figure_evidence 读取，返回 verification = not_verified（检索式读取 Reactome 记录，未做独立实验核验）；全部 species = Homo sapiens（taxId 9606），reviewStatus 多为 'five stars'。图中的箭头只声称记录本身所陈述的转变；检索未命中、未读取或记录粒度不足均不证明机制不存在。"
+          ],
+          "audience": "研究生（生命科学/免疫学方向，组会或课程讲解）；已确认以人 IFN-γ 为教学示例，讲解口径按研究生可接受的通路图简化",
+          "edges": [
+            {
+              "direction": "forward",
+              "evidence": [
+                "R-HSA-873919 Phosphorylation of JAK2（IFNG:IFNGR1:JAK1:IFNGR2:JAK2 → IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873919 —— 对应 JAK2 自磷酸化这一步",
+                "R-HSA-873918 Transphosphorylation of JAK1（IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2 → IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873918 —— 对应由 p-JAK2 反式磷酸化 JAK1 这一步（位点为推断）"
+              ],
+              "from": "n_receptor_complex",
+              "inhibitory": false,
+              "label": "JAK2 自磷酸化；p-JAK2 反式磷酸化 JAK1",
+              "to": "n_jak_active"
+            },
+            {
+              "direction": "forward",
+              "evidence": [
+                "R-HSA-873924 Phosphorylation of IFNGR1 by JAK kinases（IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2 → IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2，p-JAK1 磷酸化 IFNGR1 Y440）https://reactome.org/content/detail/R-HSA-873924 —— 对应「受体侧磷酸化」这一步",
+                "R-HSA-873921 Binding of STAT1 to p-IFNGR1（IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2 + STAT1-1 [cytosol] → STAT1 bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873921 —— 对应「STAT1 募集」这一步（顺序在 873924 之后）"
+              ],
+              "from": "n_jak_active",
+              "inhibitory": false,
+              "label": "p-JAK1 磷酸化 IFNGR1 Y440；STAT1 经 SH2 停靠位点募集",
+              "to": "n_stat1_recruited"
+            },
+            {
+              "direction": "forward",
+              "evidence": [
+                "R-HSA-873922 Phosphorylation of STAT1 by JAK kinases（STAT1 bound to p-IFNGR1 → p-STAT1(Y701) bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873922 —— from/to 与本边两端状态完全一致；激酶归属为 probably JAK2"
+              ],
+              "from": "n_stat1_recruited",
+              "inhibitory": false,
+              "label": "Y701 磷酸化（记录：probably by JAK2）",
+              "to": "n_pstat1"
+            },
+            {
+              "direction": "forward",
+              "evidence": [
+                "R-HSA-873927 Release of STAT1 dimer from active receptor unit（p-STAT1 dimer bound to p-IFNGR1 → IFNG-activated factor (GAF) [cytosol] = p-STAT1:p-STAT1 dimer）https://reactome.org/content/detail/R-HSA-873927 —— 记录 summation 明确二聚化经 reciprocal SH2-phosphotyrosine 互作形成 GAF 并脱离受体；该记录同时覆盖「二聚化」与「自受体解离」两步",
+                "R-HSA-909552 Phosphorylation of STAT1 at Ser727（产物状态即 p-STAT1 dimer bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-909552 —— 仅用于界定二聚体状态边界；S727 磷酸化本身按范围不画"
+              ],
+              "from": "n_pstat1",
+              "inhibitory": false,
+              "label": "SH2-pTyr 互作同源二聚化 → 形成 GAF 并脱离受体",
+              "to": "n_gaf_cytosol"
+            },
+            {
+              "direction": "forward",
+              "evidence": [
+                "R-HSA-873917 Translocation of STAT1 dimer to nucleus（IFNG-activated factor (GAF) [cytosol] → p-STAT1 homodimer [nucleoplasm]）https://reactome.org/content/detail/R-HSA-873917 —— from/to 与本边两端状态完全一致；记录类型为 BlackBoxEvent"
+              ],
+              "from": "n_gaf_cytosol",
+              "inhibitory": false,
+              "label": "GAF 转位入核",
+              "to": "n_gaf_nucleus"
+            }
+          ],
+          "layout": "horizontal",
+          "message": "已确认范围：人类（Homo sapiens）IFN-γ（IFNG）信号，从 IFNG 结合 IFNGR 受体复合物起，到 p-STAT1 同源二聚体（GAF）进入细胞核为止；不画核内转录、药物、反馈抑制与 MAPK 支路。画布当前为空（revision 2），本轮仍不画图、不生成候选、不添加素材，只交付已按反应级来源逐条核对过的就绪计划，供你确认后再生成候选。图意：一条自左向右、六个组件的教学链——IFN-γ–IFNGR1/IFNGR2 受体复合物 → 活化的受体相关 JAK1/JAK2 → 募集于 p-IFNGR1 的未修饰 STAT1 → p-STAT1（Y701）→ 胞质 p-STAT1 同源二聚体 GAF → 核内 p-STAT1 同源二聚体。分工原则：节点只承载状态，事件（结合、JAK 磷酸化、STAT1 募集、Y701 磷酸化、二聚化与解离、核转位）一律以关系表达，不重复写进节点标签；每条关系的 from 状态、to 状态、关系说明与 evidence 描述同一个转变，全部引用反应级记录（R-HSA-873926 / 873919 / 873918 / 873924 / 873921 / 873922 / 873927 / 873917），不使用通路总览 R-HSA-877300 充当任何一条箭头的证据（该总览仅用于确认事件清单与受体组成）。排版：横向六节点单行，节点短标签（≤12 字），边标签 ≤20 字；详细反应叙述、位点、限定词与全部不确定性写入 evidence 与假设，另加一处可编辑的读者可见说明框，写明物种/亚型/范围与关键不确定性（如 Y701 激酶归属为 probably JAK2、S727 未画、IFN-γ 二聚化在 Reactome 无独立反应记录）。",
+          "nodes": [
+            {
+              "evidence": [
+                "R-HSA-873926 IFNG dimer binds IFNGR（IFNG dimer [extracellular region] + IFNGR1:JAK1:IFNGR2:JAK2 → IFNG:IFNGR1:JAK1:IFNGR2:JAK2）https://reactome.org/content/detail/R-HSA-873926 —— 该节点状态即此反应的产物"
+              ],
+              "id": "n_receptor_complex",
+              "label": "IFN-γ–IFNGR1/IFNGR2 受体复合物（含 JAK1/JAK2）",
+              "shape": "ellipse"
+            },
+            {
+              "evidence": [
+                "R-HSA-873919 Phosphorylation of JAK2（产物 IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873919",
+                "R-HSA-873918 Transphosphorylation of JAK1（产物 IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873918"
+              ],
+              "id": "n_jak_active",
+              "label": "受体相关 JAK1/JAK2 活化",
+              "shape": "rectangle"
+            },
+            {
+              "evidence": [
+                "R-HSA-873921 Binding of STAT1 to p-IFNGR1（产物 STAT1 bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873921",
+                "前置状态：R-HSA-873924 Phosphorylation of IFNGR1 by JAK kinases（提供 Y440 停靠位点）https://reactome.org/content/detail/R-HSA-873924"
+              ],
+              "id": "n_stat1_recruited",
+              "label": "STAT1 募集于 p-IFNGR1（未修饰）",
+              "shape": "rectangle"
+            },
+            {
+              "evidence": [
+                "R-HSA-873922 Phosphorylation of STAT1 by JAK kinases（产物 p-STAT1(Y701) bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873922"
+              ],
+              "id": "n_pstat1",
+              "label": "p-STAT1（Y701 磷酸化）",
+              "shape": "rectangle"
+            },
+            {
+              "evidence": [
+                "R-HSA-873927 Release of STAT1 dimer from active receptor unit（产物 IFNG-activated factor (GAF) [cytosol] = p-STAT1:p-STAT1 dimer）https://reactome.org/content/detail/R-HSA-873927"
+              ],
+              "id": "n_gaf_cytosol",
+              "label": "p-STAT1 同源二聚体 GAF（胞质）",
+              "shape": "ellipse"
+            },
+            {
+              "evidence": [
+                "R-HSA-873917 Translocation of STAT1 dimer to nucleus（产物 p-STAT1 homodimer [nucleoplasm]）https://reactome.org/content/detail/R-HSA-873917"
+              ],
+              "id": "n_gaf_nucleus",
+              "label": "核内 p-STAT1 同源二聚体（GAF）",
+              "shape": "ellipse"
+            }
+          ]
+        }
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 170,
+      "id": "node-0",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "ellipse",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 768223612,
+      "width": 220,
+      "x": 0,
+      "y": 0,
+      "index": "a0"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-0",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": null,
+      "groupIds": [],
+      "height": 100,
+      "id": "label-0",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "IFN-γ–IFNGR1/IFNGR2 受体复合物（含 JAK1/JAK2）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "IFN-γ–IFNGR1/\nIFNGR2 受体复\n合物（含 JAK1/\nJAK2）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 174341188,
+      "verticalAlign": "middle",
+      "width": 140,
+      "x": 40,
+      "y": 35,
+      "index": "a1"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-1",
+          "type": "text"
+        },
+        {
+          "id": "edge-0",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-1",
+          "type": "arrow"
+        }
+      ],
+      "customData": {
+        "evidence": [
+          "R-HSA-873919 Phosphorylation of JAK2（产物 IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873919",
+          "R-HSA-873918 Transphosphorylation of JAK1（产物 IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873918"
+        ],
+        "scientificId": "n_jak_active"
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 100,
+      "id": "node-1",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1782553084,
+      "width": 220,
+      "x": 400,
+      "y": 35,
+      "index": "a2"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-1",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": null,
+      "groupIds": [],
+      "height": 50,
+      "id": "label-1",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "受体相关 JAK1/JAK2 活化",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "受体相关 JAK1/JAK2\n活化",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 245109700,
+      "verticalAlign": "middle",
+      "width": 200,
+      "x": 410,
+      "y": 60,
+      "index": "a3"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-2",
+          "type": "text"
+        },
+        {
+          "id": "edge-1",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-2",
+          "type": "arrow"
+        }
+      ],
+      "customData": {
+        "evidence": [
+          "R-HSA-873921 Binding of STAT1 to p-IFNGR1（产物 STAT1 bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873921",
+          "前置状态：R-HSA-873924 Phosphorylation of IFNGR1 by JAK kinases（提供 Y440 停靠位点）https://reactome.org/content/detail/R-HSA-873924"
+        ],
+        "scientificId": "n_stat1_recruited"
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 100,
+      "id": "node-2",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1202911868,
+      "width": 220,
+      "x": 800,
+      "y": 35,
+      "index": "a4"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-2",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": null,
+      "groupIds": [],
+      "height": 50,
+      "id": "label-2",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "STAT1 募集于 p-IFNGR1（未修饰）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "STAT1 募集于 p-\nIFNGR1（未修饰）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 2095905604,
+      "verticalAlign": "middle",
+      "width": 200,
+      "x": 810,
+      "y": 60,
+      "index": "a5"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-3",
+          "type": "text"
+        },
+        {
+          "id": "edge-2",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-3",
+          "type": "arrow"
+        }
+      ],
+      "customData": {
+        "evidence": [
+          "R-HSA-873922 Phosphorylation of STAT1 by JAK kinases（产物 p-STAT1(Y701) bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873922"
+        ],
+        "scientificId": "n_pstat1"
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 100,
+      "id": "node-3",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1357269756,
+      "width": 220,
+      "x": 1200,
+      "y": 35,
+      "index": "a6"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-3",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": null,
+      "groupIds": [],
+      "height": 50,
+      "id": "label-3",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "p-STAT1（Y701 磷酸化）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "p-STAT1（Y701 磷酸\n化）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1337258692,
+      "verticalAlign": "middle",
+      "width": 200,
+      "x": 1210,
+      "y": 60,
+      "index": "a7"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-4",
+          "type": "text"
+        },
+        {
+          "id": "edge-3",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-4",
+          "type": "arrow"
+        }
+      ],
+      "customData": {
+        "evidence": [
+          "R-HSA-873927 Release of STAT1 dimer from active receptor unit（产物 IFNG-activated factor (GAF) [cytosol] = p-STAT1:p-STAT1 dimer）https://reactome.org/content/detail/R-HSA-873927"
+        ],
+        "scientificId": "n_gaf_cytosol"
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 135,
+      "id": "node-4",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "ellipse",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1750829948,
+      "width": 220,
+      "x": 1600,
+      "y": 17.5,
+      "index": "a8"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-4",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": null,
+      "groupIds": [],
+      "height": 75,
+      "id": "label-4",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "p-STAT1 同源二聚体 GAF（胞质）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "p-STAT1 同源\n二聚体\nGAF（胞质）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 93452868,
+      "verticalAlign": "middle",
+      "width": 140,
+      "x": 1640,
+      "y": 47.5,
+      "index": "a9"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-5",
+          "type": "text"
+        },
+        {
+          "id": "edge-4",
+          "type": "arrow"
+        }
+      ],
+      "customData": {
+        "evidence": [
+          "R-HSA-873917 Translocation of STAT1 dimer to nucleus（产物 p-STAT1 homodimer [nucleoplasm]）https://reactome.org/content/detail/R-HSA-873917"
+        ],
+        "scientificId": "n_gaf_nucleus"
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 135,
+      "id": "node-5",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "ellipse",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1347730428,
+      "width": 220,
+      "x": 2000,
+      "y": 17.5,
+      "index": "aA"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-5",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": null,
+      "groupIds": [],
+      "height": 75,
+      "id": "label-5",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "核内 p-STAT1 同源二聚体（GAF）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "核内 p-STAT1\n同源二聚体\n（GAF）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 425857476,
+      "verticalAlign": "middle",
+      "width": 140,
+      "x": 2040,
+      "y": 47.5,
+      "index": "aB"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-0",
+          "type": "text"
+        }
+      ],
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873919 Phosphorylation of JAK2（IFNG:IFNGR1:JAK1:IFNGR2:JAK2 → IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873919 —— 对应 JAK2 自磷酸化这一步",
+          "R-HSA-873918 Transphosphorylation of JAK1（IFNG:IFNGR1:JAK1:IFNGR2:p-JAK2 → IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2）https://reactome.org/content/detail/R-HSA-873918 —— 对应由 p-JAK2 反式磷酸化 JAK1 这一步（位点为推断）"
+        ],
+        "from": "n_receptor_complex",
+        "inhibitory": false,
+        "to": "n_jak_active"
+      },
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-1",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 0,
+      "id": "edge-0",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          160,
+          0
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-0",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 852745340,
+      "width": 160,
+      "x": 230,
+      "y": 85,
+      "index": "aC",
+      "lastCommittedPoint": null
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-0",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 80,
+      "id": "edge-label-0",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "JAK2 自磷酸化；p-JAK2 反式磷酸化 JAK1",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "JAK2 自磷酸\n化；p-JAK2\n反式磷酸化\nJAK1",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 2051225924,
+      "verticalAlign": "middle",
+      "width": 90.6875,
+      "x": 264.65625,
+      "y": 45,
+      "index": "aD"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-1",
+          "type": "text"
+        }
+      ],
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873924 Phosphorylation of IFNGR1 by JAK kinases（IFNG:IFNGR1:p-JAK1:IFNGR2:p-JAK2 → IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2，p-JAK1 磷酸化 IFNGR1 Y440）https://reactome.org/content/detail/R-HSA-873924 —— 对应「受体侧磷酸化」这一步",
+          "R-HSA-873921 Binding of STAT1 to p-IFNGR1（IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2 + STAT1-1 [cytosol] → STAT1 bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873921 —— 对应「STAT1 募集」这一步（顺序在 873924 之后）"
+        ],
+        "from": "n_jak_active",
+        "inhibitory": false,
+        "to": "n_stat1_recruited"
+      },
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-2",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 0,
+      "id": "edge-1",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          160,
+          0
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-1",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 698019068,
+      "width": 160,
+      "x": 630,
+      "y": 85,
+      "index": "aE",
+      "lastCommittedPoint": null
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-1",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 100,
+      "id": "edge-label-1",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "p-JAK1 磷酸化 IFNGR1 Y440；STAT1 经 SH2 停靠位点募集",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "p-JAK1 磷酸\n化 IFNGR1\nY440；STAT1\n经 SH2 停靠\n位点募集",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 59994308,
+      "verticalAlign": "middle",
+      "width": 100.78125,
+      "x": 659.609375,
+      "y": 35,
+      "index": "aF"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-2",
+          "type": "text"
+        }
+      ],
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873922 Phosphorylation of STAT1 by JAK kinases（STAT1 bound to p-IFNGR1 → p-STAT1(Y701) bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-873922 —— from/to 与本边两端状态完全一致；激酶归属为 probably JAK2"
+        ],
+        "from": "n_stat1_recruited",
+        "inhibitory": false,
+        "to": "n_pstat1"
+      },
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-3",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 0,
+      "id": "edge-2",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          160,
+          0
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-2",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1177283964,
+      "width": 160,
+      "x": 1030,
+      "y": 85,
+      "index": "aG",
+      "lastCommittedPoint": null
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-2",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 80,
+      "id": "edge-label-2",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "Y701 磷酸化（记录：probably by JAK2）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "Y701 磷酸化\n（记录：\nprobably by\nJAK2）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1961932868,
+      "verticalAlign": "middle",
+      "width": 89.8125,
+      "x": 1065.09375,
+      "y": 45,
+      "index": "aH"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-3",
+          "type": "text"
+        }
+      ],
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873927 Release of STAT1 dimer from active receptor unit（p-STAT1 dimer bound to p-IFNGR1 → IFNG-activated factor (GAF) [cytosol] = p-STAT1:p-STAT1 dimer）https://reactome.org/content/detail/R-HSA-873927 —— 记录 summation 明确二聚化经 reciprocal SH2-phosphotyrosine 互作形成 GAF 并脱离受体；该记录同时覆盖「二聚化」与「自受体解离」两步",
+          "R-HSA-909552 Phosphorylation of STAT1 at Ser727（产物状态即 p-STAT1 dimer bound to p-IFNGR1）https://reactome.org/content/detail/R-HSA-909552 —— 仅用于界定二聚体状态边界；S727 磷酸化本身按范围不画"
+        ],
+        "from": "n_pstat1",
+        "inhibitory": false,
+        "to": "n_gaf_cytosol"
+      },
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-4",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 0,
+      "id": "edge-3",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          160,
+          0
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-3",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 432594428,
+      "width": 160,
+      "x": 1430,
+      "y": 85,
+      "index": "aI",
+      "lastCommittedPoint": null
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-3",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 80,
+      "id": "edge-label-3",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "SH2-pTyr 互作同源二聚化 → 形成 GAF 并脱离受体",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "SH2-pTyr 互\n作同源二聚化\n→ 形成 GAF\n并脱离受体",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1782124484,
+      "verticalAlign": "middle",
+      "width": 96,
+      "x": 1462,
+      "y": 45,
+      "index": "aJ"
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-4",
+          "type": "text"
+        }
+      ],
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873917 Translocation of STAT1 dimer to nucleus（IFNG-activated factor (GAF) [cytosol] → p-STAT1 homodimer [nucleoplasm]）https://reactome.org/content/detail/R-HSA-873917 —— from/to 与本边两端状态完全一致；记录类型为 BlackBoxEvent"
+        ],
+        "from": "n_gaf_cytosol",
+        "inhibitory": false,
+        "to": "n_gaf_nucleus"
+      },
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-5",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 0,
+      "id": "edge-4",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          160,
+          0
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-4",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1030995580,
+      "width": 160,
+      "x": 1830,
+      "y": 85,
+      "index": "aK",
+      "lastCommittedPoint": null
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-4",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 20,
+      "id": "edge-label-4",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "GAF 转位入核",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "GAF 转位入核",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 2,
+      "versionNonce": 1401583428,
+      "verticalAlign": "middle",
+      "width": 101.3359375,
+      "x": 1859.33203125,
+      "y": 75,
+      "index": "aL"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": null,
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 20,
+      "id": "note_scope_heading",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "范围与不确定性说明（请与图一并阅读）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "范围与不确定性说明（请与图一并阅读）",
+      "textAlign": "left",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 3,
+      "versionNonce": 1508806396,
+      "verticalAlign": "top",
+      "width": 1180,
+      "x": 0,
+      "y": 215,
+      "index": "aM"
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": null,
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 13,
+      "frameId": null,
+      "groupIds": [],
+      "height": 146.25,
+      "id": "note_scope_body",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "物种与亚型：人类 (Homo sapiens) IFN-γ (IFNG)，IFNGR1/IFNGR2 分支，非 IFN-α/β 分支。图中受体复合物把 IFNGR1、IFNGR2、JAK1、JAK2 合并为一个教学性组件。\n\n教学终点：p-STAT1 同源二聚体 (GAF) 进入细胞核为止；不含核内转录（GAS 结合与基因表达）、药物作用、反馈抑制（PTPN6、SOCS1/3）与 MAPK 支路。\n\n关键不确定性：1) STAT1 Y701 的激酶归属在 Reactome 记为 probably by JAK2，为非确定归属；2) JAK1 反式磷酸化位点 Y1033 为序列相似性推断，JAK2 反应中仅表示 Y1007；3) 本图按本次已读 R-HSA-873927 将二聚化与受体释放合并描述；未对整个数据库独立二聚化记录的有无作判断；4) 核转位记录为 BlackBoxEvent，未描述显式机制；5) Ser727 磷酸化未画入本图；所读 R-HSA-909552 说明其并非 STAT1 同源二聚化与核转位所必需，本图不据此推断发生时序或区室。\n\n来源：Reactome 人源反应级记录 R-HSA-873926、873919、873918、873924、873921、873922、873927、873917；每条箭头的完整来源 URL 与转变说明见其依据（尚未独立实验核验）。",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "物种与亚型：人类 (Homo sapiens) IFN-γ (IFNG)，IFNGR1/IFNGR2 分支，非 IFN-α/β 分支。图中受体复合物把 IFNGR1、IFNGR2、JAK1、JAK2 合并为一个教学性组件。\n\n教学终点：p-STAT1 同源二聚体 (GAF) 进入细胞核为止；不含核内转录（GAS 结合与基因表达）、药物作用、反馈抑制（PTPN6、SOCS1/3）与 MAPK 支路。\n\n关键不确定性：1) STAT1 Y701 的激酶归属在 Reactome 记为 probably by JAK2，为非确定归属；2) JAK1 反式磷酸化位点 Y1033 为序列相似性推断，JAK2 反应中仅表示 Y1007；3) 本图按本次已读 R-\nHSA-873927 将二聚化与受体释放合并描述；未对整个数据库独立二聚化记录的有无作判断；4) 核转位记录为 BlackBoxEvent，未描述显式机制；5) Ser727 磷酸化未画入本图；所读 R-HSA-909552 说明其\n并非 STAT1 同源二聚化与核转位所必需，本图不据此推断发生时序或区室。\n\n来源：Reactome 人源反应级记录 R-HSA-873926、873919、873918、873924、873921、873922、873927、873917；每条箭头的完整来源 URL 与转变说明见其依据（尚未独立实验核验）。",
+      "textAlign": "left",
+      "type": "text",
+      "updated": 1794332710880,
+      "version": 4,
+      "versionNonce": 1833103044,
+      "verticalAlign": "top",
+      "width": 1180,
+      "x": 0,
+      "y": 248,
+      "index": "aN"
+    }
+  ],
+  "appState": {
+    "gridSize": 20,
+    "gridStep": 5,
+    "gridModeEnabled": false,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}

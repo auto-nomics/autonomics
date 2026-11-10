@@ -90,3 +90,21 @@ BioArt 和 BioIcons 的 `replace` 支持可选 `proposal_id` 与 `document_sha25
 按当前科学意图明确指定搜索物种，不默认人类。搜索命中及通路总览不是逐关系证据；应读取相关反应、必要时跟随引用 ID，保留来源中的不确定性，再将适用 URL 放入计划 evidence，并把范围和未知项写入 assumptions/questions。只读工具不会自动把计划置为科学正确或自动生成图。
 
 显式联网复现：`cargo run -p visualization-tools --example figure_evidence -- '{"action":"search","query":"interferon gamma","species":"Homo sapiens","limit":3}'`；`record` 改传 `id`，如 `{"action":"record","id":"R-HSA-877300"}`。网络错误明确返回，不构造占位来源。记录指纹针对 SDK 取得的 JSON 值的序列化字节，不是 HTTP 原始字节。
+
+### 精确范围的只读后续参数
+
+成功的、有画布范围的 `visualization` 结果附带 `figure_scope` 与 `follow_up_inputs`。后者提供可直接复制为工具输入的 `read`/`read_plan`；候选创建、读取及 PNG 元数据还包含完整的 `read_proposal`/`read_proposal_preview` 参数。`candidate_context` 给出真实项目、画布、候选 ID、文档哈希、当前 `expected_revision` 与原 `base_revision`。复制参数，勿从 `visualization_id` 推导输入字段或重写 UUID，也不要把 `planning_version` 当作图稿版本。
+
+这些是只读输入，既不自动执行，也不采用、修改或授权候选。结果过期后调用仍会冲突，需显式重新读取并核对；检查历史候选时保留当前图稿版本与候选基础版本的区别。不补齐错误请求的 ID，不猜测项目或图稿。字段是工具输出的附加上下文，不写入正式场景、候选文档或计划历史；当前只适用于 `visualization` 工具，目录素材工具的结果格式不在此变更范围。
+
+注册工具回归验证计划 v3 / 图稿 v1 下原样复制参数可读取正确候选，错误项目/画布/候选与计划版本误用仍拒绝，过期输入不自动刷新，显式读取历史候选使用当前图稿版本，原候选哈希不变。PNG 回归核对图像块旁元数据中的同一参数（含已采用的历史候选）；22 项工具库测试、注册回归与严格 Clippy 通过。真实模型能否减少误填 ID 与重复生成，仍需独立验收。
+
+后续真实单例 `/tmp/autonomics-canvas-live-dNDUtr` 已完成三轮来源工作流，第三轮六次绘图调用均成功（创建、读取、子候选修订和 PNG 检查），GUI 采用及来源导出通过。此前 44 次/29 错误的失败轨迹仍保留；两次运行不足以证明所有模型或场景的稳定性。图下说明的科学语言仍有两处需按明确审阅意见收窄，独立记录于 `manual-source-review.json`；结构/调用成功不等于每一句话获科学验证。
+
+明确审阅意见后的独立修订 `/tmp/autonomics-canvas-live-Xu6RXl` 通过：只替换两处说明文字，保存科学图结构、引用与历史计划，预览/采用/源文件核对通过。该次首次 read_proposal 曾漏 project_id 并恢复；GUI 候选反馈现在也从最初交接提供完整的同名只读输入，三类焦点对象的原生浏览器回归通过，不自动发送或修改图稿。此 UI 补充不改变工具的 ID/版本验证，也不意味着已普遍消除模型误填。
+
+### 素材候选与保留身份的平移
+
+BioArt 插入/替换以及 BioIcons 插入/替换/改色/路径修改的成功结果现在统一包含候选哈希、完整图稿范围、`candidate_context` 与同样的只读 `follow_up_inputs`；既有 proposal_id/element_id 字段保留。不包含场景或图像字节。两个素材提供者的实际注册工具回归均验证可原样调用返回的 read_proposal 参数，读取到同一候选及哈希，原图未改动。
+
+在 propose/revise_proposal 中整体移动现有组件或数条说明，使用 `{op:translate,element_ids:[ids],dx:0,dy:79}`，dx/dy 为 JSON 数值。完整组、帧和互相确认的素材/标签归属只移动一次，保持 ID、文件与科学元数据，按既有整理规则处理支持的连线及标签。锁定成员、保护性放大图注释、无法安全处理的部分曲线连接或越界会使整批失败。不要 duplicate/remove 来代替移动。原始 update 的 x/y 字符串仍拒绝；工具错误会精确指到 operations[i].changes.y 并提示 translate，不静默转换。

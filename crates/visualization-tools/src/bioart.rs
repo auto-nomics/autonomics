@@ -19,7 +19,7 @@ fn missing(field: &str) -> ToolError {
 }
 #[tool(
     name = "bioart",
-    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. insert and replace create reviewable proposals while preserving layout, labels and arrow anchors; they do not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and review the proposal before adoption. insert appends a standalone image at x/y; use replace for an existing semantic node. For insert or replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Do not infer protein-specific structure or additional mechanism from generic artwork."
+    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. insert and replace create reviewable proposals while preserving layout, labels and arrow anchors; they do not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and review the proposal before adoption. insert appends a standalone image at x/y; use replace for an existing semantic node. For insert or replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Successful changes include candidate_context and follow_up_inputs with complete read_proposal/read_proposal_preview arguments; copy these instead of reconstructing IDs or confusing plan and figure versions. Do not infer protein-specific structure or additional mechanism from generic artwork."
 )]
 pub struct Input {
     #[desc = "search | preview | insert | replace"]
@@ -238,7 +238,7 @@ fn persist_asset(
         }
         .map_err(error)?;
         return Ok(
-            json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending","parent_proposal_id":proposal.parent_proposal_id,"parent_document_sha256":proposal.parent_document_sha256,"document_sha256":proposal.document_sha256}),
+            crate::follow_up::proposal_result(&project, &proposal, Some(&element_id)),
         );
     }
     let current = store.revision(&project, &figure, revision).map_err(error)?;
@@ -260,7 +260,7 @@ fn persist_asset(
             )
             .map_err(error)?;
         return Ok(
-            json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending"}),
+            crate::follow_up::proposal_result(&project, &proposal, Some(&element_id)),
         );
     }
     let (document, element_id) =
@@ -276,14 +276,14 @@ fn persist_asset(
         )
         .map_err(error)?;
     Ok(
-        json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending","document_sha256":proposal.document_sha256}),
+        crate::follow_up::proposal_result(&project, &proposal, Some(&element_id)),
     )
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn downloaded_asset_becomes_a_version_checked_proposal() {
+    #[tokio::test]
+    async fn downloaded_asset_becomes_a_version_checked_proposal() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("figures.sqlite");
         let mut store = visualization::Store::open(&path).unwrap();
@@ -316,6 +316,9 @@ mod tests {
             y: 0.0,
         };
         let result = persist_asset(path.clone(), placement(), asset.clone()).unwrap();
+        let follow=serde_json::to_value(crate::registrations(path.clone()).remove(0).implementation.execute(result["follow_up_inputs"]["read_proposal"].clone()).await.unwrap()).unwrap();
+        assert_eq!(follow["content"]["proposal"]["id"], result["proposal_id"]);
+        assert_eq!(follow["content"]["proposal"]["document_sha256"], result["document_sha256"]);
         assert!(!result.to_string().contains("data:image"));
         assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
         let proposal = store.proposals("p", &figure.id).unwrap().remove(0);
