@@ -59,7 +59,6 @@ import {
   LiteratureExploration,
   SaveSnapshotButton,
   SearchSnapshots,
-  Subscriptions,
 } from "@/features/discovery";
 import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort, type SearchMode, type SearchRetrieval } from "./bib-search-model";
 
@@ -344,7 +343,7 @@ function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
   );
 }
 
-export type BibliographyWorkspace = "library" | "discover" | "snapshots" | "subscriptions";
+export type BibliographyWorkspace = "library" | "discover" | "snapshots";
 
 // The workspace tabs live in the app sidebar; this component is controlled by
 // the selected workspace and only keeps the lazy-mount bookkeeping: a panel
@@ -359,7 +358,6 @@ export function BibliographyView({ workspace = "library", active = true, sidebar
     {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView sidebarSlot={sidebarSlot} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
     {mounted.has("discover") && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
     {mounted.has("snapshots") && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={active && workspace === "snapshots"} /></div>}
-    {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><Subscriptions active={active && workspace === "subscriptions"} /></div>}
   </div>;
 }
 

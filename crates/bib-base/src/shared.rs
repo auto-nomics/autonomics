@@ -83,11 +83,6 @@ fn s2_client_from_env() -> Arc<semantic_scholar::S2Client> {
 /// (`Arc`-backed).
 #[derive(Clone)]
 pub struct BibShared {
-    /// Durable rules, checkpoints, inbox and execution history. Construction
-    /// opens storage only; no subscription source requests start implicitly.
-    pub subscriptions: crate::subscription_store::SubscriptionStore,
-    subscription_scheduler:
-        Arc<tokio::sync::OnceCell<crate::subscription_scheduler::SubscriptionScheduler>>,
     /// Immutable user-owned execution captures, in the canonical DB on disk.
     pub search_snapshots: crate::search_snapshots::SnapshotStore,
     pub discovery_acquisitions: crate::discovery_acquisition::DiscoveryAcquisitions,
@@ -182,11 +177,6 @@ impl BibShared {
             crate::search_snapshots::SnapshotStore::open(path.as_ref().to_string_lossy().as_ref())
                 .await
                 .map_err(|error| crate::Error::Unknown(error.to_string()))?;
-        let subscriptions = crate::subscription_store::SubscriptionStore::open(
-            path.as_ref().to_string_lossy().as_ref(),
-        )
-        .await
-        .map_err(|error| crate::Error::Unknown(error.to_string()))?;
         let eutils = Arc::new(eutils::EutilsClient::from_env());
         let arxiv = Arc::new(arxiv::ArxivClient::new());
         let http = http_client_from(http_opts);
@@ -204,8 +194,6 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
-            subscriptions,
-            subscription_scheduler: Default::default(),
             search_snapshots,
             discovery_acquisitions: Default::default(),
             discovery_sessions: Default::default(),
@@ -240,9 +228,6 @@ impl BibShared {
         let search_snapshots = crate::search_snapshots::SnapshotStore::open(":memory:")
             .await
             .map_err(|error| crate::Error::Unknown(error.to_string()))?;
-        let subscriptions = crate::subscription_store::SubscriptionStore::open(":memory:")
-            .await
-            .map_err(|error| crate::Error::Unknown(error.to_string()))?;
         let eutils = Arc::new(eutils::EutilsClient::from_env());
         let arxiv = Arc::new(arxiv::ArxivClient::new());
         let http = http_client_from(http_opts);
@@ -260,8 +245,6 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
-            subscriptions,
-            subscription_scheduler: Default::default(),
             search_snapshots,
             discovery_acquisitions: Default::default(),
             discovery_sessions: Default::default(),
@@ -281,33 +264,6 @@ impl BibShared {
                 crate::extraction::MAX_CONCURRENT_EXTRACTIONS,
             )),
         })
-    }
-
-    /// Start one host-owned scheduler after source injection is complete.
-    /// Clones share its handle. Closing a GUI view does not stop the service;
-    /// releasing the host bundle and all returned handles cancels its workers.
-    pub async fn subscription_service(
-        &self,
-    ) -> crate::subscriptions::Result<crate::subscription_scheduler::SubscriptionScheduler> {
-        self.subscription_scheduler
-            .get_or_try_init(|| async {
-                crate::subscription_scheduler::SubscriptionScheduler::start(
-                    self.subscription_executor(),
-                    2,
-                )
-            })
-            .await
-            .cloned()
-    }
-
-    /// Bind to the fully configured bundle, including injected test providers.
-    /// Hosts call this after gateway/session configuration, before scheduling.
-    pub fn subscription_executor(&self) -> crate::subscription_execution::SubscriptionExecutor {
-        crate::subscription_execution::SubscriptionExecutor {
-            store: self.subscriptions.clone(),
-            sessions: self.discovery_sessions.clone(),
-            gateway: self.gateway.clone(),
-        }
     }
 
     /// Attach the mounted, agent-visible filesystem used to store original

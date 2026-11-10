@@ -223,9 +223,8 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
     { id: "view.tool-calls", title: "Toggle tool calls", category: "view", keywords: "collapse fold function call", run: () => void runtime.toggleDisplay("collapse_tool_calls") },
     { id: "view.tool-results", title: "Toggle tool results", category: "view", keywords: "collapse fold output", run: () => void runtime.toggleDisplay("collapse_tool_results") },
     { id: "go.library", title: "Bibliography library", category: "research", keywords: "papers articles fulltext collections", run: () => openBibliographyEditor("library") },
-    { id: "go.discover", title: "Discover literature", category: "research", keywords: "federated search sources subscriptions", run: () => openBibliographyEditor("discover") },
+    { id: "go.discover", title: "Discover literature", category: "research", keywords: "federated search sources", run: () => openBibliographyEditor("discover") },
     { id: "go.snapshots", title: "Search snapshots", category: "research", keywords: "snapshots history", run: () => openBibliographyEditor("snapshots") },
-    { id: "go.subscriptions", title: "Subscriptions", category: "research", keywords: "feeds inbox", run: () => openBibliographyEditor("subscriptions") },
   ]), [runtime, cancel, compact, openDag]);
 
   const logout = useCallback(() => void runtime.logout(), [runtime]);

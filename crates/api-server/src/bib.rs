@@ -55,20 +55,9 @@ struct ApiError {
 type ApiResult = Result<Json<Value>, (StatusCode, Json<ApiError>)>;
 
 pub fn router(shared: BibShared) -> Router {
-    // The final injected gateway is now fixed. Resume explicitly enabled durable
-    // rules on host startup, independently of whether the GUI opens this view.
-    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-        let startup = shared.clone();
-        runtime.spawn(async move {
-            if let Err(error) = startup.subscription_service().await {
-                tracing::error!(%error, "bibliography subscription scheduler startup failed");
-            }
-        });
-    }
     Router::new()
         .merge(crate::discovery::router())
         .merge(crate::snapshots::router())
-        .merge(crate::subscriptions::router())
         .route("/health", get(health))
         .route("/articles", get(list_articles).post(create_article))
         .route("/articles/unfiled", get(list_unfiled_articles))

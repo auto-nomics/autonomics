@@ -229,7 +229,7 @@ fn main() {
     let origin = std::env::var("BIB_NATIVE_SMOKE_ORIGIN").unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let control = Arc::new(Control::default());
-    let (server, service) = runtime.block_on(async {
+    let (server, ()) = runtime.block_on(async {
         let mut shared = bib_base::BibShared::open(root.join("library.db"))
             .await
             .unwrap();
@@ -254,7 +254,6 @@ fn main() {
                     control: control.clone(),
                 })),
         );
-        let service = shared.subscription_service().await.unwrap();
         let server = api_server::start(
             api_server::api_router_with_auth(
                 shared,
@@ -265,7 +264,7 @@ fn main() {
         )
         .await
         .unwrap();
-        (server, service)
+        (server, ())
     });
     let api_addr = server.addr().to_string();
     let mut context = tauri::generate_context!();
@@ -315,7 +314,6 @@ fn main() {
         .expect("native P5 window");
     let code = app.run_return(|_, _| {});
     runtime.block_on(async {
-        service.shutdown().await;
         let _ = server.shutdown().await;
     });
     runtime.shutdown_timeout(Duration::from_secs(1));

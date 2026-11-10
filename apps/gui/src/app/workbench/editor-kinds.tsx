@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FlaskConical, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -363,9 +363,9 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "bibliography",
-    title: (editor) => ({ discover: "发现", snapshots: "快照", subscriptions: "订阅" }[String(editor.params.workspace)] ?? "文献与证据"),
-    name: (editor) => ({ discover: "Discover", snapshots: "Snapshots", subscriptions: "Subscriptions" }[String(editor.params.workspace)] ?? "Bibliography"),
-    icon: (editor) => ({ discover: Compass, snapshots: Camera, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
+    title: (editor) => ({ discover: "发现", snapshots: "快照",  }[String(editor.params.workspace)] ?? "文献与证据"),
+    name: (editor) => ({ discover: "Discover", snapshots: "Snapshots",  }[String(editor.params.workspace)] ?? "Bibliography"),
+    icon: (editor) => ({ discover: Compass, snapshots: Camera,  }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
     mount: "keep-alive",
   });

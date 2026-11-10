@@ -5,7 +5,7 @@
  * behavior); clicking it again reveals it.
  */
 
-import { BookOpen, Bot, Camera, Compass, FolderCode, FolderTree, Presentation, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
+import { BookOpen, Bot, Camera, Compass, FolderCode, FolderTree, Presentation, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Search, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -98,7 +98,6 @@ export function ActivityBar(props: {
         />
         <RailButton label="Discover" title="发现" icon={Compass} active={activeWorkspace === "discover"} onClick={() => openBibliographyEditor("discover")} />
         <RailButton label="Snapshots" title="快照" icon={Camera} active={activeWorkspace === "snapshots"} onClick={() => openBibliographyEditor("snapshots")} />
-        <RailButton label="Subscriptions" title="订阅" icon={Rss} active={activeWorkspace === "subscriptions"} onClick={() => openBibliographyEditor("subscriptions")} />
         <RailButton
           label="Wiki"
           title="知识库(条目即编辑器标签,Ctrl+K 检索)"

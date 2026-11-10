@@ -9,7 +9,6 @@ pub mod bib;
 mod discovery;
 pub mod server;
 mod snapshots;
-mod subscriptions;
 pub mod deck;
 pub mod wiki;
 

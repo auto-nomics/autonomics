@@ -940,60 +940,6 @@ async fn crossref_changing_totals_and_new_provider_tokens_are_observed_without_p
     }
 }
 #[tokio::test]
-async fn subscription_crossref_window_uses_indexed_cursor_order_and_keeps_publication_filters() {
-    use bib_base::{subscription_plan, subscriptions::*};
-    let (url, requests) = server(vec![
-        json(crossref_list(2, &["10.1000/a"], Some("next-indexed"))),
-        json(crossref_list(2, &["10.1000/b"], None)),
-    ])
-    .await;
-    let source = crossref_source(url);
-    let input = DiscoveryRequest {
-        query: "year:2020..2022".into(),
-        sources: vec!["crossref".into()],
-        sort: DiscoverySort::Newest,
-        page_size: 1,
-        ..Default::default()
-    };
-    let window = SubscriptionWindow {
-        kind: SubscriptionWindowKind::CrossrefIndexed,
-        from_ms: 1_728_000_000_000,
-        through_ms: 1_728_000_000_999,
-    };
-    let plan = subscription_plan::plan(&input, "crossref", Some(&window)).unwrap();
-    assert!(
-        !plan
-            .notices
-            .iter()
-            .any(|n| n.code == "publication_offset_window")
-    );
-    assert!(
-        plan.notices
-            .iter()
-            .any(|n| n.code == "subscription_scan_order")
-    );
-    assert!(
-        plan.notices
-            .iter()
-            .any(|n| n.code == "no_text_relevance" && n.message.contains("indexed asc"))
-    );
-    let a = source.discovery_page(&plan, None, 1).await.unwrap();
-    source
-        .discovery_page(&plan, a.next_cursor.as_deref(), 1)
-        .await
-        .unwrap();
-    for request in requests.await.unwrap() {
-        assert_eq!(param(&request, "sort").as_deref(), Some("indexed"));
-        assert_eq!(param(&request, "order").as_deref(), Some("asc"));
-        assert!(param(&request, "offset").is_none());
-        let filter = param(&request, "filter").unwrap();
-        assert!(filter.contains("from-pub-date:2020-01-01,until-pub-date:2022-12-31"));
-        assert!(filter.contains("from-index-date:"));
-        assert!(filter.contains("until-index-date:"));
-    }
-}
-
-#[tokio::test]
 async fn crossref_empty_terminal_token_does_not_make_a_complete_full_page_invalid() {
     let (url, requests) = server(vec![json(crossref_list(1, &["10.1000/a"], Some("")))]).await;
     let source = crossref_source(url);
