@@ -175,3 +175,5 @@ mod tests {
         Ok(())
     }
 }
+
+mod text_edit;

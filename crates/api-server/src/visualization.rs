@@ -47,6 +47,18 @@ where
 pub fn router(store: Store) -> Router {
     Router::new()
         .route(
+            "/proposal-preview-requests",
+            get(workspace_proposal_preview_requests),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposal-index",
+            get(proposal_index),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposal-summary",
+            get(proposal_summary),
+        )
+        .route(
             "/projects/{project}/figures/{id}/proposals/{proposal}",
             get(read_proposal),
         )
@@ -1038,6 +1050,38 @@ struct ProposalInput {
     #[serde(default)]
     markup_ids: Vec<String>,
 }
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalIndexQuery {
+    before: Option<String>,
+    limit: Option<usize>,
+}
+async fn proposal_index(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Query(query): Query<ProposalIndexQuery>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().proposal_index(
+            &project,
+            &id,
+            query.before.as_deref(),
+            query.limit.unwrap_or(20)
+        )?))
+    })
+    .await
+}
+async fn proposal_summary(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(
+            service.store().pending_proposal_summary(&project, &id)?
+        ))
+    })
+    .await
+}
 async fn proposals(
     State(s): State<Shared>,
     Path((project, id)): Path<(String, String)>,
@@ -1361,6 +1405,12 @@ struct CandidatePreviewCompletion {
     #[serde(rename = "dataURL")]
     data_url: Option<String>,
     error: Option<String>,
+}
+async fn workspace_proposal_preview_requests(State(s): State<Shared>) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().workspace_proposal_render_requests()?))
+    })
+    .await
 }
 async fn proposal_preview_requests(
     State(s): State<Shared>,

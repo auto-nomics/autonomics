@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 import { patchEditorState } from "@/app/workbench/workbench-store";
 import type { EditorContext } from "@/app/workbench/editor-registry";
-import { useCandidatePreviewRenderer } from "./canvas-proposal-renderer";
 import { canvasSelectionContext } from "./canvas-selection-context";
 import { createSourceManifest, embedSvgSources, embedPngSources } from "./canvas-source-manifest";
 import { CanvasInset } from "./canvas-inset";
 import { CanvasPalette } from "./canvas-palette";
+import { CanvasRelation } from "./canvas-relation";
 import { CanvasRouting } from "./canvas-routing";
 import { CanvasPlanning } from "./canvas-planning";
 import { CanvasMarkups } from "./canvas-markups";
@@ -53,7 +53,6 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const candidatePreviewStatus = useCandidatePreviewRenderer(projectId, id, loaded);
   useEffect(() => {
     let cancelled = false;
     patchEditorState(editor.id, { selectedObjectIds: "[]", selectedObjects: "[]", selectedObjectsTotal: 0, selectedObjectsTruncated: false, selectionReady: false });
@@ -145,6 +144,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {projectId && <CanvasPlanning projectId={projectId} canvasId={id} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasPalette projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
       {projectId && <Button size="sm" variant="outline" onClick={() => setShowAgent(value => !value)}>Agent 绘图</Button>}
@@ -159,7 +159,6 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
       {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
     </div>
-    {candidatePreviewStatus && <p role="status" className="px-2 text-xs text-muted-foreground">{candidatePreviewStatus}</p>}
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
     {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => { api.current = instance; }} langCode="zh-CN" handleKeyboardGlobally={false} autoFocus onChange={(elements, appState, files) => {

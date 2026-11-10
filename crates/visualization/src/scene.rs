@@ -7,6 +7,21 @@ use std::collections::HashSet;
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Wrap text using pinned font metrics while keeping containers and bindings.
+    SetWrappedText {
+        id: String,
+        text: String,
+        #[serde(default)]
+        max_width: Option<f64>,
+    },
+    /// Set native relation endpoints and explicit direction metadata together.
+    /// Geometry, bindings, labels, evidence and historical plan snapshots survive.
+    SetRelationDirection {
+        id: String,
+        direction: crate::sketch::Direction,
+        /// Explicit state, never inferred from the requested direction.
+        inhibitory: bool,
+    },
     /// Recompute an existing generated cross-panel connector from current geometry.
     /// Preserves IDs, scientific metadata, text, styling and unrelated objects.
     Reroute {
@@ -38,6 +53,10 @@ pub enum SceneError {
     NotFound(String),
     #[error("cannot reroute connector: {0}")]
     InvalidRoute(String),
+    #[error("cannot reflow text: {0}")]
+    InvalidText(String),
+    #[error("cannot set relation direction: {0}")]
+    InvalidRelation(String),
     #[error("element id cannot be changed")]
     ImmutableId,
 }
@@ -86,7 +105,7 @@ fn shift(element: &mut Value, dx: f64, dy: f64) {
     element["y"] = serde_json::json!(element["y"].as_f64().unwrap_or(0.0) + dy);
     touch(element);
 }
-fn path_label_center(points: &[[f64; 2]], x: f64, y: f64) -> [f64; 2] {
+pub(crate) fn path_label_center(points: &[[f64; 2]], x: f64, y: f64) -> [f64; 2] {
     let middle = points.len() / 2;
     let point = if points.len().is_multiple_of(2) {
         [
@@ -215,6 +234,47 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     }
     for operation in operations {
         match operation {
+            Operation::SetWrappedText {
+                id,
+                text,
+                max_width,
+            } => crate::text_edit::apply(elements, id, text, *max_width)?,
+            Operation::SetRelationDirection {
+                id,
+                direction,
+                inhibitory,
+            } => {
+                if *inhibitory && *direction != crate::sketch::Direction::Forward {
+                    return Err(SceneError::InvalidRelation(
+                        "inhibitory is supported only for forward relations".into(),
+                    ));
+                }
+                let element = elements
+                    .iter_mut()
+                    .find(|element| element["id"].as_str() == Some(id))
+                    .ok_or_else(|| SceneError::NotFound(id.clone()))?;
+                let metadata = element.get("customData").cloned().unwrap_or(Value::Null);
+                if element["type"] != "arrow"
+                    || element["isDeleted"] == true
+                    || element["locked"] == true
+                    || (!metadata.is_null() && !metadata.is_object())
+                    || metadata
+                        .get("annotationKind")
+                        .is_some_and(|kind| !kind.is_null())
+                    || metadata.get("inset").is_some_and(|value| !value.is_null())
+                {
+                    return Err(SceneError::InvalidRelation("requires a live unlocked relation arrow; annotation/inset arrows and opaque metadata are not supported".into()));
+                }
+                let (start, end) = direction.arrowheads(*inhibitory);
+                element["startArrowhead"] = serde_json::json!(start);
+                element["endArrowhead"] = serde_json::json!(end);
+                if metadata.is_null() {
+                    element["customData"] = serde_json::json!({});
+                }
+                element["customData"]["direction"] = serde_json::json!(direction);
+                element["customData"]["inhibitory"] = serde_json::json!(inhibitory);
+                touch(element);
+            }
             Operation::Reroute { id } => {
                 if !ids.contains(id) {
                     return Err(SceneError::NotFound(id.clone()));

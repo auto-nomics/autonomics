@@ -186,4 +186,133 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn candidate_revision_preserves_parent_and_adopts_combined_changes() -> Result<(), ServiceError>
+    {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let document = json!({"elements":[
+            {"id":"original","type":"rectangle","x":10,"y":0,"width":20,"height":20,"angle":0}
+        ],"files":{"asset":{"dataURL":"unchanged","mimeType":"image/png"}}});
+        let figure = store.create("p", "Figure", "excalidraw/v2", &document)?;
+        let mut service = VisualizationService::new(store);
+        let parent = service.propose("p", &figure.id, 1, "Add component", &[
+            scene::Operation::Add { element: json!({"id":"added","type":"rectangle","x":80,"y":40,"width":20,"height":20,"angle":0}) }
+        ])?;
+        let input = ProposalRevisionInput {
+            parent_proposal_id: parent.id.clone(),
+            parent_document_sha256: parent.document_sha256.clone(),
+            summary: "Align candidate components".into(),
+            operations: None,
+            arrangement: Some(crate::arrange::Spec {
+                element_ids: vec!["original".into(), "added".into()],
+                mode: crate::arrange::Mode::Left,
+            }),
+            markup_ids: None,
+        };
+        let child = service.revise_proposal("p", &figure.id, 1, &input)?;
+        assert_eq!(
+            child.parent_proposal_id.as_deref(),
+            Some(parent.id.as_str())
+        );
+        assert_eq!(
+            child.parent_document_sha256.as_deref(),
+            Some(parent.document_sha256.as_str())
+        );
+        assert_eq!(child.document["elements"][1]["x"], 10.0);
+        assert_eq!(child.document["files"], document["files"]);
+        assert_eq!(service.current("p", &figure.id)?.document, document);
+        let reread = service.store().proposal("p", &figure.id, &parent.id)?;
+        assert_eq!(reread.document, parent.document);
+        assert_eq!(reread.document_sha256, parent.document_sha256);
+        let mut wrong = input;
+        wrong.parent_document_sha256 = "wrong".into();
+        assert!(matches!(
+            service.revise_proposal("p", &figure.id, 1, &wrong),
+            Err(ServiceError::Store(crate::Error::Conflict))
+        ));
+        assert_eq!(service.store().proposals("p", &figure.id)?.len(), 2);
+        service
+            .store_mut()
+            .accept_proposal("p", &figure.id, &child.id)?;
+        assert_eq!(service.current("p", &figure.id)?.revision, 2);
+        assert_eq!(service.current("p", &figure.id)?.document, child.document);
+        assert_eq!(
+            service
+                .store()
+                .proposal("p", &figure.id, &parent.id)?
+                .status,
+            "pending"
+        );
+        wrong.parent_document_sha256 = parent.document_sha256.clone();
+        assert!(matches!(
+            service.revise_proposal("p", &figure.id, 2, &wrong),
+            Err(ServiceError::Store(crate::Error::Conflict))
+        ));
+        assert!(
+            service
+                .store_mut()
+                .accept_proposal("p", &figure.id, &parent.id)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn candidate_revision_requires_explicit_review_link_decision() -> Result<(), ServiceError> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let figure = store.create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))?;
+        let ink = [crate::markup::Stroke {
+            kind: crate::markup::Kind::Cross,
+            points: vec![[0., 0.], [10., 10.]],
+        }];
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let review = store.create_markup("p", &figure.id, 1, "Revise", &ink, png)?;
+        let service = VisualizationService::new(store);
+        let parent = service.propose_with_markups(
+            "p",
+            &figure.id,
+            1,
+            "Parent",
+            &[],
+            &[review.id.clone()],
+        )?;
+        let mut input = ProposalRevisionInput {
+            parent_proposal_id: parent.id.clone(),
+            parent_document_sha256: parent.document_sha256.clone(),
+            summary: "Child".into(),
+            operations: Some(vec![]),
+            arrangement: None,
+            markup_ids: None,
+        };
+        assert!(service.revise_proposal("p", &figure.id, 1, &input).is_err());
+        assert_eq!(service.store().proposals("p", &figure.id)?.len(), 1);
+        input.markup_ids = Some(vec!["missing-review".into()]);
+        assert!(service.revise_proposal("p", &figure.id, 1, &input).is_err());
+        assert_eq!(service.store().proposals("p", &figure.id)?.len(), 1);
+        input.markup_ids = Some(vec![]);
+        assert!(
+            service
+                .revise_proposal("p", &figure.id, 1, &input)?
+                .review_markups
+                .is_empty()
+        );
+        input.markup_ids = Some(vec![review.id.clone()]);
+        let child = service.revise_proposal("p", &figure.id, 1, &input)?;
+        assert_eq!(child.review_markups[0].id, review.id);
+        assert_eq!(child.review_markups[0].status, "open");
+        service
+            .store()
+            .reject_proposal("p", &figure.id, &parent.id)?;
+        assert!(matches!(
+            service.revise_proposal("p", &figure.id, 1, &input),
+            Err(ServiceError::Store(crate::Error::Conflict))
+        ));
+        assert_eq!(
+            service.store().proposal("p", &figure.id, &child.id)?.status,
+            "pending"
+        );
+        Ok(())
+    }
 }

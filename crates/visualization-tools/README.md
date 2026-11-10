@@ -51,4 +51,18 @@ sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格�
 
 `arrange` 接受 `arrangement:{element_ids:[...],mode:left|center|right|top|middle|bottom|distribute_horizontal|distribute_vertical}` 和精确 `expected_revision`，返回待审阅提案（不返回嵌入图稿字节）。读取完整明确的目标后操作；原生组合、语义锚点及所属标签/素材一起移动，父子重复选择会合并；分布至少三个独立组件。空间不足时沿用编辑器的中心退化方式，仍需核对重叠。可携带 `markup_ids` 关联实际回应的标记，采用时才按用户选择关闭。排除放大区域/引导线注释，先处理锁定或缺失对象；支持手绘点列与无抖动、无圆角的线段/折线边界；被选组合内部的绑定连接线必须与端点同幅移动，不能为满足外部绑定而拉伸组合。分开移动的曲线/旋转/肘线、粗糙连接线和旋转箭头绑定文字仍需原生几何适配。不推断关系、不自动避障，保留来源和文件；必要时另行 reroute。
 
-`read_proposal_preview` 使用 `proposal_id` 和当前 `expected_revision` 请求候选图 PNG，最多短暂等待约 6 秒。返回 `scope=proposal_candidate`、文档 SHA、基础/当前版本、提案状态、renderer 和独立图像块；候选没有因此采用。检查 `base_is_current`，不要把历史候选当作当前文档。相关画布需保持打开（内部切到 Agent 标签可继续后台渲染）；未就绪或失败明确报错，不回退到正式画布图像。资源修复后可用 `retry_preview:true` 重排失败请求；成功图像不可覆盖。模型看图与选择正确修正动作仍需真实案例验证。
+`read_proposal_preview` 使用 `proposal_id` 和当前 `expected_revision` 请求候选图 PNG，最多短暂等待约 6 秒。返回 `scope=proposal_candidate`、文档 SHA、基础/当前版本、提案状态、renderer 和独立图像块；候选没有因此采用。检查 `base_is_current`，不要把历史候选当作当前文档。工作台需保持打开并登录（无须打开对应画布）；未就绪或失败明确报错，不回退到正式画布图像。资源修复后可用 `retry_preview:true` 重排失败请求；成功图像不可覆盖。模型看图与选择正确修正动作仍需真实案例验证。
+
+`read_proposal` 读取指定候选并隐藏图片数据；复制其 `document_sha256`，再用 `revise_proposal` 的 `proposal_id/document_sha256/expected_revision` 和 `operations` 或 `arrangement` 生成下一版候选。修订基于父候选文档，保留累计修改，返回独立提案及来源。父候选关联开放审阅时，需显式给出 `markup_ids`（`[]` 表示不继承）。两版候选均不会自动采用。存储文档哈希不能用脱敏 JSON 或 PNG 的哈希替代。
+
+`read` 附带 `proposal_summary`，声明正式当前版本、待审阅数量、其中当前/旧基础版本数量和最新摘要，不返回候选文档。`list_proposals` 使用 `project_id/figure_id`、可选 `expected_revision` 和 `before/limit`（1–100，默认 20），返回待审候选摘要分页、`current_revision/status/next_before`。复制游标加载更早候选；`status` 不支持自行指定，避免把历史已采用项混为待审阅结果。候选详细文档仍通过 `read_proposal` 精确读取，读取后再判断科学内容与修订对象。
+
+注册工具测试验证 2＋1 分页、当前摘要数量、跨项目隔离、版本冲突、非法页大小/状态拒绝，且列表不含文档或图片字节。
+
+候选预览由已登录工作台统一渲染，不再要求目标画布编辑器已打开。队列仍只接受显式 `read_proposal_preview` 请求；首次字体初始化在正式渲染前完成。没有打开工作台时仍可能排队或失败，应保持工作台登录后重试，不会替换成正式画布图像。完全无浏览器的渲染尚未实现。
+
+科学计划的 `edges[].direction` 支持 `forward`（默认）、`bidirectional`、`undirected`，控制原生连线两端箭头，跨面板同样适用。`from/to` 对无向关系仅为布局端点；不得推断因果。`inhibitory:true` 仅支持单向；冲突需先澄清或显式修正，不自动改写。`read_plan/save_plan/sketch_plan` 与直接 `sketch` 共用该计划结构。
+
+现有连线的局部修改可用 `operations:[{op:"set_relation_direction",id:"edge-0",direction:"bidirectional",inhibitory:false}]`，两个状态字段都必须明确给出。支持提案与候选连续修订，保留端点几何、绑定、文字、依据和历史计划。不能用来改变放大图引导线、批注或已锁定/删除对象；不能将抑制与双向/无向组合。改变图示方向前须核对科学意图及证据，不要据新端标记声称已经验证机制。
+
+长标签优先使用 `{op:"set_wrapped_text",id:"label-0",text:"..."}`，在默认科学字体下同步换行和尺寸而不是只更新 `text`。可用于普通提案或候选连续修订；自由文本可提供 `max_width`，绑定文字使用原生容器宽度。形状尺寸保持不变，放不下时先明确调整容器/字号，再核对候选；不支持的字体、旋转或复杂连线会失败，不猜测度量。原文保存为 `originalText`，原有绑定、依据与样式保留。

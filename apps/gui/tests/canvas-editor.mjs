@@ -21,6 +21,7 @@ try {
   await page.route(`${origin}/api/session`, r => r.fulfill({ json: {} }));
   await page.route('**/api/v1/**', async route => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
+    if (path.endsWith('/proposal-summary')) return route.fulfill({json:{current_revision:figures.get("figure")?.metadata.revision ?? 1,total:0,current:0,stale:0,latest:null}});
     if (path === '/events') return;
     if (path.endsWith('/proposal-preview-requests')) return route.fulfill({ json: [] });
     if (path === '/visualization/bioart/search') return route.fulfill({ json: { assets: [{ id: 1, title: 'Test cell', source_url: 'https://bioart.niaid.nih.gov/asset/1', licenses: ['CC0'], creators: ['NIH'] }] } });
@@ -56,11 +57,12 @@ try {
       return route.fulfill({ json: [...revisions.values()].filter(item => item.revision < before).sort((a, b) => b.revision - a.revision).slice(0, Number(query.get('limit') || 20)).map(({ document, ...metadata }) => metadata) });
     }
     if (path.match(/^\/visualization\/projects\/study\/figures\/figure\/revisions\/\d+$/)) return route.fulfill({ json: revisions.get(Number(path.split('/').at(-1))) });
-    if (path === '/visualization/projects/study/figures/figure/proposals') {
+    if (path === '/visualization/projects/study/figures/figure/proposal-index' || path === '/visualization/projects/study/figures/figure/proposals') {
       const item = figures.get('figure'); const document = JSON.parse(JSON.stringify(item.scene.document)); document.elements[0].backgroundColor = '#d3f9d8';
       proposal = { id: 'candidate', summary: '突出细胞', status: 'pending', base_revision: item.metadata.revision, document };
-      return route.fulfill({ json: [proposal] });
+      return route.fulfill({ json: path.endsWith('/proposal-index') ? {items:[{id:proposal.id,summary:proposal.summary,base_revision:proposal.base_revision}],next_before:null} : [proposal] });
     }
+    if (path === '/visualization/projects/study/figures/figure/proposals/candidate') return route.fulfill({json:proposal});
     if (path === '/visualization/projects/study/figures/figure/proposals/candidate/accept') {
       const item = figures.get('figure');
       if (item.metadata.revision !== proposal.base_revision) return route.fulfill({ status: 409, json: { error: 'document changed' } });

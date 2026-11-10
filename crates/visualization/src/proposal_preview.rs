@@ -27,6 +27,13 @@ pub struct RenderRequest {
     pub document_sha256: String,
     pub document: Value,
 }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct WorkspaceRenderRequest {
+    pub project_id: String,
+    pub visualization_id: String,
+    #[serde(flatten)]
+    pub request: RenderRequest,
+}
 impl Store {
     pub fn request_proposal_preview(
         &self,
@@ -81,6 +88,44 @@ impl Store {
             let base_revision=r.get(0)?;
             Ok(CandidatePreview{scope:"proposal_candidate".into(),proposal_id:proposal.into(),visualization_id:id.into(),base_revision,current_revision:head.revision,base_is_current:base_revision==head.revision,proposal_status:r.get(1)?,document_sha256:r.get(2)?,render_status:r.get(3)?,renderer:r.get(4)?,error:r.get(5)?,data_url:r.get(6)?})
         }).optional()?.ok_or(Error::NotFound)
+    }
+    /// Authenticated workspace renderer: only explicitly queued immutable candidates.
+    pub fn workspace_proposal_render_requests(&self) -> Result<Vec<WorkspaceRenderRequest>> {
+        let mut statement = self.connection.prepare("SELECT f.project_id,p.visualization_id,p.id,p.base_revision,v.document_sha256,p.document FROM visualization_proposal_previews v JOIN visualization_proposals p ON p.id=v.proposal_id JOIN visualizations f ON f.id=p.visualization_id WHERE v.render_status='requested' ORDER BY v.requested_at,p.rowid LIMIT 2")?;
+        let rows = statement.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                project_id,
+                visualization_id,
+                proposal_id,
+                base_revision,
+                document_sha256,
+                document,
+            ) = row?;
+            if hash(&document) != document_sha256 {
+                return Err(Error::Conflict);
+            }
+            Ok(WorkspaceRenderRequest {
+                project_id,
+                visualization_id,
+                request: RenderRequest {
+                    proposal_id,
+                    base_revision,
+                    document_sha256,
+                    document: serde_json::from_str(&document)?,
+                },
+            })
+        })
+        .collect()
     }
     pub fn proposal_render_requests(&self, project: &str, id: &str) -> Result<Vec<RenderRequest>> {
         self.get(project, id)?;
@@ -182,6 +227,69 @@ mod tests {
             )
             .unwrap();
         (store, figure.id, proposal)
+    }
+    #[test]
+    fn workspace_queue_is_requested_only_bounded_and_routes_each_project() {
+        let (mut store, figure, first) = fixture();
+        let other = store
+            .create(
+                "other",
+                "Other figure",
+                "excalidraw/v2",
+                &json!({"elements":[]}),
+            )
+            .unwrap();
+        let second = store
+            .propose("other", &other.id, 1, "Second", &json!({"elements":[]}))
+            .unwrap();
+        let third = store
+            .propose("p", &figure, 1, "Third", &json!({"elements":[]}))
+            .unwrap();
+        assert!(
+            store
+                .workspace_proposal_render_requests()
+                .unwrap()
+                .is_empty()
+        );
+        for (project, id, candidate) in [
+            ("p", figure.as_str(), first.id.as_str()),
+            ("other", other.id.as_str(), second.id.as_str()),
+            ("p", figure.as_str(), third.id.as_str()),
+        ] {
+            store
+                .request_proposal_preview(project, id, candidate, 1, false)
+                .unwrap();
+        }
+        let queue = store.workspace_proposal_render_requests().unwrap();
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0].project_id, "p");
+        assert_eq!(queue[0].visualization_id, figure);
+        assert_eq!(queue[0].request.proposal_id, first.id);
+        assert_eq!(queue[1].project_id, "other");
+        assert_eq!(queue[1].visualization_id, other.id);
+        assert_eq!(queue[1].request.proposal_id, second.id);
+        assert_eq!(queue[0].request.document, first.document);
+        store
+            .complete_proposal_preview(
+                "p",
+                &figure,
+                &first.id,
+                PreviewCompletion {
+                    base_revision: 1,
+                    document_sha256: &queue[0].request.document_sha256,
+                    data_url: Some(PNG),
+                    error: None,
+                    renderer: "test",
+                },
+            )
+            .unwrap();
+        let next = store.workspace_proposal_render_requests().unwrap();
+        assert_eq!(
+            next.iter()
+                .map(|job| job.request.proposal_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![second.id.as_str(), third.id.as_str()]
+        );
     }
     #[test]
     fn candidates_have_separate_immutable_previews_across_adoption_and_project_scopes() {

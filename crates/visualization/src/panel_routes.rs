@@ -521,7 +521,7 @@ pub(crate) fn connect(plan: &Plan, elements: &mut Vec<Value>) -> Result<(), Inva
             bb[2] - bb[0],
             bb[3] - bb[1],
         );
-        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-start[0],p[1]-start[1]]).collect::<Vec<_>>(),"startBinding":{"elementId":format!("node-{a}"),"focus":0,"gap":12},"endBinding":{"elementId":format!("node-{b}"),"focus":0,"gap":12},"startArrowhead":null,"endArrowhead":if edge.inhibitory{"bar"}else{"arrow"},"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence,"crossPanel":true}}).as_object().unwrap().clone());
+        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-start[0],p[1]-start[1]]).collect::<Vec<_>>(),"startBinding":{"elementId":format!("node-{a}"),"focus":0,"gap":12},"endBinding":{"elementId":format!("node-{b}"),"focus":0,"gap":12},"startArrowhead":edge.arrowheads().0,"endArrowhead":edge.arrowheads().1,"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence,"direction":edge.direction,"inhibitory":edge.inhibitory,"crossPanel":true}}).as_object().unwrap().clone());
         if !edge.label.is_empty() {
             arrow["boundElements"] = json!([{"id":label_id,"type":"text"}]);
         }

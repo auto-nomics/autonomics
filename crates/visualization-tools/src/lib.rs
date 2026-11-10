@@ -31,6 +31,7 @@ enum ActionSchema {
     ReviseProposal,
     ReadMarkup,
     ListMarkups,
+    ListProposals,
     ReadPlan,
     SavePlan,
     SketchPlan,
@@ -60,7 +61,7 @@ struct SceneSchema {
 }
 #[tool(
     name = "visualization",
-    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, image_info, inset, inset_status, refresh_inset, read_image, read_preview, read_proposal_preview, read_proposal, revise_proposal, read_markup, list_markups, read_plan, save_plan, sketch_plan, create, sketch, propose, apply, arrange. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. When a proposed change addresses review markup, pass its IDs in markup_ids after reading and reconciling those reviews; this links the candidate to those notes without closing them. The user can explicitly close linked notes when adopting the proposal. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_proposal with proposal_id and expected_revision returns an immutable candidate scene with image bytes omitted, its full stored document_sha256 and parent lineage. revise_proposal creates a new child from that candidate (not the saved scene), retaining previous edits and files; pass proposal_id, document_sha256, expected_revision, title, and exactly one operations or arrangement. Parent must be pending at the current figure base revision; rejected/accepted or stale parents must be reconciled with the saved scene. Parent stays immutable and is not automatically adopted/rejected. If the parent has open review links, explicitly pass markup_ids (including [] to drop) for reviews still addressed by the child; do not silently inherit resolved or no-longer-addressed notes. read_proposal_preview with proposal_id and expected_revision requests an independent browser render of that exact immutable candidate, then waits briefly for the open canvas renderer and returns a vision block. It never adopts the proposal. Inspect scope, document_sha256, base_revision, current_revision and proposal_status; if base_is_current is false, reconcile with the current saved scene. If no renderer is open or a render fails, it reports an error and never substitutes the saved-canvas preview. After fixing render resources, retry_preview:true explicitly requeues a failed render. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries, markups_pagination.next_before and object-linked review annotations as well as the scene. Use list_markups with before, limit (1..100) and optional status open/resolved to retrieve older reviews; repeat next_before until null. Filter status open to find outstanding reviews even when newer records are resolved; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. image_info requires element_id and expected_revision and returns actual file dimensions, crop and provenance without image bytes. inset requires expected_revision and inset {element_id,region:{x,y,width,height},x,y,max_size,title}; region is fractional in the current visible image after flips, before rotation; x/y position the new detail panel. Use image_info and read_image first. This creates a pending proposal with editable image crop, region box and neutral callout, preserving original files and licensing. inset_status with element_id (inset anchor/image) and expected_revision compares the current source against its recorded historical snapshot; changed does not merely mean a later figure revision. refresh_inset with the same arguments proposes a refresh in the existing panel, keeping object IDs, panel/title, styles and unrelated objects. The saved fractional region is applied to the current source viewport; replacing the source may change its scientific content. Read status and images before refreshing; if detail_edited is true, local file/crop edits will be replaced only with discard_detail_edits:true. Missing members, ambiguous ownership or rotated panels must be resolved first. To delete a whole inset, remove its anchor_id once; this also removes its owned image/title and matching region/callout decorations, preserving the source image and other insets. Do not repeat cascaded IDs. Insets are frozen snapshots tied to the source revision; later source edits do not refresh them or move the region annotation automatically. Read the saved scene and its group membership before arrange. arrange requires arrangement and expected_revision and proposes alignment or equal edge-gap distribution of existing components without changing their relationships. Native groups, semantic anchors and owned labels/images move together; overlapping selections collapse to one unit. Distribution needs at least three independent units, uses equal edge gaps when space permits and the editor's anchored-center fallback when the span is too small. Exclude inset region/callout annotations. Native ink and unrounded zero-roughness polylines can be part of arranged components. A connector inside a selected component must translate rigidly with its bound endpoints; keep between-component connectors outside those groups. Rotated arrow-bound text and rough/curved/elbowed bounds still require native geometry. Locked members and unsupported independently moved curved/rotated/elbowed connectors must be resolved before arranging. Review crossings/overlaps visually; arrangement does not automatically reroute arrows. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
+    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, image_info, inset, inset_status, refresh_inset, read_image, read_preview, read_proposal_preview, read_proposal, revise_proposal, read_markup, list_markups, list_proposals, read_plan, save_plan, sketch_plan, create, sketch, propose, apply, arrange. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. When a proposed change addresses review markup, pass its IDs in markup_ids after reading and reconciling those reviews; this links the candidate to those notes without closing them. The user can explicitly close linked notes when adopting the proposal. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_proposal with proposal_id and expected_revision returns an immutable candidate scene with image bytes omitted, its full stored document_sha256 and parent lineage. revise_proposal creates a new child from that candidate (not the saved scene), retaining previous edits and files; pass proposal_id, document_sha256, expected_revision, title, and exactly one operations or arrangement. Parent must be pending at the current figure base revision; rejected/accepted or stale parents must be reconciled with the saved scene. Parent stays immutable and is not automatically adopted/rejected. If the parent has open review links, explicitly pass markup_ids (including [] to drop) for reviews still addressed by the child; do not silently inherit resolved or no-longer-addressed notes. read_proposal_preview with proposal_id and expected_revision requests an independent browser render of that exact immutable candidate, then waits briefly for the authenticated workspace renderer (the figure editor need not be open) and returns a vision block. It never adopts the proposal. Inspect scope, document_sha256, base_revision, current_revision and proposal_status; if base_is_current is false, reconcile with the current saved scene. If no renderer is open or a render fails, it reports an error and never substitutes the saved-canvas preview. After fixing render resources, retry_preview:true explicitly requeues a failed render. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. read also returns proposal_summary (current/stale pending counts and latest metadata only). Use list_proposals with before and limit (1..100, default 20) to discover pending candidate metadata without scene/image bytes; repeat next_before until null. Read a chosen candidate with read_proposal and the current expected_revision before revising it; listing is not scientific validation or acceptance. Read returns recent markup summaries, markups_pagination.next_before and object-linked review annotations as well as the scene. Use list_markups with before, limit (1..100) and optional status open/resolved to retrieve older reviews; repeat next_before until null. Filter status open to find outstanding reviews even when newer records are resolved; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. image_info requires element_id and expected_revision and returns actual file dimensions, crop and provenance without image bytes. inset requires expected_revision and inset {element_id,region:{x,y,width,height},x,y,max_size,title}; region is fractional in the current visible image after flips, before rotation; x/y position the new detail panel. Use image_info and read_image first. This creates a pending proposal with editable image crop, region box and neutral callout, preserving original files and licensing. inset_status with element_id (inset anchor/image) and expected_revision compares the current source against its recorded historical snapshot; changed does not merely mean a later figure revision. refresh_inset with the same arguments proposes a refresh in the existing panel, keeping object IDs, panel/title, styles and unrelated objects. The saved fractional region is applied to the current source viewport; replacing the source may change its scientific content. Read status and images before refreshing; if detail_edited is true, local file/crop edits will be replaced only with discard_detail_edits:true. Missing members, ambiguous ownership or rotated panels must be resolved first. To delete a whole inset, remove its anchor_id once; this also removes its owned image/title and matching region/callout decorations, preserving the source image and other insets. Do not repeat cascaded IDs. Insets are frozen snapshots tied to the source revision; later source edits do not refresh them or move the region annotation automatically. Read the saved scene and its group membership before arrange. arrange requires arrangement and expected_revision and proposes alignment or equal edge-gap distribution of existing components without changing their relationships. Native groups, semantic anchors and owned labels/images move together; overlapping selections collapse to one unit. Distribution needs at least three independent units, uses equal edge gaps when space permits and the editor's anchored-center fallback when the span is too small. Exclude inset region/callout annotations. Native ink and unrounded zero-roughness polylines can be part of arranged components. A connector inside a selected component must translate rigidly with its bound endpoints; keep between-component connectors outside those groups. Rotated arrow-bound text and rough/curved/elbowed bounds still require native geometry. Locked members and unsupported independently moved curved/rotated/elbowed connectors must be resolved before arranging. Review crossings/overlaps visually; arrangement does not automatically reroute arrows. For long scientific labels, use {op:set_wrapped_text,id,text} to update text/originalText, wrapping, height and position together with pinned fontFamily 9 metrics. It preserves containers, other objects, styles, files and binding identities; uses native container widths and rejects overflowing shape/frame text rather than clipping or silently resizing containers. Optional max_width applies only to unbound text. Requires unrotated unlocked text; complex curves/elbows, unsupported glyphs/fonts and ambiguous bindings need native editing. Always inspect the candidate for collisions; wrapping is not global layout. For a local change of an existing relation, use {op:set_relation_direction,id,direction,inhibitory:false} in propose/revise_proposal. It updates arrowheads and explicit metadata together, preserving geometry, bindings, labels, evidence and original plan snapshots. Locked/deleted arrows, inset callouts, annotation arrows and opaque metadata are rejected. inhibitory must be explicitly supplied (true only for forward inhibition); do not silently discard inhibition when changing direction. Read the current relation and scientific intent before changing it; this does not rewrite the saved scientific brief. Edges may explicitly declare direction:forward (default), bidirectional, or undirected. Direction controls native arrowheads, including cross-panel connectors. inhibitory:true is supported only with forward direction; resolve conflicting scientific intent instead of discarding it. from/to identify layout endpoints even for undirected relations and do not establish causality. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
 )]
 pub struct FigureInput {
     #[desc = "For revise_proposal: copy the parent candidate document_sha256 from read_proposal or read_proposal_preview; this is not its PNG hash. Requires proposal_id, expected_revision and title; exactly one operations or arrangement."]
@@ -75,7 +76,7 @@ pub struct FigureInput {
     pub discard_detail_edits: Option<bool>,
     #[desc = "For inset only: source image ID, fractional visible region, new panel x/y, max_size (32..2048) and title (1..80 characters). Frozen revision-bound snapshot; never invent image dimensions."]
     pub inset: Option<visualization::inset::Spec>,
-    #[desc = "projects | list | read | image_info | inset | inset_status | refresh_inset | read_image | read_preview | read_proposal_preview | read_proposal | revise_proposal | read_markup | list_markups | read_plan | save_plan | sketch_plan | create | sketch | propose | apply | arrange"]
+    #[desc = "projects | list | read | image_info | inset | inset_status | refresh_inset | read_image | read_preview | read_proposal_preview | read_proposal | revise_proposal | read_markup | list_markups | list_proposals | read_plan | save_plan | sketch_plan | create | sketch | propose | apply | arrange"]
     #[schemars(with = "ActionSchema")]
     pub action: String,
     #[desc = "Opaque project ID: copy verbatim from the active tab context or projects. Never compose or guess IDs."]
@@ -88,11 +89,11 @@ pub struct FigureInput {
     pub markup_id: Option<String>,
     #[desc = "For propose/arrange/revise_proposal: IDs of open review markups actually addressed by these edits. Read each with read_markup first; include only addressed reviews, including historical reviews reconciled with the current scene. Does not resolve notes; the user chooses whether to close them when accepting the proposal."]
     pub markup_ids: Option<Vec<String>>,
-    #[desc = "list_markups cursor: copy next_before from the previous page; omit for the newest page"]
+    #[desc = "list_markups/list_proposals cursor: copy next_before from the previous page; omit for the newest page"]
     pub before: Option<String>,
     #[desc = "list_markups status filter: open or resolved; omit for all records"]
     pub status: Option<String>,
-    #[desc = "list_markups page size, 1..100 (default 50)"]
+    #[desc = "list_markups/list_proposals page size, 1..100 (default 50/20)"]
     pub limit: Option<u32>,
     #[desc = "Expected planning version for save_plan/sketch_plan; use zero to create a brief, otherwise the version from read_plan"]
     pub planning_version: Option<i64>,
@@ -103,7 +104,7 @@ pub struct FigureInput {
     pub document: Option<Value>,
     #[desc = "Exact current revision returned by read; required for edits, save_plan and sketch_plan"]
     pub expected_revision: Option<i64>,
-    #[desc = "Array of add/update/remove/reroute operations; required for apply. Updates are shallow merges and cannot change IDs."]
+    #[desc = "Array of add/update/remove/reroute/set_relation_direction/set_wrapped_text operations; required for apply. Updates are shallow merges and cannot change IDs."]
     #[schemars(with = "Option<Vec<visualization::scene::Operation>>")]
     pub operations: Option<Value>,
 }
@@ -236,6 +237,32 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
             Ok(proposal)
         }
 
+        "list_proposals" => {
+            if input.status.is_some() {
+                return Err(invalid(
+                    "list_proposals lists pending candidates; status is not supported",
+                ));
+            }
+            let metadata = service.store().get(&project, &id).map_err(failure)?;
+            if input
+                .expected_revision
+                .is_some_and(|revision| revision != metadata.revision)
+            {
+                return Err(failure(visualization::Error::Conflict));
+            }
+            let page = service
+                .store()
+                .proposal_index(
+                    &project,
+                    &id,
+                    input.before.as_deref(),
+                    input.limit.unwrap_or(20) as usize,
+                )
+                .map_err(failure)?;
+            Ok(
+                json!({"current_revision":metadata.revision,"status":"pending","items":page.items,"next_before":page.next_before,"image_data_omitted":true}),
+            )
+        }
         "list_markups" => Ok(json!(
             service
                 .store()
@@ -271,7 +298,7 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
                 .map_err(failure)?;
             let planning=service.store().planning(&project,&id).map_err(failure)?.map(|p|json!({"version":p.version,"based_on_revision":p.based_on_revision,"status":p.status,"issue_count":p.issues.len(),"proposal_id":p.proposal_id}));
             Ok(
-                json!({"metadata":metadata,"scene":scene,"image_data_omitted":true,"annotations":service.store().annotations(&project,&id).map_err(failure)?,"markups":markups.items,"markups_pagination":{"next_before":markups.next_before},"planning":planning}),
+                json!({"metadata":metadata,"scene":scene,"image_data_omitted":true,"proposal_summary":service.store().pending_proposal_summary(&project,&id).map_err(failure)?,"annotations":service.store().annotations(&project,&id).map_err(failure)?,"markups":markups.items,"markups_pagination":{"next_before":markups.next_before},"planning":planning}),
             )
         }
         "read_markup" => {
@@ -605,7 +632,7 @@ impl ToolFunction for FigureTool {
             }
             if value["render_status"] == "requested" {
                 return Err(invalid(
-                    "Candidate preview is queued; keep its project canvas open and retry read_proposal_preview. No saved-canvas image was substituted.",
+                    "Candidate preview is queued; keep an authenticated GUI workspace open and retry read_proposal_preview. No saved-canvas image was substituted.",
                 ));
             }
             if value["render_status"] == "failed" {
@@ -678,6 +705,8 @@ mod tests {
                 .unwrap()
                 .contains(&json!("sketch_plan"))
         );
+        assert!(schema.to_string().contains("set_wrapped_text"));
+        assert!(schema.to_string().contains("set_relation_direction"));
         let document = &schema["properties"]["document"];
         assert_eq!(property(document, "edges").unwrap()["type"], "array");
         let question = property(document, "questions").unwrap();
@@ -1145,6 +1174,177 @@ mod tests {
         assert!(tool.implementation.execute(json!({"action":"read_image","project_id":"p","figure_id":figure.id,"element_id":"reference","expected_revision":0})).await.is_err());
         assert!(tool.implementation.execute(json!({"action":"read_image","project_id":"p","figure_id":figure.id,"element_id":"missing"})).await.is_err());
     }
+    #[tokio::test]
+    async fn candidate_discovery_is_paged_scoped_and_version_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        store.create_project("other", "Other").unwrap();
+        let scene = json!({"elements":[],"files":{"asset":{"dataURL":"PRIVATE-BYTES"}}});
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &scene)
+            .unwrap();
+        let mut ids = vec![];
+        for index in 0..3 {
+            ids.push(
+                store
+                    .propose("p", &figure.id, 1, &format!("Candidate {index}"), &scene)
+                    .unwrap()
+                    .id,
+            );
+        }
+        let tool = registrations(path).remove(0);
+        let input = json!({"action":"list_proposals","project_id":"p","figure_id":figure.id,"expected_revision":1,"limit":2});
+        let first = serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
+            .unwrap();
+        assert_eq!(first["content"]["items"].as_array().unwrap().len(), 2);
+        assert_eq!(first["content"]["items"][0]["id"], ids[2]);
+        assert!(!first.to_string().contains("PRIVATE-BYTES"));
+        assert!(
+            !first["content"]["items"][0]
+                .as_object()
+                .unwrap()
+                .contains_key("document")
+        );
+        let mut next = input.clone();
+        next["before"] = first["content"]["next_before"].clone();
+        let second =
+            serde_json::to_value(tool.implementation.execute(next).await.unwrap()).unwrap();
+        assert_eq!(second["content"]["items"][0]["id"], ids[0]);
+        assert!(second["content"]["next_before"].is_null());
+        let read = serde_json::to_value(
+            tool.implementation
+                .execute(json!({"action":"read","project_id":"p","figure_id":figure.id}))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(read["content"]["proposal_summary"]["total"], 3);
+        assert!(!read.to_string().contains("PRIVATE-BYTES"));
+        for (key, value) in [
+            ("expected_revision", json!(2)),
+            ("project_id", json!("other")),
+            ("limit", json!(0)),
+            ("status", json!("accepted")),
+        ] {
+            let mut invalid = input.clone();
+            invalid[key] = value;
+            assert!(tool.implementation.execute(invalid).await.is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn local_relation_operation_is_reviewed_and_composes_with_candidate_revisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let plan=serde_json::from_value(json!({"message":"Synthetic relation fixture","audience":"Testers","layout":"horizontal","nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"edges":[{"from":"a","to":"b","label":"relation","evidence":["fixture-source"]}]})).unwrap();
+        let original = visualization::sketch::compile(&plan).unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &original)
+            .unwrap();
+        let tool = registrations(path).remove(0);
+        let input = json!({"action":"propose","project_id":"p","figure_id":figure.id,"expected_revision":1,"title":"Make reciprocal","operations":[{"op":"set_relation_direction","id":"edge-0","direction":"bidirectional","inhibitory":false},{"op":"update","id":"edge-label-0","changes":{"text":"Reviewed","originalText":"Reviewed"}}]});
+        let result =
+            serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
+                .unwrap();
+        let parent = store
+            .proposal("p", &figure.id, result["content"]["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            parent.document["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == "edge-0")
+                .unwrap()["startArrowhead"],
+            "arrow"
+        );
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        let revised=serde_json::to_value(tool.implementation.execute(json!({"action":"revise_proposal","project_id":"p","figure_id":figure.id,"expected_revision":1,"proposal_id":parent.id,"document_sha256":parent.document_sha256,"title":"Explicit inhibition","operations":[{"op":"set_relation_direction","id":"edge-0","direction":"forward","inhibitory":true}]})).await.unwrap()).unwrap();
+        let child = store
+            .proposal("p", &figure.id, revised["content"]["id"].as_str().unwrap())
+            .unwrap();
+        let edge = child.document["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == "edge-0")
+            .unwrap();
+        assert_eq!(edge["startArrowhead"], Value::Null);
+        assert_eq!(edge["endArrowhead"], "bar");
+        assert_eq!(edge["customData"]["evidence"], json!(["fixture-source"]));
+        assert_eq!(
+            child.document["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == "edge-label-0")
+                .unwrap()["text"],
+            "Reviewed"
+        );
+        let mut missing = input;
+        missing["operations"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("inhibitory");
+        assert!(tool.implementation.execute(missing).await.is_err());
+        assert_eq!(store.proposals("p", &figure.id).unwrap().len(), 2);
+        store.accept_proposal("p", &figure.id, &child.id).unwrap();
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 2);
+        assert_eq!(
+            store.revision("p", &figure.id, 1).unwrap().document,
+            original
+        );
+        assert_eq!(
+            store.proposal("p", &figure.id, &parent.id).unwrap().status,
+            "pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn candidate_revision_tool_preserves_parent_and_redacts_image_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let figure = store.create("p", "Figure", "excalidraw/v2", &json!({"elements":[],"files":{"asset":{"dataURL":"private-image-bytes","mimeType":"image/png"}}})).unwrap();
+        let parent = store.propose("p", &figure.id, 1, "Parent", &json!({"elements":[{"id":"added","type":"text","text":"First"}],"files":{"asset":{"dataURL":"private-image-bytes","mimeType":"image/png"}}})).unwrap();
+        let tool = registrations(path).remove(0);
+        let read = serde_json::to_value(tool.implementation.execute(json!({"action":"read_proposal","project_id":"p","figure_id":figure.id,"proposal_id":parent.id,"expected_revision":1})).await.unwrap()).unwrap();
+        assert!(!read.to_string().contains("private-image-bytes"));
+        assert_eq!(
+            read["content"]["proposal"]["document_sha256"],
+            parent.document_sha256
+        );
+        assert_eq!(
+            read["content"]["proposal"]["document"]["elements"][0]["text"],
+            "First"
+        );
+        let mut input = json!({"action":"revise_proposal","project_id":"p","figure_id":figure.id,"proposal_id":parent.id,"document_sha256":"wrong","expected_revision":1,"title":"Child","operations":[{"op":"update","id":"added","changes":{"text":"Revised"}}]});
+        assert!(tool.implementation.execute(input.clone()).await.is_err());
+        input["document_sha256"] = json!(parent.document_sha256);
+        let result =
+            serde_json::to_value(tool.implementation.execute(input).await.unwrap()).unwrap();
+        assert!(result["content"]["document"].is_null());
+        assert_eq!(result["content"]["parent_proposal_id"], parent.id);
+        let child = store
+            .proposal("p", &figure.id, result["content"]["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(child.document["elements"][0]["text"], "Revised");
+        assert_eq!(child.document["files"], parent.document["files"]);
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        assert_eq!(
+            store
+                .proposal("p", &figure.id, &parent.id)
+                .unwrap()
+                .document,
+            parent.document
+        );
+    }
+
     #[tokio::test]
     async fn registered_tool_creates_sketch_and_proposes_a_local_text_edit() {
         let directory = tempfile::tempdir().unwrap();

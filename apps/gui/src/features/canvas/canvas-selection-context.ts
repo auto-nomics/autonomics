@@ -47,6 +47,13 @@ export function canvasSelectionContext(input: readonly unknown[], selected: Read
       ? element.id === reference.anchor_id ? "inset_panel" : element.id === reference.image_id ? "inset_image" : element.id === reference.region_id ? "inset_region" : element.id === reference.callout_id ? "inset_callout" : titles.get(String(element.id)) === reference.anchor_id ? "inset_title" : null : null;
     const object: Row = { id: element.id, type: id(element.type), ...rectangle(element, ["x", "y", "width", "height", "angle"]), role: memberRole ?? (reference ? "unverified_inset_reference" : "canvas_object") };
     if (typeof element.text === "string") { object.text = element.text.slice(0, 1000); object.text_truncated = element.text.length > 1000; }
+    if (element.type === "text") {
+      object.font_family = finite(element.fontFamily); object.font_size = finite(element.fontSize); object.line_height = finite(element.lineHeight);
+      object.container_id = id(element.containerId);
+      object.auto_resize = typeof element.autoResize === "boolean" ? element.autoResize : null;
+      object.text_align = typeof element.textAlign === "string" && ["left", "center", "right"].includes(element.textAlign) ? element.textAlign : null;
+      object.vertical_align = typeof element.verticalAlign === "string" && ["top", "middle", "bottom"].includes(element.verticalAlign) ? element.verticalAlign : null;
+    }
     if (id(element.frameId)) object.frame_id = element.frameId;
     if (Array.isArray(element.groupIds) && element.groupIds.length) {
       object.group_ids = element.groupIds.filter(value => id(value)).slice(0, 32);
@@ -59,7 +66,13 @@ export function canvasSelectionContext(input: readonly unknown[], selected: Read
       if (id(data.semanticAnchorId)) { object.semantic_anchor_id = data.semanticAnchorId; object.semantic_anchor_verified = row(index.get(String(data.semanticAnchorId))?.customData).visualAssetElementId === element.id; }
     }
     if (reference) object.inset = { ...reference, identity_verified: Boolean(memberRole), source_available: index.get(reference.source_element_id ?? "")?.type === "image" };
-    if (element.type === "arrow") { object.start_binding_id = id(row(element.startBinding).elementId); object.end_binding_id = id(row(element.endBinding).elementId); }
+    if (element.type === "arrow") {
+      object.start_binding_id = id(row(element.startBinding).elementId); object.end_binding_id = id(row(element.endBinding).elementId);
+      object.start_arrowhead = id(element.startArrowhead); object.end_arrowhead = id(element.endArrowhead);
+      const direction = row(element.customData).direction;
+      if (typeof row(element.customData).inhibitory === "boolean") object.declared_inhibitory = row(element.customData).inhibitory;
+      if (direction === "forward" || direction === "bidirectional" || direction === "undirected") object.declared_direction = direction;
+    }
     const size = JSON.stringify(object).length + 1;
     if (chars + size > 16000) continue;
     chars += size; objects.push(object);

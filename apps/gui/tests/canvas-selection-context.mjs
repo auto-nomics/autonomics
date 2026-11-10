@@ -39,3 +39,25 @@ console.log('canvas-selection-context: transform/crop, verified roles, false/del
 
 const grouped=canvasSelectionContext([{id:'group-member',type:'rectangle',groupIds:Array.from({length:40},(_,n)=>`group-${n}`)}],{'group-member':true}).objects[0];
 assert.equal(grouped.group_ids.length,32);assert.equal(grouped.group_ids_truncated,true);assert.equal(grouped.group_ids[0],'group-0');
+
+const relation={id:'relation',type:'arrow',startArrowhead:'arrow',endArrowhead:'arrow',customData:{direction:'bidirectional',private_note:'PRIVATE-NOTE'}};
+const relationContext=canvasSelectionContext([relation],{relation:true}).objects[0];
+assert.equal(relationContext.start_arrowhead,'arrow');assert.equal(relationContext.end_arrowhead,'arrow');assert.equal(relationContext.declared_direction,'bidirectional');
+assert.ok(!JSON.stringify(relationContext).includes('PRIVATE-'));
+relation.endArrowhead=null;
+const manuallyEdited=canvasSelectionContext([relation],{relation:true}).objects[0];
+assert.equal(manuallyEdited.end_arrowhead,null);assert.equal(manuallyEdited.declared_direction,'bidirectional','declared direction does not overwrite observed manual arrowheads');
+
+relation.customData.inhibitory=true;
+assert.equal(canvasSelectionContext([relation],{relation:true}).objects[0].declared_inhibitory,true);
+relation.customData.inhibitory=false;
+assert.equal(canvasSelectionContext([relation],{relation:true}).objects[0].declared_inhibitory,false);
+relation.customData.inhibitory='unknown';
+assert.equal(canvasSelectionContext([relation],{relation:true}).objects[0].declared_inhibitory,undefined);
+
+const typography=canvasSelectionContext([{id:'label',type:'text',text:'Visible label',fontFamily:9,fontSize:20,lineHeight:1.25,containerId:'node-0',autoResize:false,textAlign:'center',verticalAlign:'middle',originalText:'PRIVATE-ORIGINAL',customData:{note:'PRIVATE-NOTE'}}],{label:true}).objects[0];
+assert.equal(typography.font_family,9);assert.equal(typography.font_size,20);assert.equal(typography.line_height,1.25);assert.equal(typography.container_id,'node-0');assert.equal(typography.auto_resize,false);assert.equal(typography.text_align,'center');assert.equal(typography.vertical_align,'middle');assert.ok(!JSON.stringify(typography).includes('PRIVATE-'));
+const malformedTypography=canvasSelectionContext([{id:'bad-label',type:'text',fontSize:Infinity,fontFamily:'9',lineHeight:NaN,containerId:'x'.repeat(513),autoResize:'false',textAlign:'PRIVATE-ALIGN',verticalAlign:'PRIVATE-ALIGN'}],{'bad-label':true}).objects[0];
+for(const key of ['font_size','font_family','line_height','container_id','auto_resize','text_align','vertical_align'])assert.equal(malformedTypography[key],null);
+
+const opaqueAlignment=canvasSelectionContext([{id:'opaque-label',type:'text',textAlign:{toString:'not-callable',valueOf:'not-callable'},verticalAlign:{}}],{'opaque-label':true}).objects[0];assert.equal(opaqueAlignment.text_align,null);assert.equal(opaqueAlignment.vertical_align,null);

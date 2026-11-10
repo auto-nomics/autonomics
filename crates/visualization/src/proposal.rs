@@ -26,6 +26,27 @@ pub struct Proposal {
     #[serde(default)]
     pub review_markups: Vec<crate::markup::Summary>,
 }
+#[derive(Debug, Serialize)]
+pub struct PendingSummary {
+    pub current_revision: i64,
+    pub total: i64,
+    pub current: i64,
+    pub stale: i64,
+    pub latest: Option<PendingCandidate>,
+}
+#[derive(Debug, Serialize)]
+pub struct PendingCandidate {
+    pub id: String,
+    pub summary: String,
+    pub summary_truncated: bool,
+    pub base_revision: i64,
+    pub parent_proposal_id: Option<String>,
+}
+#[derive(Debug, Serialize)]
+pub struct ProposalIndex {
+    pub items: Vec<PendingCandidate>,
+    pub next_before: Option<String>,
+}
 pub struct ProposedRevision<'a> {
     pub parent_id: &'a str,
     pub parent_document_sha256: &'a str,
@@ -226,6 +247,67 @@ impl Store {
             review_markups: self.proposal_markups(proposal_id)?,
         })
     }
+    /// Page candidate metadata without reading scene bytes.
+    pub fn proposal_index(
+        &self,
+        project: &str,
+        id: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<ProposalIndex> {
+        if !(1..=100).contains(&limit) {
+            return Err(Error::Invalid("proposal page limit must be 1..100"));
+        }
+        self.get(project, id)?;
+        let cursor: Option<(String,i64)> = before.map(|cursor| self.connection.query_row(
+            "SELECT created_at,rowid FROM visualization_proposals WHERE id=?1 AND visualization_id=?2", params![cursor,id], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(Error::NotFound)).transpose()?;
+        let mut statement = self.connection.prepare(
+            "SELECT p.id,substr(p.summary,1,1000),length(p.summary)>1000,p.base_revision,l.parent_id FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.visualization_id=?1 AND p.status='pending' AND (?2 IS NULL OR p.created_at<?2 OR (p.created_at=?2 AND p.rowid<?3)) ORDER BY p.created_at DESC,p.rowid DESC LIMIT ?4")?;
+        let mut items = statement
+            .query_map(
+                params![
+                    id,
+                    cursor.as_ref().map(|v| &v.0),
+                    cursor.as_ref().map(|v| v.1),
+                    limit as i64 + 1
+                ],
+                |r| {
+                    Ok(PendingCandidate {
+                        id: r.get(0)?,
+                        summary: r.get(1)?,
+                        summary_truncated: r.get(2)?,
+                        base_revision: r.get(3)?,
+                        parent_proposal_id: r.get(4)?,
+                    })
+                },
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let next_before = if items.len() > limit {
+            items.truncate(limit);
+            items.last().map(|item| item.id.clone())
+        } else {
+            None
+        };
+        Ok(ProposalIndex { items, next_before })
+    }
+    pub fn pending_proposal_summary(&self, project: &str, id: &str) -> Result<PendingSummary> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let revision = self.get(project, id)?.revision;
+        let (total, current): (i64, i64) = transaction.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(base_revision=?2),0) FROM visualization_proposals WHERE visualization_id=?1 AND status='pending'",
+            params![id, revision], |row| Ok((row.get(0)?,row.get(1)?)))?;
+        let latest = transaction.query_row(
+            "SELECT p.id,substr(p.summary,1,1000),length(p.summary)>1000,p.base_revision,l.parent_id FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.visualization_id=?1 AND p.status='pending' ORDER BY (p.base_revision=?2) DESC,p.created_at DESC,p.rowid DESC LIMIT 1",
+            params![id, revision], |row| Ok(PendingCandidate { id: row.get(0)?, summary: row.get(1)?, summary_truncated: row.get(2)?, base_revision: row.get(3)?, parent_proposal_id: row.get(4)? })).optional()?;
+        transaction.commit()?;
+        Ok(PendingSummary {
+            current_revision: revision,
+            total,
+            current,
+            stale: total - current,
+            latest,
+        })
+    }
     pub fn proposals(&self, project: &str, id: &str) -> Result<Vec<Proposal>> {
         self.get(project, id)?;
         let mut statement=self.connection.prepare("SELECT p.id,p.base_revision,p.summary,p.document,p.status,p.created_at,l.parent_id,l.parent_document_sha256 FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.visualization_id=?1 ORDER BY p.created_at DESC,p.id")?;
@@ -328,6 +410,90 @@ impl Store {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn candidate_index_pages_metadata_with_stable_scoped_cursors() -> Result<()> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let scene = json!({"elements":[],"files":{"asset":{"dataURL":"PRIVATE-BYTES"}}});
+        let figure = store.create("p", "Figure", "excalidraw/v2", &scene)?;
+        let other = store.create("p", "Other", "excalidraw/v2", &scene)?;
+        let mut ids = Vec::new();
+        for index in 0..25 {
+            ids.push(
+                store
+                    .propose("p", &figure.id, 1, &format!("Candidate {index}"), &scene)?
+                    .id,
+            );
+        }
+        // Equal timestamps must still have a deterministic insertion order.
+        store.connection.execute("UPDATE visualization_proposals SET created_at='same',document='not-json' WHERE visualization_id=?1", [&figure.id])?;
+        let first = store.proposal_index("p", &figure.id, None, 20)?;
+        assert_eq!(first.items.len(), 20);
+        assert_eq!(first.items[0].id, ids[24]);
+        assert_eq!(first.items[19].id, ids[5]);
+        assert!(!serde_json::to_string(&first)?.contains("PRIVATE-BYTES"));
+        let cursor = first.next_before.unwrap();
+        store.reject_proposal("p", &figure.id, &cursor)?;
+        let second = store.proposal_index("p", &figure.id, Some(&cursor), 20)?;
+        assert_eq!(
+            second.items.iter().map(|v| &v.id).collect::<Vec<_>>(),
+            ids[..5].iter().rev().collect::<Vec<_>>()
+        );
+        assert!(second.next_before.is_none());
+        assert!(matches!(
+            store.proposal_index("p", &other.id, Some(&cursor), 20),
+            Err(Error::NotFound)
+        ));
+        assert!(store.proposal_index("p", &figure.id, None, 0).is_err());
+        assert!(store.proposal_index("p", &figure.id, None, 101).is_err());
+        Ok(())
+    }
+    #[test]
+    fn pending_notifications_are_scoped_bounded_and_exclude_scene_bytes() -> Result<()> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        store.create_project("other", "Other")?;
+        let scene = json!({"elements":[],"files":{"asset":{"dataURL":"PRIVATE-IMAGE-BYTES"}}});
+        let figure = store.create("p", "Figure", "excalidraw/v2", &scene)?;
+        assert_eq!(store.pending_proposal_summary("p", &figure.id)?.total, 0);
+        assert!(matches!(
+            store.pending_proposal_summary("other", &figure.id),
+            Err(Error::NotFound)
+        ));
+        let old = store.propose("p", &figure.id, 1, "Old", &scene)?;
+        let adopted = store.propose("p", &figure.id, 1, "Adopt", &scene)?;
+        store.accept_proposal("p", &figure.id, &adopted.id)?;
+        let stale = store.pending_proposal_summary("p", &figure.id)?;
+        assert_eq!(
+            (
+                stale.current_revision,
+                stale.total,
+                stale.current,
+                stale.stale
+            ),
+            (2, 1, 0, 1)
+        );
+        assert_eq!(stale.latest.unwrap().id, old.id);
+        let latest = store.propose("p", &figure.id, 2, &"图".repeat(1200), &scene)?;
+        // The notification must not parse or transfer candidate documents.
+        store.connection.execute(
+            "UPDATE visualization_proposals SET document='not-json' WHERE id=?1",
+            [&latest.id],
+        )?;
+        let current = store.pending_proposal_summary("p", &figure.id)?;
+        assert_eq!((current.total, current.current, current.stale), (2, 1, 1));
+        assert!(!serde_json::to_string(&current)?.contains("PRIVATE-IMAGE-BYTES"));
+        let candidate = current.latest.unwrap();
+        assert_eq!(candidate.id, latest.id);
+        assert_eq!(candidate.summary.chars().count(), 1000);
+        assert!(candidate.summary_truncated);
+        store.reject_proposal("p", &figure.id, &latest.id)?;
+        store.reject_proposal("p", &figure.id, &old.id)?;
+        let empty = store.pending_proposal_summary("p", &figure.id)?;
+        assert_eq!(empty.total, 0);
+        assert!(empty.latest.is_none());
+        Ok(())
+    }
     #[test]
     fn linked_reviews_close_only_on_explicit_atomic_adoption() -> Result<()> {
         let mut store = Store::in_memory()?;

@@ -1338,6 +1338,22 @@ async fn visualization_projects_require_auth_and_persist_revisions() {
     let gateway = start_mock_gateway("ok").await;
     let http = reqwest::Client::new();
     let base = format!("http://{}/api/v1/visualization", gateway.addr);
+    let queued = http
+        .get(format!("{base}/proposal-preview-requests"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(queued.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let queued: Value = http
+        .get(format!("{base}/proposal-preview-requests"))
+        .bearer_auth(&gateway.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(queued, json!([]));
     let response = http.get(format!("{base}/projects")).send().await.unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
     let response = http

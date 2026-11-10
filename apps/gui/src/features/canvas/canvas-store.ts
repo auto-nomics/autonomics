@@ -10,6 +10,11 @@ const listeners = new Set<() => void>();
 const emit = () => listeners.forEach(listener => listener());
 const path = (projectId: string) => `/visualization/projects/${encodeURIComponent(projectId)}/figures`;
 const record = (meta: Metadata): CanvasRecord => ({ id: meta.id, projectId: meta.project_id, revision: meta.revision, title: meta.title, updatedAt: Date.parse(meta.updated_at), scene: null });
+const projectPreference = "autonomics:visualization:project";
+export const selectedCanvasProject = () => {
+  if (selectedProject !== undefined) return selectedProject;
+  try { return localStorage.getItem(projectPreference) || undefined; } catch { return undefined; }
+};
 export const listProjects = (): Promise<Project[]> => gatewayRequest("GET", "/visualization/projects");
 export const createProject = (title: string): Promise<Project> => gatewayRequest("POST", "/visualization/projects", { id: crypto.randomUUID(), title });
 export async function readCanvas(id: string, projectId?: string): Promise<CanvasRecord> {
@@ -19,6 +24,7 @@ export async function readCanvas(id: string, projectId?: string): Promise<Canvas
 }
 export async function refreshCanvases(projectId?: string) {
   selectedProject = projectId;
+  try { if (projectId) localStorage.setItem(projectPreference,projectId); else localStorage.removeItem(projectPreference); } catch { /* Storage may be unavailable in embedded views. */ }
   if (!projectId) { summaries = []; emit(); return; }
   const records = await gatewayRequest("GET", path(projectId)) as Metadata[];
   if (selectedProject === projectId) { summaries = records.map(record); emit(); }

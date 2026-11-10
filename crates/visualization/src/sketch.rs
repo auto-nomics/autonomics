@@ -61,6 +61,17 @@ pub enum Shape {
     Rectangle,
     Ellipse,
 }
+/// Visual direction is explicitly declared, never inferred from node labels.
+#[derive(
+    schemars::JsonSchema, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    #[default]
+    Forward,
+    Bidirectional,
+    Undirected,
+}
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
@@ -71,7 +82,26 @@ pub struct Edge {
     #[serde(default)]
     pub inhibitory: bool,
     #[serde(default)]
+    pub direction: Direction,
+    #[serde(default)]
     pub evidence: Vec<String>,
+}
+impl Direction {
+    pub(crate) fn arrowheads(
+        self,
+        inhibitory: bool,
+    ) -> (Option<&'static str>, Option<&'static str>) {
+        match self {
+            Self::Forward => (None, Some(if inhibitory { "bar" } else { "arrow" })),
+            Self::Bidirectional => (Some("arrow"), Some("arrow")),
+            Self::Undirected => (None, None),
+        }
+    }
+}
+impl Edge {
+    pub(crate) fn arrowheads(&self) -> (Option<&'static str>, Option<&'static str>) {
+        self.direction.arrowheads(self.inhibitory)
+    }
 }
 #[derive(Debug, thiserror::Error)]
 #[error("invalid scientific sketch: {0}")]
@@ -93,6 +123,15 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
     }
     if plan.nodes.is_empty() || plan.nodes.len() > 100 || plan.edges.len() > 200 {
         return Err(fail("requires 1..100 nodes and at most 200 edges"));
+    }
+    if plan
+        .edges
+        .iter()
+        .any(|edge| edge.inhibitory && edge.direction != Direction::Forward)
+    {
+        return Err(fail(
+            "inhibitory is supported only for forward relations; explicitly reconcile direction and inhibition",
+        ));
     }
     if !plan.panels.is_empty() {
         return crate::panels::compile(plan);
@@ -153,7 +192,7 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
             max_x - min_x,
             max_y - min_y,
         );
-        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-sx,p[1]-sy]).collect::<Vec<_>>(),"startBinding":null,"endBinding":null,"startArrowhead":null,"endArrowhead":if edge.inhibitory{"bar"}else{"arrow"},"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence}}).as_object().unwrap().clone());
+        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-sx,p[1]-sy]).collect::<Vec<_>>(),"startBinding":null,"endBinding":null,"startArrowhead":edge.arrowheads().0,"endArrowhead":edge.arrowheads().1,"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence,"direction":edge.direction,"inhibitory":edge.inhibitory}}).as_object().unwrap().clone());
         let from_index = plan
             .nodes
             .iter()
