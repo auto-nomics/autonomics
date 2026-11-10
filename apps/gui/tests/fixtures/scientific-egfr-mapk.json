@@ -1,0 +1,198 @@
+{
+  "schema": "autonomics.figure.scientific-case/v1",
+  "id": "human-egfr-mapk-reduced-v1",
+  "title": "Reduced human EGFR-MAPK signaling",
+  "checked_at": "2026-11-10",
+  "species": "Homo sapiens",
+  "scope_caption": "Reduced human EGFR-MAPK schematic: selected events; RAS and RAF are family-level summaries.",
+  "sources": [
+    {
+      "url": "https://reactome.org/content/detail/R-HSA-177942",
+      "stable_id": "R-HSA-177942",
+      "title": "EGFR binds EGF ligand",
+      "supports": "EGF binding to the extracellular EGFR domain."
+    },
+    {
+      "url": "https://reactome.org/content/detail/R-HSA-177929",
+      "stable_id": "R-HSA-177929",
+      "observed_doi": "10.3180/R-HSA-177929.5",
+      "title": "Signaling by EGFR",
+      "supports": "Ligand-driven receptor activation and GRB2/SOS1-mediated RAS nucleotide exchange, allowing direct or SHC1-mediated recruitment."
+    },
+    {
+      "url": "https://reactome.org/content/detail/R-HSA-5673000",
+      "stable_id": "R-HSA-5673000",
+      "title": "RAF activation",
+      "supports": "RAF activation downstream of RAS with omitted regulatory detail."
+    },
+    {
+      "url": "https://reactome.org/content/detail/R-HSA-5673001",
+      "stable_id": "R-HSA-5673001",
+      "observed_doi": "10.3180/R-HSA-5673001.9",
+      "title": "RAF/MAP kinase cascade",
+      "supports": "RAS-GTP promotes RAF activation; RAF phosphorylates MEK1/2, which phosphorylate ERK1/2."
+    }
+  ],
+  "brief": {
+    "message": "Reduced human EGFR-MAPK signaling. Panels show explanatory stages, not physical compartments. Show the supplied scope caption below the diagram.",
+    "audience": "Biomedical researchers",
+    "layout": "vertical",
+    "panels": [
+      {
+        "id": "receptor",
+        "title": "A | Ligand and receptor",
+        "column": 0,
+        "row": 0
+      },
+      {
+        "id": "relay",
+        "title": "B | RAS activation relay",
+        "column": 1,
+        "row": 0
+      },
+      {
+        "id": "kinases",
+        "title": "C | RAF-MEK-ERK cascade",
+        "column": 2,
+        "row": 0
+      }
+    ],
+    "nodes": [
+      {
+        "id": "egf",
+        "label": "EGF",
+        "panel": "receptor",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177942"
+        ]
+      },
+      {
+        "id": "egfr",
+        "label": "EGFR (ligand-activated)",
+        "panel": "receptor",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177929"
+        ]
+      },
+      {
+        "id": "relay",
+        "label": "GRB2/SOS1 relay",
+        "panel": "relay",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177929"
+        ]
+      },
+      {
+        "id": "ras",
+        "label": "RAS-GTP",
+        "panel": "relay",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177929",
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      },
+      {
+        "id": "raf",
+        "label": "RAF family",
+        "panel": "kinases",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-5673000",
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      },
+      {
+        "id": "mek",
+        "label": "MEK1/2 (MAP2K1/2)",
+        "panel": "kinases",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      },
+      {
+        "id": "erk",
+        "label": "ERK1/2 (MAPK3/1)",
+        "panel": "kinases",
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "from": "egf",
+        "to": "egfr",
+        "label": "binding and activation (summary)",
+        "direction": "forward",
+        "inhibitory": false,
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177942",
+          "https://reactome.org/content/detail/R-HSA-177929"
+        ]
+      },
+      {
+        "from": "egfr",
+        "to": "relay",
+        "label": "recruits relay (summary)",
+        "direction": "forward",
+        "inhibitory": false,
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177929"
+        ]
+      },
+      {
+        "from": "relay",
+        "to": "ras",
+        "label": "promotes GDP/GTP exchange",
+        "direction": "forward",
+        "inhibitory": false,
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-177929"
+        ]
+      },
+      {
+        "from": "ras",
+        "to": "raf",
+        "label": "recruitment and activation (summary)",
+        "direction": "forward",
+        "inhibitory": false,
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-5673000",
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      },
+      {
+        "from": "raf",
+        "to": "mek",
+        "label": "phosphorylates",
+        "direction": "forward",
+        "inhibitory": false,
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      },
+      {
+        "from": "mek",
+        "to": "erk",
+        "label": "phosphorylates",
+        "direction": "forward",
+        "inhibitory": false,
+        "evidence": [
+          "https://reactome.org/content/detail/R-HSA-5673001"
+        ]
+      }
+    ],
+    "assumptions": [
+      "Selected human signaling events only; this is not the complete Reactome pathway.",
+      "EGFR denotes ligand-activated receptor; binding, dimerization and autophosphorylation are collapsed into a summary step.",
+      "RAS and RAF are family-level summaries; MEK1/2 and ERK1/2 denote the stated family members, not single proteins.",
+      "Recruitment and activation summary arrows can omit intermediates, including SHC1 and RAF regulatory steps.",
+      "Panels group explanatory stages, not cellular compartments. Feedback, crosstalk, nuclear transport and phenotypic outcomes are outside this diagram."
+    ],
+    "relationship_note": "Only the six supplied directed relationships; summary edges do not assert single-step direct molecular interactions. No inhibitory relationships are specified.",
+    "questions": []
+  },
+  "local_edit": {
+    "target_node": "erk",
+    "new_label": "ERK1/2 (MAPK3/MAPK1)"
+  }
+}

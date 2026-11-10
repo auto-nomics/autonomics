@@ -251,6 +251,12 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let mut host = RuntimeHost::open(&config).await.unwrap();
     // One slot shared by the host and the gateway state — exactly like
     // the real daemon wires it.
+    let provider = if model.provider_name().is_empty() {
+        "mock"
+    } else {
+        model.provider_name()
+    };
+    let model_spec = format!("{}:{}", provider, model.model_info.model_name);
     let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(model)));
     host.set_model(model_slot.clone());
 
@@ -263,10 +269,10 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let (model_events, model_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let models = runtime::model_actor::start(storage, model_events);
     crate::hub::spawn_model_event_bridge(model_event_rx, hub.clone());
-    // Report the injected mock through the same channel a real daemon
+    // Report the injected model through the same channel a real daemon
     // uses (`active_model` in the settings table), so `/state` consumers
     // (e.g. the headless runner's run.started.model) see it.
-    let _ = models.put_setting("active_model", "mock:mock-model").await;
+    let _ = models.put_setting("active_model", &model_spec).await;
     // Same install-later pattern as the daemon: the bound address exists
     // only after `start()` (tests bind an ephemeral port).
     let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());

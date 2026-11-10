@@ -7,6 +7,22 @@ use std::collections::HashSet;
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Add complete native scientific-font text with validated geometry and wrapping.
+    AddWrappedText {
+        id: String,
+        text: String,
+        x: f64,
+        y: f64,
+        max_width: f64,
+        #[serde(default)]
+        font_size: Option<f64>,
+        #[serde(default)]
+        frame_id: Option<String>,
+    },
+    /// Reposition region/callout around frozen pixels, preserving the detail snapshot.
+    SyncInsetRegion {
+        id: String,
+    },
     /// Duplicate complete native components with new IDs and rigid offsets.
     Duplicate {
         element_ids: Vec<String>,
@@ -75,6 +91,8 @@ pub enum SceneError {
     InvalidRelation(String),
     #[error("cannot duplicate components: {0}")]
     InvalidCopy(String),
+    #[error("cannot sync inset region: {0}")]
+    InvalidInset(String),
     #[error("element id cannot be changed")]
     ImmutableId,
 }
@@ -252,6 +270,32 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     }
     for operation in operations {
         match operation {
+            Operation::AddWrappedText {
+                id,
+                text,
+                x,
+                y,
+                max_width,
+                font_size,
+                frame_id,
+            } => {
+                if ids.contains(id) {
+                    return Err(SceneError::Duplicate(id.clone()));
+                }
+                crate::text_edit::add(
+                    elements,
+                    id,
+                    text,
+                    [*x, *y],
+                    *max_width,
+                    *font_size,
+                    frame_id.as_deref(),
+                )?;
+                ids.insert(id.clone());
+            }
+            Operation::SyncInsetRegion { id } => {
+                crate::inset_sync::apply(elements, &document["files"], id)?
+            }
             Operation::Duplicate {
                 element_ids,
                 id_prefix,

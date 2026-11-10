@@ -268,3 +268,37 @@ pub(crate) fn apply(
     scene::touch(target);
     Ok(())
 }
+
+/// Construct a complete native element; never coerce opaque native JSON fields.
+pub(crate) fn add(
+    elements: &mut Vec<Value>,
+    id: &str,
+    source: &str,
+    origin: [f64; 2],
+    max_width: f64,
+    font_size: Option<f64>,
+    frame_id: Option<&str>,
+) -> Result<(), SceneError> {
+    if id.trim().is_empty() || id.len() > 512 {
+        return Err(fail("text ID requires 1..512 bytes"));
+    }
+    let mut text = crate::sketch::text(id, source, origin[0], origin[1], max_width);
+    text["textAlign"] = json!("left");
+    text["verticalAlign"] = json!("top");
+    text["frameId"] = json!(frame_id);
+    let mut scratch = frame_id
+        .and_then(|frame| elements.iter().find(|e| e["id"].as_str() == Some(frame)))
+        .cloned()
+        .into_iter()
+        .collect::<Vec<_>>();
+    scratch.push(text);
+    apply(
+        &mut scratch,
+        id,
+        source,
+        Some(max_width),
+        Some(font_size.unwrap_or(16.)),
+    )?;
+    elements.push(scratch.pop().unwrap());
+    Ok(())
+}

@@ -1,6 +1,9 @@
 // Opt-in real Agent + configured provider + tools + SQLite + GUI integration.
-// Only the surrounding workbench APIs are fixtures; model responses are never scripted.
+// Default mode fixtures only the surrounding workbench APIs; gateway mode uses real HTTP/login/SSE.
+// Model responses are never scripted.
 import { chromium } from 'playwright';
+import { runCandidateRevision } from './helpers/canvas-live-candidate.mjs';
+import { runScientificCase } from './helpers/canvas-live-scientific.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -8,36 +11,48 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const scientificCase=process.env.VISUALIZATION_LIVE_SCIENTIFIC;
+const candidateMode=process.env.VISUALIZATION_LIVE_CANDIDATE==='1';
+const gatewayMode=process.env.VISUALIZATION_LIVE_GATEWAY==='1';
 const reviewSource=process.env.VISUALIZATION_LIVE_REVIEW_SCENE, prepareOnly=process.env.VISUALIZATION_LIVE_PREPARE_ONLY==='1';
+assert.ok(!scientificCase || (gatewayMode&&!reviewSource&&!candidateMode&&!prepareOnly),'scientific case requires an empty Gateway evaluation');
+assert.ok(!candidateMode || (gatewayMode&&reviewSource&&!prepareOnly),'candidate case requires Gateway mode and an explicit saved illustrated scene');
+assert.ok(!gatewayMode || !prepareOnly, 'gateway mode uses a real configured model');
 assert.ok(!prepareOnly || reviewSource, 'prepare-only requires an explicit saved review scene');
 const provider = process.env.VISUALIZATION_LIVE_PROVIDER, model = process.env.VISUALIZATION_LIVE_MODEL;
 assert.ok(prepareOnly || (provider && model), 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
 const config = process.env.VISUALIZATION_LIVE_CONFIG || join(homedir(), '.autonomics/config.db');
-const binary = prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
+const binary = gatewayMode ? (process.env.VISUALIZATION_LIVE_GATEWAY_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_gateway_live',import.meta.url))) : prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
 assert.ok(existsSync(binary) && (prepareOnly || existsSync(config)), 'build the selected test host; live mode also requires a config database');
 const directory = process.env.VISUALIZATION_LIVE_OUTPUT || await mkdtemp(join(tmpdir(), 'autonomics-canvas-live-'));
 await mkdir(directory, { recursive: true });
 assert.ok(!existsSync(join(directory,"figures.sqlite")), "use a fresh output directory; existing evaluation databases are never reused");
-const native = spawn(binary, prepareOnly ? [join(directory,'figures.sqlite')] : [config, provider, model, join(directory, 'figures.sqlite'), join(directory, 'trace.jsonl')], { stdio: ['ignore', 'pipe', 'pipe'] });
+const native = spawn(binary, gatewayMode ? [directory,config,provider,model] : prepareOnly ? [join(directory,'figures.sqlite')] : [config, provider, model, join(directory, 'figures.sqlite'), join(directory, 'trace.jsonl')], { stdio: ['ignore', 'pipe', 'pipe'] });
 const port = Number(process.env.VISUALIZATION_LIVE_PORT || '1449');
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536, 'choose an unprivileged live test port');
-const origin = `http://127.0.0.1:${port}`;
-const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'] });
+let origin = `http://127.0.0.1:${port}`, gatewayReady;let sseResponses=0;const seenGatewayTools=new Set();
+const vite = gatewayMode ? null : spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'] });
 let output = '', viteOutput = '', browser, page; const turns = [], errors = [], checkpoints = [];
 native.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk); }); native.stderr.on('data', chunk => output += chunk);
-vite.stdout.on('data', chunk => viteOutput += chunk); vite.stderr.on('data', chunk => viteOutput += chunk);
+vite?.stdout.on('data', chunk => viteOutput += chunk); vite?.stderr.on('data', chunk => viteOutput += chunk);
 const until = async (predicate, message, duration = 60000) => { const deadline = Date.now() + duration; while (!await predicate()) { if (Date.now() > deadline) throw new Error(message); await new Promise(resolve => setTimeout(resolve, 100)); } };
 const persist = async (name, value) => writeFile(join(directory, name), JSON.stringify(value, null, 2), { mode: 0o600 });
 try {
-  await until(() => { if (native.exitCode !== null || native.signalCode !== null) throw new Error(output); return /VISUALIZATION_(?:LIVE|NATIVE)_ADDR=/.test(output); }, 'live host readiness');
-  await until(() => { if (vite.exitCode !== null || vite.signalCode !== null) throw new Error(viteOutput); return viteOutput.includes(origin); }, 'Vite readiness');
-  const backend = `http://${output.match(/VISUALIZATION_(?:LIVE|NATIVE)_ADDR=([^\s]+)/)[1]}`;
+  if(gatewayMode){
+    await until(async()=>{if(native.exitCode!==null||native.signalCode!==null)throw new Error('gateway host stopped');try{gatewayReady=JSON.parse(await readFile(join(directory,'ready.json'),'utf8'));return true;}catch{return false;}},'production gateway readiness');origin=gatewayReady.origin;
+  }else{
+    await until(() => { if (native.exitCode !== null || native.signalCode !== null) throw new Error(output); return /VISUALIZATION_(?:LIVE|NATIVE)_ADDR=/.test(output); }, 'live host readiness');
+    await until(() => { if (vite.exitCode !== null || vite.signalCode !== null) throw new Error(viteOutput); return viteOutput.includes(origin); }, 'Vite readiness');
+  }
+  const backend = gatewayMode ? origin : `http://${output.match(/VISUALIZATION_(?:LIVE|NATIVE)_ADDR=([^\s]+)/)[1]}`;
   const call = async (method, path, body, timeout = 30000) => {
+    if(gatewayMode){const response=await page.context().request.fetch(`${backend}${path}`,{method,...(body===undefined?{}:{data:body}),timeout});const value=await response.json();assert.ok(response.ok(),`HTTP ${response.status()} ${path}`);return value;}
     const response = await fetch(`${backend}${path}`, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeout) });
     const value = await response.json(); assert.ok(response.ok, `${response.status} ${JSON.stringify(value)}`); return value;
   };
   browser = await chromium.launch({ executablePath: process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined), args: ['--no-sandbox'] });
   page = await browser.newPage({ viewport: { width: 1600, height: 1000 } }); page.setDefaultTimeout(30000); page.on('pageerror', error => errors.push(error.message));
+  if(!gatewayMode){
   await page.route('**/api/session', route => route.fulfill({ json: {} }));
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url()), path = url.pathname.replace('/api/v1', '');
@@ -56,6 +71,13 @@ try {
     if (path === '/gateway/status') return route.fulfill({ json: { running: true } });
     return route.fulfill({ status: 404, json: { error: `Unrelated fixture: ${path}` } });
   });
+  }else{
+    assert.equal((await fetch(`${origin}/api/v1/state`)).status,401);
+    await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin});
+    const login=await page.context().request.post(`${origin}/api/session`,{data:{token:gatewayReady.token}});assert.ok(login.ok());
+    assert.ok((await page.context().cookies()).some(cookie=>cookie.name==='autonomics_session'&&cookie.httpOnly));
+    page.on('response',response=>{if(new URL(response.url()).pathname==='/api/v1/events'&&response.status()===200)sseResponses++;});
+  }
   await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.getByRole('navigation', { name: '工作台活动栏' }).getByRole('button', { name: '画布', exact: true }).click();
   await page.getByRole('textbox', { name: '新项目名称' }).fill('Live figure evaluation'); await page.getByRole('button', { name: '创建项目', exact: true }).click();
@@ -65,7 +87,18 @@ try {
   const path = `/api/v1/visualization/projects/${project}/figures/${figure}`;
   const send = async (number, message) => {
     if (message !== undefined) await page.getByPlaceholder('输入消息…').fill(message);
+    let oldIds,oldToolIds;
+    const history=async()=>{const state=await call('GET','/api/v1/state'),actor=state.agents.find(a=>a.path===gatewayReady.agent);assert.ok(actor);const session=state.contexts[gatewayReady.agent]?.id;const messages=session?await call('GET',`/api/v1/agents/${actor.agent_id}/sessions/${session}/history`):[];for(const block of messages.flatMap(message=>message.content)){if(block.type==='tool_use'&&!seenGatewayTools.has(block.id)){seenGatewayTools.add(block.id);console.log(`LIVE_GATEWAY_TOOL_CALL=${block.name} action=${block.input?.action??''}`);}}return {actor,messages};};
+    if(gatewayMode){const before=await history();oldIds=new Set(before.messages.map(m=>m.id));oldToolIds=new Set(before.messages.flatMap(m=>m.content).filter(b=>b.type==='tool_use').map(b=>b.id));}
     await page.getByRole('button', { name: '发送', exact: true }).click();
+    if(gatewayMode){let finished;await until(async()=>{const current=await history();if(String(current.actor.status).toUpperCase()!=='IDLE'||!current.messages.some(m=>!oldIds.has(m.id)&&m.role==='assistant'&&m.content.some(b=>b.type==='text'&&b.text.trim())))return false;finished=current.messages;return true;},`production agent turn ${number}`,250000);
+      const finalAssistant=finished.filter(m=>!oldIds.has(m.id)&&m.role==='assistant').at(-1),expectedReply=finalAssistant.content.filter(b=>b.type==='text').map(b=>b.text).join('\n');
+      assert.ok(expectedReply.trim());
+      const displayed=page.locator('[data-agent-workspace]:visible').getByRole('button',{name:'复制助手回复',exact:true}).last();
+      await until(async()=>{if(!await displayed.count())return false;await displayed.click();return await page.evaluate(()=>navigator.clipboard.readText())===expectedReply;},'actual final assistant reply matches session history through production SSE');
+      const calls=finished.flatMap(m=>m.content).filter(b=>b.type==='tool_use'&&!oldToolIds.has(b.id)).map(b=>({name:b.name,input:b.input}));assert.ok(calls.length,'actual session records registered tool calls');turns.push({calls});await persist(`turn-${number}.json`,{calls,transport:'production_gateway'});
+      const redacted=JSON.parse(JSON.stringify(finished,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value));await persist('session-history.json',redacted);
+    }
     await until(() => turns.length >= number || errors.length, `live turn ${number} completion`, 250000); assert.deepEqual(errors, []);
     console.log(`LIVE_CHECKPOINT turn=${number}`);
   };
@@ -76,6 +109,12 @@ try {
   };
   const normalized = text => text.replace(/\s/g, '');
   const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
+  if(scientificCase){
+    const spec=JSON.parse(await readFile(scientificCase,'utf8'));await persist('scientific-case.json',spec);
+    const evidence=await runScientificCase({page,call,path,handoff,send,persist,directory,turns,until,spec});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'scientific_case',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: scientific case passed; artifacts=${directory}`);
+  }else{
   let image,receptorLabel,receptor;
   if (!reviewSource) {
   await handoff('我想画一张受体信号传导示意图，但还没有指定受众、具体受体和需要表达的终点。请先和我澄清图意并保存待讨论的绘图计划。这一轮先提问，不要擅自选择具体受体、分子或通路，也不要先画图。');
@@ -159,6 +198,13 @@ try {
     assert.equal(image.customData?.semanticAnchorId,receptor.id,'reference image belongs to the marked receptor');assert.ok(receptor.customData?.visualLabelIds?.includes(receptorLabel.id),'label belongs to illustrated semantic anchor');
     await persist('seed-scene.json',imported);checkpoints.push('imported an explicit prior illustrated scene into a separate test database; no earlier model turns were replayed');
   }
+  if(candidateMode){
+    const evidence=await runCandidateRevision({page,call,path,send,persist,directory,turns,until});
+    assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('candidate-evidence.json',evidence);await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'candidate_revision',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});
+    console.log(`canvas-live: candidate revision checks passed; artifacts=${directory}`);
+  }else{
   const beforeMarkup = await call('GET', path); await persist('before-markup.json', beforeMarkup);
   await page.screenshot({ path: join(directory, 'illustrated-figure.png'), animations: 'disabled' });
   const beforeElements = beforeMarkup.scene.document.elements.filter(e => !e.isDeleted);
@@ -200,6 +246,9 @@ try {
   assert.ok(turns[reviewSource ? 0 : 4].calls.some(c => c.name === 'visualization' && c.input.action === 'read_markup' && c.input.markup_id === review.id), 'real agent reads the exact review as a vision result');
   const markupEdits = (await call('GET', `${path}/proposals`)).filter(p => p.status === 'pending'); assert.equal(markupEdits.length, 1);
   const deletion = markupEdits[0]; await persist('proposal-stage-5.json', deletion);
+  assert.deepEqual(deletion.review_markups.map(item=>item.id),[review.id], 'candidate explicitly links only the addressed review');
+  assert.equal((await call('GET', `${path}/markups/${review.id}`)).status,'open', 'proposing does not resolve the review');
+  assert.deepEqual(deletion.document.files,beforeMarkup.scene.document.files, 'review edit preserves source image bytes');
   const kept = beforeElements.filter(e => ![receptor.id, receptorLabel.id, image.id].includes(e.id) && e.type !== 'arrow' && !(e.type === 'text' && beforeElements.some(arrow => arrow.type === 'arrow' && arrow.id === e.containerId)));
   assert.equal(kept.length, 4); assert.equal(deletion.document.elements.length, kept.length);
   const removedIds = new Set(beforeElements.filter(e => !kept.some(k => k.id === e.id)).map(e => e.id));
@@ -211,23 +260,38 @@ try {
   assert.equal((await call('GET', path)).metadata.revision, beforeMarkup.metadata.revision);
   checkpoints.push('interpreted a visual cross and proposed removing only its component and explicit relationships');
   await page.getByRole('tab', { name: 'Live figure', exact: true }).click(); await page.getByRole('button', { name: '查看 Agent 提案', exact: true }).click();
-  await preview.getByRole('button', { name: deletion.summary, exact: true }).click();
+  await preview.getByRole('button', { name: `${deletion.summary} · v${deletion.base_revision}`, exact: true }).click();
   await preview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
   await page.screenshot({ path: join(directory, 'markup-proposal.png'), animations: 'disabled' });
+  await preview.getByRole('checkbox',{name:'采用时同时完成关联标记（1 组）',exact:true}).check();
   await preview.getByRole('button', { name: '采用提案', exact: true }).click(); await preview.waitFor({ state: 'hidden' });
   await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
-  assert.equal((await call('GET', path)).scene.document.elements.length, 4);
+  const adoptedReview=await call('GET',path), resolvedReview=await call('GET',`${path}/markups/${review.id}`), acceptedReviewProposal=await call('GET',`${path}/proposals/${deletion.id}`);
+  assert.equal(adoptedReview.scene.document.elements.length,4);assert.equal(adoptedReview.metadata.revision,beforeMarkup.metadata.revision+1);
+  assert.deepEqual(adoptedReview.scene.document,deletion.document);assert.equal(acceptedReviewProposal.status,'accepted');assert.equal(resolvedReview.status,'resolved');
+  assert.equal(resolvedReview.at_revision,review.at_revision);assert.deepEqual(resolvedReview.strokes,review.strokes);
+  await persist('resolved-review.json',resolvedReview);await persist('accepted-review-proposal.json',acceptedReviewProposal);
+  checkpoints.push('GUI adopted the exact candidate and explicitly resolved the linked review without altering its original strokes');
   await page.getByRole('button', { name: '保存画布', exact: true }).waitFor();
   const download = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 SVG', exact: true }).click(); await writeFile(join(directory, 'figure.svg'), await readFile(await (await download).path()));
   await page.screenshot({ path: join(directory, 'figure.png'), animations: 'disabled' }); await persist('final.json', await call('GET', path));
-  assert.deepEqual(errors, []); await persist('result.json', { passed: true, provider, model, project, figure, checkpoints, turns: turns.length, case:reviewSource?'isolated_markup':'full_workflow' });
+  if(!gatewayMode){
+  const auditedRequests=(await readFile(join(directory,'trace.requests.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  const visionCallCount=turns.flatMap(turn=>turn.calls).filter(call=>(call.name==='visualization'&&['read_image','read_preview','read_proposal_preview','read_markup'].includes(call.input.action))||(call.name==='bioart'&&call.input.action==='preview')).length;
+  assert.ok(auditedRequests.length>0);assert.ok(auditedRequests.some(request=>request.images>0),'real model receives vision images');
+  assert.ok(auditedRequests.every(request=>request.images<=visionCallCount),'request images cannot multiply beyond actual image-producing tool calls');
+  await persist('request-audit.json',{requests:auditedRequests.length,vision_tool_calls:visionCallCount,max_images:Math.max(...auditedRequests.map(request=>request.images)),contains_payloads:false});
+  }else{assert.ok(sseResponses>0,'actual SSE stream delivered runtime events');await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});}
+  assert.deepEqual(errors, []); await persist('result.json', { passed: true, transport:gatewayMode?'production_gateway':'native_test_host', provider, model, project, figure, checkpoints, turns: turns.length, case:reviewSource?'isolated_markup':'full_workflow' });
   console.log(`canvas-live: all checks passed; artifacts=${directory}`);
+  }
+  }
   }
 } catch (error) {
   await page?.screenshot({ path: join(directory, 'failure.png'), animations: 'disabled' }).catch(() => {});
-  await persist('result.json', { passed: false, case:reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
+  await persist('result.json', { passed: false, case:scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
   console.error(`canvas-live: failed; artifacts=${directory}`); throw error;
 } finally {
-  await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await page?.unrouteAll({behavior:'ignoreErrors'}).catch(()=>{}); await browser?.close(); native.kill(); vite.kill();
-  await Promise.all([native, vite].map(child => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise(resolve => child.once('exit', resolve))));
+  await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await page?.unrouteAll({behavior:'ignoreErrors'}).catch(()=>{}); await browser?.close(); if(gatewayMode&&native.exitCode===null&&native.signalCode===null)await writeFile(join(directory,'stop'),'stop');else native.kill(); vite?.kill();
+  await Promise.all([native, vite].filter(Boolean).map(child => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise(resolve => {const timer=setTimeout(()=>child.kill('SIGKILL'),10000);timer.unref();child.once('exit',()=>{clearTimeout(timer);resolve();});})));
 }

@@ -68,3 +68,11 @@ sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格�
 长标签优先使用 `{op:"set_wrapped_text",id:"label-0",text:"..."}`，在默认科学字体下同步换行和尺寸而不是只更新 `text`。可用于普通提案或候选连续修订；自由文本可提供 `max_width`，绑定文字使用原生容器宽度。形状尺寸保持不变，放不下时先明确调整容器/字号，再核对候选；不支持的字体、旋转或复杂连线会失败，不猜测度量。原文保存为 `originalText`，原有绑定、依据与样式保留。
 
 `duplicate` 局部操作支持在待审提案中复用现有完整组件：`{"op":"duplicate","element_ids":["node-0"],"id_prefix":"trialB","dx":300,"dy":0}`。读取候选核对自动展开的成员与新 ID，再请求候选预览，确认内部连接和外部断开符合本轮需求；复制保留原引用与历史计划，不自动验证新实验语境。
+
+`propose` / `revise_proposal` 的 `sync_inset_region` 操作用于源图变换后重新定位固定快照的区域框和引导线，不刷新放大内容。指定完整放大图的锚点或图片 ID；以记录的原始裁剪像素及源文件 SHA-256 校验定位，保留快照、引用和图像字节。源文件变化、区域被裁掉、成员不完整/锁定、旋转面板或复杂引导线会拒绝，应核对并选择显式刷新或原生编辑。该操作生成待审候选，不启用自动跟随。
+
+
+`save_plan` 优先使用独立的 `planning` 对象参数（message/audience/layout/nodes/edges/assumptions/relationship_note/questions），与任意场景导入的 `document` 联合类型分开，保持嵌套数组的明确 schema。旧 document 兼容，禁止两者同时传入；planning 只能用于 save_plan。数组仍严格验证，不将 item 包装或字符串自动视作数组，未回答问题保存在 questions 中，不能只写入 message。实际 Gateway 模型已用该通道保存 8 个结构化问题。
+
+
+FigureTool 的输入反序列化错误会报告具体字段（例如 `input.markup_ids`），操作解析报告操作下标。`markup_ids` 必须是 JSON 数组；不自动把 `{}`、item 包装或字符串转换成 `[]`。省略字段不代表解除父候选已有的审阅关联，显式 `[]` 才可解除，且不关闭原审阅。18 项工具回归覆盖错误输入无子提案、显式保留/解除关联、父候选和正式版本不变。

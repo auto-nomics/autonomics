@@ -195,6 +195,7 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
           <button
             type="button"
             className="ml-auto shrink-0 opacity-0 transition hover:text-foreground group-hover:opacity-100"
+            aria-label="复制助手回复"
             onClick={() => onCopy(message.text)}
           >
             <Copy className="size-3" />

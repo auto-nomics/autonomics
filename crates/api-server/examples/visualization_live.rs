@@ -26,6 +26,86 @@ use std::{
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
+// Metadata-only audit at the actual model boundary. Never write prompts, keys or image bytes.
+struct RequestAuditClient {
+    inner: Model,
+    file: std::sync::Mutex<std::fs::File>,
+}
+impl RequestAuditClient {
+    fn record(&self, messages: &[agentik_sdk::types::messages::Message]) {
+        let mut images = 0usize;
+        let mut base64_chars = 0usize;
+        for message in messages {
+            for block in &message.content {
+                if let ContentBlock::Image { source } = block {
+                    images += 1;
+                    if let agentik_sdk::types::messages::ImageSource::Base64 { data, .. } = source {
+                        base64_chars += data.len();
+                    }
+                }
+            }
+        }
+        if let Ok(mut file) = self.file.lock() {
+            let _ = writeln!(
+                file,
+                "{}",
+                json!({"messages":messages.len(),"images":images,"base64_chars":base64_chars})
+            );
+        }
+    }
+}
+#[async_trait::async_trait]
+impl agentik_sdk::provider::client::ApiClient for RequestAuditClient {
+    async fn request(
+        &self,
+        messages: Vec<agentik_sdk::types::messages::Message>,
+        tools: Vec<agentik_sdk::types::tools::ToolDefinition>,
+        info: &ModelInfo,
+    ) -> Result<agentik_sdk::types::messages::Message, agentik_sdk::types::errors::AnthropicError>
+    {
+        self.record(&messages);
+        {
+            let mut model = self.inner.clone();
+            model.model_info = info.clone();
+            model.request(messages, &tools).await
+        }
+    }
+    async fn request_stream(
+        &self,
+        messages: Vec<agentik_sdk::types::messages::Message>,
+        tools: Vec<agentik_sdk::types::tools::ToolDefinition>,
+        info: &ModelInfo,
+    ) -> Result<agentik_sdk::streaming::MessageStream, agentik_sdk::types::errors::AnthropicError>
+    {
+        self.record(&messages);
+        {
+            let mut model = self.inner.clone();
+            model.model_info = info.clone();
+            model.request_stream(messages, &tools).await
+        }
+    }
+    async fn request_stream_with_system(
+        &self,
+        messages: Vec<agentik_sdk::types::messages::Message>,
+        tools: Vec<agentik_sdk::types::tools::ToolDefinition>,
+        info: &ModelInfo,
+        system: Option<String>,
+    ) -> Result<agentik_sdk::streaming::MessageStream, agentik_sdk::types::errors::AnthropicError>
+    {
+        self.record(&messages);
+        let mut model = self.inner.clone();
+        model.model_info = info.clone();
+        model
+            .request_stream_with_system(messages, &tools, system)
+            .await
+    }
+    async fn test_connection(&self) -> Result<(), agentik_sdk::types::errors::AnthropicError> {
+        Err(agentik_sdk::types::errors::AnthropicError::Configuration {
+            message: "request audit client does not implement connection probes".into(),
+        })
+    }
+}
+
 fn configured_model(
     path: &Path,
     provider_name: &str,
@@ -241,6 +321,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("live test requires fresh figure database and trace paths".into());
     }
     let (model, secrets) = configured_model(Path::new(&args[0]), &args[1], &args[2])?;
+    let audit = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(Path::new(&args[4]).with_extension("requests.jsonl"))?;
+    let model = Model::with_client(
+        model.model_info.clone(),
+        RequestAuditClient {
+            inner: model,
+            file: std::sync::Mutex::new(audit),
+        },
+    );
     let store = visualization::Store::open(&args[3])?;
     let (tx, rx) = mpsc::unbounded_channel();
     let cancel = CancellationToken::new();

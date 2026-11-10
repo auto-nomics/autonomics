@@ -61,6 +61,7 @@ test-util = [
 ]
 
 [dev-dependencies]
+rusqlite = "0.40.1"
 # Self-reference so `cargo test -p gateway` enables `test-util` for the
 # integration tests too (workspace-wide runs get it via `headless`).
 gateway = { path = ".", features = ["test-util"] }
@@ -75,4 +76,8 @@ workspace = true
 
 [[example]]
 name = "visualization_workflow"
+required-features = ["test-util"]
+
+[[example]]
+name = "visualization_gateway_live"
 required-features = ["test-util"]

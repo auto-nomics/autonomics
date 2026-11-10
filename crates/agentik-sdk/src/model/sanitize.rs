@@ -608,13 +608,17 @@ fn repair_tool_use_adjacency(messages: Vec<Message>) -> Vec<Message> {
                     );
                 }
                 out.push(rebuilt);
+                // The adjacent user message was fully consumed above. Replaying
+                // it in the next iteration duplicates its images/non-result blocks.
+                i += 1;
             }
-            Some(next_msg) => {
+            Some(_next_msg) => {
                 // Next message is Assistant (or other non-User). Insert
                 // a synthetic user message carrying stub results in
                 // tool_use order.
                 out.push(stub_user_message(tool_use_ids));
-                out.push(next_msg);
+                // Let the next iteration handle that assistant exactly once,
+                // including its own tool results if it contains a tool call.
             }
             None => {
                 // Assistant is the last message.
@@ -1712,5 +1716,61 @@ mod tests {
             vec!["tool_result", "text"],
             "coalesced user messages must keep tool_result before text"
         );
+    }
+    #[test]
+    fn adjacency_repair_preserves_each_image_when_later_messages_trigger_sanitizing() {
+        let mut result = user_with_tool_results(&["vision"]);
+        result.content.push(ContentBlock::Image {
+            source: agentik_types::messages::ImageSource::Base64 {
+                media_type: "image/png".into(),
+                data: "fixture-pixels".into(),
+            },
+        });
+        result.content.push(ContentBlock::Text {
+            text: "Inspect the returned candidate".into(),
+        });
+        let mut messages = vec![text_user("draw"), assistant_tool_use("vision"), result];
+        for round in 0..8 {
+            // Each new notification forces a repair of historical tool/result adjacency.
+            messages.push(text_user(&format!("Review round {round}")));
+            messages = sanitize_messages(messages);
+            assert_eq!(
+                messages
+                    .iter()
+                    .flat_map(|m| &m.content)
+                    .filter(|c| matches!(c, ContentBlock::Image { .. }))
+                    .count(),
+                1,
+                "image duplicated in round {round}"
+            );
+            assert_eq!(messages.iter().flat_map(|m|&m.content).filter(|c|matches!(c,ContentBlock::Text{text} if text=="Inspect the returned candidate")).count(),1);
+            assert_eq!(diagnose(&messages).values().sum::<usize>(), 0);
+        }
+        assert_eq!(sanitize_messages(messages.clone()), messages);
+    }
+
+    #[test]
+    fn adjacency_repair_does_not_replay_the_next_assistant_or_its_tool_use() {
+        let messages = vec![
+            text_user("draw"),
+            assistant_tool_use("first"),
+            assistant_tool_use("second"),
+            user_with_tool_results(&["second"]),
+        ];
+        let out = sanitize_messages(messages);
+        let ids: Vec<_> = out
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter_map(|c| {
+                if let ContentBlock::ToolUse { id, .. } = c {
+                    Some(id.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(ids, vec!["first", "second"]);
+        assert_eq!(diagnose(&out).values().sum::<usize>(), 0);
+        assert_eq!(sanitize_messages(out.clone()), out);
     }
 }

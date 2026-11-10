@@ -7,6 +7,7 @@ mod font_metrics;
 pub mod image;
 pub mod inset;
 pub mod inset_refresh;
+mod inset_sync;
 mod layout;
 pub mod markup;
 mod panel_routes;
