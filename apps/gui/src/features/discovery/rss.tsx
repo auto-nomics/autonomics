@@ -111,10 +111,10 @@ export function RssSubscriptions({ active = true }: { active?: boolean }) {
       gatewayRequest("GET", api("/status"), undefined, { signal }),
     ]);
     if (signal.aborted || sequence !== loadSeq.current) return;
-    setFeeds(feedData.feeds as Feed[]);
-    setItems(itemData.items as FeedItem[]);
-    setNext(itemData.next);
-    setScheduler(status.scheduler as SchedulerStatus);
+    setFeeds((feedData.feeds as Feed[] | undefined) ?? []);
+    setItems((itemData.items as FeedItem[] | undefined) ?? []);
+    setNext(itemData.next ?? null);
+    setScheduler((status.scheduler as SchedulerStatus | undefined) ?? null);
   }
   useEffect(() => {
     if (!active) return;
