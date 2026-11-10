@@ -1,4 +1,4 @@
-//! BioArt search and version-checked insertion into shared project figures.
+//! BioArt search and reviewed insertion/replacement in shared project figures.
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::{ToolResult, tools::ToolResultBlock};
@@ -19,7 +19,7 @@ fn missing(field: &str) -> ToolError {
 }
 #[tool(
     name = "bioart",
-    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. replace creates a reviewable proposal while preserving layout, labels and arrow anchors; it does not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and reload the canvas after insertion. For replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Do not infer protein-specific structure or additional mechanism from generic artwork."
+    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. insert and replace create reviewable proposals while preserving layout, labels and arrow anchors; they do not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and review the proposal before adoption. insert appends a standalone image at x/y; use replace for an existing semantic node. For insert or replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Do not infer protein-specific structure or additional mechanism from generic artwork."
 )]
 pub struct Input {
     #[desc = "search | preview | insert | replace"]
@@ -34,9 +34,9 @@ pub struct Input {
     pub figure_id: Option<String>,
     #[desc = "Placeholder, semantic anchor or image object ID; required for replace"]
     pub element_id: Option<String>,
-    #[desc = "Optional pending candidate ID for replace; requires document_sha256 from visualization read_proposal. Creates a child candidate, preserving the parent."]
+    #[desc = "Optional pending candidate ID for insert/replace; requires document_sha256 from visualization read_proposal. Creates a child candidate, preserving the parent."]
     pub proposal_id: Option<String>,
-    #[desc = "Exact parent candidate document_sha256; use only with proposal_id on replace"]
+    #[desc = "Exact parent candidate document_sha256; use only with proposal_id on insert/replace"]
     pub document_sha256: Option<String>,
     #[desc = "Explicit review IDs to retain/address; [] explicitly drops links; omission rejects a candidate with open linked reviews"]
     pub markup_ids: Option<Vec<String>>,
@@ -61,6 +61,16 @@ impl ToolFunction for BioArtTool {
             input.markup_ids.as_deref(),
         )
         .map_err(missing)?;
+        if input.action == "replace" && (input.x.is_some() || input.y.is_some()) {
+            return Err(missing(
+                "replace preserves current placement; omit x/y. Use visualization revise_proposal set_image_geometry to move or resize a standalone image",
+            ));
+        }
+        if input.action == "insert" && input.element_id.is_some() {
+            return Err(missing(
+                "insert creates a new image at x/y; omit element_id or use replace for an existing object",
+            ));
+        }
         let client = bioart::BioArtClient::new().map_err(error)?;
         if input.action == "search" {
             let query = input.query.ok_or_else(|| missing("query required"))?;
@@ -167,13 +177,21 @@ fn persist_asset(
         y,
     } = placement;
 
-    let mut store = visualization::Store::open(path).map_err(error)?;
+    let store = visualization::Store::open(path).map_err(error)?;
     let metadata = store.get(&project, &figure).map_err(error)?;
     if metadata.revision != revision {
         return Err(error(visualization::Error::Conflict));
     }
 
-    let summary = format!("Replace placeholder with {}", asset.asset.title);
+    let summary = format!(
+        "{} BioArt {}",
+        if replacement {
+            "Replace with"
+        } else {
+            "Insert"
+        },
+        asset.asset.title
+    );
     let image = visualization::image::Image {
         file_id: &asset.sha256,
         data_url: &asset.data_url,
@@ -182,22 +200,42 @@ fn persist_asset(
         provenance: json!({"source":"NIH BioArt","asset":asset.asset,"file":asset.file,"sha256":asset.sha256}),
     };
     if let (Some(parent_id), Some(hash)) = (&proposal_id, &document_sha256) {
-        let (proposal, element_id) = visualization_assets::candidate::replace(
-            &store,
-            &project,
-            &figure,
-            revision,
-            visualization_assets::candidate::Replacement {
-                parent_id,
-                parent_document_sha256: hash,
-                target: element_id
-                    .as_deref()
-                    .ok_or_else(|| missing("element_id required"))?,
-                image,
-                summary: &summary,
-                markup_ids: markup_ids.as_deref(),
-            },
-        )
+        let (proposal, element_id) = if !replacement {
+            visualization_assets::candidate::insert(
+                &store,
+                &project,
+                &figure,
+                revision,
+                visualization_assets::candidate::Insertion {
+                    reference: visualization_assets::candidate::Reference {
+                        proposal_id: parent_id,
+                        document_sha256: hash,
+                    },
+                    image,
+                    x,
+                    y,
+                    summary: &summary,
+                    markup_ids: markup_ids.as_deref(),
+                },
+            )
+        } else {
+            visualization_assets::candidate::replace(
+                &store,
+                &project,
+                &figure,
+                revision,
+                visualization_assets::candidate::Replacement {
+                    parent_id,
+                    parent_document_sha256: hash,
+                    target: element_id
+                        .as_deref()
+                        .ok_or_else(|| missing("element_id required"))?,
+                    image,
+                    summary: &summary,
+                    markup_ids: markup_ids.as_deref(),
+                },
+            )
+        }
         .map_err(error)?;
         return Ok(
             json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending","parent_proposal_id":proposal.parent_proposal_id,"parent_document_sha256":proposal.parent_document_sha256,"document_sha256":proposal.document_sha256}),
@@ -227,10 +265,19 @@ fn persist_asset(
     }
     let (document, element_id) =
         visualization::image::insert(&current.document, image, x, y).map_err(error)?;
-    let saved = store
-        .save(&project, &figure, revision, &metadata.title, &document)
+    let proposal = store
+        .propose_with_markups(
+            &project,
+            &figure,
+            revision,
+            &summary,
+            &document,
+            markup_ids.as_deref().unwrap_or(&[]),
+        )
         .map_err(error)?;
-    Ok::<_, ToolError>(json!({"figure":saved,"element_id":element_id}))
+    Ok(
+        json!({"proposal_id":proposal.id,"figure_id":figure,"base_revision":revision,"element_id":element_id,"summary":summary,"status":"pending","document_sha256":proposal.document_sha256}),
+    )
 }
 #[cfg(test)]
 mod tests {
@@ -320,6 +367,55 @@ mod tests {
         assert_eq!(
             store.revision("p", &figure.id, 1).unwrap().document,
             original
+        );
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        let mut inserted = placement();
+        inserted.replacement = false;
+        inserted.element_id = None;
+        inserted.proposal_id = Some(child.id.clone());
+        inserted.document_sha256 = Some(child.document_sha256.clone());
+        inserted.markup_ids = Some(vec![]);
+        inserted.x = 700.;
+        inserted.y = 440.;
+        let result = persist_asset(path.clone(), inserted, asset.clone()).unwrap();
+        let appended = store
+            .proposal("p", &figure.id, result["proposal_id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            appended.parent_proposal_id.as_deref(),
+            Some(child.id.as_str())
+        );
+        assert_eq!(
+            &appended.document["elements"].as_array().unwrap()
+                [..child.document["elements"].as_array().unwrap().len()],
+            child.document["elements"].as_array().unwrap()
+        );
+        assert_eq!(
+            appended.document["elements"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["x"],
+            700.
+        );
+        assert_eq!(appended.document["files"], child.document["files"]);
+        let mut root_insert = placement();
+        root_insert.replacement = false;
+        root_insert.element_id = None;
+        let root_result = persist_asset(path.clone(), root_insert, asset.clone()).unwrap();
+        assert_eq!(root_result["status"], "pending");
+        assert!(root_result.get("figure").is_none());
+        let root = store
+            .proposal(
+                "p",
+                &figure.id,
+                root_result["proposal_id"].as_str().unwrap(),
+            )
+            .unwrap();
+        assert!(root.parent_proposal_id.is_none());
+        assert_eq!(
+            root.document["elements"].as_array().unwrap().len(),
+            original["elements"].as_array().unwrap().len() + 1
         );
         assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
         store

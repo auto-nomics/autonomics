@@ -1,8 +1,11 @@
+import { runLiveEvidencePlanning } from './helpers/canvas-live-evidence.mjs';
+import { runLiveComposition } from './helpers/canvas-live-compose.mjs';
 // Opt-in real Agent + configured provider + tools + SQLite + GUI integration.
 // Default mode fixtures only the surrounding workbench APIs; gateway mode uses real HTTP/login/SSE.
 // Model responses are never scripted.
 import { chromium } from 'playwright';
 import { runCandidateRevision } from './helpers/canvas-live-candidate.mjs';
+import { runLiveSvgRefinement } from './helpers/canvas-live-svg.mjs';
 import { runLiveIllustrationFit } from './helpers/canvas-live-fit.mjs';
 import { runCandidateMaterialization } from './helpers/canvas-live-materialize.mjs';
 import { runScientificCase } from './helpers/canvas-live-scientific.mjs';
@@ -13,6 +16,9 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const liveEvidence=process.env.VISUALIZATION_LIVE_EVIDENCE==='1';
+const liveCompose=process.env.VISUALIZATION_LIVE_COMPOSE==='1';
+const liveSvg=process.env.VISUALIZATION_LIVE_SVG==='1';
 const liveFit=process.env.VISUALIZATION_LIVE_FIT==='1';
 const fitSource=process.env.VISUALIZATION_LIVE_FIT_SCENE||fileURLToPath(new URL('./fixtures/scientific-egfr-mapk-illustrated.json',import.meta.url));
 const materializationSource=process.env.VISUALIZATION_LIVE_MATERIALIZE_SCENE;
@@ -21,6 +27,9 @@ const scientificCase=process.env.VISUALIZATION_LIVE_SCIENTIFIC;
 const candidateMode=process.env.VISUALIZATION_LIVE_CANDIDATE==='1';
 const gatewayMode=process.env.VISUALIZATION_LIVE_GATEWAY==='1';
 const reviewSource=process.env.VISUALIZATION_LIVE_REVIEW_SCENE, prepareOnly=process.env.VISUALIZATION_LIVE_PREPARE_ONLY==='1';
+assert.ok(!liveEvidence || (gatewayMode&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live evidence requires a separate Gateway evaluation');
+assert.ok(!liveCompose || (gatewayMode&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live composition requires a separate Gateway evaluation');
+assert.ok(!liveSvg || (gatewayMode&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live SVG requires a separate Gateway evaluation');
 assert.ok(!liveFit || (gatewayMode&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live fit requires a separate Gateway evaluation');
 assert.ok(!materializationSource || (gatewayMode&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'materialization requires a separate Gateway evaluation');
 assert.ok(!scientificCase || (gatewayMode&&!reviewSource&&!candidateMode&&!prepareOnly),'scientific case requires an empty Gateway evaluation');
@@ -28,7 +37,7 @@ assert.ok(!candidateMode || (gatewayMode&&reviewSource&&!prepareOnly),'candidate
 assert.ok(!gatewayMode || !prepareOnly, 'gateway mode uses a real configured model');
 assert.ok(!prepareOnly || reviewSource, 'prepare-only requires an explicit saved review scene');
 const provider = process.env.VISUALIZATION_LIVE_PROVIDER, model = process.env.VISUALIZATION_LIVE_MODEL;
-const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||(liveFit?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
+const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||((liveFit||liveSvg||liveCompose||liveEvidence)?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
 assert.ok(prepareOnly || (provider && model), 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
 const config = process.env.VISUALIZATION_LIVE_CONFIG || join(homedir(), '.autonomics/config.db');
 const binary = gatewayMode ? (process.env.VISUALIZATION_LIVE_GATEWAY_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_gateway_live',import.meta.url))) : prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
@@ -108,7 +117,7 @@ try {
       assert.ok(expectedReply.trim(),`production agent ended without final text; stop_reason=${finalAssistant.stop_reason??'missing'}; terminal blocks: ${finalAssistant.content.map(b=>b.type).join(',')}`);
       const displayed=page.locator('[data-agent-workspace]:visible').getByRole('button',{name:'复制助手回复',exact:true}).last();
       await until(async()=>{if(!await displayed.count())return false;await displayed.click();return await page.evaluate(()=>navigator.clipboard.readText())===expectedReply;},'actual final assistant reply matches session history through production SSE');
-      const calls=finished.flatMap(m=>m.content).filter(b=>b.type==='tool_use'&&!oldToolIds.has(b.id)).map(b=>({name:b.name,input:b.input}));assert.ok(calls.length,'actual session records registered tool calls');turns.push({calls});await persist(`turn-${number}.json`,{calls,transport:'production_gateway'});
+      const toolErrors=new Map(finished.flatMap(m=>m.content).filter(b=>b.type==='tool_result').map(b=>[b.tool_use_id,Boolean(b.is_error)]));const calls=finished.flatMap(m=>m.content).filter(b=>b.type==='tool_use'&&!oldToolIds.has(b.id)).map(b=>({name:b.name,input:b.input,is_error:toolErrors.get(b.id)??false}));assert.ok(calls.length,'actual session records registered tool calls');turns.push({calls});await persist(`turn-${number}.json`,{calls,transport:'production_gateway'});
       const redacted=JSON.parse(JSON.stringify(finished,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value));await persist('session-history.json',redacted);
     }
     await until(() => turns.length >= number || errors.length, `live turn ${number} completion`, turnTimeout); assert.deepEqual(errors, []);
@@ -121,7 +130,19 @@ try {
   };
   const normalized = text => text.replace(/\s/g, '');
   const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
-  if(liveFit){
+  if(liveEvidence){
+    const evidence=await runLiveEvidencePlanning({page,call,path,handoff,send,persist,directory,turns,until});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_evidence_planning',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent source planning passed; artifacts=${directory}`);
+  }else if(liveCompose){
+    const evidence=await runLiveComposition({page,call,path,send,persist,directory,turns,until});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_composition',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent composition passed; artifacts=${directory}`);
+  }else if(liveSvg){
+    const evidence=await runLiveSvgRefinement({page,call,path,send,persist,directory,turns,until,source:fitSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_svg_refinement',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent SVG refinement passed; artifacts=${directory}`);
+  }else if(liveFit){
     assert.ok(Number.isSafeInteger(gatewayReady.max_output_tokens)&&gatewayReady.max_output_tokens>0,'rebuild the configured-model host; output-limit metadata is required');
     await persist('fit-model-settings.json',{provider,model,max_output_tokens:gatewayReady.max_output_tokens});
     const evidence=await runLiveIllustrationFit({page,call,path,send,persist,directory,turns,until,source:fitSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
@@ -311,7 +332,7 @@ try {
   }
 } catch (error) {
   await page?.screenshot({ path: join(directory, 'failure.png'), animations: 'disabled' }).catch(() => {});
-  await persist('result.json', { passed: false, case:scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
+  await persist('result.json', { passed: false, case:liveEvidence?'live_evidence_planning':liveCompose?'live_composition':liveSvg?'live_svg_refinement':liveFit?'live_illustration_fit':materializationSource?'candidate_materialization':scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
   console.error(`canvas-live: failed; artifacts=${directory}`); throw error;
 } finally {
   await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await page?.unrouteAll({behavior:'ignoreErrors'}).catch(()=>{}); await browser?.close(); if(gatewayMode&&native.exitCode===null&&native.signalCode===null)await writeFile(join(directory,'stop'),'stop');else native.kill(); vite?.kill();

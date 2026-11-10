@@ -236,3 +236,186 @@ fn open_reviews_require_explicit_retain_or_drop_and_never_resolve_on_refinement(
         "open"
     );
 }
+
+#[test]
+fn standalone_insertions_accumulate_without_replacing_scientific_nodes() {
+    use visualization_assets::candidate::{Insertion, Reference, insert};
+    let (mut store, figure, original) = fixture();
+    let parent = store
+        .propose("p", &figure, 1, "Pending sketch", &original)
+        .unwrap();
+    let add = |parent: &visualization::proposal::Proposal, file_id, x| {
+        insert(
+            &store,
+            "p",
+            &figure,
+            1,
+            Insertion {
+                reference: Reference {
+                    proposal_id: &parent.id,
+                    document_sha256: &parent.document_sha256,
+                },
+                image: image::Image { file_id, ..asset() },
+                x,
+                y: 640.,
+                summary: "Append standalone art",
+                markup_ids: Some(&[]),
+            },
+        )
+        .unwrap()
+    };
+    let (first, first_id) = add(&parent, "first-asset", 30.);
+    let (second, second_id) = add(&first, "second-asset", 360.);
+    assert_ne!(first_id, second_id);
+    assert_eq!(
+        second.parent_proposal_id.as_deref(),
+        Some(first.id.as_str())
+    );
+    assert_eq!(
+        second.parent_document_sha256.as_deref(),
+        Some(first.document_sha256.as_str())
+    );
+    for e in first.document["elements"].as_array().unwrap() {
+        assert_eq!(by_id(&second.document, e["id"].as_str().unwrap()), e);
+    }
+    for e in original["elements"].as_array().unwrap() {
+        assert_eq!(by_id(&second.document, e["id"].as_str().unwrap()), e);
+    }
+    assert_eq!(by_id(&second.document, &first_id)["x"], 30.);
+    assert_eq!(by_id(&second.document, &second_id)["x"], 360.);
+    assert_eq!(by_id(&second.document, &second_id)["y"], 640.);
+    assert_eq!(
+        by_id(&second.document, &second_id)["customData"],
+        asset().provenance
+    );
+    assert_eq!(second.document["files"].as_object().unwrap().len(), 2);
+    for (id, file) in first.document["files"].as_object().unwrap() {
+        assert_eq!(second.document["files"][id], *file);
+    }
+    assert_eq!(
+        store.proposal("p", &figure, &parent.id).unwrap().document,
+        original
+    );
+    assert_eq!(
+        store.proposal("p", &figure, &first.id).unwrap().document,
+        first.document
+    );
+    assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
+    store.accept_proposal("p", &figure, &second.id).unwrap();
+    assert_eq!(
+        store.revision("p", &figure, 2).unwrap().document,
+        second.document
+    );
+}
+#[test]
+fn candidate_insertion_conflicts_and_invalid_geometry_never_fall_back_or_write() {
+    use visualization_assets::candidate::{Insertion, Reference, insert};
+    let (store, figure, original) = fixture();
+    let parent = store
+        .propose("p", &figure, 1, "Pending", &original)
+        .unwrap();
+    for (project, revision, hash, x) in [
+        ("other", 1, parent.document_sha256.as_str(), 0.),
+        ("p", 2, parent.document_sha256.as_str(), 0.),
+        ("p", 1, "wrong hash", 0.),
+        ("p", 1, parent.document_sha256.as_str(), f64::NAN),
+        ("p", 1, parent.document_sha256.as_str(), 2e6),
+    ] {
+        assert!(
+            insert(
+                &store,
+                project,
+                &figure,
+                revision,
+                Insertion {
+                    reference: Reference {
+                        proposal_id: &parent.id,
+                        document_sha256: hash
+                    },
+                    image: asset(),
+                    x,
+                    y: 0.,
+                    summary: "Invalid",
+                    markup_ids: None,
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(store.proposals("p", &figure).unwrap().len(), 1);
+    }
+    store.reject_proposal("p", &figure, &parent.id).unwrap();
+    assert!(
+        insert(
+            &store,
+            "p",
+            &figure,
+            1,
+            Insertion {
+                reference: Reference {
+                    proposal_id: &parent.id,
+                    document_sha256: &parent.document_sha256
+                },
+                image: asset(),
+                x: 0.,
+                y: 0.,
+                summary: "Invalid",
+                markup_ids: None,
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
+    assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
+    assert_eq!(store.proposals("p", &figure).unwrap().len(), 1);
+}
+#[test]
+fn candidate_insertion_requires_explicit_open_review_decision() {
+    use visualization_assets::candidate::{Insertion, Reference, insert};
+    let (store, figure, original) = fixture();
+    let ink = [visualization::markup::Stroke {
+        kind: visualization::markup::Kind::Cross,
+        points: vec![[0., 0.], [10., 10.]],
+    }];
+    let review = store
+        .create_markup("p", &figure, 1, "Add artwork", &ink, asset().data_url)
+        .unwrap();
+    let links = [review.id.clone()];
+    let parent = store
+        .propose_with_markups("p", &figure, 1, "Linked", &original, &links)
+        .unwrap();
+    let add = |ids: Option<&[String]>| {
+        insert(
+            &store,
+            "p",
+            &figure,
+            1,
+            Insertion {
+                reference: Reference {
+                    proposal_id: &parent.id,
+                    document_sha256: &parent.document_sha256,
+                },
+                image: asset(),
+                x: 0.,
+                y: 0.,
+                summary: "Append",
+                markup_ids: ids,
+            },
+        )
+    };
+    assert!(add(None).is_err());
+    assert!(add(Some(&["missing".into()])).is_err());
+    assert_eq!(store.proposals("p", &figure).unwrap().len(), 1);
+    assert!(add(Some(&[])).unwrap().0.review_markups.is_empty());
+    let retained = add(Some(&links)).unwrap().0;
+    assert_eq!(retained.review_markups[0].id, review.id);
+    assert_eq!(retained.review_markups[0].status, "open");
+    assert_eq!(
+        store
+            .proposal("p", &figure, &parent.id)
+            .unwrap()
+            .review_markups[0]
+            .status,
+        "open"
+    );
+    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
+}

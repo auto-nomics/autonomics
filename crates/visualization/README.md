@@ -752,3 +752,69 @@ BioArt/BioIcons `replace` 已支持以待审候选 ID 和精确哈希创建子�
 运行时新增截断错误处理：显式 max_tokens 响应记为失败，保留部分响应及用量，不执行该截断响应中的工具调用，不自动重复同一请求。回归覆盖仅推理、部分文字、完整工具块后截断三种响应，均只发出一次 Failed/Done，且无工具执行事件。运行时库 140 项测试通过、2 项忽略，SVG parts 7 项回归、修改库的严格 Clippy 及两个宿主检查通过。真实测试遇到 Error/Cancelled 会立即保存历史与终态，不再等待成 Idle；本案例观察窗口默认 15 分钟，可用 `VISUALIZATION_LIVE_TURN_TIMEOUT_MS` 调整，不改变生产请求上限。
 
 边界审计格式：`fit-coverage.json` 的 chosen 是归一化 `[x,y,width,height]`，source_stroke_bounds 是归一化 `[left,top,right,bottom]`；两种数组表示不同。`bioicons parts` 的原始 bounds 则使用 canonical SVG 根坐标单位，应按返回的 width/height 转换，不能直接当作 0..1 比例。
+
+### 候选 SVG 连续精化与源素材保留
+
+`VISUALIZATION_LIVE_PROVIDER=minimax VISUALIZATION_LIVE_MODEL=minimax-m3.1-flash-preview npm --prefix apps/gui run test:canvas:svg:live` 使用保存的科学插图，通过候选反馈界面请求整体配色和单路径强调。正式图与待审图预先使用不同配色；验收要求真实 Agent 使用精确候选引用，配色后重新读取子候选路径，再修改局部、检查最终配色及 PNG。脚本还核对父候选、科学标签/证据/绑定、布局和来源许可保留，最后经 GUI 采用并比较源文件。
+
+原生序列化会筛除未被当前图像实例引用的文件；这些文件可能仍由素材修改记录引用。画布保存和源文件导出现在保留加载图稿中的历史文件，当前实例则使用原生序列化后的内容。`npm --prefix apps/gui run test:canvas:source-files` 无须模型，验证配色提案采用、源文件导出、普通保存和重载均保留原始 SVG、修改后的 SVG 及来源记录。此行为不将原始素材重新放回画布，也不改变 PNG/SVG 的可见图形。
+
+2026-11-10 实际 Gateway/模型案例通过：`/tmp/autonomics-canvas-live-DtwfQm/result.json`，MiniMax m3.1 flash，16 次工具调用。Agent 在绿色候选上生成深蓝子候选，重新读取路径后将一条路径填充改为橙色，再检查最终配色与独立 PNG；父候选及正式图保持不变，GUI 采用和源文件导出验证通过，全部 4 份 SVG 文件保留。唯一工具错误为测试 Agent 未启用的记忆工具；不据此声称跨模型稳定性或广泛科学内容正确性。无模型的文件保留回归通过于 `/tmp/autonomics-source-files-NzTpIL/result.json`。首轮真实案例 `/tmp/autonomics-canvas-live-0ZHAFi` 因原生导出筛除历史文件而未通过，促成了上述修复；不计作通过案例。
+
+### 审阅候选中的任意对象
+
+候选预览左侧的“核对候选对象”支持按文字、类型、对象 ID 或已有 `scientificId` 搜索，包括本轮没有变化的对象。选择后两侧预览同时定位；未出现在某版本中的对象明确显示缺失。列表每次最多显示 200 个匹配项并标出总量，当前定位对象在搜索过滤后仍保持可见。
+
+准备反馈时重新核对候选和正式基础版本，`focused_object_context` 分别包含 `candidate` 与当前 `comparison` 的有界对象摘要，复用正式画布的选中对象上下文格式。不把对照中的对象补入候选，不将摘要作为完整文档或素材；完整候选 ID/哈希仍随反馈传递。用户可先检查 Agent 草稿，再自行发送。
+
+`npm --prefix apps/gui run test:canvas:candidate-focus` 使用实际 HTTP/SQLite 和原生预览验证未改动对象、候选新增对象以及对照独有对象的定位和反馈。工作台 Agent 信息为测试夹具，不调用模型；正式图和父候选保持不变，发送计数为零。2026-11-10 通过记录：`/tmp/autonomics-candidate-focus-QfEZzm/result.json`。
+
+### 在候选中连续添加素材
+
+BioArt/BioIcons 的 Agent `insert` 可在待审图上追加独立素材，传入父候选 ID、精确文档哈希、基础版本、`markup_ids` 与场景 `x/y`。使用 `replace` 更新已有节点外观；`insert` 不接受目标 `element_id`，不暗中推断生物关系。每次追加返回新的候选及图片 ID，前序对象和素材保留，用户采用前正式图不变。
+
+BioArt Agent 插入已从直接保存改为待审提案，返回 `proposal_id` 而非旧的 `figure` 结果，需由用户审阅采用，与 BioIcons 一致。人工目录面板的交互沿用原有流程。
+
+`npm --prefix apps/gui run test:canvas:candidate-insert:catalog` 是需要网络的显式目录回归，不调用模型。它从仓库图稿中声明的 BioIcons 素材 ID 通过真实注册工具下载并连续插入两个独立实例，验证累计说明/原对象与许可、祖先和正式版本隔离、独立候选 PNG、GUI 采用、源文件导出及重载。2026-11-10 通过：`/tmp/autonomics-candidate-insert-mDlU3U/result.json`。这证明同素材多实例构图通道，不证明 Agent 选择不同素材的科学适配性；PNG/BioArt 适配器与核心层的独立插入/多文件及失败隔离另由 Rust 回归覆盖。
+
+### 独立图片的类型化位置与尺寸
+
+`set_image_geometry` 操作接受 `id`、数值 `x/y/width/height`，供 `propose` / `revise_proposal` 移动和缩放独立图片。尺寸是场景宽高，不是原生 `scale` 镜像字段。操作保留角度、裁剪、镜像、文件字节、来源许可及无关对象。拒绝锁定/已删除图片、语义素材归属、放大图成员及正向/反向绑定；这些组件需使用对应操作或原生编辑。字段非法时整批操作不提交；工具指出错误下标/几何字段，不将引号字符串自动转成数字。
+
+真实多素材构图评估入口：`VISUALIZATION_LIVE_PROVIDER=minimax VISUALIZATION_LIVE_MODEL=minimax-m3.1-flash-preview npm --prefix apps/gui run test:canvas:composition:live`。测试提供已声明的细胞培养→显微观察概念流程及范围说明，要求模型检索/预览两个不同 BioIcons 素材、沿同一候选链插入，检查中间/最终 PNG，保持原有对象并分别居中、避免覆盖。它不是模型自主生成实验条件或检索科学机制的验证。首轮 `/tmp/autonomics-canvas-live-dRiv4J` 未通过：数值字符串导致通用 update 失败，后续对齐使图片重叠并留下多条候选分支，促成了类型化几何操作。保留该失败，不计作通过。
+
+2026-11-10 多素材真实 Gateway 回归通过：`/tmp/autonomics-canvas-live-xD0oNf/result.json`。MiniMax m3.1 flash 自主检索/预览并选用 Servier 的 `petri-dish-top-red` 与 `microscope`（均 CC-BY-3.0），连续插入同一候选链，再通过 `set_image_geometry` 调整新图片尺寸与中心位置。原有对象和科学范围说明逐字段保留，图片分别位于对应流程下方且不相交，中间与最终独立 PNG、GUI 采用和源文件一致性均验证。26 次工具调用中仅两次记忆工具因测试环境禁用而失败，绘图/素材调用没有错误。已查看最终 PNG；该单例不证明多主题稳定性、实验参数正确性或交互延迟已达标。
+
+第二次运行 `/tmp/autonomics-canvas-live-jrsZlx` 在测试驱动的中间预览断言处停止：模型先预览单图子候选，再调整位置后继续插入，驱动原先误要求预览恰好对应第二次插入的直接父版本。现核验两次插入之间确有已成功查看的单图候选，且其位于第二次插入的同一祖先链上；不能以无关或旧分支预览充数。保留该次未完成验收记录，最终通过来自上述新的完整运行。
+
+### 独立图片原位换源
+
+对独立图片执行 BioArt/BioIcons `replace` 现在保留 image 类型及对象 ID，不再把图片转换成透明锚点并另建图片。保持画布位置/尺寸、旋转、镜像、透明度、分组、框架及绑定，原裁剪按新素材尺寸保留归一化区域。画布视口保持不变；这不保证新旧素材的生物学区域对应，也不强制改变原视口去适配新素材的长宽比，须审阅候选图。
+
+用户自定义备注保留，当前作者/许可/来源改为新素材。`customData.asset_replacements` 记录旧文件与旧来源字段、旧路径修改记录、新文件和裁剪策略；旧版权字段不混入新素材信息，历史不递归嵌套，原始文件仍在场景中保存。锁定图片、非法裁剪、不可解释的历史和不一致语义归属报错。已有语义锚点的插图替换仍沿用原布局槽逻辑，此处不扩大其变换兼容性声明。`replace` 的 `x/y` 明确拒绝，位置/尺寸修改使用 `set_image_geometry`，不再默默忽略。
+
+`npm --prefix apps/gui run test:canvas:standalone-replace:catalog` 使用真实 BioIcons 工具将旋转、镜像、裁剪过的独立 SVG 换成另一份源尺寸不同的素材，核对父候选及正式图隔离、原图对象不变、归一化裁剪和来源历史、独立 PNG、GUI 采用、原生保存/导出/重载。该测试不调用模型；2026-11-10 通过记录：`/tmp/autonomics-standalone-replace-kkyPcI/result.json`，已查看最终 PNG。核心回归另覆盖未裁剪图片、连续换源及拒绝后原文档不变。
+
+### 导出的历史素材归属
+
+素材来源 JSON，以及 SVG/PNG 内嵌来源元数据，新增每个当前素材的 `replacement_history`。当前 `authors`、`licenses` 和 `credits` 继续只描述当前显示的素材；历史来源独立记录，不增加当前素材实例或混合旧许可。每条历史导出前后文件 ID、裁剪策略、旧来源的白名单作者/许可/URL/修改信息，以及旧文件和换源结果文件的实际 SHA-256 与可用状态。记录哈希不匹配明确为 false，缺失或不能比较为 null；只有内容哈希形式的文件 ID 才比较 `hash_matches_file_id`。文件字节相符不证明来源或版权真实性，`verification` 明确为 `not_verified`。
+
+历史只导出最近 50 条，保留原始索引、起始索引、总条数与截断标志；非数组或异常条目明确标出 unsupported，不静默当成完整空历史。私人备注、任意嵌套元数据、递归历史和图片字节不进入来源清单，完整记录仍在原始源文档中。
+
+`npm --prefix apps/gui run test:canvas:sources` 覆盖当前/历史归属分离、旧文件缺失及篡改、结果文件状态、截断和异常格式、私有字段排除及 PNG 传输。`test:canvas:standalone-replace:catalog` 另验证真实替换后的三种下载元数据一致性、保存和重载；2026-11-10 通过记录：`/tmp/autonomics-standalone-replace-o8Os5e/result.json`，来源文件为同目录 `source-manifest.json`。这不是文献真实性、科学支持或版权权属的验证。
+
+### 候选中的素材来源与变换核对
+
+在候选对象列表选择图片或其相互对应的语义锚点后，可展开“核对所选素材的来源与变换”。两栏分别展示当前对照快照与候选快照的名称、作者、许可、近似画布边界、旋转、镜像、相对裁剪区域、文件核对及最近换源记录。可继续切换正式版本/父候选对照；焦点或对照变化时旧异步结果不会用于新快照。不存在的对象、没有关联素材及不一致归属分开处理，不将其他图片补入当前对象。
+
+面板只读且按需读取，只检查所选图片；复用 `inspectAssetSource` 与导出的白名单和文件哈希逻辑，不序列化整份场景，不展示任意私人备注或图片字节。历史与当前作者/许可分开，界面最多显示最近五条历史；记录与权属/科学适配性的核验仍明确区分。图片没有记录镜像或裁剪不完整时展示无法解释，不猜测默认状态。
+
+`npm --prefix apps/gui run test:canvas:asset-review` 覆盖显式/相互对应归属、缺失/已删除对象、异常几何、审阅与导出来源一致性及私人字段排除。真实目录/原生回归 `test:canvas:standalone-replace:catalog` 覆盖双方来源、裁剪和镜像、对照切换、焦点切换无旧值、正式图及父候选不变，随后完成采用/保存/三格式导出；2026-11-10 通过于 `/tmp/autonomics-standalone-replace-nitu5E/result.json`，界面截图为同目录 `review.png`。本例不调用模型。
+
+### 科学来源读取通道
+
+Runtime 绘图工具集合新增只读 `figure_evidence`，复用 Reactome SDK。Agent 可先 search 检索通路/反应，再 record 读取实际来源记录，跟随相关事件、实体和文献 ID；返回物种、推断标志、机制说明、实际输入/输出等有限投影，以及来源 URL、检索时间和检索记录 JSON 指纹。搜索结果不是关系证据，字段省略/截断与 `verification:not_verified` 明确保留；不写入计划、画布或提案，也不代替用户审阅。Reactome 的数字引用及重复参与者保留，不能把重复项随意去重后推断化学计量。
+
+实测修复了 SDK 的搜索返回兼容性：当前接口按 results[].entries 分组且 dbId 为字符串，旧解析器按扁平数值结构读取会失败；现在兼容两种结构。协议测试覆盖分组结果、机制说明与原始 JSON 指纹、反应参与者/文献、物种与推断标志、非法参数拒绝及不创建画布数据库。还覆盖有界投影和 HTML 高亮清理，并保持文本中的数学比较符号。
+
+2026-11-10 正式注册工具的实际联网搜索、通路及反应记录读取通过，记录为 `/tmp/figure-evidence-live-search.json`、`/tmp/figure-evidence-live-record.json`、`/tmp/figure-evidence-live-reaction.json`；对应官方记录：[Interferon gamma signaling](https://reactome.org/content/detail/R-HSA-877300)、[Phosphorylation of STAT1 by JAK kinases](https://reactome.org/content/detail/R-HSA-873922)。工具 21 项库测试、Reactome SDK 非联网回归、严格 Clippy 和 Runtime 编译检查通过。现有 SDK 的 4 项联网集成测试默认仍忽略，此处只声明上述显式实测。真实 Agent 的自主检索→范围澄清→有据计划与图稿的完整验收仍待完成，不把来源可读视为科学理解已经验证。

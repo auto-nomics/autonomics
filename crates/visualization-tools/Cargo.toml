@@ -15,6 +15,9 @@ visualization = { path = "../visualization" }
 visualization-assets = { path = "../visualization-assets" }
 bioart = { path = "../bioart" }
 bioicons = { path = "../bioicons" }
+reactome = { path = "../reactome" }
+chrono.workspace = true
+sha2 = "0.10"
 base64 = "0.23"
 serde.workspace = true
 serde_json.workspace = true

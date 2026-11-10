@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 fn horizontal() -> sketch::Layout {
     sketch::Layout::Horizontal
 }
+fn blocking_by_default() -> bool {
+    true
+}
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Question {
@@ -13,6 +16,9 @@ pub struct Question {
     pub question: String,
     #[serde(default)]
     pub answer: String,
+    /// False only for optional preferences; missing scientific scope remains blocking.
+    #[serde(default = "blocking_by_default")]
+    pub blocking: bool,
 }
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -103,7 +109,9 @@ impl Brief {
             );
         }
         for question in &self.questions {
-            if question.question.trim().is_empty() || question.answer.trim().is_empty() {
+            if question.question.trim().is_empty()
+                || question.blocking && question.answer.trim().is_empty()
+            {
                 add(
                     &format!("question:{}", question.id),
                     "还有待澄清的问题，请填写问题与答案。",
@@ -353,6 +361,7 @@ mod tests {
                 id: "receptor".into(),
                 question: "Which receptor should be shown?".into(),
                 answer: String::new(),
+                blocking: true,
             }],
             ..Brief::default()
         };
@@ -448,7 +457,8 @@ mod tests {
             Question {
                 id: "q".into(),
                 question: "Why?".into(),
-                answer: "".into()
+                answer: "".into(),
+                blocking: true,
             };
             2
         ];

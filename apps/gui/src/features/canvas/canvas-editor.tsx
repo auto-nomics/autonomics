@@ -25,6 +25,7 @@ import { CanvasProposals } from "./canvas-proposals";
 import { CanvasAgentPanel } from "./canvas-agent-panel";
 import { BioIconsPanel } from "./bioicons-panel";
 import { BioArtPanel } from "./bioart-panel";
+import { preserveSourceFiles } from "./canvas-source-files";
 import { readCanvas, saveCanvas } from "./canvas-store";
 
 function download(blob: Blob, name: string) {
@@ -42,6 +43,8 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const revision = useRef<number | undefined>(undefined);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const baseline = useRef<string | null>(null);
+  const sourceFiles = useRef<Record<string, unknown>>({});
+  const serializeScene = (...args: Parameters<typeof serializeAsJSON>) => preserveSourceFiles(serializeAsJSON(...args), sourceFiles.current);
   const pointerSubscription=useRef<(()=>void)|undefined>(undefined);
   const stopProtectedPointer=useRef<(()=>void)|undefined>(undefined);
   useEffect(()=>()=>{pointerSubscription.current?.();stopProtectedPointer.current?.();},[]);
@@ -72,6 +75,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       if (cancelled) return;
       revision.current = record.revision;
       titleRef.current = record.title; latestTitle.current = record.title; setTitle(record.title);
+      sourceFiles.current = record.scene ? JSON.parse(record.scene).files ?? {} : {};
       setInitial(record.scene ? { ...JSON.parse(record.scene), scrollToContent: true } : { appState: { currentItemRoughness: 0, currentItemFontFamily: 9, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } });
       setLoaded(true);
     }).catch(cause => { if (!cancelled) setError(String(cause)); });
@@ -87,7 +91,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     if (!instance || saving.current) return false;
     if (instance.getSceneElements().some(element => element.type === "image" && (!element.fileId || !instance.getFiles()[element.fileId]))) { setError("图片仍在载入，请稍后保存"); return false; }
     saving.current = true; setBusy(true); setError("");
-    const scene = serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local");
+    const scene = serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local");
     const savedTitle = title.trim() || "未命名画布";
     dirty(true);
     try {
@@ -95,18 +99,18 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       baseline.current = scene; titleRef.current = savedTitle;
       setTitle(savedTitle); latestTitle.current = savedTitle;
       saving.current = false;
-      const current = serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local");
+      const current = serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local");
       dirty(current !== scene);
       return true;
     } catch (cause) { setError(`保存失败：${String(cause)}`); return false; }
-    finally { saving.current = false; setBusy(false); if (api.current) { const current = serializeAsJSON(api.current.getSceneElements(), api.current.getAppState(), api.current.getFiles(), "local"); dirty(current !== baseline.current || latestTitle.current !== titleRef.current); } }
+    finally { saving.current = false; setBusy(false); if (api.current) { const current = serializeScene(api.current.getSceneElements(), api.current.getAppState(), api.current.getFiles(), "local"); dirty(current !== baseline.current || latestTitle.current !== titleRef.current); } }
   }
   async function capturePreview() {
     const instance = api.current; if (!instance || !projectId || revision.current === undefined || saving.current) return false;
     const version = revision.current;
     const elements = instance.getSceneElements(); if (!elements.length) return false;
     const appState = instance.getAppState(), files = instance.getFiles();
-    const observed = serializeAsJSON(elements, appState, files, "local");
+    const observed = serializeScene(elements, appState, files, "local");
     if (observed !== baseline.current) throw new Error("请先保存画布再生成预览。");
     setBusy(true);
     try {
@@ -114,7 +118,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       let blob = await render(1280);
       if (blob.size > 4.4 * 1024 * 1024) blob = await render(1024);
       const dataURL = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
-      if (version !== revision.current || serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== observed) throw new Error("生成预览时画布发生变化，请重新保存并交接。");
+      if (version !== revision.current || serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== observed) throw new Error("生成预览时画布发生变化，请重新保存并交接。");
       await gatewayRequest("PUT", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(id)}/revisions/${version}/preview`, { dataURL });
       return true;
     } finally { setBusy(false); }
@@ -125,7 +129,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     try {
       const state = instance.getAppState(), appState = { ...state, frameRendering: { ...state.frameRendering } };
       // Export the serialized snapshot: runtime provenance and renderer caches stay local.
-      const scene = serializeAsJSON(instance.getSceneElements(), appState, instance.getFiles(), "local"), exportTitle = title;
+      const scene = serializeScene(instance.getSceneElements(), appState, instance.getFiles(), "local"), exportTitle = title;
       const snapshot = JSON.parse(scene) as {elements: ReturnType<ExcalidrawImperativeAPI["getSceneElements"]>;files: ReturnType<ExcalidrawImperativeAPI["getFiles"]>};
       const {elements,files} = snapshot;
       if (format === "excalidraw") { download(new Blob([scene], { type: "application/json" }), `${exportTitle}.excalidraw`); return; }
@@ -137,7 +141,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   }
   const hasUnsavedChanges = () => {
     const instance = api.current;
-    return saving.current || !instance || serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current;
+    return saving.current || !instance || serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current;
   };
   async function ensureSaved() {
     if (saving.current) return false;
@@ -180,7 +184,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       <Button size="sm" variant={panel === "bioicons" ? "secondary" : "outline"} aria-expanded={panel === "bioicons"} onClick={() => selectPanel("bioicons")}>矢量素材</Button>
       {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
         const instance = api.current;
-        const changed = instance && (serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
+        const changed = instance && (serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
         if (!changed || window.confirm("重新加载将丢弃未保存修改，继续？")) onReload();
       }}>重新加载服务端版本</Button>}
       <Button size="sm" disabled={!loaded || busy || !imagesReady} onClick={() => void save()}>{busy ? "保存中…" : !imagesReady ? "图片载入中…" : "保存画布"}</Button>
@@ -230,7 +234,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
           }
         }
         setImagesReady(elements.every(element => element.isDeleted || element.type !== "image" || Boolean(element.fileId && files[element.fileId])));
-        const scene = serializeAsJSON(elements, appState, files, "local");
+        const scene = serializeScene(elements, appState, files, "local");
         if (baseline.current === null) { baseline.current = scene; dirty(false, elements.filter(element => !element.isDeleted).length, Object.keys(files).length); return; }
         const nextDirty = scene !== baseline.current || title !== titleRef.current;
         const previous = editor.state as { dirty?: boolean; objectCount?: number; selectedObjectIds?: string; selectedObjects?: string; selectedObjectsTotal?: number; selectedObjectsTruncated?: boolean; imageFileCount?: number } | null;

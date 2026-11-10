@@ -133,7 +133,7 @@ pub struct SearchResult {
     pub number_of_matches: u64,
     #[serde(rename = "rowCount", default)]
     pub row_count: u64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "search_entries")]
     pub results: Vec<SearchEntry>,
     #[serde(default)]
     pub facets: Vec<serde_json::Value>,
@@ -142,9 +142,9 @@ pub struct SearchResult {
 /// A single search hit.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchEntry {
-    #[serde(rename = "dbId")]
+    #[serde(rename = "dbId", deserialize_with = "search_db_id")]
     pub db_id: u64,
-    #[serde(rename = "displayName")]
+    #[serde(rename = "displayName", alias = "name")]
     pub display_name: Option<String>,
     #[serde(rename = "stId")]
     pub stable_id: Option<String>,
@@ -156,6 +156,37 @@ pub struct SearchEntry {
     pub species: Vec<serde_json::Value>,
     #[serde(default)]
     pub compartment: Option<String>,
+}
+
+// Content Service search groups hits under results[].entries, and encodes
+// search dbId as a string. Preserve the SDK's flat hit interface for callers.
+fn search_db_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .ok_or_else(|| {
+            serde::de::Error::custom("search dbId must be an unsigned integer or numeric string")
+        })
+}
+fn search_entries<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SearchEntry>, D::Error> {
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut hits = Vec::new();
+    for value in values {
+        if let Some(entries) = value.get("entries") {
+            let entries = entries
+                .as_array()
+                .ok_or_else(|| serde::de::Error::custom("search group entries must be an array"))?;
+            for entry in entries {
+                hits.push(serde_json::from_value(entry.clone()).map_err(serde::de::Error::custom)?);
+            }
+        } else {
+            hits.push(serde_json::from_value(value).map_err(serde::de::Error::custom)?);
+        }
+    }
+    Ok(hits)
 }
 
 // ===========================================================================

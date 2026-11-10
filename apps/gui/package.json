@@ -30,6 +30,7 @@
     "test:canvas:text-overlaps": "node tests/canvas-text-overlaps.mjs",
     "test:canvas:native-copy": "node tests/canvas-native-duplicate.mjs",
     "test:canvas:selection": "node tests/canvas-selection-context.mjs",
+    "test:canvas:asset-review": "node tests/canvas-asset-review.mjs",
     "test:canvas:sources": "node tests/canvas-sources.mjs",
     "test:canvas:review:prepare": "cargo build -p api-server --example visualization_native && VISUALIZATION_LIVE_PREPARE_ONLY=1 node tests/canvas-live.mjs",
     "test:canvas:live": "cargo build -p api-server --example visualization_live && node tests/canvas-live.mjs",
@@ -61,6 +62,12 @@
     "test:canvas:scientific:contract": "cargo build -p api-server --example visualization_native && node tests/canvas-scientific-contract.mjs",
     "test:canvas:materialize:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_MATERIALIZE=1 node tests/canvas-live.mjs",
     "test:canvas:illustration-fit": "cargo build -p api-server --example visualization_native && node tests/canvas-illustration-fit.mjs",
+    "test:canvas:standalone-replace:catalog": "cargo build -p api-server --example visualization_native && node tests/canvas-standalone-replace.mjs",
+    "test:canvas:candidate-insert:catalog": "cargo build -p api-server --example visualization_native && node tests/canvas-candidate-insert.mjs",
+    "test:canvas:candidate-focus": "cargo build -p api-server --example visualization_native && node tests/canvas-candidate-focus.mjs",
+    "test:canvas:source-files": "cargo build -p api-server --example visualization_native && node tests/canvas-source-files.mjs",
+    "test:canvas:composition:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_COMPOSE=1 node tests/canvas-live.mjs",
+    "test:canvas:svg:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_SVG=1 node tests/canvas-live.mjs",
     "test:canvas:illustration-fit:live": "cargo build -p gateway --features test-util --example visualization_gateway_live && VISUALIZATION_LIVE_GATEWAY=1 VISUALIZATION_LIVE_FIT=1 node tests/canvas-live.mjs"
   },
   "dependencies": {

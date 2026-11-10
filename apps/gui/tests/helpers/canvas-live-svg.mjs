@@ -1,0 +1,50 @@
+// Unscripted configured Agent: refine pending SVG through actual candidate feedback.
+import assert from 'node:assert/strict';
+import {readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {currentCandidateLeaf} from './canvas-live-scientific.mjs';
+const byId=(doc,id)=>doc.elements.find(e=>e.id===id);
+const content=elements=>elements.map(e=>Object.fromEntries(Object.entries(e).filter(([k])=>!['index','version','versionNonce','updated'].includes(k)&&!(k==='lastCommittedPoint'&&e[k]===null))));
+export async function runLiveSvgRefinement({page,call,path,send,persist,directory,turns,until,source}) {
+  const input=JSON.parse(await readFile(source,'utf8')),document=input.scene?.document??input.document??input;
+  const anchor=document.elements.find(e=>e.customData?.scientificId==='egfr'),image=byId(document,anchor?.customData?.visualAssetElementId);assert.equal(image?.type,'image');
+  const head=await call('GET',path);await call('PUT',path,{expected_revision:head.metadata.revision,title:'Live figure',document});
+  page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();
+  const formal=await call('GET',path),revision=formal.metadata.revision;
+  const originalPalette=await call('GET',`${path}/vector-palette?element_id=${image.id}&expected_revision=${revision}`);
+  const colors=Object.fromEntries(originalPalette.colors.filter(c=>c!=='#228866').map(c=>[c,'#228866']));assert.ok(Object.keys(colors).length);
+  const parent=await call('POST',`${path}/vector-colors`,{element_id:image.id,expected_revision:revision,colors});
+  await persist('svg-parent.json',parent);await persist('svg-formal-before.json',formal);
+  await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});
+  await dialog.getByRole('button',{name:`${parent.summary} · v${revision}`,exact:true}).click();await dialog.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();
+  const feedback=dialog.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();
+  await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill('请精化这份待审候选中的 EGFR 通用受体 SVG。先查看候选 PNG 和该候选素材的 palette、parts，核对实际颜色。第一步用 recolor 把候选中绿色 #228866 改成深蓝 #2457A7，创建子候选。第二步重新读取这份子候选的 parts，自主选一条当前可见且填充深蓝的路径，用 edit_parts 将这一条的填充改成橙色 #E89B38，留下局部视觉强调。不要把路径解释为特异分子域，不改几何、不替换素材、不增删文字。保留所有科学标签、关系与证据、其他对象以及来源许可；每次编辑沿用最新候选引用和 markup_ids:[]。最终重新读取配色及候选 PNG 核对，留待我审阅，不采用，不在正式图另建提案。');
+  await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const draft=await composer.inputValue();assert.ok(draft.includes(parent.id)&&draft.includes(parent.document_sha256));await persist('svg-feedback.json',{draft});
+  assert.equal(turns.length,0);assert.deepEqual(await call('GET',path),formal);await send(1);
+  const calls=turns[0].calls,mutations=calls.filter(c=>c.name==='bioicons'&&['recolor','edit_parts'].includes(c.input.action));
+  assert.ok(mutations.some(c=>c.input.action==='recolor')&&mutations.some(c=>c.input.action==='edit_parts'),'real Agent performs both refinement stages');
+  for(const c of mutations){assert.ok(c.input.proposal_id&&c.input.document_sha256);assert.deepEqual(c.input.markup_ids,[]);assert.equal(c.input.expected_revision,revision);}
+  const first=mutations.find(c=>c.input.action==='recolor');assert.equal(first.input.proposal_id,parent.id);assert.equal(first.input.document_sha256,parent.document_sha256);
+  assert.ok(calls.slice(0,calls.indexOf(first)).some(c=>c.name==='bioicons'&&c.input.action==='palette'&&c.input.proposal_id===parent.id));
+  const local=mutations.find(c=>c.input.action==='edit_parts');assert.notEqual(local.input.proposal_id,parent.id);
+  assert.equal(local.input.edits.length,1,'only one graphical path is accented');assert.equal(local.input.edits[0].fill.toLowerCase(),'#e89b38');
+  for(const key of ['stroke','opacity','translate','points'])assert.ok(local.input.edits[0][key]==null,`unrequested ${key} remains unchanged`);
+  assert.ok(calls.slice(calls.indexOf(first)+1,calls.indexOf(local)).some(c=>c.name==='bioicons'&&c.input.action==='parts'&&c.input.proposal_id===local.input.proposal_id&&c.input.document_sha256===local.input.document_sha256),'parts refreshed from the recolored candidate');
+  const child=currentCandidateLeaf(await call('GET',`${path}/proposals`),revision);await persist('svg-child.json',child);assert.notEqual(child.id,parent.id);
+  const finalImage=byId(child.document,image.id);assert.notEqual(finalImage.fileId,image.fileId);
+  for(const e of parent.document.elements.filter(e=>e.id!==image.id))assert.deepEqual(byId(child.document,e.id),e,`unrelated ${e.id} preserved`);
+  assert.equal(child.document.elements.length,parent.document.elements.length);
+  for(const key of ['x','y','width','height','angle','crop','frameId'])assert.deepEqual(finalImage[key],image[key]);
+  for(const [id,file] of Object.entries(parent.document.files))assert.deepEqual(child.document.files[id],file);
+  for(const [key,value] of Object.entries(byId(parent.document,image.id).customData))if(!['modifications','sha256','colors'].includes(key))assert.deepEqual(finalImage.customData[key],value);
+  const query=`element_id=${image.id}&expected_revision=${revision}&proposal_id=${child.id}&document_sha256=${child.document_sha256}`;
+  const palette=await call('GET',`${path}/vector-palette?${query}`);assert.ok(palette.colors.includes('#e89b38'));assert.ok(palette.colors.includes('#2457a7'));assert.ok(!palette.colors.includes('#228866'));
+  assert.ok(calls.some(c=>c.name==='bioicons'&&c.input.action==='palette'&&c.input.proposal_id===child.id),'Agent rechecks final palette');
+  assert.ok(calls.some(c=>c.name==='visualization'&&c.input.action==='read_proposal_preview'&&c.input.proposal_id===child.id),'Agent sees final PNG');
+  assert.deepEqual(await call('GET',path),formal);assert.deepEqual(await call('GET',`${path}/proposals/${parent.id}`),parent);
+  let png;await until(async()=>{png=await call('GET',`${path}/proposals/${child.id}/preview?expected_revision=${revision}`);assert.notEqual(png.render_status,'failed');return png.render_status==='ready';},'final SVG candidate PNG');assert.equal(png.document_sha256,child.document_sha256);await writeFile(join(directory,'svg-candidate.png'),Buffer.from(png.dataURL.split(',')[1],'base64'));
+  await page.getByRole('tab',{name:'Live figure',exact:true}).click();await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();await dialog.getByRole('button',{name:`${child.summary} · v${revision} · 修订`,exact:true}).click();await dialog.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();await page.screenshot({path:join(directory,'svg-review.png'),animations:'disabled'});
+  await dialog.getByRole('button',{name:'采用提案',exact:true}).click();await dialog.waitFor({state:'hidden'});const final=await call('GET',path);assert.equal(final.metadata.revision,revision+1);assert.deepEqual(final.scene.document,child.document);
+  const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出 源文件',exact:true}).click();const exported=JSON.parse(await readFile(await(await download).path(),'utf8'));await persist('svg-source.json',exported);assert.deepEqual(content(exported.elements),content(child.document.elements));assert.deepEqual(exported.files,child.document.files);await persist('final.json',final);
+  return {parent_proposal_id:parent.id,child_proposal_id:child.id,scope:'one configured Agent recolors a pending SVG then accents one path; existing declared scientific content preserved, no scientific discovery claim'};
+}

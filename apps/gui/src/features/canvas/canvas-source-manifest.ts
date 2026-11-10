@@ -33,22 +33,48 @@ function changes(value: unknown) {
     return { kind: string(row.kind), ...insetChange(row), ...(["path_style", "path_edit"].includes(String(row.kind)) ? { edits: (Array.isArray(row.edits) ? row.edits : []).map(value => { const edit = object(value); const paint = (v: unknown) => typeof v === "string" && (v === "none" || /^#[a-f\d]{6}$/i.test(v)) ? v : null; return { part_id: string(edit.part_id), ...(Array.isArray(edit.points) ? { points: edit.points.map(value => { const point = object(value); return { index: typeof point.index === "number" && Number.isSafeInteger(point.index) && point.index >= 0 ? point.index : null, position: Array.isArray(point.position) && point.position.length === 2 && point.position.every(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1e6) ? point.position as number[] : null }; }) } : {}), ...(Array.isArray(edit.translate) && edit.translate.length === 2 && edit.translate.every(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 100000) ? { translate: edit.translate as number[] } : {}), fill: paint(edit.fill), stroke: paint(edit.stroke), opacity: typeof edit.opacity === "number" && Number.isFinite(edit.opacity) && edit.opacity >= 0 && edit.opacity <= 1 ? edit.opacity : null }; }) } : {}), colors: Object.fromEntries(Object.entries(object(row.colors)).filter(([from, to]) => /^#[a-f\d]{6}$/i.test(from) && typeof to === "string" && /^#[a-f\d]{6}$/i.test(to))), based_on_file_id: string(row.based_on_file_id), based_on_sha256: string(row.based_on_sha256), result_sha256: string(row.result_sha256), created_at: string(row.created_at) };
   });
 }
+function attribution(data: ObjectValue, fallbackName: string) {
+  const asset = object(data.asset);
+  const authors = unique([...strings(asset.creators), ...strings(asset.author), ...strings(data.creators), ...strings(data.author)]);
+  const licenses = unique([...strings(asset.licenses), ...strings(asset.license), ...strings(data.licenses), ...strings(data.license)]);
+  const sourceURLs = urls(asset.source_url, asset.svg_url, data.source_url, data.source, object(data.file).url);
+  return { provider: string(data.source), asset_id: identifier(asset.id), name: string(asset.title) ?? string(asset.name) ?? fallbackName, authors, author_urls: urls(asset.author_url), licenses, license_urls: urls(asset.license_url, asset.license_urls, data.license_url, data.license_urls), source_urls: sourceURLs, source_sha256: string(data.source_sha256), recorded_sha256: string(data.sha256), normalization: strings(data.normalization), modifications: changes(data.modifications), missing_fields: [...(!authors.length ? ["authors"] : []), ...(!licenses.length ? ["licenses"] : []), ...(!sourceURLs.length ? ["source_urls"] : [])] };
+}
+const matchesRecordedHash = (actual: string | null, recorded: string | null) => actual && recorded && /^[a-f\d]{64}$/i.test(recorded) ? actual === recorded.toLowerCase() : null;
+async function replacementHistory(value: unknown, lookup: (fileId: string | null) => ReturnType<typeof fileHash>) {
+  const recorded = Array.isArray(value), entries = recorded ? value : [];
+  const start = Math.max(0, entries.length - 50);
+  const exported = await Promise.all(entries.slice(start).map(async (entry, index) => {
+    const data = object(entry), previous = data.previous_provenance;
+    const previousId = string(data.previous_file_id), resultId = string(data.result_file_id);
+    const valid = Boolean(entry && typeof entry === "object" && !Array.isArray(entry) && previous && typeof previous === "object" && !Array.isArray(previous) && previousId && resultId);
+    const source = attribution(object(previous), previousId ?? "Previous image"), [hash, resultHash] = await Promise.all([lookup(previousId), lookup(resultId)]);
+    return { index: start + index, metadata_status: valid ? "recorded" : "unsupported", previous_file_id: previousId, result_file_id: resultId, result_file: { ...resultHash, hash_matches_file_id: matchesRecordedHash(resultHash.actual_sha256, resultId) }, crop_policy: ["uncropped", "normalized_source_region"].includes(String(data.crop_policy)) ? data.crop_policy as string : null, created_at: string(data.created_at), previous_source: { ...source, ...hash, hash_matches_recorded: matchesRecordedHash(hash.actual_sha256, source.recorded_sha256) } };
+  }));
+  return { status: value == null ? "not_recorded" : recorded ? "recorded" : "unsupported", verification: "not_verified", entries: exported, start_index: recorded ? start : null, total: recorded ? entries.length : value == null ? 0 : null, truncated: entries.length > exported.length, unsupported_entries_in_export: exported.filter(entry => entry.metadata_status === "unsupported").length };
+}
+function fileLookup(files: ObjectValue) {
+  const hashes = new Map<string | null, ReturnType<typeof fileHash>>();
+  return (fileId: string | null) => {
+    if (!hashes.has(fileId)) hashes.set(fileId, fileHash(object(fileId ? files[fileId] : undefined)));
+    return hashes.get(fileId)!;
+  };
+}
+async function assetRecord(element: ObjectValue, files: ObjectValue, lookup: ReturnType<typeof fileLookup>) {
+  const data = object(element.customData), fileId = string(element.fileId), file = object(fileId ? files[fileId] : undefined);
+  const source = attribution(data, string(element.id) ?? "Image"), hash = await lookup(fileId);
+  return { element_id: string(element.id), semantic_anchor_id: string(data.semanticAnchorId), mime_type: string(file.mimeType), file_id: fileId, ...source, ...hash, hash_matches_recorded: matchesRecordedHash(hash.actual_sha256, source.recorded_sha256), replacement_history: await replacementHistory(data.asset_replacements, lookup) };
+}
+/** Same whitelist and file checks as export, without serializing a whole scene. */
+export function inspectAssetSource(element: unknown, fileInput: unknown) {
+  const files = object(fileInput);
+  return assetRecord(object(element), files, fileLookup(files));
+}
 export async function createSourceManifest(input: { scene: string; title: string; project_id?: string; figure_id?: string; based_on_revision?: number; unsaved_changes: boolean }) {
   const document = object(JSON.parse(input.scene)), files = object(document.files);
   const elements = (Array.isArray(document.elements) ? document.elements : []).map(object).filter(element => element.type === "image" && element.isDeleted !== true);
-  const hashes = new Map<string, ReturnType<typeof fileHash>>();
-  const assets = await Promise.all(elements.map(async element => {
-    const data = object(element.customData), asset = object(data.asset), fileId = string(element.fileId), file = object(fileId ? files[fileId] : undefined);
-    const key = fileId ?? `missing:${string(element.id)}`; if (!hashes.has(key)) hashes.set(key, fileHash(file));
-    const hash = await hashes.get(key)!;
-    const authors = unique([...strings(asset.creators), ...strings(asset.author), ...strings(data.creators), ...strings(data.author)]), licenses = unique([...strings(asset.licenses), ...strings(asset.license), ...strings(data.licenses), ...strings(data.license)]);
-    const sourceURLs = urls(asset.source_url, asset.svg_url, data.source_url, data.source, object(data.file).url);
-    const normalization = strings(data.normalization), modifications = changes(data.modifications);
-    const name = string(asset.title) ?? string(asset.name) ?? string(element.id) ?? "Image";
-    const recordedHash = string(data.sha256);
-    const missing = [...(!authors.length ? ["authors"] : []), ...(!licenses.length ? ["licenses"] : []), ...(!sourceURLs.length ? ["source_urls"] : [])];
-    return { element_id: string(element.id), semantic_anchor_id: string(data.semanticAnchorId), mime_type: string(file.mimeType), file_id: fileId, provider: string(data.source), asset_id: identifier(asset.id), name, authors, author_urls: urls(asset.author_url), licenses, license_urls: urls(asset.license_url, asset.license_urls, data.license_url, data.license_urls), source_urls: sourceURLs, source_sha256: string(data.source_sha256), recorded_sha256: recordedHash, ...hash, hash_matches_recorded: hash.actual_sha256 && recordedHash && /^[a-f\d]{64}$/i.test(recordedHash) ? hash.actual_sha256 === recordedHash.toLowerCase() : null, normalization, modifications, missing_fields: missing };
-  }));
+  const lookup = fileLookup(files);
+  const assets = await Promise.all(elements.map(element => assetRecord(element, files, lookup)));
   const credits = unique(assets.map(asset => `${asset.name} — ${asset.authors.length ? asset.authors.join(", ") : "author not recorded"}; ${asset.licenses.length ? asset.licenses.join(", ") : "license not recorded"}${asset.license_urls.length ? ` (${asset.license_urls.join(", ")})` : ""}; ${asset.source_urls.join(", ") || "source not recorded"}${asset.normalization.length || asset.modifications.length ? `; changes: ${[...asset.normalization, ...asset.modifications.map(change => change.kind ?? "unspecified")].join("; ")}` : ""}`));
   return { schema: "autonomics.figure.asset-sources/v1", exported_at: new Date().toISOString(), title: input.title, project_id: input.project_id ?? null, figure_id: input.figure_id ?? null, based_on_revision: input.based_on_revision ?? null, unsaved_changes: input.unsaved_changes, scene_json_sha256: await sha256(new TextEncoder().encode(input.scene)), assets, credits, relation_sources: relationSources(document) };
 }

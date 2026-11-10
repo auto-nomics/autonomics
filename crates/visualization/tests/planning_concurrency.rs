@@ -23,6 +23,7 @@ fn independent_planners_cannot_overwrite_an_answer_from_a_newer_version()
             id: "q1".into(),
             question: "Which cell?".into(),
             answer: String::new(),
+            blocking: true,
         }],
         ..Brief::default()
     };

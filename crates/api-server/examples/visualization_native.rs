@@ -18,6 +18,24 @@ async fn tool(
         })?;
     Ok(Json(serde_json::to_value(result).unwrap()))
 }
+// Real catalogue/tool path for opt-in asset integration tests; loopback only.
+async fn bioicons(
+    State(path): State<String>,
+    Json(input): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let registration = visualization_tools::bioicons_registrations(path.into()).remove(0);
+    let result = registration
+        .implementation
+        .execute(input)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":error.to_string()})),
+            )
+        })?;
+    Ok(Json(serde_json::to_value(result).unwrap()))
+}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -38,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(
             Router::new()
                 .route("/test/visualization", post(tool))
+                .route("/test/bioicons", post(bioicons))
                 .with_state(path),
         );
     let listener = tokio::net::TcpListener::bind(addr).await?;

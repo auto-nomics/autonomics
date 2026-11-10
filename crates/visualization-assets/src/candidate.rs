@@ -122,6 +122,41 @@ pub fn replace(
     )?;
     Ok((proposal, image_id.unwrap()))
 }
+pub struct Insertion<'a> {
+    pub reference: Reference<'a>,
+    pub image: image::Image<'a>,
+    pub x: f64,
+    pub y: f64,
+    pub summary: &'a str,
+    pub markup_ids: Option<&'a [String]>,
+}
+/// Append a new standalone asset to the exact pending document, preserving prior work.
+pub fn insert(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    input: Insertion<'_>,
+) -> Result<(Proposal, String)> {
+    let mut image_id = None;
+    let proposal = revise(
+        store,
+        project,
+        figure,
+        revision,
+        Revision {
+            reference: input.reference,
+            summary: input.summary,
+            markup_ids: input.markup_ids,
+        },
+        |doc| {
+            let (document, id) = image::insert(doc, input.image, input.x, input.y)?;
+            image_id = Some(id);
+            Ok(document)
+        },
+    )?;
+    Ok((proposal, image_id.unwrap()))
+}
 pub enum Inspection<'a> {
     Palette,
     Parts,

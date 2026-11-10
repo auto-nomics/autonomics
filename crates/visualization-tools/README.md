@@ -82,3 +82,11 @@ BioArt 和 BioIcons 的 `replace` 支持可选 `proposal_id` 与 `document_sha25
 这些候选参数和 `markup_ids` 仅用于 `replace`，其他动作拒绝它们，避免将候选定位信息静默忽略后操作正式图。未传候选参数时沿用原有入口：BioArt replace 和 BioIcons insert/replace 生成根提案；BioArt insert 保留既有直接保存语义。通用素材不构成特异分子结构或新科学机制的证据。
 
 `visualization` operations 新增 `fit_illustration_anchor {id,file_id,normalized_bounds:[x,y,width,height]}`。先读取当前图片/候选和文件身份，检查图片或 SVG parts，再明确提供相对整张图片的范围；不把路径边界当成分子域。该操作调整语义锚点与局部正交连接、保留图片字节和科学关系，沿用候选审阅和哈希约束。新素材替换后旧贴合失效，按新素材重新贴合再重路由。旋转、裁剪、翻转、复杂连线或固定端口须使用原生编辑；检查候选后再采用。
+
+`bioart insert` 与 `bioicons insert` 均返回待审提案，不直接保存正式图。BioArt 的旧插入结果 `{figure,...}` 已改为 `{proposal_id,element_id,base_revision,status,...}`，调用方须审阅并采用。两者都可用 `proposal_id`、`document_sha256` 和正式 `expected_revision`，在指定待审文档上追加独立图片；新图使用场景 `x/y`，不传 `element_id`，已有节点的外观更新应使用 `replace`。连续插入保留所有前序对象和文件，作者/许可与原始来源哈希随素材保存；开放审阅关联须显式保留或解除，不自动完成。
+
+`figure_evidence` 是独立只读来源工具，由 `evidence_registrations()` 注册并接入 Runtime 的绘图能力，不改变原有 `registrations(path)` 的单个画布工具接口。当前提供 Reactome `search` / `record`：搜索候选记录，再读取所需通路、反应或相关实体 ID，返回官方来源 URL、检索时间、完整检索记录 JSON 序列化的 SHA-256、物种/推断标志、机制说明、输入/输出、催化/调节实体、相关事件和文献字段（存在时）。数字引用 ID 及重复项保留，不推断或去重化学计量。投影深度、列表和文本上限、字段省略与截断明确标出；不是完整原始响应，不验证图中每条关系、版权或实验支持，不保存计划或图稿。
+
+按当前科学意图明确指定搜索物种，不默认人类。搜索命中及通路总览不是逐关系证据；应读取相关反应、必要时跟随引用 ID，保留来源中的不确定性，再将适用 URL 放入计划 evidence，并把范围和未知项写入 assumptions/questions。只读工具不会自动把计划置为科学正确或自动生成图。
+
+显式联网复现：`cargo run -p visualization-tools --example figure_evidence -- '{"action":"search","query":"interferon gamma","species":"Homo sapiens","limit":3}'`；`record` 改传 `id`，如 `{"action":"record","id":"R-HSA-877300"}`。网络错误明确返回，不构造占位来源。记录指纹针对 SDK 取得的 JSON 值的序列化字节，不是 HTTP 原始字节。

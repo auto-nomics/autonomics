@@ -7,6 +7,14 @@ use std::collections::HashSet;
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Place/resize a standalone image without altering pixels, crop, flips or provenance.
+    SetImageGeometry {
+        id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
     /// Fit a semantic anchor to explicitly reviewed bounds inside its illustration.
     FitIllustrationAnchor {
         id: String,
@@ -101,6 +109,10 @@ pub enum SceneError {
     InvalidInset(String),
     #[error("cannot fit illustration anchor: {0}")]
     InvalidIllustration(String),
+    #[error("invalid image geometry: {0}")]
+    InvalidImageGeometry(String),
+    #[error("invalid update: {0}")]
+    InvalidUpdate(String),
     #[error("element id cannot be changed")]
     ImmutableId,
 }
@@ -397,6 +409,61 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 }
                 elements.push(element.clone());
             }
+            Operation::SetImageGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                if ![x, y, width, height].iter().all(|n| n.is_finite())
+                    || x.abs() > 1e6
+                    || y.abs() > 1e6
+                    || *width <= 0.
+                    || *height <= 0.
+                    || *width > 1e6
+                    || *height > 1e6
+                {
+                    return Err(SceneError::InvalidImageGeometry("x/y require finite scene coordinates within ±1000000; width/height require positive finite numbers <=1000000".into()));
+                }
+                if elements
+                    .iter()
+                    .any(|e| e["customData"]["visualAssetElementId"].as_str() == Some(id))
+                {
+                    return Err(SceneError::InvalidImageGeometry("owned illustrations require their component/anchor operation, not standalone image placement".into()));
+                }
+                if elements.iter().any(|e| {
+                    ["startBinding", "endBinding"]
+                        .iter()
+                        .any(|key| e[key]["elementId"].as_str() == Some(id))
+                        || e["containerId"].as_str() == Some(id)
+                }) {
+                    return Err(SceneError::InvalidImageGeometry(
+                        "image has bound objects; use its component-specific/native operation"
+                            .into(),
+                    ));
+                }
+                let element = elements
+                    .iter_mut()
+                    .find(|e| e["id"].as_str() == Some(id))
+                    .ok_or_else(|| SceneError::NotFound(id.clone()))?;
+                if element["type"] != "image"
+                    || element["isDeleted"] == true
+                    || element["locked"] == true
+                    || !element["customData"]["semanticAnchorId"].is_null()
+                    || !element["customData"]["inset"].is_null()
+                    || element["boundElements"]
+                        .as_array()
+                        .is_some_and(|v| !v.is_empty())
+                {
+                    return Err(SceneError::InvalidImageGeometry("requires a live unlocked standalone image without semantic ownership, inset membership or bound objects".into()));
+                }
+                element["x"] = serde_json::json!(x);
+                element["y"] = serde_json::json!(y);
+                element["width"] = serde_json::json!(width);
+                element["height"] = serde_json::json!(height);
+                touch(element);
+            }
             Operation::Update { id, changes } => {
                 if changes.contains_key("id") {
                     return Err(SceneError::ImmutableId);
@@ -407,7 +474,9 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                             .as_f64()
                             .is_some_and(|number| number.is_finite() && number.abs() <= 1e6)
                     }) {
-                        return Err(SceneError::InvalidScene);
+                        return Err(SceneError::InvalidUpdate(format!(
+                            "{id}.{field} requires a finite JSON number within ±1000000, not a quoted string; use set_image_geometry for standalone image placement"
+                        )));
                     }
                 }
                 let owned = owned_elements(elements, id);

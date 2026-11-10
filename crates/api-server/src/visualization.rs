@@ -326,6 +326,119 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap())
     }
     #[tokio::test]
+    async fn svg_http_refines_exact_pending_candidate_without_adoption() {
+        let mut store = Store::in_memory().unwrap();
+        store.create_project("p", "Study").unwrap();
+        let original = json!({"elements":[],"files":{}});
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &original)
+            .unwrap();
+        let vector = bioicons::vector::normalize(b"<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><path fill='#ff0000' d='M10 10h80v80H10z'/></svg>").unwrap();
+        let (document, image_id) = visualization::image::insert(&original, visualization::image::Image {
+            file_id: &vector.sha256, data_url: &vector.data_url, width: vector.width, height: vector.height,
+            provenance: json!({"source":"BioIcons","asset":{"author":"Fixture","license":"cc-0"}}),
+        }, 0., 0.).unwrap();
+        let parent = store
+            .propose("p", &figure.id, 1, "Pending art", &document)
+            .unwrap();
+        let app = router(store);
+        let path = format!("/projects/p/figures/{}", figure.id);
+        let query = format!(
+            "element_id={image_id}&expected_revision=1&proposal_id={}&document_sha256={}",
+            parent.id, parent.document_sha256
+        );
+        let (status, palette) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/vector-palette?{query}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(palette["scope"], "proposal_candidate");
+        assert_eq!(palette["document_sha256"], parent.document_sha256);
+        assert!(
+            palette["colors"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("#ff0000"))
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!("{path}/vector-palette?element_id={image_id}&expected_revision=1"),
+                Value::Null
+            )
+            .await
+            .0,
+            400
+        );
+        for invalid_query in [
+            format!("{query}&markup_ids=ignored"),
+            format!(
+                "element_id={image_id}&expected_revision=1&proposal_id={}",
+                parent.id
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("{path}/vector-palette?{invalid_query}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 400);
+        }
+        let wrong = query.replace(&parent.document_sha256, "wrong");
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!("{path}/vector-palette?{wrong}"),
+                Value::Null
+            )
+            .await
+            .0,
+            409
+        );
+        let (status, child) = request(app.clone(), "POST", &format!("{path}/vector-colors"), json!({
+            "element_id": image_id, "expected_revision":1, "proposal_id":parent.id,
+            "document_sha256":parent.document_sha256, "markup_ids":[], "colors":{"#ff0000":"#0044aa"}
+        })).await;
+        assert_eq!(status, 200, "{child}");
+        assert_eq!(child["parent_proposal_id"], parent.id);
+        let child_query = format!(
+            "element_id={image_id}&expected_revision=1&proposal_id={}&document_sha256={}",
+            child["id"].as_str().unwrap(),
+            child["document_sha256"].as_str().unwrap()
+        );
+        let (status, parts) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/vector-parts?{child_query}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 200, "{parts}");
+        assert_ne!(parts["sha256"], vector.sha256);
+        let (_, unchanged) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/proposals/{}", parent.id),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(unchanged["document"], document);
+        assert_eq!(unchanged["status"], "pending");
+        let (_, formal) = request(app, "GET", &path, Value::Null).await;
+        assert_eq!(formal["metadata"]["revision"], 1);
+        assert_eq!(formal["scene"]["document"], original);
+    }
+    #[tokio::test]
     async fn proposal_preview_http_is_content_bound_and_does_not_adopt() {
         let mut store = Store::in_memory().unwrap();
         store.create_project("p", "Study").unwrap();

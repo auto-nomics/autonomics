@@ -1,3 +1,5 @@
+import { CanvasAssetComparison } from "./canvas-asset-comparison";
+import { CanvasCandidateObjects } from "./canvas-candidate-objects";
 import { useEffect, useMemo, useState } from "react";
 import type { MarkupSummary } from "./canvas-markup-render";
 import { useProposalNotice, type ProposalNotice } from "./canvas-proposal-notice";
@@ -116,6 +118,7 @@ export function CanvasProposals({ projectId, canvasId, isDirty, onAccepted, requ
         {!items.length && <p className="p-2 text-sm text-muted-foreground">{busy ? "加载中…" : "没有待审阅提案"}</p>}
         {items.map(item => <Button key={item.id} variant={selected?.id === item.id ? "secondary" : "ghost"} className="h-auto w-full justify-start whitespace-normal py-2 text-left" disabled={busy} onClick={() => void select(item)}>{item.summary}{item.summary_truncated ? "…" : ""} · v{item.base_revision}{item.parent_proposal_id ? " · 修订" : ""}</Button>)}
         {nextBefore && <Button size="sm" variant="outline" disabled={busy} onClick={async () => { setBusy(true); setError(""); try { await loadPage(nextBefore); } catch (cause) { setError(String(cause)); } finally { setBusy(false); } }}>加载更早提案</Button>}
+        {selected && <CanvasCandidateObjects key={selected.id} document={selected.document} focusedId={focus?.id} onFocus={id => setFocus(current => id ? { id, request: (current?.request ?? 0) + 1 } : null)} />}
         {Boolean(selected?.review_markups?.length) && <section aria-label="提案关联标记" className="mt-3 border-t pt-3">
           <p className="mb-2 text-sm font-medium">回应的审阅意见</p>
           {selected!.review_markups!.map(markup => <article key={markup.id} className="mb-2 rounded border p-2 text-xs"><p className="whitespace-pre-wrap">{markup.note}</p><p className="mt-1 text-muted-foreground">v{markup.at_revision} · {markup.status === "resolved" ? "已处理" : "待处理"}{markup.at_revision !== selected!.base_revision ? " · 历史意见，请核对当前图稿" : ""}</p></article>)}
@@ -132,6 +135,7 @@ export function CanvasProposals({ projectId, canvasId, isDirty, onAccepted, requ
           {(diff.truncated || diff.filesTruncated) && <p>修改较多，明细已截断，请结合源文件核对。</p>}
           {!diff.objects.length && !diff.fileCount && !diff.orderChanged && !diff.appStateChanged && <p>没有可见内容或素材文件修改。</p>}
         </div></details>}
+        {focus && comparison && <CanvasAssetComparison key={selected.id} before={comparison} after={selected.document} focusedId={focus.id} comparisonLabel={compareParent && parent ? "上一版候选" : `正式版本 v${selected.base_revision}`} />}
         <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-border md:grid-cols-2">
           <section aria-label="修改前画布" className="flex min-h-0 min-w-0 flex-col bg-background"><p className="border-b p-2 text-xs">{compareParent && parent ? `上一版候选 · ${parent.summary}` : `修改前 · v${selected.base_revision}`}</p><div className="min-h-0 flex-1">{comparison && <CanvasPreview key={`${selected.id}:before:${compareParent}`} document={comparison} focus={focus} />}</div></section>
           <section aria-label="候选画布" className="flex min-h-0 min-w-0 flex-col bg-background"><p className="border-b p-2 text-xs">候选修改</p><div className="min-h-0 flex-1"><CanvasPreview key={`${selected.id}:after`} document={selected.document} focus={focus} /></div></section>

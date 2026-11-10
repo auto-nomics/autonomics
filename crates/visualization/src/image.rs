@@ -129,7 +129,104 @@ pub fn replace_file(document: &Value, id: &str, image: Image<'_>) -> Result<Valu
     crate::scene::touch(next);
     Ok(result)
 }
-/// Replace a visual placeholder with an image while preserving its semantic anchor.
+/// A standalone image keeps its viewport and identity when choosing new artwork.
+fn replace_standalone(
+    document: &Value,
+    target: &Value,
+    mut image: Image<'_>,
+) -> Result<(Value, String), InvalidImage> {
+    if target["locked"] == true {
+        return Err(InvalidImage("image is locked"));
+    }
+    let id = target["id"]
+        .as_str()
+        .ok_or(InvalidImage("invalid image ID"))?;
+    let mut crop = target.get("crop").cloned().unwrap_or(Value::Null);
+    if !crop.is_null() {
+        let number = |key: &str| crop[key].as_f64().filter(|n| n.is_finite());
+        let natural_width = number("naturalWidth")
+            .filter(|n| *n > 0.)
+            .ok_or(InvalidImage("invalid crop natural width"))?;
+        let natural_height = number("naturalHeight")
+            .filter(|n| *n > 0.)
+            .ok_or(InvalidImage("invalid crop natural height"))?;
+        let x = number("x")
+            .filter(|n| *n >= 0.)
+            .ok_or(InvalidImage("invalid crop x"))?;
+        let y = number("y")
+            .filter(|n| *n >= 0.)
+            .ok_or(InvalidImage("invalid crop y"))?;
+        let width = number("width")
+            .filter(|n| *n > 0.)
+            .ok_or(InvalidImage("invalid crop width"))?;
+        let height = number("height")
+            .filter(|n| *n > 0.)
+            .ok_or(InvalidImage("invalid crop height"))?;
+        if x + width > natural_width + 1e-6 || y + height > natural_height + 1e-6 {
+            return Err(InvalidImage("crop exceeds source dimensions"));
+        }
+        crop["x"] = json!(x / natural_width * f64::from(image.width));
+        crop["width"] = json!(width / natural_width * f64::from(image.width));
+        crop["y"] = json!(y / natural_height * f64::from(image.height));
+        crop["height"] = json!(height / natural_height * f64::from(image.height));
+        crop["naturalWidth"] = json!(image.width);
+        crop["naturalHeight"] = json!(image.height);
+    }
+    let mut provenance = match target.get("customData") {
+        None | Some(Value::Null) => serde_json::Map::new(),
+        Some(Value::Object(value)) => value.clone(),
+        _ => return Err(InvalidImage("image customData must be an object")),
+    };
+    let mut previous = serde_json::Map::new();
+    for key in [
+        "source",
+        "asset",
+        "file",
+        "sha256",
+        "source_sha256",
+        "colors",
+        "normalization",
+        "modifications",
+        "source_url",
+        "author",
+        "author_url",
+        "license",
+        "license_url",
+        "creators",
+        "licenses",
+    ] {
+        if let Some(value) = provenance.remove(key) {
+            previous.insert(key.into(), value);
+        }
+    }
+    if !provenance.contains_key("asset_replacements") {
+        provenance.insert("asset_replacements".into(), json!([]));
+    }
+    provenance.get_mut("asset_replacements").and_then(Value::as_array_mut).ok_or(InvalidImage("asset_replacements must be an array"))?.push(json!({"previous_file_id":target["fileId"],"previous_provenance":previous,"result_file_id":image.file_id,"crop_policy":if crop.is_null(){"uncropped"}else{"normalized_source_region"},"created_at":chrono::Utc::now().to_rfc3339()}));
+    let incoming = image
+        .provenance
+        .as_object()
+        .ok_or(InvalidImage("invalid replacement metadata"))?;
+    if incoming.contains_key("asset_replacements") {
+        return Err(InvalidImage(
+            "incoming asset must not overwrite replacement history",
+        ));
+    }
+    provenance.extend(incoming.clone());
+    image.provenance = Value::Object(provenance);
+    let mut result = replace_file(document, id, image)?;
+    let next = result["elements"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"].as_str() == Some(id))
+        .unwrap();
+    if !target["crop"].is_null() {
+        next["crop"] = crop;
+    }
+    Ok((result, id.into()))
+}
+/// Replace standalone artwork in place, or illustrate a shape while preserving its semantic anchor.
 /// The anchor keeps its ID, bounds and arrow bindings. Image and detached labels
 /// form one movable group; the image retains its aspect ratio inside those bounds.
 pub fn illustrate(
@@ -147,16 +244,25 @@ pub fn illustrate(
         })
         .ok_or(InvalidImage("target not found"))?;
     let index = if source[index]["type"] == "image" {
-        source[index]["customData"]["semanticAnchorId"]
-            .as_str()
-            .and_then(|parent| {
-                source.iter().position(|element| {
+        if let Some(parent) = source[index]["customData"]["semanticAnchorId"].as_str() {
+            source
+                .iter()
+                .position(|element| {
                     element["id"].as_str() == Some(parent)
                         && element["type"] == "rectangle"
+                        && element["isDeleted"] != true
                         && element["customData"]["visualAssetElementId"].as_str() == Some(target_id)
                 })
-            })
-            .unwrap_or(index)
+                .ok_or(InvalidImage("image semantic ownership is inconsistent"))?
+        } else {
+            if source.iter().any(|e| {
+                e["isDeleted"] != true
+                    && e["customData"]["visualAssetElementId"].as_str() == Some(target_id)
+            }) {
+                return Err(InvalidImage("image semantic ownership is inconsistent"));
+            }
+            return replace_standalone(document, &source[index], image);
+        }
     } else {
         index
     };

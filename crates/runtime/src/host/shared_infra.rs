@@ -653,6 +653,7 @@ impl SharedInfra {
         tools.extend(visualization_tools::registrations(
             self.visualization_db.clone(),
         ));
+        tools.extend(visualization_tools::evidence_registrations());
 
         // wiki 读组对每个 kind 挂载(知识库是共享长期记忆,任何
         // agent 都可查阅);写组只给 curator kind——任务 agent 对

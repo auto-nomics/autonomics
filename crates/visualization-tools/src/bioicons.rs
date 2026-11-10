@@ -14,7 +14,7 @@ fn error(e: impl std::fmt::Display) -> ToolError {
 }
 #[tool(
     name = "bioicons",
-    description = "Search BioIcons SVG illustrations. Actions search, preview, insert, replace, palette, recolor, parts, geometry, edit_parts. parts inspects rendered SVG paths and returns snapshot-scoped IDs, bounds and a numbered PNG; numbers identify graphical paths, never biological identities. Each bounds [x,y,width,height] already includes the path stroke and ancestor transforms in normalized SVG root coordinates; do not retrieve raw SVG merely to add stroke width. Bounds are geometric boxes, not exact clipped visible-pixel masks. edit_parts proposes fill/stroke (#RRGGBB or none) local opacity (0..1) and translate [dx,dy] edits in normalized SVG root coordinates on specified paths, using sha256 and edits from parts. Shared masks, clips and pattern resources are not editable paths. Omitted attributes remain unchanged. Translation compensates ancestor scaling, rotation and reflection; paint follows the path, parent clipping and the SVG viewport stay fixed. Use preview and review the result; geometry returns numbered endpoint/control handles and command topology for one part_id and sha256 from parts. Use edit_parts points:[{index,position:[x,y]}] for sparse absolute root-coordinate control/anchor edits from geometry; at most 64 edited points on paths with at most 512 points. Keep topology and other points unchanged. Do not combine points and translate for the same path; make separate reviewed proposals. Shape edits keep paint coordinates and parent clips fixed. Read parts again after every SVG edit or replacement, including candidate edits, because IDs belong to the exact old file snapshot. palette reads a saved SVG image (or its semantic anchor) and returns actual #RRGGBB paints with a PNG preview. recolor uses colors mapping old_hex to new_hex to propose simultaneous exact paint replacements; preserves text glyphs, geometry, original author/license/source hash and unrelated image instances. Both require project_id, figure_id, expected_revision and element_id; neither requires network access. Read palette first, do not invent source colours. SVG text must already be outlined so recoloring cannot silently substitute its font. Search then inspect a PNG preview and per-icon author/license before selecting; do not infer scientific specificity from generic art. insert and replace create reviewable proposals on the exact current figure revision; they never commit directly. SVG remains a scalable vector image with provenance and source/normalized hashes; internal paths are not individual canvas objects. Unsupported raster/active SVG or unsupported text is rejected rather than silently dropped. Use visualization read/read_image to inspect saved objects and current revision. Preserve unrelated elements, scientific labels and arrow anchors. User must save local edits before agent modification. For replace, palette, parts, geometry, recolor or edit_parts on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. Inspection returns scope/proposal/hash/file identity plus a PNG from that exact candidate, without adopting it. Changes create a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. On changes, explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Omit markup_ids on read-only inspection. Recolor and part edits require no catalog/network access. Inspect the new child with visualization read_proposal_preview before adoption. Do not infer protein-specific structure or additional mechanism from generic artwork."
+    description = "Search BioIcons SVG illustrations. Actions search, preview, insert, replace, palette, recolor, parts, geometry, edit_parts. parts inspects rendered SVG paths and returns snapshot-scoped IDs, bounds and a numbered PNG; numbers identify graphical paths, never biological identities. Each bounds [x,y,width,height] already includes the path stroke and ancestor transforms in normalized SVG root coordinates; do not retrieve raw SVG merely to add stroke width. Bounds are geometric boxes, not exact clipped visible-pixel masks. edit_parts proposes fill/stroke (#RRGGBB or none) local opacity (0..1) and translate [dx,dy] edits in normalized SVG root coordinates on specified paths, using sha256 and edits from parts. Shared masks, clips and pattern resources are not editable paths. Omitted attributes remain unchanged. Translation compensates ancestor scaling, rotation and reflection; paint follows the path, parent clipping and the SVG viewport stay fixed. Use preview and review the result; geometry returns numbered endpoint/control handles and command topology for one part_id and sha256 from parts. Use edit_parts points:[{index,position:[x,y]}] for sparse absolute root-coordinate control/anchor edits from geometry; at most 64 edited points on paths with at most 512 points. Keep topology and other points unchanged. Do not combine points and translate for the same path; make separate reviewed proposals. Shape edits keep paint coordinates and parent clips fixed. Read parts again after every SVG edit or replacement, including candidate edits, because IDs belong to the exact old file snapshot. palette reads a saved SVG image (or its semantic anchor) and returns actual #RRGGBB paints with a PNG preview. recolor uses colors mapping old_hex to new_hex to propose simultaneous exact paint replacements; preserves text glyphs, geometry, original author/license/source hash and unrelated image instances. Both require project_id, figure_id, expected_revision and element_id; neither requires network access. Read palette first, do not invent source colours. SVG text must already be outlined so recoloring cannot silently substitute its font. insert appends a standalone image at x/y; use replace to preserve an existing node identity. To move/resize the new image, use visualization revise_proposal with {op:set_image_geometry,id,x,y,width,height}, all JSON numbers. Native scale is only flip signs ±1, not fractional size; dimensions are width/height. Never use align-center on two images that belong under different stages. Search then inspect a PNG preview and per-icon author/license before selecting; do not infer scientific specificity from generic art. insert and replace create reviewable proposals on the exact current figure revision; they never commit directly. SVG remains a scalable vector image with provenance and source/normalized hashes; internal paths are not individual canvas objects. Unsupported raster/active SVG or unsupported text is rejected rather than silently dropped. Use visualization read/read_image to inspect saved objects and current revision. Preserve unrelated elements, scientific labels and arrow anchors. User must save local edits before agent modification. For insert, replace, palette, parts, geometry, recolor or edit_parts on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. Inspection returns scope/proposal/hash/file identity plus a PNG from that exact candidate, without adopting it. Changes create a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. On changes, explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Omit markup_ids on read-only inspection. Recolor and part edits require no catalog/network access. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Do not infer protein-specific structure or additional mechanism from generic artwork."
 )]
 pub struct Input {
     #[desc = "search | preview | insert | replace | palette | recolor | parts | geometry | edit_parts"]
@@ -25,7 +25,7 @@ pub struct Input {
     pub figure_id: Option<String>,
     pub expected_revision: Option<i64>,
     pub element_id: Option<String>,
-    #[desc = "Optional pending candidate ID for replace/palette/parts/geometry/recolor/edit_parts; requires its exact document_sha256. Reads inspect that candidate; writes create a child."]
+    #[desc = "Optional pending candidate ID for insert/replace/palette/parts/geometry/recolor/edit_parts; requires its exact document_sha256. Reads inspect that candidate; writes create a child."]
     pub proposal_id: Option<String>,
     #[desc = "Exact candidate document_sha256; use with proposal_id, distinct from the SVG file sha256"]
     pub document_sha256: Option<String>,
@@ -66,6 +66,16 @@ impl ToolFunction for BioIconsTool {
                 .map_err(error)?;
         }
 
+        if input.action == "replace" && (input.x.is_some() || input.y.is_some()) {
+            return Err(error(
+                "replace preserves current placement; omit x/y. Use visualization revise_proposal set_image_geometry to move or resize a standalone image",
+            ));
+        }
+        if input.action == "insert" && input.element_id.is_some() {
+            return Err(error(
+                "insert creates a new image at x/y; omit element_id or use replace for an existing object",
+            ));
+        }
         let client = CLIENT.as_ref().map_err(error)?;
         if input.action == "search" {
             return Ok(ToolResult::success_json(json!(
@@ -243,23 +253,43 @@ fn persist(
         provenance: json!({"source":"BioIcons","asset":asset.asset,"sha256":asset.vector.sha256,"source_sha256":asset.vector.source_sha256,"colors":asset.vector.colors,"normalization":asset.vector.normalization}),
     };
     if let (Some(parent_id), Some(hash)) = (&input.proposal_id, &input.document_sha256) {
-        let (proposal, id) = visualization_assets::candidate::replace(
-            &store,
-            &project,
-            &figure,
-            revision,
-            visualization_assets::candidate::Replacement {
-                parent_id,
-                parent_document_sha256: hash,
-                target: input
-                    .element_id
-                    .as_deref()
-                    .ok_or_else(|| error("element_id required"))?,
-                image,
-                summary: &summary,
-                markup_ids: input.markup_ids.as_deref(),
-            },
-        )
+        let (proposal, id) = if input.action == "insert" {
+            visualization_assets::candidate::insert(
+                &store,
+                &project,
+                &figure,
+                revision,
+                visualization_assets::candidate::Insertion {
+                    reference: visualization_assets::candidate::Reference {
+                        proposal_id: parent_id,
+                        document_sha256: hash,
+                    },
+                    image,
+                    x: input.x.unwrap_or(0.),
+                    y: input.y.unwrap_or(0.),
+                    summary: &summary,
+                    markup_ids: input.markup_ids.as_deref(),
+                },
+            )
+        } else {
+            visualization_assets::candidate::replace(
+                &store,
+                &project,
+                &figure,
+                revision,
+                visualization_assets::candidate::Replacement {
+                    parent_id,
+                    parent_document_sha256: hash,
+                    target: input
+                        .element_id
+                        .as_deref()
+                        .ok_or_else(|| error("element_id required"))?,
+                    image,
+                    summary: &summary,
+                    markup_ids: input.markup_ids.as_deref(),
+                },
+            )
+        }
         .map_err(error)?;
         return Ok(
             json!({"proposal_id":proposal.id,"element_id":id,"base_revision":revision,"summary":summary,"status":"pending","parent_proposal_id":proposal.parent_proposal_id,"parent_document_sha256":proposal.parent_document_sha256,"document_sha256":proposal.document_sha256}),
@@ -389,7 +419,7 @@ mod tests {
             path.clone(),
             next_input,
             ::bioicons::vector::VectorAsset {
-                asset: serde_json::from_value(candidate_asset).unwrap(),
+                asset: serde_json::from_value(candidate_asset.clone()).unwrap(),
                 vector: next_vector,
             },
         )
@@ -422,6 +452,37 @@ mod tests {
             proposal.document
         );
         assert_eq!(store.revision("p", &figure.id, 1).unwrap().document, scene);
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        let inserted: Input = serde_json::from_value(json!({"action":"insert","project_id":"p","figure_id":figure.id,"expected_revision":1,"proposal_id":child.id,"document_sha256":child.document_sha256,"markup_ids":[],"x":700,"y":440})).unwrap();
+        let insert_result = persist(path.clone(), inserted, ::bioicons::vector::VectorAsset {
+            asset: serde_json::from_value(candidate_asset.clone()).unwrap(),
+            vector: ::bioicons::vector::normalize(b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 100'><path d='M10 10h60v80H10z' fill='#0088cc'/></svg>").unwrap(),
+        }).unwrap();
+        let appended = store
+            .proposal(
+                "p",
+                &figure.id,
+                insert_result["proposal_id"].as_str().unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            appended.parent_proposal_id.as_deref(),
+            Some(child.id.as_str())
+        );
+        assert_eq!(
+            &appended.document["elements"].as_array().unwrap()
+                [..child.document["elements"].as_array().unwrap().len()],
+            child.document["elements"].as_array().unwrap()
+        );
+        let new_image = appended.document["elements"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap();
+        assert_eq!(new_image["x"], 700.);
+        assert_eq!(new_image["y"], 440.);
+        assert_eq!(new_image["customData"]["asset"]["license"], "cc-by-4.0");
+        assert_eq!(appended.document["files"], child.document["files"]);
         assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
         store
             .accept_proposal("p", &figure.id, &proposal.id)
