@@ -66,3 +66,5 @@ sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格�
 现有连线的局部修改可用 `operations:[{op:"set_relation_direction",id:"edge-0",direction:"bidirectional",inhibitory:false}]`，两个状态字段都必须明确给出。支持提案与候选连续修订，保留端点几何、绑定、文字、依据和历史计划。不能用来改变放大图引导线、批注或已锁定/删除对象；不能将抑制与双向/无向组合。改变图示方向前须核对科学意图及证据，不要据新端标记声称已经验证机制。
 
 长标签优先使用 `{op:"set_wrapped_text",id:"label-0",text:"..."}`，在默认科学字体下同步换行和尺寸而不是只更新 `text`。可用于普通提案或候选连续修订；自由文本可提供 `max_width`，绑定文字使用原生容器宽度。形状尺寸保持不变，放不下时先明确调整容器/字号，再核对候选；不支持的字体、旋转或复杂连线会失败，不猜测度量。原文保存为 `originalText`，原有绑定、依据与样式保留。
+
+`duplicate` 局部操作支持在待审提案中复用现有完整组件：`{"op":"duplicate","element_ids":["node-0"],"id_prefix":"trialB","dx":300,"dy":0}`。读取候选核对自动展开的成员与新 ID，再请求候选预览，确认内部连接和外部断开符合本轮需求；复制保留原引用与历史计划，不自动验证新实验语境。

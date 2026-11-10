@@ -221,3 +221,102 @@ fn local_direction_edits_reject_annotations_locks_opaque_metadata_and_conflicts(
         .is_err()
     );
 }
+
+#[test]
+fn evidence_edit_checks_exact_prior_value_and_preserves_other_fields() {
+    let mut source = sketch::compile(&plan(false)).unwrap();
+    let arrow = source["elements"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"] == "edge-0")
+        .unwrap();
+    arrow["customData"]["evidence"] = json!(["prior",{"doi":"structured-reference"}]);
+    arrow["customData"]["privateNote"] = json!("preserve");
+    let prior = arrow["customData"]["evidence"].clone();
+    let operation = |expected, evidence| Operation::SetRelationEvidence {
+        id: "edge-0".into(),
+        expected_evidence: expected,
+        evidence,
+    };
+    let changed = scene::apply(
+        &source,
+        &[operation(
+            prior.clone(),
+            vec!["User supplied DOI or reference".into()],
+        )],
+    )
+    .unwrap();
+    let mut actual = edge(&changed, 0).clone();
+    let mut expected = edge(&source, 0).clone();
+    actual.as_object_mut().unwrap().remove("version");
+    actual.as_object_mut().unwrap().remove("versionNonce");
+    actual.as_object_mut().unwrap().remove("updated");
+    expected.as_object_mut().unwrap().remove("version");
+    expected.as_object_mut().unwrap().remove("versionNonce");
+    expected.as_object_mut().unwrap().remove("updated");
+    expected["customData"]["evidence"] = json!(["User supplied DOI or reference"]);
+    assert_eq!(actual, expected);
+    assert_eq!(changed["scientificPlan"], source["scientificPlan"]);
+    for entry in source["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["id"] != "edge-0")
+    {
+        assert_eq!(
+            changed["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == entry["id"])
+                .unwrap(),
+            entry
+        );
+    }
+    assert!(scene::apply(&source, &[operation(json!(["prior"]), vec![])]).is_err());
+    for invalid in [
+        vec![" ".into()],
+        vec!["x".repeat(2001)],
+        vec!["x".into(); 101],
+    ] {
+        assert!(scene::apply(&source, &[operation(prior.clone(), invalid)]).is_err());
+    }
+    let cleared = scene::apply(&source, &[operation(prior.clone(), vec![])]).unwrap();
+    assert_eq!(edge(&cleared, 0)["customData"]["evidence"], json!([]));
+    for patch in [
+        json!({"locked":true}),
+        json!({"isDeleted":true}),
+        json!({"customData":"opaque"}),
+        json!({"customData":{"annotationKind":"review"}}),
+        json!({"customData":{"inset":{}}}),
+    ] {
+        let mut invalid = source.clone();
+        invalid["elements"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["id"] == "edge-0")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .extend(patch.as_object().unwrap().clone());
+        assert!(scene::apply(&invalid, &[operation(prior.clone(), vec![])]).is_err());
+    }
+}
+
+#[test]
+fn evidence_replacement_requires_explicit_prior_and_new_values() {
+    assert!(
+        serde_json::from_value::<Operation>(
+            json!({"op":"set_relation_evidence","id":"edge-0","evidence":[]})
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<Operation>(
+            json!({"op":"set_relation_evidence","id":"edge-0","expected_evidence":null})
+        )
+        .is_err()
+    );
+}

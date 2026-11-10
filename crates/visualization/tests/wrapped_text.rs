@@ -20,6 +20,7 @@ fn operation(id: &str, text: &str, max_width: Option<f64>) -> Operation {
         id: id.into(),
         text: text.into(),
         max_width,
+        font_size: None,
     }
 }
 #[test]
@@ -145,4 +146,41 @@ fn unsupported_or_nonfitting_labels_fail_atomically() {
     let missing =
         serde_json::from_value::<Operation>(json!({"op":"set_wrapped_text","id":"label-0"}));
     assert!(missing.is_err());
+}
+
+#[test]
+fn explicit_font_size_reflows_atomically_and_preserves_container() {
+    let original = plan();
+    let source = "Receptor complex and downstream signal";
+    let edit = |size| Operation::SetWrappedText {
+        id: "label-0".into(),
+        text: source.into(),
+        max_width: None,
+        font_size: Some(size),
+    };
+    let changed = scene::apply(&original, &[edit(12.)]).unwrap();
+    let label = element(&changed, "label-0");
+    assert_eq!(label["fontSize"], 12.);
+    assert_eq!(label["originalText"], source);
+    assert_eq!(
+        label["lineHeight"],
+        element(&original, "label-0")["lineHeight"]
+    );
+    assert_eq!(
+        label["height"].as_f64().unwrap(),
+        label["text"].as_str().unwrap().split('\n').count() as f64 * 12. * 1.25
+    );
+    for e in original["elements"].as_array().unwrap() {
+        if e["id"] != "label-0" {
+            assert_eq!(element(&changed, e["id"].as_str().unwrap()), e);
+        }
+    }
+    for size in [0., 3.9, 201., f64::NAN, f64::INFINITY] {
+        assert!(scene::apply(&original, &[edit(size)]).is_err());
+    }
+    assert!(
+        scene::apply(&original, &[edit(200.)]).is_err(),
+        "large font must not silently expand container"
+    );
+    assert_eq!(element(&original, "label-0")["fontSize"], 20.);
 }

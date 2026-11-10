@@ -8,14 +8,17 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const reviewSource=process.env.VISUALIZATION_LIVE_REVIEW_SCENE, prepareOnly=process.env.VISUALIZATION_LIVE_PREPARE_ONLY==='1';
+assert.ok(!prepareOnly || reviewSource, 'prepare-only requires an explicit saved review scene');
 const provider = process.env.VISUALIZATION_LIVE_PROVIDER, model = process.env.VISUALIZATION_LIVE_MODEL;
-assert.ok(provider && model, 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
+assert.ok(prepareOnly || (provider && model), 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
 const config = process.env.VISUALIZATION_LIVE_CONFIG || join(homedir(), '.autonomics/config.db');
-const binary = process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
-assert.ok(existsSync(binary) && existsSync(config), 'build the visualization_live example and provide a config database');
+const binary = prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
+assert.ok(existsSync(binary) && (prepareOnly || existsSync(config)), 'build the selected test host; live mode also requires a config database');
 const directory = process.env.VISUALIZATION_LIVE_OUTPUT || await mkdtemp(join(tmpdir(), 'autonomics-canvas-live-'));
 await mkdir(directory, { recursive: true });
-const native = spawn(binary, [config, provider, model, join(directory, 'figures.sqlite'), join(directory, 'trace.jsonl')], { stdio: ['ignore', 'pipe', 'pipe'] });
+assert.ok(!existsSync(join(directory,"figures.sqlite")), "use a fresh output directory; existing evaluation databases are never reused");
+const native = spawn(binary, prepareOnly ? [join(directory,'figures.sqlite')] : [config, provider, model, join(directory, 'figures.sqlite'), join(directory, 'trace.jsonl')], { stdio: ['ignore', 'pipe', 'pipe'] });
 const port = Number(process.env.VISUALIZATION_LIVE_PORT || '1449');
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536, 'choose an unprivileged live test port');
 const origin = `http://127.0.0.1:${port}`;
@@ -26,9 +29,9 @@ vite.stdout.on('data', chunk => viteOutput += chunk); vite.stderr.on('data', chu
 const until = async (predicate, message, duration = 60000) => { const deadline = Date.now() + duration; while (!await predicate()) { if (Date.now() > deadline) throw new Error(message); await new Promise(resolve => setTimeout(resolve, 100)); } };
 const persist = async (name, value) => writeFile(join(directory, name), JSON.stringify(value, null, 2), { mode: 0o600 });
 try {
-  await until(() => { if (native.exitCode !== null || native.signalCode !== null) throw new Error(output); return output.includes('VISUALIZATION_LIVE_ADDR='); }, 'live host readiness');
+  await until(() => { if (native.exitCode !== null || native.signalCode !== null) throw new Error(output); return /VISUALIZATION_(?:LIVE|NATIVE)_ADDR=/.test(output); }, 'live host readiness');
   await until(() => { if (vite.exitCode !== null || vite.signalCode !== null) throw new Error(viteOutput); return viteOutput.includes(origin); }, 'Vite readiness');
-  const backend = `http://${output.match(/VISUALIZATION_LIVE_ADDR=([^\s]+)/)[1]}`;
+  const backend = `http://${output.match(/VISUALIZATION_(?:LIVE|NATIVE)_ADDR=([^\s]+)/)[1]}`;
   const call = async (method, path, body, timeout = 30000) => {
     const response = await fetch(`${backend}${path}`, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(timeout) });
     const value = await response.json(); assert.ok(response.ok, `${response.status} ${JSON.stringify(value)}`); return value;
@@ -71,6 +74,10 @@ try {
     await page.getByRole('textbox', { name: '绘图需求' }).fill(request);
     await page.getByRole('button', { name: '交给 Agent', exact: true }).click(); await page.getByPlaceholder('输入消息…').waitFor();
   };
+  const normalized = text => text.replace(/\s/g, '');
+  const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
+  let image,receptorLabel,receptor;
+  if (!reviewSource) {
   await handoff('我想画一张受体信号传导示意图，但还没有指定受众、具体受体和需要表达的终点。请先和我澄清图意并保存待讨论的绘图计划。这一轮先提问，不要擅自选择具体受体、分子或通路，也不要先画图。');
   await send(1);
   const first = await call('GET', `${path}/planning`); await persist('plan-stage-1.json', first);
@@ -82,7 +89,7 @@ try {
   const ready = await call('GET', `${path}/planning`); await persist('plan-stage-2.json', ready);
   assert.equal(ready.issues.length, 0); assert.ok(ready.version > first.version);
   for (const question of first.document.questions) assert.ok(ready.document.questions.some(q => q.id === question.id && q.answer.trim()), `preserve and answer ${question.id}`);
-  const normalized = text => text.replace(/\s/g, '');
+
   assert.deepEqual(ready.document.nodes.map(node => normalized(node.label)).sort(), ['受体R', '响应X', '配体L'].sort());
   const labels = Object.fromEntries(ready.document.nodes.map(node => [node.id, normalized(node.label)]));
   assert.deepEqual(ready.document.edges.map(edge => `${labels[edge.from]}→${labels[edge.to]}`).sort(), ['受体R→响应X', '配体L→受体R'].sort());
@@ -95,7 +102,7 @@ try {
   await page.getByRole('tab', { name: 'Live figure', exact: true }).click(); await page.getByRole('button', { name: '绘图计划', exact: true }).click();
   const planning = page.getByRole('dialog', { name: '科研绘图计划' }); await planning.getByRole('textbox', { name: '核心图意' }).waitFor();
   await page.screenshot({ path: join(directory, 'planning.png'), animations: 'disabled' }); await planning.getByRole('button', { name: '生成草图提案', exact: true }).click();
-  const preview = page.getByRole('dialog', { name: 'Agent 修改预览' }); await preview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
+  await preview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
   await page.screenshot({ path: join(directory, 'proposal.png'), animations: 'disabled' }); await preview.getByRole('button', { name: '采用提案', exact: true }).click(); await preview.waitFor({ state: 'hidden' });
   await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
   const beforeEdit = await call('GET', path); await persist('adopted-stage-2.json', beforeEdit);
@@ -121,12 +128,12 @@ try {
   assert.ok(assetCalls.some(call => call.input.action === 'preview' && call.input.asset_id === replacement.input.asset_id), 'preview the same asset before replacing the placeholder');
   const assetEdits = (await call('GET', `${path}/proposals`)).filter(p => p.status === 'pending'); assert.equal(assetEdits.length, 1);
   const illustrated = assetEdits[0]; await persist('proposal-stage-4.json', illustrated);
-  const image = illustrated.document.elements.find(element => element.type === 'image'); assert.ok(image);
+  image = illustrated.document.elements.find(element => element.type === 'image'); assert.ok(image);
   assert.equal(image.customData.asset.id, replacement.input.asset_id); assert.ok(image.customData.asset.licenses.length > 0);
   assert.ok(image.customData.asset.source_url.startsWith('https://bioart.niaid.nih.gov/'));
   assert.ok(illustrated.document.files[image.fileId].dataURL.startsWith('data:image/png;base64,'));
-  const receptorLabel = beforeIllustration.scene.document.elements.find(element => element.type === 'text' && normalized(element.text) === '受体R'); assert.ok(receptorLabel);
-  const receptor = beforeIllustration.scene.document.elements.find(element => element.id === receptorLabel.containerId); assert.ok(receptor);
+  receptorLabel = beforeIllustration.scene.document.elements.find(element => element.type === 'text' && normalized(element.text) === '受体R'); assert.ok(receptorLabel);
+  receptor = beforeIllustration.scene.document.elements.find(element => element.id === receptorLabel.containerId); assert.ok(receptor);
   for (const element of beforeIllustration.scene.document.elements.filter(e => ![receptor.id, receptorLabel.id].includes(e.id))) {
     assert.deepEqual(illustrated.document.elements.find(next => next.id === element.id), element, `asset replacement preserves unrelated ${element.id}`);
   }
@@ -137,6 +144,21 @@ try {
   await preview.getByRole('button', { name: new RegExp(illustrated.summary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).click();
   await preview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor(); await page.screenshot({ path: join(directory, 'bioart-proposal.png'), animations: 'disabled' });
   await preview.getByRole('button', { name: '采用提案', exact: true }).click(); await preview.waitFor({ state: 'hidden' }); await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  } else {
+    const artifact=JSON.parse(await readFile(reviewSource,'utf8')),document=artifact.scene?.document ?? artifact.document ?? artifact;
+    assert.ok(Array.isArray(document.elements)&&document.files,'review scene must be an editable saved document with files');
+    const head=await call('GET',path);
+    await call('PUT',path,{expected_revision:head.metadata.revision,title:'Live figure',document});
+    page.once('dialog',dialog=>dialog.accept());
+    await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();
+    const seededDownload=page.waitForEvent('download');await page.getByRole('button',{name:'导出 源文件',exact:true}).click();const seededScene=JSON.parse(await readFile(await (await seededDownload).path(),'utf8'));assert.ok(seededScene.elements.some(e=>e.type==='image'),'editor loaded the imported scene');
+    await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+    const imported=await call('GET',path);image=imported.scene.document.elements.find(e=>e.type==='image'&&!e.isDeleted);assert.ok(image,'isolated case requires the illustrated receptor fixture');
+    receptorLabel=imported.scene.document.elements.find(e=>e.type==='text'&&normalized(e.text)==='受体R');assert.ok(receptorLabel);
+    receptor=imported.scene.document.elements.find(e=>e.id===image.customData?.semanticAnchorId);assert.ok(receptor);
+    assert.equal(image.customData?.semanticAnchorId,receptor.id,'reference image belongs to the marked receptor');assert.ok(receptor.customData?.visualLabelIds?.includes(receptorLabel.id),'label belongs to illustrated semantic anchor');
+    await persist('seed-scene.json',imported);checkpoints.push('imported an explicit prior illustrated scene into a separate test database; no earlier model turns were replayed');
+  }
   const beforeMarkup = await call('GET', path); await persist('before-markup.json', beforeMarkup);
   await page.screenshot({ path: join(directory, 'illustrated-figure.png'), animations: 'disabled' });
   const beforeElements = beforeMarkup.scene.document.elements.filter(e => !e.isDeleted);
@@ -167,9 +189,15 @@ try {
   assert.ok(Math.min(a[0], b[0]) < centerX && Math.max(a[0], b[0]) > centerX && Math.min(a[1], b[1]) < centerY && Math.max(a[1], b[1]) > centerY, 'GUI cross covers the receptor image in scene coordinates');
   await page.screenshot({ path: join(directory, 'markup.png'), animations: 'disabled' });
   await markup.getByRole('button', { name: '关闭标记', exact: true }).click();
+  if (prepareOnly) {
+    assert.equal(turns.length,0);assert.deepEqual(errors,[]);
+    await persist('result.json',{prepared:true,passed:false,model_evaluated:false,case:'isolated_markup',project,figure,checkpoints,review_id:review.id});
+    console.log(`canvas-live: isolated markup prepared without model inference; artifacts=${directory}`);
+    process.exitCode=0;
+  } else {
   await handoff('请查看本次保存的草图标记截图，结合笔迹和修改说明识别应移除的组件，生成局部修改提案。不要直接改正式图稿，不要推断新的科学关系。');
-  await send(5);
-  assert.ok(turns[4].calls.some(c => c.name === 'visualization' && c.input.action === 'read_markup' && c.input.markup_id === review.id), 'real agent reads the exact review as a vision result');
+  await send(reviewSource ? 1 : 5);
+  assert.ok(turns[reviewSource ? 0 : 4].calls.some(c => c.name === 'visualization' && c.input.action === 'read_markup' && c.input.markup_id === review.id), 'real agent reads the exact review as a vision result');
   const markupEdits = (await call('GET', `${path}/proposals`)).filter(p => p.status === 'pending'); assert.equal(markupEdits.length, 1);
   const deletion = markupEdits[0]; await persist('proposal-stage-5.json', deletion);
   const kept = beforeElements.filter(e => ![receptor.id, receptorLabel.id, image.id].includes(e.id) && e.type !== 'arrow' && !(e.type === 'text' && beforeElements.some(arrow => arrow.type === 'arrow' && arrow.id === e.containerId)));
@@ -192,13 +220,14 @@ try {
   await page.getByRole('button', { name: '保存画布', exact: true }).waitFor();
   const download = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 SVG', exact: true }).click(); await writeFile(join(directory, 'figure.svg'), await readFile(await (await download).path()));
   await page.screenshot({ path: join(directory, 'figure.png'), animations: 'disabled' }); await persist('final.json', await call('GET', path));
-  assert.deepEqual(errors, []); await persist('result.json', { passed: true, provider, model, project, figure, checkpoints, turns: turns.length });
+  assert.deepEqual(errors, []); await persist('result.json', { passed: true, provider, model, project, figure, checkpoints, turns: turns.length, case:reviewSource?'isolated_markup':'full_workflow' });
   console.log(`canvas-live: all checks passed; artifacts=${directory}`);
+  }
 } catch (error) {
   await page?.screenshot({ path: join(directory, 'failure.png'), animations: 'disabled' }).catch(() => {});
-  await persist('result.json', { passed: false, provider, model, checkpoints, error: String(error), errors });
+  await persist('result.json', { passed: false, case:reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
   console.error(`canvas-live: failed; artifacts=${directory}`); throw error;
 } finally {
-  await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await browser?.close(); native.kill(); vite.kill();
+  await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await page?.unrouteAll({behavior:'ignoreErrors'}).catch(()=>{}); await browser?.close(); native.kill(); vite.kill();
   await Promise.all([native, vite].map(child => child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise(resolve => child.once('exit', resolve))));
 }

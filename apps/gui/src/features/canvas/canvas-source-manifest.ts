@@ -50,7 +50,7 @@ export async function createSourceManifest(input: { scene: string; title: string
     return { element_id: string(element.id), semantic_anchor_id: string(data.semanticAnchorId), mime_type: string(file.mimeType), file_id: fileId, provider: string(data.source), asset_id: identifier(asset.id), name, authors, author_urls: urls(asset.author_url), licenses, license_urls: urls(asset.license_url, asset.license_urls, data.license_url, data.license_urls), source_urls: sourceURLs, source_sha256: string(data.source_sha256), recorded_sha256: recordedHash, ...hash, hash_matches_recorded: hash.actual_sha256 && recordedHash && /^[a-f\d]{64}$/i.test(recordedHash) ? hash.actual_sha256 === recordedHash.toLowerCase() : null, normalization, modifications, missing_fields: missing };
   }));
   const credits = unique(assets.map(asset => `${asset.name} — ${asset.authors.length ? asset.authors.join(", ") : "author not recorded"}; ${asset.licenses.length ? asset.licenses.join(", ") : "license not recorded"}${asset.license_urls.length ? ` (${asset.license_urls.join(", ")})` : ""}; ${asset.source_urls.join(", ") || "source not recorded"}${asset.normalization.length || asset.modifications.length ? `; changes: ${[...asset.normalization, ...asset.modifications.map(change => change.kind ?? "unspecified")].join("; ")}` : ""}`));
-  return { schema: "autonomics.figure.asset-sources/v1", exported_at: new Date().toISOString(), title: input.title, project_id: input.project_id ?? null, figure_id: input.figure_id ?? null, based_on_revision: input.based_on_revision ?? null, unsaved_changes: input.unsaved_changes, scene_json_sha256: await sha256(new TextEncoder().encode(input.scene)), assets, credits };
+  return { schema: "autonomics.figure.asset-sources/v1", exported_at: new Date().toISOString(), title: input.title, project_id: input.project_id ?? null, figure_id: input.figure_id ?? null, based_on_revision: input.based_on_revision ?? null, unsaved_changes: input.unsaved_changes, scene_json_sha256: await sha256(new TextEncoder().encode(input.scene)), assets, credits, relation_sources: relationSources(document) };
 }
 export type SourceManifest = Awaited<ReturnType<typeof createSourceManifest>>;
 export function embedSvgSources(svg: SVGSVGElement, manifest: SourceManifest) {
@@ -80,4 +80,33 @@ export async function embedPngSources(blob: Blob, manifest: SourceManifest) {
   }
   if (!ended) throw new Error("PNG 缺少结束数据块");
   return new Blob(parts.map(part => Uint8Array.from(part).buffer), { type: "image/png" });
+}
+
+/** Explicit scientific references only; never copy arbitrary customData into exports. */
+type Row = Record<string,unknown>;
+const row=(v:unknown):Row=>v&&typeof v==='object'&&!Array.isArray(v)?v as Row:{};
+const id=(v:unknown)=>typeof v==='string'&&v.length>0&&v.length<=512?v:null;
+function reference(value:unknown) {
+  if(typeof value==='string'&&value.trim()&&!/^\s*data:/i.test(value))return {kind:'text',text:value.slice(0,2000),truncated:value.length>2000};
+  if(!value||typeof value!=='object'||Array.isArray(value))return {kind:'unsupported'};
+  const source=row(value),fields:Record<string,string>={};let omitted=false,truncated=false;
+  for(const [key,v] of Object.entries(source)) {
+    if(!['doi','pmid','pmcid','url','title','reference'].includes(key)||typeof v!=='string'||!v.trim()||/^\s*data:/i.test(v)){omitted=true;continue;}
+    if(key==='url'){try{const url=new URL(v);if(!['http:','https:'].includes(url.protocol)||url.username||url.password){omitted=true;continue;}}catch{omitted=true;continue;}}
+    fields[key]=v.slice(0,2000);if(v.length>2000)truncated=true;
+  }
+  return {kind:'structured',fields,omitted_fields:omitted,truncated};
+}
+export function relationSources(input:unknown) {
+  const scene=row(input),elements=Array.isArray(scene.elements)?scene.elements:[];
+  const relations=[];let total=0;
+  for(const value of elements) {
+    const e=row(value),data=row(e.customData);
+    if(e.type!=='arrow'||e.isDeleted===true||data.annotationKind!=null||data.inset!=null)continue;
+    total++;if(relations.length>=1000)continue;
+    const evidence=data.evidence,entries=Array.isArray(evidence)?evidence:[];
+    const actualHead=(v:unknown)=>v==null?null:typeof v==='string'&&v.length<=32?v:'unknown';
+    relations.push({element_id:id(e.id),start_element_id:id(row(e.startBinding).elementId),end_element_id:id(row(e.endBinding).elementId),start_arrowhead:actualHead(e.startArrowhead),end_arrowhead:actualHead(e.endArrowhead),declared_direction:typeof data.direction==='string'&&['forward','bidirectional','undirected'].includes(data.direction)?data.direction:null,declared_inhibitory:typeof data.inhibitory==='boolean'?data.inhibitory:null,evidence_status:evidence==null?'not_recorded':Array.isArray(evidence)?'recorded':'unsupported',references:entries.slice(0,100).map(reference),reference_count:entries.length,references_truncated:entries.length>100});
+  }
+  return {schema:'autonomics.figure.relation-sources/v1',verification:'not_verified',relations,total,truncated:total>relations.length};
 }

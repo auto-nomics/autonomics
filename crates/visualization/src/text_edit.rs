@@ -26,6 +26,7 @@ pub(crate) fn apply(
     id: &str,
     source: &str,
     max_width: Option<f64>,
+    font_size: Option<f64>,
 ) -> Result<(), SceneError> {
     if source.trim().is_empty() || source.chars().count() > 2048 {
         return Err(fail(
@@ -57,7 +58,7 @@ pub(crate) fn apply(
             "requires live unlocked unrotated scientific-font text (fontFamily 9)",
         ));
     }
-    let size = number(original, "fontSize")?;
+    let size = font_size.unwrap_or(number(original, "fontSize")?);
     let line_height = number(original, "lineHeight")?;
     if !(4. ..=200.).contains(&size) || !(0.5..=3.).contains(&line_height) {
         return Err(fail("font size or line height is out of range"));
@@ -256,6 +257,7 @@ pub(crate) fn apply(
         return Err(fail("resulting text geometry is out of range"));
     }
     let target = &mut elements[index];
+    target["fontSize"] = json!(size);
     target["text"] = json!(wrapped);
     target["originalText"] = json!(source);
     target["width"] = json!(width);

@@ -1,3 +1,4 @@
+import { hasProtectedCopyTarget, prepareNativePaste, repairNativeDuplicate, stampNativeIdentities } from "./canvas-native-duplicate";
 import { useEffect, useRef, useState } from "react";
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
@@ -11,6 +12,9 @@ import { canvasSelectionContext } from "./canvas-selection-context";
 import { createSourceManifest, embedSvgSources, embedPngSources } from "./canvas-source-manifest";
 import { CanvasInset } from "./canvas-inset";
 import { CanvasPalette } from "./canvas-palette";
+import { CanvasTextEdit } from "./canvas-text-edit";
+import { CanvasEvidenceList } from "./canvas-evidence-list";
+import { CanvasDuplicate } from "./canvas-duplicate";
 import { CanvasRelation } from "./canvas-relation";
 import { CanvasRouting } from "./canvas-routing";
 import { CanvasPlanning } from "./canvas-planning";
@@ -38,7 +42,11 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const revision = useRef<number | undefined>(undefined);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
   const baseline = useRef<string | null>(null);
+  const pointerSubscription=useRef<(()=>void)|undefined>(undefined);
+  const stopProtectedPointer=useRef<(()=>void)|undefined>(undefined);
+  useEffect(()=>()=>{pointerSubscription.current?.();stopProtectedPointer.current?.();},[]);
   const fitted = useRef(false);
+  const viewportSize = useRef<{width:number;height:number}|null>(null);
   const titleRef = useRef("");
   const saving = useRef(false);
   const latestTitle = useRef("未命名画布");
@@ -46,9 +54,13 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const [error, setError] = useState("");
   const [circleSelect, setCircleSelect] = useState(false);
   const [proposalRequest, setProposalRequest] = useState<{ id: string }>();
-  const [showAgent, setShowAgent] = useState(false);
-  const [showBioArt, setShowBioArt] = useState(false);
-  const [showBioIcons, setShowBioIcons] = useState(false);
+  type Panel = "agent" | "bioart" | "bioicons";
+  const [panel,setPanel]=useState<Panel|null>(null);
+  const [visitedPanels,setVisitedPanels]=useState<Record<Panel,boolean>>({agent:false,bioart:false,bioicons:false});
+  function selectPanel(target:Panel,toggle=true) {
+    setVisitedPanels(current=>({...current,[target]:true}));
+    setPanel(current=>toggle&&current===target?null:target);
+  }
   const [imagesReady, setImagesReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
@@ -111,9 +123,11 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     const instance = api.current; if (!instance) return;
     setError("");
     try {
-      const elements = structuredClone(instance.getSceneElements()), files = structuredClone(instance.getFiles());
       const state = instance.getAppState(), appState = { ...state, frameRendering: { ...state.frameRendering } };
-      const scene = serializeAsJSON(elements, appState, files, "local"), exportTitle = title;
+      // Export the serialized snapshot: runtime provenance and renderer caches stay local.
+      const scene = serializeAsJSON(instance.getSceneElements(), appState, instance.getFiles(), "local"), exportTitle = title;
+      const snapshot = JSON.parse(scene) as {elements: ReturnType<ExcalidrawImperativeAPI["getSceneElements"]>;files: ReturnType<ExcalidrawImperativeAPI["getFiles"]>};
+      const {elements,files} = snapshot;
       if (format === "excalidraw") { download(new Blob([scene], { type: "application/json" }), `${exportTitle}.excalidraw`); return; }
       const manifest = await createSourceManifest({ scene, title: exportTitle, project_id: projectId, figure_id: id, based_on_revision: revision.current, unsaved_changes: scene !== baseline.current || exportTitle !== titleRef.current });
       if (format === "sources") download(new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }), `${exportTitle}.sources.json`);
@@ -133,9 +147,20 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   }
   return <section aria-label="画布编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDownCapture={event => {
     if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) return;
+    const key=event.key.toLowerCase(), target=event.target;
+    const history=(event.ctrlKey||event.metaKey)&&!event.altKey&&(key==="z"||(key==="y"&&!event.shiftKey));
+    if(history&&target instanceof HTMLElement&&!target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]')) {
+      const canvas=event.currentTarget.querySelector<HTMLElement>('[data-canvas-surface] .excalidraw');
+      if(canvas&&(!canvas.contains(target)||key==="y")) {
+        event.preventDefault();event.stopPropagation();canvas.focus({preventScroll:true});
+        // Normalize the redo alias; native Ctrl+Y is otherwise Windows-only.
+        canvas.dispatchEvent(new KeyboardEvent("keydown",{key:key==="y"?"Z":event.key,code:key==="y"?"KeyZ":event.code,ctrlKey:event.ctrlKey,metaKey:event.metaKey,shiftKey:key==="y"||event.shiftKey,altKey:event.altKey,repeat:event.repeat,bubbles:true,cancelable:true}));
+        return;
+      }
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); void save(); }
   }}>
-    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b p-2">
+    <div data-canvas-toolbar role="group" aria-label="画布工具栏" className="flex max-h-[35%] shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b p-2">
       <input aria-label="画布名称" disabled={busy} className="min-w-48 flex-1 rounded border bg-background px-2 py-1 text-sm" value={title} onChange={event => { latestTitle.current = event.target.value; setTitle(event.target.value); dirty(true); }} />
       <span className="text-xs text-muted-foreground">{projectId ? "保存在项目中" : "旧版本地画布"}</span>
       {projectId && <CanvasHistory projectId={projectId} canvasId={id} getRevision={() => revision.current} isDirty={hasUnsavedChanges} onRestored={onReload} />}
@@ -145,11 +170,14 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {projectId && <CanvasPalette projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasDuplicate projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasEvidenceList projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
-      {projectId && <Button size="sm" variant="outline" onClick={() => setShowAgent(value => !value)}>Agent 绘图</Button>}
-      <Button size="sm" variant="outline" onClick={() => setShowBioArt(value => !value)}>BioArt 素材</Button>
-      <Button size="sm" variant="outline" onClick={() => setShowBioIcons(value => !value)}>矢量素材</Button>
+      {projectId && <Button size="sm" variant={panel === "agent" ? "secondary" : "outline"} aria-expanded={panel === "agent"} onClick={() => selectPanel("agent")}>Agent 绘图</Button>}
+      <Button size="sm" variant={panel === "bioart" ? "secondary" : "outline"} aria-expanded={panel === "bioart"} onClick={() => selectPanel("bioart")}>BioArt 素材</Button>
+      <Button size="sm" variant={panel === "bioicons" ? "secondary" : "outline"} aria-expanded={panel === "bioicons"} onClick={() => selectPanel("bioicons")}>矢量素材</Button>
       {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
         const instance = api.current;
         const changed = instance && (serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
@@ -161,10 +189,45 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     </div>
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
     {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" data-canvas-surface>
-      <Excalidraw initialData={initial} excalidrawAPI={instance => { api.current = instance; }} langCode="zh-CN" handleKeyboardGlobally={false} autoFocus onChange={(elements, appState, files) => {
+      <Excalidraw initialData={initial} excalidrawAPI={instance => {
+        api.current = instance;pointerSubscription.current?.();
+        pointerSubscription.current=instance.onPointerDown((_tool,pointerState,event)=>{
+          stopProtectedPointer.current?.();
+          if(_tool.type!=="selection"||event.button!==0)return;
+          const pointerId=event.pointerId;
+          const block=(move:PointerEvent)=>{
+            if(move.pointerId!==pointerId||!move.altKey)return;
+            const state=instance.getAppState();
+            if(pointerState.resize.handleType||state.croppingElementId||state.editingLinearElement||(!pointerState.hit.element&&!pointerState.hit.hasHitCommonBoundingBoxOfSelectedElements))return;
+            if(!hasProtectedCopyTarget(instance.getSceneElements(),state.selectedElementIds,pointerState.hit.element?.id))return;
+            move.preventDefault();move.stopImmediatePropagation();
+            setError("放大图和批注暂不支持 Alt 拖拽复制；可松开 Alt 移动原对象。");
+          };
+          const cleanup=()=>{window.removeEventListener("pointermove",block,true);window.removeEventListener("pointerup",cleanup,true);window.removeEventListener("pointercancel",cleanup,true);window.removeEventListener("blur",cleanup);if(stopProtectedPointer.current===cleanup)stopProtectedPointer.current=undefined;};
+          stopProtectedPointer.current=cleanup;
+          window.addEventListener("pointermove",block,{capture:true,passive:false});window.addEventListener("pointerup",cleanup,{capture:true,once:true});window.addEventListener("pointercancel",cleanup,{capture:true,once:true});window.addEventListener("blur",cleanup,{once:true});
+        });
+      }} langCode="zh-CN" handleKeyboardGlobally={false} autoFocus onPaste={data=>{
+        if(!data.elements)return true;
+        try {const prepared=prepareNativePaste(data.elements,data.files,api.current?.getFiles()??{});data.elements=prepared.elements;data.files=prepared.files;return true;}
+        catch(cause){setError(String(cause));return false;}
+      }} onDuplicate={(next,previous) => {
+        const selected=api.current?.getAppState().selectedElementIds;
+        try {return repairNativeDuplicate(next,previous);} catch(cause) {setError(String(cause));queueMicrotask(()=>{if(selected)api.current?.updateScene({appState:{selectedElementIds:selected}});});return [...previous];}
+      }} onChange={(elements, appState, files) => {
+        stampNativeIdentities(elements);
         if (!fitted.current && initial?.elements?.length && elements.length && api.current) {
           fitted.current = true;
           api.current.scrollToContent(elements, { fitToViewport: true, maxZoom: 1, viewportZoomFactor: 0.8 });
+        }
+        // Preserve the scene point at the viewport center, without resetting user zoom/pan.
+        if (appState.width > 0 && appState.height > 0) {
+          const previousSize=viewportSize.current;
+          viewportSize.current={width:appState.width,height:appState.height};
+          if(previousSize && api.current && (previousSize.width!==appState.width || previousSize.height!==appState.height)) {
+            const zoom=appState.zoom.value;
+            if(Number.isFinite(zoom)&&zoom>0)api.current.updateScene({appState:{scrollX:appState.scrollX+(appState.width-previousSize.width)/(2*zoom),scrollY:appState.scrollY+(appState.height-previousSize.height)/(2*zoom)}});
+          }
         }
         setImagesReady(elements.every(element => element.isDeleted || element.type !== "image" || Boolean(element.fileId && files[element.fileId])));
         const scene = serializeAsJSON(elements, appState, files, "local");
@@ -180,8 +243,8 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
         <MainMenu><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
       </Excalidraw>
       {circleSelect && <CanvasCircleSelect getApi={() => api.current} onDone={(count, message) => {
-        setCircleSelect(false); if (message) setError(message); else setError(""); if (count) setShowAgent(true);
+        setCircleSelect(false); if (message) setError(message); else setError(""); if (count) selectPanel("agent",false);
       }} />}
-    </div>{showAgent && projectId && <CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} />}{showBioArt && <BioArtPanel getApi={() => api.current} />}{showBioIcons && <BioIconsPanel getApi={() => api.current} />}</div>}
+    </div><div className="contents" data-canvas-panels>{visitedPanels.agent && projectId && <div className={panel === "agent" ? "contents" : "hidden"}><CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} /></div>}{visitedPanels.bioart && <div className={panel === "bioart" ? "contents" : "hidden"}><BioArtPanel getApi={() => api.current} /></div>}{visitedPanels.bioicons && <div className={panel === "bioicons" ? "contents" : "hidden"}><BioIconsPanel getApi={() => api.current} /></div>}</div></div>}
   </section>;
 }

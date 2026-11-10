@@ -1,3 +1,4 @@
+import { textOverlapChanges, textOverlaps } from "./canvas-text-overlaps";
 import { useState } from "react";
 import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
 import { openAgentEditor } from "@/app/workbench/workbench-store";
@@ -24,12 +25,18 @@ export function CanvasProposalFeedback({ projectId, canvasId, candidate, focused
       const path = `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}`;
       const [head, latest] = await Promise.all([
         gatewayRequest("GET", path) as Promise<{ metadata: { revision: number } }>,
-        gatewayRequest("GET", `${path}/proposals/${encodeURIComponent(candidate.id)}`) as Promise<Candidate & { status: string }>,
+        gatewayRequest("GET", `${path}/proposals/${encodeURIComponent(candidate.id)}`) as Promise<Candidate & { status: string; document: unknown }>,
       ]);
       if (isDirty() || !candidate.document_sha256 || latest.document_sha256 !== candidate.document_sha256 || latest.status !== "pending" || latest.base_revision !== candidate.base_revision || head.metadata.revision !== candidate.base_revision) throw new Error("候选或正式版本已变化，请重新打开并核对提案。");
       if (markupIds.some(id => !latest.review_markups?.some(markup => markup.id === id && markup.status === "open"))) throw new Error("关联意见已变化，请重新打开并核对提案。");
-      const context = { project_id: projectId, figure_id: canvasId, proposal_id: candidate.id, document_sha256: candidate.document_sha256, expected_revision: candidate.base_revision, request: request.trim(), focused_object_id: focusedId ?? null, comparison, reviewed_object_change: focusedId ? changes.find(change => change.id === focusedId) ?? null : null, markup_ids: markupIds };
-      const prompt = ["请继续修订下面的待审科研绘图候选。先用 visualization read_proposal 核对候选 ID、document_sha256、基础版本与当前版本，再 read_proposal_preview 检查候选图。使用 revise_proposal 以该候选为基础提交 operations 或 arrangement，保留上一轮累计修改和无关对象，不采用提案。focused_object_id 是用户当前核对的对象，可能仅存在于对照版本；需在完整候选中确认身份。reviewed_object_change 是当前对照视角的有界字段摘要，不是完整编辑指令。markup_ids 是用户本轮选择回应的意见，[] 表示不继承关联，不得自动添加或完成其他意见。生成子提案后再次读取候选预览核对，并向用户说明需要确认的科学假设。缺失的科学事实应先询问，不要猜测。", JSON.stringify(context, null, 2)].join("\n\n");
+      const baseline = comparison.kind === "parent_candidate"
+        ? await gatewayRequest("GET", `${path}/proposals/${encodeURIComponent(comparison.proposal_id)}`) as Candidate & { document: unknown }
+        : await gatewayRequest("GET", `${path}/revisions/${comparison.revision}`) as { document: unknown };
+      if (comparison.kind === "parent_candidate" && (!comparison.document_sha256 || !("document_sha256" in baseline) || baseline.document_sha256 !== comparison.document_sha256)) throw new Error("对照候选已变化，请重新打开提案。");
+      if (comparison.kind === "formal_revision" && comparison.revision !== candidate.base_revision) throw new Error("对照版本不匹配，请重新打开提案。");
+      if (isDirty()) throw new Error("画布发生变化，请保存后重新核对候选。");
+      const context = { project_id: projectId, figure_id: canvasId, proposal_id: candidate.id, document_sha256: candidate.document_sha256, expected_revision: candidate.base_revision, request: request.trim(), candidate_text_overlap_check: { scope: "candidate_document", method: "unrotated_text_rectangles", ...textOverlaps(latest.document), comparison_changes: textOverlapChanges(baseline.document,latest.document) }, focused_object_id: focusedId ?? null, comparison, reviewed_object_change: focusedId ? changes.find(change => change.id === focusedId) ?? null : null, markup_ids: markupIds };
+      const prompt = ["请继续修订下面的待审科研绘图候选。先用 visualization read_proposal 核对候选 ID、document_sha256、基础版本与当前版本，再 read_proposal_preview 检查候选图。使用 revise_proposal 以该候选为基础提交 operations 或 arrangement，保留上一轮累计修改和无关对象，不采用提案。focused_object_id 是用户当前核对的对象，可能仅存在于对照版本；需在完整候选中确认身份。reviewed_object_change 是当前对照视角的有界字段摘要，不是完整编辑指令。candidate_text_overlap_check 是对同一哈希候选的有界文字矩形检查；pairs 给出需核对的对象 ID，skipped/truncated 表示检查不完整。它可能包含原有重叠或文字空白，不代表实际字形碰撞，更不代表应删除文字；须通过候选预览确认，保留科学含义，再按用户要求修改。comparison_changes 按 comparison 来源区分 introduced/persisting/resolved/unknown；unknown 或 skipped 表示不能确定，不能当作新增或已修复。零条提示也不证明布局没有问题。markup_ids 是用户本轮选择回应的意见，[] 表示不继承关联，不得自动添加或完成其他意见。生成子提案后再次读取候选预览核对，并向用户说明需要确认的科学假设。缺失的科学事实应先询问，不要猜测。", JSON.stringify(context, null, 2)].join("\n\n");
       const previous = runtime.drafts[target] || "";
       runtime.setDraftFor(target, previous ? `${previous}\n\n${prompt}` : prompt);
       runtime.selectAgent(target); onPrepared(); openAgentEditor(target);

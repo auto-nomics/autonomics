@@ -7,12 +7,28 @@ use std::collections::HashSet;
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Duplicate complete native components with new IDs and rigid offsets.
+    Duplicate {
+        element_ids: Vec<String>,
+        id_prefix: String,
+        dx: f64,
+        dy: f64,
+    },
     /// Wrap text using pinned font metrics while keeping containers and bindings.
     SetWrappedText {
         id: String,
         text: String,
         #[serde(default)]
         max_width: Option<f64>,
+        /// Optional explicit scientific font size (4..200); otherwise preserve it.
+        #[serde(default)]
+        font_size: Option<f64>,
+    },
+    /// Replace only recorded relation evidence after reading its exact existing value.
+    SetRelationEvidence {
+        id: String,
+        expected_evidence: Value,
+        evidence: Vec<String>,
     },
     /// Set native relation endpoints and explicit direction metadata together.
     /// Geometry, bindings, labels, evidence and historical plan snapshots survive.
@@ -57,11 +73,13 @@ pub enum SceneError {
     InvalidText(String),
     #[error("cannot set relation direction: {0}")]
     InvalidRelation(String),
+    #[error("cannot duplicate components: {0}")]
+    InvalidCopy(String),
     #[error("element id cannot be changed")]
     ImmutableId,
 }
 
-fn owned_elements(elements: &[Value], id: &str) -> HashSet<String> {
+pub(crate) fn owned_elements(elements: &[Value], id: &str) -> HashSet<String> {
     let Some(parent) = elements
         .iter()
         .find(|element| element["id"].as_str() == Some(id))
@@ -234,11 +252,49 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     }
     for operation in operations {
         match operation {
+            Operation::Duplicate {
+                element_ids,
+                id_prefix,
+                dx,
+                dy,
+            } => {
+                ids.extend(crate::duplicate::apply(
+                    elements,
+                    &document["files"],
+                    element_ids,
+                    id_prefix,
+                    *dx,
+                    *dy,
+                )?);
+            }
             Operation::SetWrappedText {
                 id,
                 text,
                 max_width,
-            } => crate::text_edit::apply(elements, id, text, *max_width)?,
+                font_size,
+            } => crate::text_edit::apply(elements, id, text, *max_width, *font_size)?,
+            Operation::SetRelationEvidence {
+                id,
+                expected_evidence,
+                evidence,
+            } => {
+                if evidence.len() > 100
+                    || evidence
+                        .iter()
+                        .any(|entry| entry.trim().is_empty() || entry.chars().count() > 2000)
+                {
+                    return Err(SceneError::InvalidRelation("evidence requires at most 100 nonblank references of at most 2000 characters each".into()));
+                }
+                let element = editable_relation(elements, id)?;
+                if element["customData"]["evidence"] != *expected_evidence {
+                    return Err(SceneError::InvalidRelation("recorded evidence changed; read the exact current value before replacing it".into()));
+                }
+                if element["customData"].is_null() {
+                    element["customData"] = serde_json::json!({});
+                }
+                element["customData"]["evidence"] = serde_json::json!(evidence);
+                touch(element);
+            }
             Operation::SetRelationDirection {
                 id,
                 direction,
@@ -249,22 +305,8 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                         "inhibitory is supported only for forward relations".into(),
                     ));
                 }
-                let element = elements
-                    .iter_mut()
-                    .find(|element| element["id"].as_str() == Some(id))
-                    .ok_or_else(|| SceneError::NotFound(id.clone()))?;
+                let element = editable_relation(elements, id)?;
                 let metadata = element.get("customData").cloned().unwrap_or(Value::Null);
-                if element["type"] != "arrow"
-                    || element["isDeleted"] == true
-                    || element["locked"] == true
-                    || (!metadata.is_null() && !metadata.is_object())
-                    || metadata
-                        .get("annotationKind")
-                        .is_some_and(|kind| !kind.is_null())
-                    || metadata.get("inset").is_some_and(|value| !value.is_null())
-                {
-                    return Err(SceneError::InvalidRelation("requires a live unlocked relation arrow; annotation/inset arrows and opaque metadata are not supported".into()));
-                }
                 let (start, end) = direction.arrowheads(*inhibitory);
                 element["startArrowhead"] = serde_json::json!(start);
                 element["endArrowhead"] = serde_json::json!(end);
@@ -614,4 +656,22 @@ mod tests {
             Err(SceneError::ImmutableId)
         );
     }
+}
+
+fn editable_relation<'a>(elements: &'a mut [Value], id: &str) -> Result<&'a mut Value, SceneError> {
+    let element = elements
+        .iter_mut()
+        .find(|element| element["id"].as_str() == Some(id))
+        .ok_or_else(|| SceneError::NotFound(id.into()))?;
+    let metadata = &element["customData"];
+    if element["type"] != "arrow"
+        || element["isDeleted"] == true
+        || element["locked"] == true
+        || (!metadata.is_null() && !metadata.is_object())
+        || metadata.get("annotationKind").is_some_and(|v| !v.is_null())
+        || metadata.get("inset").is_some_and(|v| !v.is_null())
+    {
+        return Err(SceneError::InvalidRelation("requires a live unlocked relation arrow; annotation/inset arrows and opaque metadata are not supported".into()));
+    }
+    Ok(element)
 }
