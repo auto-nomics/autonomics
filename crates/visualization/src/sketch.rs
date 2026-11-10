@@ -10,17 +10,31 @@ pub struct Plan {
     pub audience: String,
     #[serde(default)]
     pub layout: Layout,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub panels: Vec<Panel>,
     pub nodes: Vec<Node>,
     #[serde(default)]
     pub edges: Vec<Edge>,
     #[serde(default)]
     pub assumptions: Vec<String>,
 }
+/// Explicit comparison/step panels. Each node belongs to one panel; no relation
+/// is inferred between panels. Column/row place panels, not their child nodes.
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Panel {
+    pub id: String,
+    pub title: String,
+    pub column: u16,
+    pub row: u16,
+}
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Node {
     pub id: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,12 +76,12 @@ pub struct Edge {
 #[derive(Debug, thiserror::Error)]
 #[error("invalid scientific sketch: {0}")]
 pub struct InvalidPlan(pub String);
-fn base(id: &str, kind: &str, x: f64, y: f64, width: f64, height: f64) -> Value {
+pub(crate) fn base(id: &str, kind: &str, x: f64, y: f64, width: f64, height: f64) -> Value {
     json!({"id":id,"type":kind,"x":x,"y":y,"width":width,"height":height,"angle":0,"strokeColor":"#1e293b","backgroundColor":"transparent","fillStyle":"solid","strokeWidth":2,"strokeStyle":"solid","roughness":0,"opacity":100,"groupIds":[],"frameId":null,"roundness":null,"seed":1,"version":1,"versionNonce":1,"isDeleted":false,"boundElements":[],"updated":1,"link":null,"locked":false})
 }
-fn text(id: &str, label: &str, x: f64, y: f64, width: f64) -> Value {
+pub(crate) fn text(id: &str, label: &str, x: f64, y: f64, width: f64) -> Value {
     let mut value = base(id, "text", x, y, width, 50.0);
-    value.as_object_mut().unwrap().extend(json!({"text":label,"originalText":label,"fontSize":20,"fontFamily":2,"textAlign":"center","verticalAlign":"middle","containerId":null,"autoResize":false,"lineHeight":1.25}).as_object().unwrap().clone());
+    value.as_object_mut().unwrap().extend(json!({"text":label,"originalText":label,"fontSize":20,"fontFamily":9,"textAlign":"center","verticalAlign":"middle","containerId":null,"autoResize":false,"lineHeight":1.25}).as_object().unwrap().clone());
     value
 }
 /// Explicit grid or automatic layered layout; no scientific relationship is inferred.
@@ -79,6 +93,12 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
     }
     if plan.nodes.is_empty() || plan.nodes.len() > 100 || plan.edges.len() > 200 {
         return Err(fail("requires 1..100 nodes and at most 200 edges"));
+    }
+    if !plan.panels.is_empty() {
+        return crate::panels::compile(plan);
+    }
+    if plan.nodes.iter().any(|node| node.panel.is_some()) {
+        return Err(fail("node panel requires a declared panel"));
     }
     let drawing = layout::arrange(plan)?;
     let mut elements = Vec::new();
@@ -103,8 +123,7 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
         shape["customData"] = json!({"scientificId":node.id,"evidence":node.evidence});
         if index == 0 {
             shape["customData"]["scientificPlan"] = json!(plan);
-            shape["customData"]["layoutInfo"] =
-                json!({"kind":plan.layout,"feedback_edges":drawing.feedback_edges});
+            shape["customData"]["layoutInfo"] = json!({"kind":plan.layout,"feedback_edges":drawing.feedback_edges,"font_family":9,"font_sha256":crate::font_metrics::SHA256});
         }
         let mut label = text(
             &label_id,
@@ -173,7 +192,7 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
                 180.0,
             );
             label["containerId"] = json!(arrow_id);
-            let available = ((ex - sx).hypot(ey - sy) - 20.0).clamp(40.0, 180.0);
+            let available = ((ex - sx).hypot(ey - sy) * 0.65).clamp(40.0, 180.0);
             let mut wrapped = String::new();
             let mut line_width = 0.0;
             for character in edge.label.chars() {
@@ -213,7 +232,7 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
         }
     }
     Ok(
-        json!({"type":"excalidraw","version":2,"source":"autonomics","elements":elements,"files":{},"appState":{"viewBackgroundColor":"#ffffff","currentItemRoughness":0,"currentItemFontFamily":2},"scientificPlan":plan}),
+        json!({"type":"excalidraw","version":2,"source":"autonomics","elements":elements,"files":{},"appState":{"viewBackgroundColor":"#ffffff","currentItemRoughness":0,"currentItemFontFamily":9},"scientificPlan":plan}),
     )
 }
 #[cfg(test)]

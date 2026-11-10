@@ -137,6 +137,58 @@ try {
   await preview.getByRole('button', { name: new RegExp(illustrated.summary.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) }).click();
   await preview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor(); await page.screenshot({ path: join(directory, 'bioart-proposal.png'), animations: 'disabled' });
   await preview.getByRole('button', { name: '采用提案', exact: true }).click(); await preview.waitFor({ state: 'hidden' }); await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  const beforeMarkup = await call('GET', path); await persist('before-markup.json', beforeMarkup);
+  await page.screenshot({ path: join(directory, 'illustrated-figure.png'), animations: 'disabled' });
+  const beforeElements = beforeMarkup.scene.document.elements.filter(e => !e.isDeleted);
+  await page.getByRole('button', { name: '草图标记', exact: true }).click();
+  const markup = page.getByRole('dialog', { name: '草图标记与审阅' });
+  await markup.getByRole('button', { name: '新建标记', exact: true }).click();
+  const ink = markup.getByRole('application', { name: '草图标记区域' }); await ink.waitFor();
+  await markup.getByRole('button', { name: '保存草图标记', exact: true }).waitFor();
+  await markup.getByRole('button', { name: '划除', exact: true }).click();
+  const bounds = await ink.boundingBox();
+  // This compact horizontal scene fits at zoom 1. Validate the saved scene-space
+  // stroke below so viewport timing or fitting errors cannot produce a false pass.
+  const minX = Math.min(...beforeElements.map(e => e.x)), maxX = Math.max(...beforeElements.map(e => e.x + e.width));
+  const minY = Math.min(...beforeElements.map(e => e.y)), maxY = Math.max(...beforeElements.map(e => e.y + e.height));
+  const currentImage = beforeElements.find(e => e.id === image.id); assert.ok(currentImage);
+  const centerX = currentImage.x + currentImage.width / 2, centerY = currentImage.y + currentImage.height / 2;
+  const inkX = bounds.x + bounds.width / 2 + centerX - (minX + maxX) / 2;
+  const inkY = bounds.y + bounds.height / 2 + centerY - (minY + maxY) / 2;
+  await page.mouse.move(inkX - 45, inkY - 65); await page.mouse.down();
+  await page.mouse.move(inkX + 45, inkY + 65, { steps: 10 }); await page.mouse.up();
+  await markup.getByRole('textbox', { name: '标记修改说明' }).fill('移除划掉的组件及其直接连接和关系文字；保留其余组件及位置，不补画任何新关系。');
+  await markup.getByRole('button', { name: '保存草图标记', exact: true }).click();
+  await markup.getByRole('img', { name: '已保存的草图标记' }).waitFor();
+  const reviews = await call('GET', `${path}/markups`); assert.equal(reviews.length, 1);
+  const review = await call('GET', `${path}/markups/${reviews[0].id}`); await persist('markup-stage-5.json', review);
+  assert.equal(review.at_revision, beforeMarkup.metadata.revision); assert.equal(review.strokes.length, 1);
+  const [a, b] = review.strokes[0].points;
+  assert.ok(Math.min(a[0], b[0]) < centerX && Math.max(a[0], b[0]) > centerX && Math.min(a[1], b[1]) < centerY && Math.max(a[1], b[1]) > centerY, 'GUI cross covers the receptor image in scene coordinates');
+  await page.screenshot({ path: join(directory, 'markup.png'), animations: 'disabled' });
+  await markup.getByRole('button', { name: '关闭标记', exact: true }).click();
+  await handoff('请查看本次保存的草图标记截图，结合笔迹和修改说明识别应移除的组件，生成局部修改提案。不要直接改正式图稿，不要推断新的科学关系。');
+  await send(5);
+  assert.ok(turns[4].calls.some(c => c.name === 'visualization' && c.input.action === 'read_markup' && c.input.markup_id === review.id), 'real agent reads the exact review as a vision result');
+  const markupEdits = (await call('GET', `${path}/proposals`)).filter(p => p.status === 'pending'); assert.equal(markupEdits.length, 1);
+  const deletion = markupEdits[0]; await persist('proposal-stage-5.json', deletion);
+  const kept = beforeElements.filter(e => ![receptor.id, receptorLabel.id, image.id].includes(e.id) && e.type !== 'arrow' && !(e.type === 'text' && beforeElements.some(arrow => arrow.type === 'arrow' && arrow.id === e.containerId)));
+  assert.equal(kept.length, 4); assert.equal(deletion.document.elements.length, kept.length);
+  const removedIds = new Set(beforeElements.filter(e => !kept.some(k => k.id === e.id)).map(e => e.id));
+  for (const element of kept) {
+    const expected = structuredClone(element);
+    if (expected.boundElements) expected.boundElements = expected.boundElements.filter(binding => !removedIds.has(binding.id));
+    assert.deepEqual(deletion.document.elements.find(e => e.id === element.id), expected, `review edit preserves surviving ${element.id}`);
+  }
+  assert.equal((await call('GET', path)).metadata.revision, beforeMarkup.metadata.revision);
+  checkpoints.push('interpreted a visual cross and proposed removing only its component and explicit relationships');
+  await page.getByRole('tab', { name: 'Live figure', exact: true }).click(); await page.getByRole('button', { name: '查看 Agent 提案', exact: true }).click();
+  await preview.getByRole('button', { name: deletion.summary, exact: true }).click();
+  await preview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
+  await page.screenshot({ path: join(directory, 'markup-proposal.png'), animations: 'disabled' });
+  await preview.getByRole('button', { name: '采用提案', exact: true }).click(); await preview.waitFor({ state: 'hidden' });
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  assert.equal((await call('GET', path)).scene.document.elements.length, 4);
   await page.getByRole('button', { name: '保存画布', exact: true }).waitFor();
   const download = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 SVG', exact: true }).click(); await writeFile(join(directory, 'figure.svg'), await readFile(await (await download).path()));
   await page.screenshot({ path: join(directory, 'figure.png'), animations: 'disabled' }); await persist('final.json', await call('GET', path));

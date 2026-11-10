@@ -19,6 +19,13 @@ pub fn insert(
     x: f64,
     y: f64,
 ) -> Result<(Value, String), InvalidImage> {
+    let mime_type = if image.data_url.starts_with("data:image/png;base64,") {
+        "image/png"
+    } else if image.data_url.starts_with("data:image/svg+xml;base64,") {
+        "image/svg+xml"
+    } else {
+        return Err(InvalidImage("expected embedded PNG or normalized SVG"));
+    };
     if !x.is_finite()
         || !y.is_finite()
         || x.abs() > 1e6
@@ -27,12 +34,26 @@ pub fn insert(
         || image.height == 0
         || !image.provenance.is_object()
         || image.file_id.is_empty()
-        || !image.data_url.starts_with("data:image/png;base64,")
     {
         return Err(InvalidImage("invalid coordinates or image metadata"));
     }
     crate::scene::apply(document, &[]).map_err(|_| InvalidImage("invalid scene"))?;
     let mut result = document.clone();
+    install_file(&mut result, &image, mime_type)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let scale = (240.0 / f64::from(image.width.max(image.height))).min(1.0);
+    let element = json!({"id":id,"type":"image","x":x,"y":y,"width":f64::from(image.width)*scale,"height":f64::from(image.height)*scale,"angle":0,"strokeColor":"transparent","backgroundColor":"transparent","fillStyle":"solid","strokeWidth":1,"strokeStyle":"solid","roughness":0,"opacity":100,"groupIds":[],"frameId":null,"roundness":null,"seed":1,"version":1,"versionNonce":1,"isDeleted":false,"boundElements":[],"updated":chrono::Utc::now().timestamp_millis(),"link":null,"locked":false,"fileId":image.file_id,"status":"saved","scale":[1,1],"crop":null,"customData":image.provenance});
+    result["elements"]
+        .as_array_mut()
+        .ok_or(InvalidImage("elements must be an array"))?
+        .push(element);
+    Ok((result, id))
+}
+fn install_file(
+    result: &mut Value,
+    image: &Image<'_>,
+    mime_type: &str,
+) -> Result<(), InvalidImage> {
     if result.get("files").is_none() {
         result["files"] = json!({});
     }
@@ -44,16 +65,69 @@ pub fn insert(
             return Err(InvalidImage("file id collision"));
         }
     } else {
-        files.insert(image.file_id.into(), json!({"id":image.file_id,"dataURL":image.data_url,"mimeType":"image/png","created":chrono::Utc::now().timestamp_millis()}));
+        files.insert(image.file_id.into(), json!({"id":image.file_id,"dataURL":image.data_url,"mimeType":mime_type,"created":chrono::Utc::now().timestamp_millis()}));
     }
-    let id = uuid::Uuid::new_v4().to_string();
-    let scale = (240.0 / f64::from(image.width.max(image.height))).min(1.0);
-    let element = json!({"id":id,"type":"image","x":x,"y":y,"width":f64::from(image.width)*scale,"height":f64::from(image.height)*scale,"angle":0,"strokeColor":"transparent","backgroundColor":"transparent","fillStyle":"solid","strokeWidth":1,"strokeStyle":"solid","roughness":0,"opacity":100,"groupIds":[],"frameId":null,"roundness":null,"seed":1,"version":1,"versionNonce":1,"isDeleted":false,"boundElements":[],"updated":chrono::Utc::now().timestamp_millis(),"link":null,"locked":false,"fileId":image.file_id,"status":"saved","scale":[1,1],"crop":null,"customData":image.provenance});
-    result["elements"]
+    Ok(())
+}
+/// Resolve an image directly or through its existing semantic anchor.
+pub fn element<'a>(document: &'a Value, id: &str) -> Result<&'a Value, InvalidImage> {
+    let elements = document["elements"]
+        .as_array()
+        .ok_or(InvalidImage("invalid scene"))?;
+    let target = elements
+        .iter()
+        .find(|e| e["id"] == id && e["isDeleted"] != true)
+        .ok_or(InvalidImage("image not found"))?;
+    if target["type"] == "image" {
+        return Ok(target);
+    }
+    let visual = target["customData"]["visualAssetElementId"]
+        .as_str()
+        .ok_or(InvalidImage("target is not an image or illustrated anchor"))?;
+    elements
+        .iter()
+        .find(|e| {
+            e["id"] == visual
+                && e["type"] == "image"
+                && e["isDeleted"] != true
+                && e["customData"]["semanticAnchorId"] == id
+        })
+        .ok_or(InvalidImage("illustrated image not found"))
+}
+/// Change one image's file/provenance, preserving its ID and full geometry.
+/// Existing file records remain immutable for other instances and old revisions.
+pub fn replace_file(document: &Value, id: &str, image: Image<'_>) -> Result<Value, InvalidImage> {
+    crate::scene::apply(document, &[]).map_err(|_| InvalidImage("invalid scene"))?;
+    let target = element(document, id)?;
+    let mime = if image.data_url.starts_with("data:image/svg+xml;base64,") {
+        "image/svg+xml"
+    } else if image.data_url.starts_with("data:image/png;base64,") {
+        "image/png"
+    } else {
+        return Err(InvalidImage("unsupported image type"));
+    };
+    if image.file_id.is_empty()
+        || image.width == 0
+        || image.height == 0
+        || !image.provenance.is_object()
+    {
+        return Err(InvalidImage("invalid replacement metadata"));
+    }
+    let target_id = target["id"]
+        .as_str()
+        .ok_or(InvalidImage("invalid image ID"))?;
+    let mut result = document.clone();
+    install_file(&mut result, &image, mime)?;
+    let next = result["elements"]
         .as_array_mut()
-        .ok_or(InvalidImage("elements must be an array"))?
-        .push(element);
-    Ok((result, id))
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"] == target_id)
+        .unwrap();
+    next["fileId"] = json!(image.file_id);
+    next["customData"] = image.provenance;
+    crate::scene::touch(next);
+    Ok(result)
 }
 /// Replace a visual placeholder with an image while preserving its semantic anchor.
 /// The anchor keeps its ID, bounds and arrow bindings. Image and detached labels

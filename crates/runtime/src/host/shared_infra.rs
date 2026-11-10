@@ -647,6 +647,9 @@ impl SharedInfra {
         tools.extend(visualization_tools::bioart_registrations(
             self.visualization_db.clone(),
         ));
+        tools.extend(visualization_tools::bioicons_registrations(
+            self.visualization_db.clone(),
+        ));
         tools.extend(visualization_tools::registrations(
             self.visualization_db.clone(),
         ));

@@ -31,7 +31,7 @@ export async function saveCanvas(canvas: CanvasRecord): Promise<number | undefin
   return saved.revision;
 }
 export async function createCanvas(projectId: string) {
-  const saved = await gatewayRequest("POST", path(projectId), { title: "未命名画布", format: "excalidraw/v2", document: { type: "excalidraw", version: 2, elements: [], files: {}, appState: { currentItemRoughness: 0, currentItemFontFamily: 2, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } } }) as Metadata;
+  const saved = await gatewayRequest("POST", path(projectId), { title: "未命名画布", format: "excalidraw/v2", document: { type: "excalidraw", version: 2, elements: [], files: {}, appState: { currentItemRoughness: 0, currentItemFontFamily: 9, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } } }) as Metadata;
   if (selectedProject === projectId) { summaries = [record(saved), ...summaries]; emit(); }
   return record(saved);
 }

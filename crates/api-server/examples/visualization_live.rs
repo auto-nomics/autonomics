@@ -248,6 +248,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tools.extend(visualization_tools::bioart_registrations(
         args[3].clone().into(),
     ));
+    tools.extend(visualization_tools::bioicons_registrations(
+        args[3].clone().into(),
+    ));
     let mut agent=Agent::builder().with_tools(tools).with_config(AgentConfig {max_iterations:12,max_retries:1}).with_system_prompt_identity("科研绘图助手").with_system_prompt_section("依据用户提供的科学内容，使用已注册工具协助规划、构图和局部编辑。用户会通过画布上下文提供目标项目与画布。").with_cancel_token(cancel.clone()).build().await?;
     agent.set_model(Arc::new(model));
     agent.set_agent_event_tx(tx);

@@ -7,12 +7,16 @@ import { Button } from "@/components/ui/button";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 import { patchEditorState } from "@/app/workbench/workbench-store";
 import type { EditorContext } from "@/app/workbench/editor-registry";
+import { createSourceManifest, embedSvgSources, embedPngSources } from "./canvas-source-manifest";
+import { CanvasPalette } from "./canvas-palette";
+import { CanvasRouting } from "./canvas-routing";
 import { CanvasPlanning } from "./canvas-planning";
 import { CanvasMarkups } from "./canvas-markups";
 import { CanvasHistory } from "./canvas-history";
 import { CanvasCircleSelect } from "./canvas-circle-select";
 import { CanvasProposals } from "./canvas-proposals";
 import { CanvasAgentPanel } from "./canvas-agent-panel";
+import { BioIconsPanel } from "./bioicons-panel";
 import { BioArtPanel } from "./bioart-panel";
 import { readCanvas, saveCanvas } from "./canvas-store";
 
@@ -41,6 +45,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const [proposalRequest, setProposalRequest] = useState<{ id: string }>();
   const [showAgent, setShowAgent] = useState(false);
   const [showBioArt, setShowBioArt] = useState(false);
+  const [showBioIcons, setShowBioIcons] = useState(false);
   const [imagesReady, setImagesReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
@@ -51,7 +56,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       if (cancelled) return;
       revision.current = record.revision;
       titleRef.current = record.title; latestTitle.current = record.title; setTitle(record.title);
-      setInitial(record.scene ? { ...JSON.parse(record.scene), scrollToContent: true } : { appState: { currentItemRoughness: 0, currentItemFontFamily: 2, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } });
+      setInitial(record.scene ? { ...JSON.parse(record.scene), scrollToContent: true } : { appState: { currentItemRoughness: 0, currentItemFontFamily: 9, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } });
       setLoaded(true);
     }).catch(cause => { if (!cancelled) setError(String(cause)); });
     return () => { cancelled = true; setDocumentDirty(`canvas:${id}`, false); };
@@ -97,14 +102,18 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       return true;
     } finally { setBusy(false); }
   }
-  async function exportFile(format: "svg" | "png" | "excalidraw") {
+  async function exportFile(format: "svg" | "png" | "excalidraw" | "sources") {
     const instance = api.current; if (!instance) return;
     setError("");
     try {
-      const elements = instance.getSceneElements(), appState = instance.getAppState(), files = instance.getFiles();
-      if (format === "excalidraw") download(new Blob([serializeAsJSON(elements, appState, files, "local")], { type: "application/json" }), `${title}.excalidraw`);
-      else if (format === "svg") { const svg = await exportToSvg({ elements, appState: { ...appState, exportWithDarkMode: false }, files }); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${title}.svg`); }
-      else download(await exportToBlob({ elements, appState: { ...appState, exportWithDarkMode: false }, files, mimeType: "image/png" }), `${title}.png`);
+      const elements = structuredClone(instance.getSceneElements()), files = structuredClone(instance.getFiles());
+      const state = instance.getAppState(), appState = { ...state, frameRendering: { ...state.frameRendering } };
+      const scene = serializeAsJSON(elements, appState, files, "local"), exportTitle = title;
+      if (format === "excalidraw") { download(new Blob([scene], { type: "application/json" }), `${exportTitle}.excalidraw`); return; }
+      const manifest = await createSourceManifest({ scene, title: exportTitle, project_id: projectId, figure_id: id, based_on_revision: revision.current, unsaved_changes: scene !== baseline.current || exportTitle !== titleRef.current });
+      if (format === "sources") download(new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }), `${exportTitle}.sources.json`);
+      else if (format === "svg") { const svg = await exportToSvg({ elements, appState: { ...appState, exportWithDarkMode: false }, files }); embedSvgSources(svg, manifest); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${exportTitle}.svg`); }
+      else { const png = await exportToBlob({ elements, appState: { ...appState, exportWithDarkMode: false }, files, mimeType: "image/png" }); download(await embedPngSources(png, manifest), `${exportTitle}.png`); }
     } catch (cause) { setError(`导出失败：${String(cause)}`); }
   }
   const hasUnsavedChanges = () => {
@@ -128,15 +137,19 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {projectId && <Button size="sm" variant={circleSelect ? "default" : "outline"} disabled={!loaded || busy} onClick={() => setCircleSelect(value => !value)}>{circleSelect ? "取消圈选" : "圈选批注"}</Button>}
       {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} />}
       {projectId && <CanvasPlanning projectId={projectId} canvasId={id} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasPalette projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
       {projectId && <Button size="sm" variant="outline" onClick={() => setShowAgent(value => !value)}>Agent 绘图</Button>}
       <Button size="sm" variant="outline" onClick={() => setShowBioArt(value => !value)}>BioArt 素材</Button>
+      <Button size="sm" variant="outline" onClick={() => setShowBioIcons(value => !value)}>矢量素材</Button>
       {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
         const instance = api.current;
         const changed = instance && (serializeAsJSON(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
         if (!changed || window.confirm("重新加载将丢弃未保存修改，继续？")) onReload();
       }}>重新加载服务端版本</Button>}
       <Button size="sm" disabled={!loaded || busy || !imagesReady} onClick={() => void save()}>{busy ? "保存中…" : !imagesReady ? "图片载入中…" : "保存画布"}</Button>
+      <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
       {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
     </div>
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
@@ -160,6 +173,6 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {circleSelect && <CanvasCircleSelect getApi={() => api.current} onDone={(count, message) => {
         setCircleSelect(false); if (message) setError(message); else setError(""); if (count) setShowAgent(true);
       }} />}
-    </div>{showAgent && projectId && <CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} />}{showBioArt && <BioArtPanel getApi={() => api.current} />}</div>}
+    </div>{showAgent && projectId && <CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} />}{showBioArt && <BioArtPanel getApi={() => api.current} />}{showBioIcons && <BioIconsPanel getApi={() => api.current} />}</div>}
   </section>;
 }

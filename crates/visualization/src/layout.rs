@@ -23,49 +23,64 @@ pub(crate) struct Drawing {
     pub feedback_edges: usize,
 }
 fn glyph_width(c: char, font_size: f64) -> f64 {
-    font_size
-        * if c == ' ' {
-            0.35
-        } else if "MW@mw".contains(c) {
-            1.1
-        } else if c.is_ascii_uppercase() {
-            0.9
-        } else if c.is_ascii() {
-            0.65
-        } else {
-            1.1
-        }
+    let advance = crate::font_metrics::ADVANCES
+        .binary_search_by_key(&(c as u32), |(cp, _)| *cp)
+        .ok()
+        .map(|index| {
+            f64::from(crate::font_metrics::ADVANCES[index].1) / crate::font_metrics::UNITS_PER_EM
+        })
+        .unwrap_or(1.1); // Conservative fallback for glyphs outside the shipped font.
+    font_size * advance
+}
+fn kerning(a: char, b: char, font_size: f64) -> f64 {
+    crate::font_metrics::KERNING
+        .binary_search_by_key(&(a as u32, b as u32), |(a, b, _)| (*a, *b))
+        .ok()
+        .map_or(0., |i| {
+            font_size * f64::from(crate::font_metrics::KERNING[i].2)
+                / crate::font_metrics::UNITS_PER_EM
+        })
 }
 pub(crate) fn text_width(label: &str, font_size: f64) -> f64 {
     label
         .lines()
-        .map(|line| line.chars().map(|c| glyph_width(c, font_size)).sum::<f64>())
+        .map(|line| {
+            let mut previous = None;
+            line.chars()
+                .map(|c| {
+                    let width = glyph_width(c, font_size)
+                        + previous.map_or(0., |p| kerning(p, c, font_size));
+                    previous = Some(c);
+                    width
+                })
+                .sum::<f64>()
+        })
         .fold(0., f64::max)
 }
-/// Conservative Arial/fallback widths, with word boundaries and long-token wrapping.
+/// Pinned Liberation Sans advances and pair kerning. Complex shaping and
+/// characters outside its cmap retain a conservative fallback, not exact shaping.
 pub(crate) fn wrap(label: &str, width: f64, font_size: f64) -> String {
-    let advance = |c| glyph_width(c, font_size);
     let mut lines = Vec::new();
     for paragraph in label.split('\n') {
         let mut line = String::new();
-        let mut used = 0.;
         for word in paragraph.split_whitespace() {
-            let word_width = word.chars().map(advance).sum::<f64>();
-            if !line.is_empty() && used + advance(' ') + word_width > width {
+            let candidate = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if !line.is_empty() && text_width(&candidate, font_size) > width {
                 lines.push(std::mem::take(&mut line));
-                used = 0.;
             }
             if !line.is_empty() {
                 line.push(' ');
-                used += advance(' ');
             }
             for c in word.chars() {
-                if used > 0. && used + advance(c) > width {
+                let candidate = format!("{line}{c}");
+                if !line.is_empty() && text_width(&candidate, font_size) > width {
                     lines.push(std::mem::take(&mut line));
-                    used = 0.;
                 }
                 line.push(c);
-                used += advance(c);
             }
         }
         lines.push(line);
@@ -406,6 +421,16 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn font_metrics_keep_fitting_words_together_and_apply_kerning() {
+        assert_eq!(wrap("Treatment input", 200., 20.), "Treatment input");
+        assert_eq!(
+            wrap("IL-6 receptor signaling", 140., 20.),
+            "IL-6 receptor\nsignaling"
+        );
+        assert!(text_width("AV", 20.) < text_width("A", 20.) + text_width("V", 20.));
+        assert_eq!(wrap("α β", 100., 20.), "α β");
+    }
     fn plan(layout: &str) -> Plan {
         serde_json::from_value(json!({"message":"Explicit conceptual relations","audience":"researchers","layout":layout,
             "nodes":[{"id":"a","label":"Ligand"},{"id":"b","label":"Receptor complex and its intracellular signaling components","shape":"ellipse"},{"id":"c","label":"Parallel response"},{"id":"d","label":"Outcome"},{"id":"e","label":"Independent control"}],

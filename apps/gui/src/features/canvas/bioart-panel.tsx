@@ -2,6 +2,7 @@ import { useState } from "react";
 import { convertToExcalidrawElements, CaptureUpdateAction } from "@excalidraw/excalidraw";
 import type { BinaryFileData, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { gatewayRequest } from "@/gateway";
+import { imagePlacement } from "./canvas-image-placement";
 import { Button } from "@/components/ui/button";
 type Asset = { id: number; title: string; source_url: string; licenses: string[]; creators: string[] };
 type AssetImage = { asset: Asset; sha256: string; dataURL: string; file: unknown };
@@ -24,12 +25,12 @@ export function BioArtPanel({ getApi }: { getApi: () => ExcalidrawImperativeAPI 
       const api = getApi(); if (!api) return;
       const fileId = result.sha256 as BinaryFileData["id"];
       const scale = Math.min(1, 240 / Math.max(image.naturalWidth, image.naturalHeight));
-      const state = api.getAppState();
-      const x = state.width / 2 / state.zoom.value - state.scrollX;
-      const y = state.height / 2 / state.zoom.value - state.scrollY;
+      const placement = imagePlacement(api, image.naturalWidth * scale, image.naturalHeight * scale);
+      const { x, y } = placement;
       const elements = convertToExcalidrawElements([{ type: "image", x, y, width: image.naturalWidth * scale, height: image.naturalHeight * scale, fileId, status: "saved", customData: { source: "NIH BioArt", asset: result.asset, sha256: result.sha256, file: result.file } }]);
       api.addFiles([{ id: fileId, dataURL: result.dataURL as BinaryFileData["dataURL"], mimeType: "image/png", created: Date.now() }]);
       api.updateScene({ elements: [...api.getSceneElements(), ...elements], appState: { selectedElementIds: { [elements[0].id]: true } }, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      if (placement.pan) api.scrollToContent(elements, { animate: false });
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
   }
   return <aside aria-label="BioArt 素材" className="w-64 shrink-0 overflow-auto border-l p-2 text-sm">

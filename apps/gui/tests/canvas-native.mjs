@@ -1,6 +1,7 @@
 // Real Rust HTTP/SQLite/tools + GUI; only model decisions and unrelated APIs are fixtures.
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -26,10 +27,14 @@ try {
     const json = await response.json(); assert.ok(response.ok, `${response.status} ${JSON.stringify(json)}`); return json;
   };
   const tool = async input => (await call('POST', '/test/visualization', input)).content;
-  const turns = [], vision = [], markupVision = [], errors = [];
+  const turns = [], vision = [], markupVision = [], errors = [], fontRequests = [];
   browser = await chromium.launch({ executablePath: process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined), args: ['--no-sandbox'] });
   page = await browser.newPage({ viewport: { width: 1600, height: 1000 } }); page.setDefaultTimeout(30000);
   page.on('pageerror', error => errors.push(error.message));
+  await page.route('**/*.woff2*', route => {
+    const url = new URL(route.request().url()); fontRequests.push(url.href);
+    return url.origin === origin ? route.continue() : route.abort('blockedbyclient');
+  });
   await page.route('**/api/session', route => route.fulfill({ json: {} }));
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url()); const path = url.pathname.replace('/api/v1', '');
@@ -182,6 +187,7 @@ try {
   const cases = [
     { name: 'vertical', layout: 'vertical', nodes, edges },
     { name: 'feedback', layout: 'horizontal', nodes, edges: [...edges, { from: 'd', to: 'a', label: 'negative feedback', inhibitory: true }, { from: 'a', to: 'b', label: 'second explicit relation' }] },
+    { name: 'font-metrics', layout: 'horizontal', nodes: [{ id: 'a', label: 'Treatment input' }, { id: 'b', label: 'IL-6 receptor signaling' }], edges: [{ from: 'a', to: 'b', label: 'AV αβ γδ' }] },
     { name: 'multilingual', layout: 'vertical', nodes: [{ id: 'a', label: '细胞膜受体复合物与下游转录调控因子之间的相互作用以及细胞内信号传导机制', shape: 'ellipse' }, { id: 'b', label: 'WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW' }], edges: [{ from: 'a', to: 'b', label: '明确提供的调控关系' }] },
   ];
   for (const item of cases) {
@@ -192,10 +198,21 @@ try {
     await page.getByRole('button', { name: title, exact: true }).click();
     await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
     const scene = await source();
+    assert.ok(scene.elements.filter(e => e.type === 'text').every(e => e.fontFamily === 9), 'generated labels use the pinned local font');
+    const storedForFont = await call('GET', `/api/v1/visualization/projects/${project}/figures/${created.id}`);
+    for (const label of storedForFont.scene.document.elements.filter(e => e.type === 'text' && e.containerId?.startsWith('edge-') && /^[\x20-\x7e\u0370-\u03ff]+$/.test(e.text.replace(/\n/g, '')))) {
+      const measured = await page.evaluate(async ({ text, size }) => {
+        await document.fonts.load(`${size}px "Liberation Sans"`);
+        const context = document.createElement('canvas').getContext('2d'); context.font = `${size}px "Liberation Sans"`;
+        return Math.max(...text.split('\n').map(line => context.measureText(line).width));
+      }, { text: label.text, size: label.fontSize });
+      assert.ok(Math.abs(measured - label.width) < 1, `${item.name}: font metric ${measured} agrees with backend width ${label.width}`);
+    }
     const boxes = scene.elements.filter(element => ['rectangle', 'ellipse'].includes(element.type));
     const arrows = scene.elements.filter(element => element.type === 'arrow');
     assert.equal(boxes.length, item.nodes.length); assert.equal(arrows.length, item.edges.length);
     assert.equal(boxes[0].customData.scientificPlan.layout, item.layout);
+    assert.equal(boxes[0].customData.layoutInfo.font_sha256, createHash('sha256').update(await readFile('public/excalidraw/fonts/Liberation/LiberationSans-Regular.woff2')).digest('hex'));
     for (const box of boxes) {
       const label = scene.elements.find(element => element.type === 'text' && element.containerId === box.id);
       assert.ok(label.x >= box.x - 1 && label.y >= box.y - 1 && label.x + label.width <= box.x + box.width + 1 && label.y + label.height <= box.y + box.height + 1, `${item.name}: restored label remains inside its node`);
@@ -290,7 +307,249 @@ try {
   const plannedContext = JSON.parse(plannedDraft.slice(plannedDraft.indexOf('{\n')));
   assert.equal(plannedContext.figure_id, plannedFigure.id); assert.equal(plannedContext.planning.version, 2); assert.equal(plannedContext.planning.based_on_revision, 1);
   assert.ok(plannedDraft.includes('read_plan')); assert.deepEqual(errors, []);
-  console.log('canvas-native: real tools, HTTP, SQLite, review markup, local edits, layouts, scientific planning, clarification and review passed');
+  const panelFigure = await tool({ action: 'create', project_id: project, title: 'Panel comparison', document: { type: 'excalidraw', version: 2, elements: [], files: {} } });
+  const panelPath = `/api/v1/visualization/projects/${project}/figures/${panelFigure.id}`;
+  await tool({ action: 'save_plan', project_id: project, figure_id: panelFigure.id, expected_revision: 1, planning_version: 0, document: {
+    message: 'Compare two explicitly supplied conceptual conditions', audience: 'Researchers', layout: 'horizontal',
+    nodes: [{ id: 'a', label: 'Control input' }, { id: 'b', label: 'Control output' }, { id: 'c', label: 'Treatment input' }, { id: 'd', label: 'Treatment output' }],
+    edges: [{ from: 'a', to: 'b', label: 'conceptual relation' }, { from: 'c', to: 'd', label: 'explicit comparison' }], assumptions: ['Synthetic comparison; no scientific claim.'],
+  } });
+  await page.getByRole('tab', { name: 'Planning study', exact: true }).click();
+  await page.getByRole('button', { name: '刷新画布列表', exact: true }).click();
+  await page.getByRole('button', { name: 'Panel comparison', exact: true }).click();
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
+  await planningDialog.getByRole('textbox', { name: '核心图意', exact: true }).waitFor();
+  await planningDialog.getByRole('button', { name: '添加面板', exact: true }).click();
+  await planningDialog.getByRole('textbox', { name: '面板标题 1', exact: true }).fill('A · Control');
+  await planningDialog.getByRole('button', { name: '添加面板', exact: true }).click();
+  await planningDialog.getByRole('textbox', { name: '面板标题 2', exact: true }).fill('B · Treatment');
+  await planningDialog.getByRole('combobox', { name: '组件面板 3', exact: true }).selectOption('p2');
+  await planningDialog.getByRole('combobox', { name: '组件面板 4', exact: true }).selectOption('p2');
+  await planningDialog.getByRole('button', { name: '添加关系', exact: true }).click();
+  await planningDialog.getByRole('combobox', { name: '关系来源 3', exact: true }).selectOption('b');
+  await planningDialog.getByRole('combobox', { name: '关系目标 3', exact: true }).selectOption('c');
+  await planningDialog.getByRole('textbox', { name: '关系说明 3', exact: true }).fill('carry forward');
+  await planningDialog.getByRole('button', { name: '保存绘图计划', exact: true }).click();
+  await planningDialog.getByRole('status').filter({ hasText: '计划 v2' }).waitFor();
+  assert.deepEqual((await call('GET', `${panelPath}/planning`)).document.nodes.map(n => n.panel), ['p1', 'p1', 'p2', 'p2']);
+  await planningDialog.getByRole('button', { name: '关闭计划', exact: true }).click();
+  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
+  await planningDialog.getByRole('textbox', { name: '面板标题 2', exact: true }).waitFor();
+  assert.equal(await planningDialog.getByRole('textbox', { name: '面板标题 2', exact: true }).inputValue(), 'B · Treatment');
+  await planningDialog.getByRole('button', { name: '生成草图提案', exact: true }).click();
+  const panelPreview = page.getByRole('dialog', { name: 'Agent 修改预览' });
+  await panelPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
+  assert.equal((await call('GET', panelPath)).scene.document.elements.length, 0);
+  await page.screenshot({ path: '/tmp/autonomics-panels-proposal.png' });
+  await panelPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await panelPreview.waitFor({ state: 'hidden' });
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  const panelScene = await source();
+  assert.equal(panelScene.elements.filter(e => e.type === 'frame').length, 2);
+  assert.equal(panelScene.elements.find(e => e.id === 'node-2').frameId, 'panel-1');
+  assert.equal(panelScene.elements.find(e => e.id === 'panel-title-0').text, 'A · Control');
+  assert.equal(panelScene.elements.find(e => e.id === 'label-2').text, 'Treatment input', 'font metrics avoid premature word wrapping');
+  const crossArrow = panelScene.elements.find(e => e.id === 'edge-2'); assert.ok(crossArrow);
+  assert.equal(crossArrow.frameId, null); assert.equal(crossArrow.startBinding.elementId, 'node-1'); assert.equal(crossArrow.endBinding.elementId, 'node-2');
+  const crossLabel = panelScene.elements.find(e => e.id === 'edge-label-2'); assert.ok(crossLabel);
+  for (const box of panelScene.elements.filter(e => ['rectangle', 'ellipse'].includes(e.type))) {
+    const points = crossArrow.points.map(p => [crossArrow.x + p[0], crossArrow.y + p[1]]);
+    for (let i = 1; i < points.length; i++) assert.ok(!segmentHits(points[i - 1], points[i], box), 'restored cross-panel route avoids all nodes');
+    assert.ok(crossLabel.x + crossLabel.width <= box.x || crossLabel.x >= box.x + box.width || crossLabel.y + crossLabel.height <= box.y || crossLabel.y >= box.y + box.height, 'restored cross-panel caption avoids nodes');
+  }
+  const edgeEnd = (edge, last) => { const p = last ? edge.points.at(-1) : edge.points[0]; return [edge.x + p[0], edge.y + p[1]]; };
+  const panelHead = await call('GET', panelPath); const frame = panelHead.scene.document.elements.find(e => e.id === 'panel-0');
+  const panelMove = await tool({ action: 'propose', project_id: project, figure_id: panelFigure.id, expected_revision: panelHead.metadata.revision, title: 'Move control panel', operations: [{ op: 'update', id: frame.id, changes: { x: frame.x + 30, y: frame.y + 40 } }] });
+  const movedPanel = (await call('GET', `${panelPath}/proposals`)).find(p => p.id === panelMove.id);
+  for (const before of panelHead.scene.document.elements) {
+    const after = movedPanel.document.elements.find(e => e.id === before.id);
+    if (before.frameId === frame.id || before.id === frame.id) {
+      assert.equal(after.x, before.x + 30); assert.equal(after.y, before.y + 40);
+    } else if (before.id === 'edge-2') {
+      assert.deepEqual(edgeEnd(after, false), edgeEnd(before, false).map((v, i) => v + [30, 40][i]));
+      assert.deepEqual(edgeEnd(after, true), edgeEnd(before, true));
+    } else if (before.id === 'edge-label-2') {
+      assert.equal(after.text, before.text);
+    } else assert.deepEqual(after, before);
+  }
+  await page.getByRole('button', { name: '查看 Agent 提案', exact: true }).click();
+  await panelPreview.getByRole('button', { name: /Move control panel/ }).click();
+  await panelPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
+  await panelPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await panelPreview.waitFor({ state: 'hidden' });
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  const movedSource = await source();
+  assert.equal(movedSource.elements.find(e => e.id === 'node-0').x, panelScene.elements.find(e => e.id === 'node-0').x + 30);
+  const frameHandle = page.locator('[data-canvas-surface]:visible [id$="-frame-name-panel-0"]');
+  await frameHandle.waitFor(); const handleBox = await frameHandle.boundingBox();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2); await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2 + 60, { steps: 10 }); await page.mouse.up();
+  const dragged = await source(); const oldFrame = movedSource.elements.find(e => e.id === 'panel-0');
+  const draggedFrame = dragged.elements.find(e => e.id === 'panel-0');
+  const dragX = draggedFrame.x - oldFrame.x, dragY = draggedFrame.y - oldFrame.y;
+  assert.ok(dragY > 30, 'native frame handle moves the panel interactively');
+  for (const before of movedSource.elements) {
+    const after = dragged.elements.find(e => e.id === before.id);
+    if (before.id === 'edge-2') {
+      for (const last of [false, true]) {
+        const key = last ? 'endBinding' : 'startBinding';
+        assert.equal(after[key].elementId, before[key].elementId);
+        const node = dragged.elements.find(e => e.id === after[key].elementId);
+        const point = edgeEnd(after, last);
+        const distance = Math.hypot(Math.max(node.x - point[0], 0, point[0] - node.x - node.width), Math.max(node.y - point[1], 0, point[1] - node.y - node.height));
+        assert.ok(distance >= after[key].gap / 2 && distance <= after[key].gap * 2 + 1, 'native binding remains just outside its actual node boundary');
+      }
+      continue;
+    }
+    if (before.id === 'edge-label-2') { assert.equal(after.text, before.text); continue; }
+    const belongs = before.frameId === 'panel-0' || before.id === 'panel-0';
+    assert.ok(Math.abs(after.x - before.x - (belongs ? dragX : 0)) < .01);
+    assert.ok(Math.abs(after.y - before.y - (belongs ? dragY : 0)) < .01);
+    assert.equal(after.frameId, before.frameId);
+  }
+  await page.getByRole('button', { name: '保存画布', exact: true }).click();
+  await until(async () => (await call('GET', panelPath)).scene.document.elements.find(e => e.id === 'panel-0').y === draggedFrame.y, 'save interactive panel movement');
+  await page.getByRole('button', { name: '重新加载服务端版本', exact: true }).click();
+  const reloadedPanel = await source();
+  assert.equal(reloadedPanel.elements.find(e => e.id === 'panel-0').y, draggedFrame.y);
+  assert.equal(reloadedPanel.elements.find(e => e.id === 'node-0').frameId, 'panel-0');
+  const beforeRouting = await call('GET', panelPath);
+  const currentArrow = beforeRouting.scene.document.elements.find(e => e.id === 'edge-2');
+  const [start, end] = [edgeEnd(currentArrow, false), edgeEnd(currentArrow, true)];
+  const blocker = { ...beforeRouting.scene.document.elements.find(e => e.id === 'node-0'), id: 'routing-obstacle', x: (start[0] + end[0]) / 2 - 30, y: (start[1] + end[1]) / 2 - 25, width: 60, height: 50, frameId: null, boundElements: [], customData: { fixture: true }, backgroundColor: '#fff3bf' };
+  await tool({ action: 'apply', project_id: project, figure_id: panelFigure.id, expected_revision: beforeRouting.metadata.revision, operations: [{ op: 'add', element: blocker }] });
+  await page.getByRole('button', { name: '重新加载服务端版本', exact: true }).click();
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  const routingHead = await call('GET', panelPath);
+  const existingPending = (await call('GET', `${panelPath}/proposals`)).filter(p => p.status === 'pending'); assert.equal(existingPending.length, 0);
+  const invalidReroute = await fetch(`${backend}${panelPath}/proposals`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected_revision: routingHead.metadata.revision, summary: 'Invalid internal connector', operations: [{ op: 'reroute', id: 'edge-0' }] }) });
+  assert.equal(invalidReroute.status, 400); assert.equal((await call('GET', `${panelPath}/proposals`)).filter(p => p.status === 'pending').length, 0);
+  await page.getByRole('button', { name: '整理跨面板连线', exact: true }).click();
+  await panelPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
+  const routingCandidates = (await call('GET', `${panelPath}/proposals`)).filter(p => p.status === 'pending'); assert.equal(routingCandidates.length, 1);
+  const routingCandidate = routingCandidates[0];
+  assert.equal((await call('GET', panelPath)).metadata.revision, routingHead.metadata.revision, 'rerouting is a proposal until adopted');
+  for (const element of routingHead.scene.document.elements.filter(e => !['edge-2', 'edge-label-2'].includes(e.id))) assert.deepEqual(routingCandidate.document.elements.find(e => e.id === element.id), element, `reroute preserves unrelated ${element.id}`);
+  await page.screenshot({ path: '/tmp/autonomics-panels-reroute-proposal.png' });
+  await panelPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await panelPreview.waitFor({ state: 'hidden' });
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  const routedScene = await source(); const routedArrow = routedScene.elements.find(e => e.id === 'edge-2');
+  const routedPoints = routedArrow.points.map(p => [routedArrow.x + p[0], routedArrow.y + p[1]]);
+  for (const obstacle of routedScene.elements.filter(e => ['rectangle', 'ellipse'].includes(e.type))) {
+    for (let i = 1; i < routedPoints.length; i++) assert.ok(!segmentHits(routedPoints[i - 1], routedPoints[i], obstacle), `restored reroute avoids ${obstacle.id}`);
+  }
+  assert.equal(routedScene.elements.find(e => e.id === 'edge-label-2').text, reloadedPanel.elements.find(e => e.id === 'edge-label-2').text);
+  await page.screenshot({ path: '/tmp/autonomics-panels.png' });
+  const panelExport = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 SVG', exact: true }).click();
+  const panelSvg = await readFile(await (await panelExport).path(), 'utf8'); assert.ok(panelSvg.includes('Control') && panelSvg.includes('Treatment'));
+  if (process.env.VISUALIZATION_BIOICONS_LIVE === '1') {
+    const beforeVector = await source();
+    await page.getByRole('button', { name: '矢量素材', exact: true }).click();
+    const vectorPanel = page.getByRole('complementary', { name: 'BioIcons 矢量素材', exact: true });
+    await vectorPanel.getByRole('textbox', { name: 'BioIcons 搜索词', exact: true }).fill('receptor');
+    await vectorPanel.getByRole('button', { name: '搜索', exact: true }).click();
+    const vectorCard = vectorPanel.locator('article').first();
+    await vectorCard.getByRole('button', { name: '预览矢量素材', exact: true }).click({ timeout: 60000 });
+    await vectorCard.getByRole('img').waitFor({ timeout: 60000 });
+    await vectorCard.getByRole('button', { name: '插入矢量素材', exact: true }).click();
+    await until(async () => (await source()).elements.some(e => e.type === 'image' && e.customData?.source === 'BioIcons'), 'insert live BioIcons SVG');
+    const withVector = await source(); const vectorImage = withVector.elements.find(e => e.type === 'image' && e.customData?.source === 'BioIcons');
+    assert.ok(vectorImage.customData.asset.license); assert.ok(vectorImage.customData.asset.author); assert.equal(vectorImage.customData.sha256.length, 64); assert.equal(vectorImage.customData.source_sha256.length, 64);
+    for (const box of beforeVector.elements.filter(e => ['rectangle', 'ellipse', 'frame', 'text'].includes(e.type))) assert.ok(vectorImage.x + vectorImage.width <= box.x || vectorImage.x >= box.x + box.width || vectorImage.y + vectorImage.height <= box.y || vectorImage.y >= box.y + box.height, 'insert vector into whitespace without obscuring existing objects');
+    assert.equal(createHash('sha256').update(Buffer.from(withVector.files[vectorImage.fileId].dataURL.split(',')[1], 'base64')).digest('hex'), vectorImage.customData.sha256, 'editor preserves content-addressed SVG bytes at insertion');
+    assert.equal(withVector.files[vectorImage.fileId].mimeType, 'image/svg+xml'); assert.ok(withVector.files[vectorImage.fileId].dataURL.startsWith('data:image/svg+xml;base64,'));
+    for (const element of beforeVector.elements) assert.deepEqual(untouched(withVector.elements.find(e => e.id === element.id)), untouched(element), 'vector insertion preserves existing objects');
+    await page.getByRole('button', { name: '保存画布', exact: true }).click();
+    await until(async () => (await call('GET', panelPath)).scene.document.files[vectorImage.fileId]?.mimeType === 'image/svg+xml', 'save vector source');
+    await page.getByRole('button', { name: '素材配色', exact: true }).click();
+    const paletteDialog = page.getByRole('dialog', { name: '矢量素材配色', exact: true });
+    await paletteDialog.getByRole('img', { name: '配色前的矢量素材', exact: true }).waitFor();
+    const colorHead = await call('GET', panelPath);
+    const sourceColor = vectorImage.customData.colors.find(c => c !== '#000000'); assert.ok(sourceColor);
+    const targetColor = sourceColor === '#22aa66' ? '#3344cc' : '#22aa66';
+    const colorsRequest = { element_id: vectorImage.id, expected_revision: colorHead.metadata.revision, colors: { [sourceColor]: targetColor } };
+    const staleColor = await fetch(`${backend}${panelPath}/vector-colors`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...colorsRequest, expected_revision: colorHead.metadata.revision - 1 }) }); assert.equal(staleColor.status, 409);
+    const invalidColor = await fetch(`${backend}${panelPath}/vector-colors`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...colorsRequest, colors: { '#nothex': targetColor } }) }); assert.equal(invalidColor.status, 400);
+    assert.equal((await call('GET', `${panelPath}/proposals`)).filter(p => p.status === 'pending').length, 0);
+    await paletteDialog.getByLabel(`替换颜色 ${sourceColor}`, { exact: true }).evaluate((input, color) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, color);
+      input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, targetColor);
+    await paletteDialog.getByRole('button', { name: '预览配色提案', exact: true }).click();
+    await panelPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
+    const colorProposals = (await call('GET', `${panelPath}/proposals`)).filter(p => p.status === 'pending'); assert.equal(colorProposals.length, 1);
+    const colorProposal = colorProposals[0]; assert.equal((await call('GET', panelPath)).metadata.revision, colorHead.metadata.revision);
+    for (const element of colorHead.scene.document.elements.filter(e => e.id !== vectorImage.id)) assert.deepEqual(colorProposal.document.elements.find(e => e.id === element.id), element, 'palette proposal preserves unrelated objects');
+    const coloredImage = colorProposal.document.elements.find(e => e.id === vectorImage.id); assert.ok(coloredImage.customData.colors.includes(targetColor));
+    for (const key of ['x', 'y', 'width', 'height', 'angle', 'groupIds', 'frameId', 'scale', 'crop']) assert.deepEqual(coloredImage[key], vectorImage[key]);
+    assert.equal(coloredImage.customData.source_sha256, vectorImage.customData.source_sha256); assert.deepEqual(coloredImage.customData.asset, vectorImage.customData.asset);
+    assert.notEqual(coloredImage.fileId, vectorImage.fileId); assert.equal(colorProposal.document.files[vectorImage.fileId].dataURL, withVector.files[vectorImage.fileId].dataURL);
+    await page.screenshot({ path: '/tmp/autonomics-bioicons-palette-proposal.png' });
+    await panelPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await panelPreview.waitFor({ state: 'hidden' });
+    await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+    const coloredHead = await call('GET', panelPath); assert.equal(coloredHead.metadata.revision, colorHead.metadata.revision + 1);
+    assert.ok(coloredHead.scene.document.elements.find(e => e.id === vectorImage.id).customData.modifications.some(m => m.kind === 'recolor'));
+
+    await page.getByRole('button', { name: '重新加载服务端版本', exact: true }).click();
+    await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+    const vectorReloaded = await source(); assert.deepEqual(vectorReloaded.files[coloredImage.fileId].dataURL, colorProposal.document.files[coloredImage.fileId].dataURL);
+    const originalColorRevision = await call('GET', `${panelPath}/revisions/${colorHead.metadata.revision}`);
+    assert.equal(originalColorRevision.document.files[vectorImage.fileId].dataURL, withVector.files[vectorImage.fileId].dataURL, 'immutable history retains the original vector colour');
+    assert.equal(vectorReloaded.elements.find(e => e.id === vectorImage.id).fileId, coloredImage.fileId);
+    assert.equal(createHash('sha256').update(Buffer.from(vectorReloaded.files[coloredImage.fileId].dataURL.split(',')[1], 'base64')).digest('hex'), coloredImage.customData.sha256, 'reloaded SVG bytes agree with recorded hash');
+    assert.ok(Buffer.from(vectorReloaded.files[coloredImage.fileId].dataURL.split(',')[1], 'base64').toString('utf8').includes(targetColor));
+    const vectorDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 SVG', exact: true }).click();
+    const vectorSvg = await readFile(await (await vectorDownload).path(), 'utf8'); assert.ok(vectorSvg.includes('data:image/svg+xml;base64,'), 'figure SVG preserves the vector image rather than baking it into PNG');
+    const embeddedSources = await page.evaluate(text => {
+      const document = new DOMParser().parseFromString(text, 'image/svg+xml');
+      return JSON.parse(document.querySelector('#autonomics-asset-sources').textContent);
+    }, vectorSvg);
+    assert.equal(embeddedSources.schema, 'autonomics.figure.asset-sources/v1'); assert.equal(embeddedSources.assets.length, 1);
+    assert.equal(embeddedSources.assets[0].element_id, vectorImage.id); assert.equal(embeddedSources.assets[0].recorded_sha256, coloredImage.customData.sha256);
+    assert.equal(embeddedSources.assets[0].actual_sha256, coloredImage.customData.sha256); assert.equal(embeddedSources.assets[0].hash_matches_recorded, true);
+    assert.ok(embeddedSources.assets[0].authors.includes(vectorImage.customData.asset.author)); assert.ok(embeddedSources.assets[0].licenses.includes(vectorImage.customData.asset.license));
+    assert.ok(embeddedSources.assets[0].modifications.some(change => change.kind === 'recolor'));
+    const pngDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '导出 PNG', exact: true }).click();
+    const pngBytes = await readFile(await (await pngDownload).path()); let pngOffset = 8, pngSources;
+    while (pngOffset + 12 <= pngBytes.length) { const length = pngBytes.readUInt32BE(pngOffset), type = pngBytes.subarray(pngOffset + 4, pngOffset + 8).toString();
+      if (type === 'iTXt') { const data = pngBytes.subarray(pngOffset + 8, pngOffset + 8 + length); if (data.subarray(0, 'autonomics.asset-sources'.length).toString() === 'autonomics.asset-sources') pngSources = JSON.parse(data.subarray('autonomics.asset-sources'.length + 5).toString('utf8')); }
+      pngOffset += length + 12;
+    }
+    assert.ok(pngSources); assert.deepEqual(pngSources.assets, embeddedSources.assets);
+    assert.ok(await page.evaluate(async data => { const blob = new Blob([Uint8Array.from(atob(data), c => c.charCodeAt(0))], { type: 'image/png' }); const url = URL.createObjectURL(blob); try { const image = new Image(); image.src = url; await image.decode(); return image.naturalWidth > 0 && image.naturalHeight > 0; } finally { URL.revokeObjectURL(url); } }, pngBytes.toString('base64')), 'PNG metadata preserves browser image decoding');
+    const savedTitle = await page.getByRole('textbox', { name: '画布名称', exact: true }).inputValue();
+    await page.getByRole('textbox', { name: '画布名称', exact: true }).fill('Unsaved attribution snapshot');
+    const sourceDownload = page.waitForEvent('download'); await page.getByRole('button', { name: '导出素材来源', exact: true }).click();
+    const sourceManifest = JSON.parse(await readFile(await (await sourceDownload).path(), 'utf8'));
+    assert.equal(sourceManifest.title, 'Unsaved attribution snapshot'); assert.equal(sourceManifest.unsaved_changes, true);
+    assert.deepEqual(sourceManifest.assets, embeddedSources.assets); assert.equal(sourceManifest.based_on_revision, coloredHead.metadata.revision);
+    assert.equal((await call('GET', panelPath)).metadata.title, savedTitle, 'source export does not save an unfinished edit');
+    await page.getByRole('textbox', { name: '画布名称', exact: true }).fill(savedTitle);
+    assert.ok(await page.evaluate(async () => {
+      const { embedSvgSources } = await import('/src/features/canvas/canvas-source-manifest.ts');
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      const manifest = { title: '</metadata><script>throw new Error("injected")</script>' };
+      embedSvgSources(svg, manifest);
+      const parsed = new DOMParser().parseFromString(svg.outerHTML, 'image/svg+xml');
+      return parsed.querySelectorAll('script').length === 0 && JSON.parse(parsed.querySelector('metadata').textContent).title === manifest.title;
+    }), 'source metadata is text rather than executable SVG markup');
+    await page.getByRole('button', { name: 'Agent 绘图', exact: true }).click();
+    await page.getByRole('textbox', { name: '绘图需求', exact: true }).fill('Review the sources of this figure without editing it.');
+    await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('textarea[placeholder="输入消息…"]')?.value.includes('Review the sources of this figure without editing it.'));
+    const sourceDraft = await page.getByPlaceholder('输入消息…').inputValue();
+    const sourceContext = JSON.parse(sourceDraft.slice(sourceDraft.lastIndexOf('{\n  "project_id"')));
+    assert.equal(sourceContext.asset_sources.total, 1); assert.equal(sourceContext.asset_sources.assets[0].actual_sha256, coloredImage.customData.sha256);
+    assert.ok(sourceContext.asset_sources.assets[0].authors.includes(vectorImage.customData.asset.author));
+    assert.equal(sourceContext.asset_sources.assets[0].mime_type, 'image/svg+xml');
+    await page.getByRole('tab', { name: savedTitle, exact: true }).click();
+    await page.screenshot({ path: '/tmp/autonomics-bioicons-canvas.png' });
+    console.log('canvas-native: live BioIcons search, preview, SVG insertion, reviewed recoloring, source manifests in SVG/PNG, agent attribution context, save/reload and vector export passed');
+  }
+  assert.ok(fontRequests.some(url => new URL(url).pathname === '/excalidraw/fonts/Liberation/LiberationSans-Regular.woff2'));
+  assert.ok(fontRequests.every(url => new URL(url).origin === origin), 'generated diagrams do not fetch remote font assets');
+  assert.ok(/data:font\/woff2;base64,/.test(panelSvg), 'standalone SVG embeds its pinned font');
+  assert.deepEqual(errors, []);
+  console.log('canvas-native: real tools, HTTP, SQLite, review markup, local edits, layouts, scientific planning, clarification, panels and review passed');
 } catch (error) {
   await page?.screenshot({ path: "/tmp/autonomics-canvas-native-failure.png" }).catch(() => {});
   throw error;

@@ -20,3 +20,5 @@ pub use server::{
 pub mod visualization;
 
 mod bioart;
+mod bioicons;
+mod visualization_assets;

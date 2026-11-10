@@ -1,10 +1,12 @@
 //! Agent access to the same project figures edited in the GUI.
 mod bioart;
+mod bioicons;
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::{ToolResult, tools::ToolResultBlock};
 use async_trait::async_trait;
 pub use bioart::registrations as bioart_registrations;
+pub use bioicons::registrations as bioicons_registrations;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use visualization::{Store, service::VisualizationService};
@@ -49,7 +51,7 @@ struct SceneSchema {
 }
 #[tool(
     name = "visualization",
-    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, read_markup, read_plan, save_plan, sketch_plan, create, sketch, propose, apply. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries and object-linked review annotations as well as the scene; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
+    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, read_markup, read_plan, save_plan, sketch_plan, create, sketch, propose, apply. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries and object-linked review annotations as well as the scene; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
 )]
 pub struct FigureInput {
     #[desc = "projects | list | read | read_image | read_preview | read_markup | read_plan | save_plan | sketch_plan | create | sketch | propose | apply"]
@@ -72,7 +74,7 @@ pub struct FigureInput {
     pub document: Option<Value>,
     #[desc = "Exact current revision returned by read; required for edits, save_plan and sketch_plan"]
     pub expected_revision: Option<i64>,
-    #[desc = "Array of add/update/remove operations; required for apply. Updates are shallow merges and cannot change IDs."]
+    #[desc = "Array of add/update/remove/reroute operations; required for apply. Updates are shallow merges and cannot change IDs."]
     #[schemars(with = "Option<Vec<visualization::scene::Operation>>")]
     pub operations: Option<Value>,
 }
@@ -280,6 +282,23 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
             let data = scene.document["files"][file_id]["dataURL"]
                 .as_str()
                 .ok_or_else(|| invalid("image bytes unavailable"))?;
+            let raster;
+            let data = if let Some(encoded) = data.strip_prefix("data:image/svg+xml;base64,") {
+                use base64::Engine;
+                if encoded.len() > 6 * 1024 * 1024 {
+                    return Err(invalid("SVG exceeds image size limit"));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .map_err(failure)?;
+                raster = ::bioicons::vector::normalize(&bytes)
+                    .map_err(failure)?
+                    .preview_data_url;
+                raster.as_str()
+            } else {
+                data
+            };
+
             Ok(
                 json!({"dataURL":data,"figure_id":id,"element_id":element_id,"revision":scene.revision,"provenance":element.get("customData")}),
             )

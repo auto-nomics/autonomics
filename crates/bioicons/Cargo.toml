@@ -1,0 +1,28 @@
+[package]
+name = "bioicons"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "BioIcons per-asset catalogue, provenance and normalized vector assets"
+
+[dependencies]
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+url = "2"
+base64 = "0.23"
+quick-xml = "0.39"
+resvg = { version = "0.45.1", default-features = false, features = ["text"] }
+ttf-parser = "0.25"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"
+
+[lints]
+workspace = true

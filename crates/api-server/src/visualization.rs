@@ -46,6 +46,16 @@ where
 }
 pub fn router(store: Store) -> Router {
     Router::new()
+        .route(
+            "/projects/{project}/figures/{id}/vector-palette",
+            get(crate::visualization_assets::palette),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/vector-colors",
+            post(crate::visualization_assets::recolor),
+        )
+        .route("/bioicons/search", get(crate::bioicons::search))
+        .route("/bioicons/{id}/vector", get(crate::bioicons::vector))
         .route("/bioart/search", get(crate::bioart::search))
         .route("/bioart/{id}/image", get(crate::bioart::image))
         .route("/projects", get(projects).post(create_project))

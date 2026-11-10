@@ -7,6 +7,11 @@ use std::collections::HashSet;
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Recompute an existing generated cross-panel connector from current geometry.
+    /// Preserves IDs, scientific metadata, text, styling and unrelated objects.
+    Reroute {
+        id: String,
+    },
     Add {
         element: Value,
     },
@@ -14,6 +19,9 @@ pub enum Operation {
         id: String,
         changes: serde_json::Map<String, Value>,
     },
+    /// Remove one object. Illustrated anchors cascade to owned images/labels.
+    /// Other bound text and connected arrows survive detached; remove their IDs
+    /// explicitly when requested. Do not repeat IDs already removed by a cascade.
     Remove {
         id: String,
     },
@@ -27,6 +35,8 @@ pub enum SceneError {
     Duplicate(String),
     #[error("element not found: {0}")]
     NotFound(String),
+    #[error("cannot reroute connector: {0}")]
+    InvalidRoute(String),
     #[error("element id cannot be changed")]
     ImmutableId,
 }
@@ -57,12 +67,13 @@ fn owned_elements(elements: &[Value], id: &str) -> HashSet<String> {
                             groups.iter().any(|value| value.as_str() == Some(group))
                         })
                     });
-            native_label || visual || detached_label
+            let frame_child = parent["type"] == "frame" && element["frameId"].as_str() == Some(id);
+            native_label || visual || detached_label || frame_child
         })
         .filter_map(|element| element["id"].as_str().map(str::to_owned))
         .collect()
 }
-fn touch(element: &mut Value) {
+pub(crate) fn touch(element: &mut Value) {
     element["version"] =
         serde_json::json!(element["version"].as_u64().unwrap_or(0).saturating_add(1));
     element["versionNonce"] =
@@ -86,14 +97,28 @@ fn path_label_center(points: &[[f64; 2]], x: f64, y: f64) -> [f64; 2] {
     };
     [x + point[0], y + point[1]]
 }
-fn translate_bindings(elements: &mut [Value], id: &str, dx: f64, dy: f64) {
+
+fn translate_bindings(
+    elements: &mut [Value],
+    moved: &HashSet<String>,
+    shifted: &HashSet<String>,
+    dx: f64,
+    dy: f64,
+) {
     let mut labels = Vec::new();
     for arrow in elements
         .iter_mut()
         .filter(|element| element["type"] == "arrow")
     {
-        let start = arrow["startBinding"]["elementId"].as_str() == Some(id);
-        let end = arrow["endBinding"]["elementId"].as_str() == Some(id);
+        if arrow["id"].as_str().is_some_and(|id| shifted.contains(id)) {
+            continue;
+        }
+        let start = arrow["startBinding"]["elementId"]
+            .as_str()
+            .is_some_and(|id| moved.contains(id));
+        let end = arrow["endBinding"]["elementId"]
+            .as_str()
+            .is_some_and(|id| moved.contains(id));
         if !(start || end)
             || arrow["angle"].as_f64().unwrap_or(0.0) != 0.0
             || arrow["elbowed"] == true
@@ -189,6 +214,13 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     }
     for operation in operations {
         match operation {
+            Operation::Reroute { id } => {
+                if !ids.contains(id) {
+                    return Err(SceneError::NotFound(id.clone()));
+                }
+                crate::panel_routes::reroute(elements, id)
+                    .map_err(|error| SceneError::InvalidRoute(error.0))?;
+            }
             Operation::Add { element } => {
                 let id = element
                     .get("id")
@@ -252,7 +284,9 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                     }) {
                         shift(child, dx, dy);
                     }
-                    translate_bindings(elements, id, dx, dy);
+                    let mut moved = owned.clone();
+                    moved.insert(id.clone());
+                    translate_bindings(elements, &moved, &owned, dx, dy);
                 }
             }
             Operation::Remove { id } => {
@@ -387,6 +421,64 @@ mod tests {
         assert!(find(&removed, "edge-0")["startBinding"].is_null());
         assert_eq!(find(&removed, "node-1"), find(&scene, "node-1"));
     }
+    #[test]
+    fn removing_a_component_and_its_relationships_preserves_other_nodes() {
+        let plan = serde_json::from_value(json!({
+            "message":"Conceptual pathway", "audience":"researchers", "layout":"horizontal",
+            "nodes":[{"id":"l","label":"L"},{"id":"r","label":"R"},{"id":"x","label":"X"}],
+            "edges":[{"from":"l","to":"r","label":"binding"},{"from":"r","to":"x","label":"activation"}]
+        })).unwrap();
+        let source = crate::sketch::compile(&plan).unwrap();
+        let (scene, _) = crate::image::illustrate(
+            &source,
+            "node-1",
+            crate::image::Image {
+                file_id: "fixture",
+                data_url: "data:image/png;base64,abc",
+                width: 40,
+                height: 100,
+                provenance: json!({"source":"fixture"}),
+            },
+        )
+        .unwrap();
+        let mut ids = vec!["node-1".to_string()];
+        for element in scene["elements"].as_array().unwrap() {
+            if element["type"] == "arrow"
+                || (element["type"] == "text"
+                    && element["containerId"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("edge-")))
+            {
+                ids.push(element["id"].as_str().unwrap().to_string());
+            }
+        }
+        let operations = ids
+            .into_iter()
+            .map(|id| Operation::Remove { id })
+            .collect::<Vec<_>>();
+        let edited = apply(&scene, &operations).unwrap();
+        let remaining = edited["elements"].as_array().unwrap();
+        assert_eq!(remaining.len(), 4);
+        for element in remaining {
+            assert!(
+                ["node-0", "label-0", "node-2", "label-2"]
+                    .contains(&element["id"].as_str().unwrap())
+            );
+            let mut expected = scene["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|old| old["id"] == element["id"])
+                .unwrap()
+                .clone();
+            if let Some(bindings) = expected["boundElements"].as_array_mut() {
+                bindings.retain(|binding| binding["type"] != "arrow");
+            }
+            assert_eq!(&expected, element);
+        }
+        assert_eq!(edited["files"], scene["files"]);
+    }
+
     #[test]
     fn text_updates_keep_engine_source_and_version_in_sync() {
         let original = json!({"elements":[{"id":"label","type":"text","text":"Old","originalText":"Old","version":4}]});

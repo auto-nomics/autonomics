@@ -5,6 +5,7 @@ import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
 import { openAgentEditor } from "@/app/workbench/workbench-store";
 import type { Planning } from "./canvas-planning";
 import type { MarkupSummary } from "./canvas-markup-render";
+import { createSourceManifest } from "./canvas-source-manifest";
 import { CanvasAnnotations, type Annotation } from "./canvas-annotations";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
@@ -36,10 +37,12 @@ export function CanvasAgentPanel({ projectId, canvasId, getRevision, getApi, ens
         const markups = (await gatewayRequest("GET", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/markups`) as MarkupSummary[]).filter(item => item.status === "open");
         const savedPlan = await gatewayRequest("GET", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/planning`) as Planning | null;
         const planning = savedPlan ? { version: savedPlan.version, based_on_revision: savedPlan.based_on_revision, status: savedPlan.status, issues: savedPlan.issues, proposal_id: savedPlan.proposal_id } : null;
+        const manifest = await createSourceManifest({ scene: observed, title: "", project_id: projectId, figure_id: canvasId, based_on_revision: revision, unsaved_changes: false });
+        const assetSources = { total: manifest.assets.length, truncated: manifest.assets.length > 30, assets: [...manifest.assets].sort((a,b) => Number(Boolean(selected[b.element_id ?? ""] || selected[b.semantic_anchor_id ?? ""])) - Number(Boolean(selected[a.element_id ?? ""] || selected[a.semantic_anchor_id ?? ""]))).slice(0, 30).map(asset => ({ element_id: asset.element_id, semantic_anchor_id: asset.semantic_anchor_id, mime_type: asset.mime_type, provider: asset.provider, name: asset.name, authors: asset.authors, licenses: asset.licenses, license_urls: asset.license_urls, source_urls: asset.source_urls, actual_sha256: asset.actual_sha256, hash_matches_recorded: asset.hash_matches_recorded, modifications: asset.modifications.slice(-3), missing_fields: asset.missing_fields })) };
         if (isDirty() || getRevision() !== revision || serializeAsJSON(api.getSceneElements(), api.getAppState(), api.getFiles(), "local") !== observed) throw new Error("交接期间画布发生变化，请保存后重试。");
         const prompt = [
-          "请作为科研绘图助手处理下面的画布需求。先用 visualization read 获取当前文档与版本；若 preview_available 为 true，使用 read_preview 查看同版本整图，选中参考图可用 read_image 查看；优先通过 propose 提交可在画布中预览的局部修改提案，保留无关元素。若 markups 非空，使用 read_markup 和对应 markup_id 读取带标记的审阅图与说明；划除、补画、强调是审阅意图，不是正式元素。核对 at_revision，历史标记须与当前图稿比对后再修改。需要素材时使用 bioart。需要规划新图时使用 read_plan/save_plan 保存图意、受众、组件、关系、假设和待澄清问题，向用户提问并保留已填写的答案；不要猜测缺失的科学机制。已有计划时用 read_plan 查看完整内容，使用 planning_version 和当前 expected_revision 更新计划；待澄清项完成并与用户核对后使用 sketch_plan 生成提案，或提示用户打开绘图计划进行编辑和生成。仅在没有已保存计划且用户已给出完整结构时使用直接 sketch。完成后说明修改和需要用户核对的科学假设，并提示点击查看 Agent 提案进行预览和采用。",
-          JSON.stringify({ project_id: projectId, figure_id: canvasId, observed_revision: revision, audience: audience.trim(), request: request.trim(), selected_objects: objects, annotations, markups, planning, preview_available: previewAvailable }, null, 2),
+          "请作为科研绘图助手处理下面的画布需求。先用 visualization read 获取当前文档与版本；若 preview_available 为 true，使用 read_preview 查看同版本整图，选中参考图可用 read_image 查看；优先通过 propose 提交可在画布中预览的局部修改提案，保留无关元素。若 markups 非空，使用 read_markup 和对应 markup_id 读取带标记的审阅图与说明；划除、补画、强调是审阅意图，不是正式元素。核对 at_revision，历史标记须与当前图稿比对后再修改。需要素材时可使用 bioart（PNG）或 bioicons（SVG）；先预览并核对逐素材作者、许可与科学含义，不要把通用图标当作特定分子的证据。asset_sources 是同版本素材来源摘要；保留逐素材作者、许可及修改记录，缺失信息不得猜测补写。需要规划新图时使用 read_plan/save_plan 保存图意、受众、组件、关系、假设和待澄清问题，向用户提问并保留已填写的答案；不要猜测缺失的科学机制。已有计划时用 read_plan 查看完整内容，使用 planning_version 和当前 expected_revision 更新计划；待澄清项完成并与用户核对后使用 sketch_plan 生成提案，或提示用户打开绘图计划进行编辑和生成。仅在没有已保存计划且用户已给出完整结构时使用直接 sketch。完成后说明修改和需要用户核对的科学假设，并提示点击查看 Agent 提案进行预览和采用。",
+          JSON.stringify({ project_id: projectId, figure_id: canvasId, observed_revision: revision, audience: audience.trim(), request: request.trim(), selected_objects: objects, annotations, markups, planning, asset_sources: assetSources, preview_available: previewAvailable }, null, 2),
         ].join("\n\n");
         const previous = runtime.drafts[target] || "";
         runtime.setDraftFor(target, previous ? `${previous}\n\n${prompt}` : prompt);
