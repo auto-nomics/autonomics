@@ -7,7 +7,10 @@ import { Button } from "@/components/ui/button";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 import { patchEditorState } from "@/app/workbench/workbench-store";
 import type { EditorContext } from "@/app/workbench/editor-registry";
+import { useCandidatePreviewRenderer } from "./canvas-proposal-renderer";
+import { canvasSelectionContext } from "./canvas-selection-context";
 import { createSourceManifest, embedSvgSources, embedPngSources } from "./canvas-source-manifest";
+import { CanvasInset } from "./canvas-inset";
 import { CanvasPalette } from "./canvas-palette";
 import { CanvasRouting } from "./canvas-routing";
 import { CanvasPlanning } from "./canvas-planning";
@@ -50,8 +53,10 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const candidatePreviewStatus = useCandidatePreviewRenderer(projectId, id, loaded);
   useEffect(() => {
     let cancelled = false;
+    patchEditorState(editor.id, { selectedObjectIds: "[]", selectedObjects: "[]", selectedObjectsTotal: 0, selectedObjectsTruncated: false, selectionReady: false });
     void readCanvas(id, projectId).then(record => {
       if (cancelled) return;
       revision.current = record.revision;
@@ -61,9 +66,10 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     }).catch(cause => { if (!cancelled) setError(String(cause)); });
     return () => { cancelled = true; setDocumentDirty(`canvas:${id}`, false); };
   }, [id, projectId]);
-  const dirty = (value: boolean, count?: number, fileCount?: number) => {
+  const dirty = (value: boolean, count?: number, fileCount?: number, providedSelection?: ReturnType<typeof canvasSelectionContext>) => {
     setDocumentDirty(`canvas:${id}`, value);
-    patchEditorState(editor.id, { title: latestTitle.current, dirty: value, saving: saving.current, imageFileCount: fileCount ?? Object.keys(api.current?.getFiles() ?? {}).length, revision: revision.current ?? 0, selectedObjectIds: JSON.stringify(Object.keys(api.current?.getAppState().selectedElementIds ?? {}).sort().slice(0, 100)), objectCount: count ?? api.current?.getSceneElements().length ?? 0 });
+    const selection = providedSelection ?? canvasSelectionContext(api.current?.getSceneElements() ?? [], api.current?.getAppState().selectedElementIds ?? {});
+    patchEditorState(editor.id, { title: latestTitle.current, dirty: value, saving: saving.current, imageFileCount: fileCount ?? Object.keys(api.current?.getFiles() ?? {}).length, revision: revision.current ?? 0, selectedObjectIds: JSON.stringify(selection.ids), selectedObjects: JSON.stringify(selection.objects), selectedObjectsTotal: selection.total, selectedObjectsTruncated: selection.truncated, selectionReady: Boolean(api.current), objectCount: count ?? api.current?.getSceneElements().length ?? 0 });
   };
   async function save() {
     const instance = api.current;
@@ -138,6 +144,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} />}
       {projectId && <CanvasPlanning projectId={projectId} canvasId={id} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasPalette projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
       {projectId && <Button size="sm" variant="outline" onClick={() => setShowAgent(value => !value)}>Agent 绘图</Button>}
@@ -152,6 +159,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
       {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
     </div>
+    {candidatePreviewStatus && <p role="status" className="px-2 text-xs text-muted-foreground">{candidatePreviewStatus}</p>}
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
     {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => { api.current = instance; }} langCode="zh-CN" handleKeyboardGlobally={false} autoFocus onChange={(elements, appState, files) => {
@@ -163,10 +171,12 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
         const scene = serializeAsJSON(elements, appState, files, "local");
         if (baseline.current === null) { baseline.current = scene; dirty(false, elements.filter(element => !element.isDeleted).length, Object.keys(files).length); return; }
         const nextDirty = scene !== baseline.current || title !== titleRef.current;
-        const previous = editor.state as { dirty?: boolean; objectCount?: number; selectedObjectIds?: string; imageFileCount?: number } | null;
+        const previous = editor.state as { dirty?: boolean; objectCount?: number; selectedObjectIds?: string; selectedObjects?: string; selectedObjectsTotal?: number; selectedObjectsTruncated?: boolean; imageFileCount?: number } | null;
         const count = elements.filter(element => !element.isDeleted).length;
-        const selectedObjectIds = JSON.stringify(Object.keys(appState.selectedElementIds).sort().slice(0, 100));
-        if (previous?.dirty !== nextDirty || previous?.objectCount !== count || previous?.selectedObjectIds !== selectedObjectIds || previous?.imageFileCount !== Object.keys(files).length) dirty(nextDirty, count, Object.keys(files).length);
+        const selection = canvasSelectionContext(elements, appState.selectedElementIds);
+        const selectedObjectIds = JSON.stringify(selection.ids);
+        const selectedObjects = JSON.stringify(selection.objects);
+        if (previous?.dirty !== nextDirty || previous?.objectCount !== count || previous?.selectedObjectIds !== selectedObjectIds || previous?.selectedObjects !== selectedObjects || previous?.selectedObjectsTotal !== selection.total || previous?.selectedObjectsTruncated !== selection.truncated || previous?.imageFileCount !== Object.keys(files).length) dirty(nextDirty, count, Object.keys(files).length, selection);
       }}>
         <MainMenu><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
       </Excalidraw>

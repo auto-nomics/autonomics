@@ -20,6 +20,7 @@ pub enum Operation {
         changes: serde_json::Map<String, Value>,
     },
     /// Remove one object. Illustrated anchors cascade to owned images/labels.
+    /// Inset anchors also remove their reciprocal region/callout decorations.
     /// Other bound text and connected arrows survive detached; remove their IDs
     /// explicitly when requested. Do not repeat IDs already removed by a cascade.
     Remove {
@@ -297,6 +298,7 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 let mut removed = HashSet::from([id.clone()]);
                 if elements[position]["customData"]["visualAssetGroupId"].is_string() {
                     removed.extend(owned_elements(elements, id));
+                    removed.extend(crate::inset::annotations(elements, id));
                 }
                 elements.retain(|element| {
                     !element["id"]

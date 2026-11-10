@@ -54,6 +54,16 @@ impl Store {
               id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
               base_revision INTEGER NOT NULL, summary TEXT NOT NULL, document TEXT NOT NULL,
               status TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS visualization_proposal_lineage (
+              proposal_id TEXT PRIMARY KEY REFERENCES visualization_proposals(id) ON DELETE CASCADE,
+              parent_id TEXT NOT NULL REFERENCES visualization_proposals(id) ON DELETE CASCADE,
+              parent_document_sha256 TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS visualization_proposals_figure ON visualization_proposals(visualization_id,created_at,id);
+            CREATE TABLE IF NOT EXISTS visualization_proposal_previews (
+              proposal_id TEXT PRIMARY KEY REFERENCES visualization_proposals(id) ON DELETE CASCADE,
+              document_sha256 TEXT NOT NULL, render_status TEXT NOT NULL,
+              data_url TEXT, error TEXT, renderer TEXT, requested_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS visualization_proposal_preview_queue ON visualization_proposal_previews(render_status,requested_at,proposal_id);
             CREATE TABLE IF NOT EXISTS visualization_plans (
               visualization_id TEXT PRIMARY KEY REFERENCES visualizations(id) ON DELETE CASCADE,
               version INTEGER NOT NULL, based_on_revision INTEGER NOT NULL, document TEXT NOT NULL,

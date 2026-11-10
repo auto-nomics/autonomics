@@ -253,3 +253,94 @@ pub fn inset(
     )?;
     Ok(store.propose(project, figure, revision, "添加局部放大快照", &next)?)
 }
+
+/// Compare against the recorded source snapshot, not the figure revision number alone.
+pub fn inset_status(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    target: &str,
+) -> Result<Value> {
+    let document = current(store, project, figure, revision)?;
+    let m = visualization::inset_refresh::members(&document, target)?;
+    let source_id = m.reference["source_element_id"].as_str().unwrap();
+    let source_revision = m.reference["source_revision"]
+        .as_i64()
+        .filter(|v| *v > 0)
+        .ok_or(Error::Invalid("invalid source revision"))?;
+    let base = json!({"anchor_id":m.anchor["id"],"image_id":m.image["id"],"source_element_id":source_id,"source_revision":source_revision,"current_revision":revision,"region":m.reference["region"]});
+    let mut result = base;
+    if image::element(&document, source_id).is_err() {
+        result["source_available"] = json!(false);
+        result["changed"] = json!(true);
+        return Ok(result);
+    }
+    let source = image::element(&document, source_id)?;
+    let info = image_info(store, project, figure, revision, source_id)?;
+    let historical = match store.revision(project, figure, source_revision) {
+        Ok(scene) => Some(scene.document),
+        Err(visualization::Error::NotFound) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let old = historical
+        .as_ref()
+        .and_then(|doc| image::element(doc, source_id).ok());
+    let geometry_changed = old.is_none_or(|old| {
+        [
+            "x", "y", "width", "height", "angle", "scale", "crop", "frameId", "opacity",
+        ]
+        .iter()
+        .any(|key| old[*key] != source[*key])
+    });
+    let metadata_changed = old.is_none_or(|old| old["customData"] != source["customData"]);
+    let file_changed = info["sha256"] != m.reference["source_sha256"]
+        || source["fileId"] != m.reference["source_file_id"];
+    let detail = image_info(
+        store,
+        project,
+        figure,
+        revision,
+        m.image["id"].as_str().unwrap(),
+    )?;
+    result.as_object_mut().unwrap().extend(json!({"source_available":true,"historical_source_available":old.is_some(),"geometry_changed":geometry_changed,"metadata_changed":metadata_changed,"file_changed":file_changed,"changed":geometry_changed||metadata_changed||file_changed,"detail_edited":detail["sha256"]!=m.reference["source_sha256"] || m.image["crop"]!=m.reference["crop"],"source_sha256":info["sha256"],"snapshot_sha256":m.reference["source_sha256"],"current_detail_sha256":detail["sha256"]}).as_object().unwrap().clone());
+    Ok(result)
+}
+pub fn refresh_inset(
+    store: &Store,
+    project: &str,
+    figure: &str,
+    revision: i64,
+    target: &str,
+    discard_detail_edits: bool,
+) -> Result<visualization::proposal::Proposal> {
+    let status = inset_status(store, project, figure, revision, target)?;
+    if status["source_available"] != true {
+        return Err(Error::Invalid(
+            "source image is missing; restore it before refreshing",
+        ));
+    }
+    if status["detail_edited"] == true && !discard_detail_edits {
+        return Err(Error::Invalid(
+            "inset has local file or crop edits; inspect and explicitly allow replacing them",
+        ));
+    }
+    let info = image_info(
+        store,
+        project,
+        figure,
+        revision,
+        status["source_element_id"].as_str().unwrap(),
+    )?;
+    let document = current(store, project, figure, revision)?;
+    let next = visualization::inset_refresh::compile(
+        &document,
+        target,
+        info["natural_width"].as_u64().unwrap() as u32,
+        info["natural_height"].as_u64().unwrap() as u32,
+        revision,
+        info["sha256"].as_str().unwrap(),
+        status["current_detail_sha256"].as_str().unwrap(),
+    )?;
+    Ok(store.propose(project, figure, revision, "从当前源图刷新放大快照", &next)?)
+}

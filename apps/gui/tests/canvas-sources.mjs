@@ -43,3 +43,17 @@ assert.equal(chunks(replaced).filter(c => c.type === 'iTXt').length, 1);
 assert.equal(JSON.parse(chunks(replaced).find(c => c.type === 'iTXt').body.subarray('autonomics.asset-sources'.length + 5).toString()).title, 'Updated');
 await assert.rejects(embedPngSources(new Blob(['not png']), manifest));
 console.log('canvas-sources: snapshot attribution, unknown provenance, instance hashes, privacy, UTF-8 PNG metadata and unchanged image chunks passed');
+
+const inset = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'detail', type: 'image', customData: { modifications: [{ kind: 'inset', source_element_id: 'source', source_revision: 3, region: { x: 0.1, y: 0.2, width: 0.3, height: 0.4, note: 'PRIVATE-INSET-NOTE' }, crop: { x: 10, y: 20, width: 30, height: 40, naturalWidth: 100, naturalHeight: 100 }, private_note: 'PRIVATE-INSET-NOTE' }] } }] }), title: '', unsaved_changes: false });
+assert.equal(inset.assets[0].modifications[0].source_element_id, 'source');
+assert.equal(inset.assets[0].modifications[0].source_revision, 3);
+assert.deepEqual(inset.assets[0].modifications[0].region, { x: 0.1, y: 0.2, width: 0.3, height: 0.4 });
+assert.equal(inset.assets[0].modifications[0].crop.naturalWidth, 100);
+assert.ok(!JSON.stringify(inset).includes('PRIVATE-INSET-NOTE'));
+
+const refresh = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'refreshed', type: 'image', customData: { modifications: [{ kind: 'inset_refresh', source_element_id: 'source', source_revision: 5, previous_source_revision: 3, previous_file_id: 'older', previous_sha256: 'a'.repeat(64), region: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 }, crop: { x: 10, y: 20, width: 30, height: 40, naturalWidth: 100, naturalHeight: 100 }, private_note: 'PRIVATE-REFRESH-NOTE' }] } }] }), title: '', unsaved_changes: false });
+assert.equal(refresh.assets[0].modifications[0].previous_source_revision, 3);
+assert.equal(refresh.assets[0].modifications[0].source_revision, 5);
+assert.equal(refresh.assets[0].modifications[0].previous_file_id, 'older');
+assert.equal(refresh.assets[0].modifications[0].previous_sha256, 'a'.repeat(64));
+assert.ok(!JSON.stringify(refresh).includes('PRIVATE-REFRESH-NOTE'));

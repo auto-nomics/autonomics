@@ -3,6 +3,10 @@ use crate::{Error, Result, Store, Visualization};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+pub(crate) fn document_hash(document: &str) -> String {
+    format!("{:x}", Sha256::digest(document.as_bytes()))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proposal {
@@ -14,7 +18,29 @@ pub struct Proposal {
     pub status: String,
     pub created_at: String,
     #[serde(default)]
+    pub document_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_proposal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_document_sha256: Option<String>,
+    #[serde(default)]
     pub review_markups: Vec<crate::markup::Summary>,
+}
+pub struct ProposedRevision<'a> {
+    pub parent_id: &'a str,
+    pub parent_document_sha256: &'a str,
+    pub summary: &'a str,
+    pub document: &'a Value,
+    pub markup_ids: &'a [String],
+}
+struct Draft<'a> {
+    project: &'a str,
+    id: &'a str,
+    base_revision: i64,
+    summary: &'a str,
+    document: &'a Value,
+    markup_ids: &'a [String],
+    parent: Option<(&'a str, &'a str)>,
 }
 impl Store {
     pub fn propose(
@@ -37,6 +63,43 @@ impl Store {
         document: &Value,
         markup_ids: &[String],
     ) -> Result<Proposal> {
+        self.insert_proposal(Draft {
+            project,
+            id,
+            base_revision,
+            summary,
+            document,
+            markup_ids,
+            parent: None,
+        })
+    }
+    pub fn propose_revision(
+        &self,
+        project: &str,
+        id: &str,
+        base_revision: i64,
+        revision: ProposedRevision<'_>,
+    ) -> Result<Proposal> {
+        self.insert_proposal(Draft {
+            project,
+            id,
+            base_revision,
+            summary: revision.summary,
+            document: revision.document,
+            markup_ids: revision.markup_ids,
+            parent: Some((revision.parent_id, revision.parent_document_sha256)),
+        })
+    }
+    fn insert_proposal(&self, draft: Draft<'_>) -> Result<Proposal> {
+        let Draft {
+            project,
+            id,
+            base_revision,
+            summary,
+            document,
+            markup_ids,
+            parent,
+        } = draft;
         if markup_ids.len() > 50
             || markup_ids
                 .iter()
@@ -54,6 +117,16 @@ impl Store {
         if self.get(project, id)?.revision != base_revision {
             return Err(Error::Conflict);
         }
+        if let Some((parent_id, expected_hash)) = parent {
+            let row=transaction.query_row("SELECT base_revision,status,document FROM visualization_proposals WHERE id=?1 AND visualization_id=?2",params![parent_id,id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).optional()?.ok_or(Error::NotFound)?;
+            if row.0 != base_revision
+                || row.1 != "pending"
+                || document_hash(&row.2) != expected_hash
+            {
+                return Err(Error::Conflict);
+            }
+        }
+        let snapshot = serde_json::to_string(document)?;
         let mut proposal = Proposal {
             id: uuid::Uuid::new_v4().to_string(),
             visualization_id: id.into(),
@@ -62,6 +135,9 @@ impl Store {
             document: document.clone(),
             status: "pending".into(),
             created_at: chrono::Utc::now().to_rfc3339(),
+            document_sha256: document_hash(&snapshot),
+            parent_proposal_id: parent.map(|p| p.0.to_owned()),
+            parent_document_sha256: parent.map(|p| p.1.to_owned()),
             review_markups: Vec::new(),
         };
         let inserted = self.connection.execute(
@@ -71,7 +147,7 @@ impl Store {
                 id,
                 base_revision,
                 proposal.summary,
-                serde_json::to_string(document)?,
+                snapshot,
                 proposal.status,
                 proposal.created_at,
                 project
@@ -94,6 +170,12 @@ impl Store {
             transaction.execute(
                 "INSERT INTO visualization_proposal_markups VALUES (?1,?2)",
                 params![proposal.id, markup_id],
+            )?;
+        }
+        if let Some((parent_id, expected_hash)) = parent {
+            transaction.execute(
+                "INSERT INTO visualization_proposal_lineage VALUES(?1,?2,?3)",
+                params![proposal.id, parent_id, expected_hash],
             )?;
         }
         proposal.review_markups = self.proposal_markups(&proposal.id)?;
@@ -127,9 +209,26 @@ impl Store {
         })
         .collect()
     }
+    pub fn proposal(&self, project: &str, id: &str, proposal_id: &str) -> Result<Proposal> {
+        self.get(project, id)?;
+        let row=self.connection.query_row("SELECT p.base_revision,p.summary,p.document,p.status,p.created_at,l.parent_id,l.parent_document_sha256 FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.id=?1 AND p.visualization_id=?2",params![proposal_id,id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,Option<String>>(6)?))).optional()?.ok_or(Error::NotFound)?;
+        Ok(Proposal {
+            id: proposal_id.into(),
+            visualization_id: id.into(),
+            base_revision: row.0,
+            summary: row.1,
+            document_sha256: document_hash(&row.2),
+            document: serde_json::from_str(&row.2)?,
+            status: row.3,
+            created_at: row.4,
+            parent_proposal_id: row.5,
+            parent_document_sha256: row.6,
+            review_markups: self.proposal_markups(proposal_id)?,
+        })
+    }
     pub fn proposals(&self, project: &str, id: &str) -> Result<Vec<Proposal>> {
         self.get(project, id)?;
-        let mut statement=self.connection.prepare("SELECT id,base_revision,summary,document,status,created_at FROM visualization_proposals WHERE visualization_id=?1 ORDER BY created_at DESC,id")?;
+        let mut statement=self.connection.prepare("SELECT p.id,p.base_revision,p.summary,p.document,p.status,p.created_at,l.parent_id,l.parent_document_sha256 FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.visualization_id=?1 ORDER BY p.created_at DESC,p.id")?;
         let rows = statement.query_map([id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -138,16 +237,30 @@ impl Store {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
             ))
         })?;
         rows.map(|row| {
-            let (proposal_id, base_revision, summary, document, status, created_at) = row?;
+            let (
+                proposal_id,
+                base_revision,
+                summary,
+                document,
+                status,
+                created_at,
+                parent_proposal_id,
+                parent_document_sha256,
+            ) = row?;
             let review_markups = self.proposal_markups(&proposal_id)?;
             Ok(Proposal {
                 id: proposal_id,
                 visualization_id: id.into(),
                 base_revision,
                 summary,
+                document_sha256: document_hash(&document),
+                parent_proposal_id,
+                parent_document_sha256,
                 document: serde_json::from_str(&document)?,
                 status,
                 created_at,

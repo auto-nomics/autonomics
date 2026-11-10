@@ -7,8 +7,20 @@ pub enum ServiceError {
     Store(#[from] crate::Error),
     #[error(transparent)]
     Scene(#[from] scene::SceneError),
+    #[error(transparent)]
+    Arrangement(#[from] crate::arrange::InvalidArrangement),
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProposalRevisionInput {
+    pub parent_proposal_id: String,
+    pub parent_document_sha256: String,
+    pub summary: String,
+    pub operations: Option<Vec<scene::Operation>>,
+    pub arrangement: Option<crate::arrange::Spec>,
+    pub markup_ids: Option<Vec<String>>,
+}
 pub struct VisualizationService {
     store: Store,
 }
@@ -59,6 +71,54 @@ impl VisualizationService {
             summary,
             &document,
             markup_ids,
+        )?)
+    }
+    pub fn revise_proposal(
+        &self,
+        project: &str,
+        id: &str,
+        expected_revision: i64,
+        input: &ProposalRevisionInput,
+    ) -> Result<crate::proposal::Proposal, ServiceError> {
+        if self.store.get(project, id)?.revision != expected_revision {
+            return Err(crate::Error::Conflict.into());
+        }
+        let parent = self
+            .store
+            .proposal(project, id, &input.parent_proposal_id)?;
+        if parent.status != "pending"
+            || parent.base_revision != expected_revision
+            || parent.document_sha256 != input.parent_document_sha256
+        {
+            return Err(crate::Error::Conflict.into());
+        }
+        if input.markup_ids.is_none() && parent.review_markups.iter().any(|m| m.status == "open") {
+            return Err(crate::Error::Invalid(
+                "explicit markup_ids required to retain or drop the parent's open review links",
+            )
+            .into());
+        }
+        let document = match (&input.operations, &input.arrangement) {
+            (Some(ops), None) if ops.len() <= 1000 => scene::apply(&parent.document, ops)?,
+            (None, Some(spec)) => crate::arrange::compile(&parent.document, spec)?,
+            _ => {
+                return Err(crate::Error::Invalid(
+                    "exactly one operations batch (at most 1000) or arrangement is required",
+                )
+                .into());
+            }
+        };
+        Ok(self.store.propose_revision(
+            project,
+            id,
+            expected_revision,
+            crate::proposal::ProposedRevision {
+                parent_id: &parent.id,
+                parent_document_sha256: &parent.document_sha256,
+                summary: &input.summary,
+                document: &document,
+                markup_ids: input.markup_ids.as_deref().unwrap_or(&[]),
+            },
         )?)
     }
     /// Apply a batch against the exact scene revision observed by the caller.

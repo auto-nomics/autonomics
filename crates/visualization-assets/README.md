@@ -14,7 +14,7 @@ API:
 - `GET .../figures/{id}/vector-palette?element_id=...&expected_revision=N`
 - `POST .../figures/{id}/vector-colors` with `{element_id,expected_revision,colors:{"#ff0000":"#00aa88"}}` (actual values must be six hexadecimal digits).
 
-The GUI's “素材配色” control reads one selected SVG, allows exact colour substitution, and opens the canonical before/after proposal viewer. It checks local edits and revisions while reading and proposing. The `bioicons` tool exposes equivalent `palette` and `recolor` actions, with a vision block for the palette preview. PNG images are not supported by these colour operations. Matching colours within one SVG change together; individual paths are not separately selected.
+The GUI's “素材编辑” control reads one selected SVG, allows exact colour substitution, and opens the canonical before/after proposal viewer. It checks local edits and revisions while reading and proposing. The `bioicons` tool exposes equivalent `palette` and `recolor` actions, with a vision block for the palette preview. PNG images are not supported by these colour operations. Palette replacements change matching colours together. Path-specific editing uses the separate parts/edit_parts operations below.
 
 `cargo test -p visualization-assets` verifies instance isolation, preserved metadata/geometry, immutable history, version conflicts and failure atomicity. The live BioIcons browser case additionally covers palette selection, rejected stale/invalid requests, proposal adoption, reload and vector export.
 
@@ -27,3 +27,8 @@ Normalized SVG uses an editor-compatible root namespace/viewBox and document ser
 
 
 `geometry` 按同一版本、目标图片、文件 SHA 与路径 ID 返回端点/控制点及编号视觉材料。端点编辑沿用 `edit_parts` 的提案、单实例替换、不可变历史和来源记录机制，新增 `points` 记录进入 `path_edit` 历史；不改变外部标签、箭头、裁剪或其他素材实例。
+
+
+`image_info` reads actual embedded SVG/PNG/JPEG/WebP dimensions, current crop, SHA-256 and provenance at the exact saved revision. `inset` compiles a fractional visible region into a pending editable crop/region/callout proposal, preserving source objects and files. `inset_status` compares the source with its recorded historical version; a later figure revision alone is not considered a source change. `refresh_inset` retains inset identities, panel, title, styles and local notes while proposing refreshed content and region/callout geometry inside the existing panel. The same fractional region is applied to the current source viewport and needs scientific review if the source content changed. Local file/crop edits require `discard_detail_edits:true`; missing sources/members, ambiguous identities and rotated panels fail before proposal creation. The source and unrelated insets remain unchanged. Every refresh records current and previous source revisions/file hashes, and remains a fixed snapshot until explicitly adopted and refreshed again.
+
+HTTP: `GET .../image-info`, `POST .../insets`, `GET .../inset-status`, `POST .../insets/refresh`. Read queries use `element_id` and `expected_revision`; refresh accepts the same fields plus optional `discard_detail_edits` (false by default). Native editor Delete uses ordinary engine rules; the GUI's reviewed delete operation and Agent removal of the inset anchor also clean reciprocal region/callout decorations.

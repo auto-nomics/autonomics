@@ -1,9 +1,11 @@
 //! Project-scoped visualization persistence, independent of GUI and rendering engine.
 pub mod annotation;
+pub mod arrange;
 pub mod error;
 mod font_metrics;
 pub mod image;
 pub mod inset;
+pub mod inset_refresh;
 mod layout;
 pub mod markup;
 mod panel_routes;
@@ -11,6 +13,7 @@ mod panels;
 pub mod planning;
 pub mod preview;
 pub mod proposal;
+pub mod proposal_preview;
 pub mod scene;
 pub mod service;
 pub mod sketch;

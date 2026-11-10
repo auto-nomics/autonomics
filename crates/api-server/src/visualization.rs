@@ -26,9 +26,9 @@ fn error(error: ServiceError) -> ApiError {
     let status = match &error {
         ServiceError::Store(visualization::Error::NotFound) => StatusCode::NOT_FOUND,
         ServiceError::Store(visualization::Error::Conflict) => StatusCode::CONFLICT,
-        ServiceError::Store(visualization::Error::Invalid(_)) | ServiceError::Scene(_) => {
-            StatusCode::BAD_REQUEST
-        }
+        ServiceError::Store(visualization::Error::Invalid(_))
+        | ServiceError::Scene(_)
+        | ServiceError::Arrangement(_) => StatusCode::BAD_REQUEST,
         _ => return internal(),
     };
     (status, Json(json!({"error":error.to_string()})))
@@ -46,6 +46,42 @@ where
 }
 pub fn router(store: Store) -> Router {
     Router::new()
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}",
+            get(read_proposal),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/revisions",
+            post(revise_proposal),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposal-preview-requests",
+            get(proposal_preview_requests),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/preview-request",
+            post(request_proposal_preview),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/preview",
+            get(read_proposal_preview).post(complete_proposal_preview),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/inset-status",
+            get(crate::visualization_assets::inset_status),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/insets/refresh",
+            post(crate::visualization_assets::refresh_inset),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/image-info",
+            get(crate::visualization_assets::image_info),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/insets",
+            post(crate::visualization_assets::inset),
+        )
         .route(
             "/projects/{project}/figures/{id}/vector-geometry",
             get(crate::visualization_assets::geometry),
@@ -276,6 +312,206 @@ mod tests {
         let status = response.status().as_u16();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    #[tokio::test]
+    async fn proposal_preview_http_is_content_bound_and_does_not_adopt() {
+        let mut store = Store::in_memory().unwrap();
+        store.create_project("p", "Study").unwrap();
+        store.create_project("other", "Other").unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
+            .unwrap();
+        let p = store
+            .propose(
+                "p",
+                &figure.id,
+                1,
+                "Candidate",
+                &json!({"elements":[{"id":"candidate","type":"rectangle"}]}),
+            )
+            .unwrap();
+        let app = router(store);
+        let path = format!("/projects/p/figures/{}", figure.id);
+        let preview = format!("{path}/proposals/{}/preview", p.id);
+        let (status, queued) = request(
+            app.clone(),
+            "POST",
+            &format!("{preview}-request"),
+            json!({"expected_revision":1}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(queued["render_status"], "requested");
+        let (status, jobs) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/proposal-preview-requests"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(jobs[0]["document"], p.document);
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let upload = json!({"base_revision":1,"document_sha256":queued["document_sha256"],"dataURL":png,"renderer":"test-renderer"});
+        let mut wrong = upload.clone();
+        wrong["document_sha256"] = json!("wrong");
+        assert_eq!(request(app.clone(), "POST", &preview, wrong).await.0, 409);
+        assert_eq!(request(app.clone(), "POST", &preview, upload).await.0, 200);
+        let ready = request(
+            app.clone(),
+            "GET",
+            &format!("{preview}?expected_revision=1"),
+            Value::Null,
+        )
+        .await
+        .1;
+        assert_eq!(ready["scope"], "proposal_candidate");
+        assert_eq!(ready["dataURL"], png);
+        assert_eq!(ready["proposal_status"], "pending");
+        assert_eq!(
+            request(app.clone(), "GET", &path, Value::Null).await.1["metadata"]["revision"],
+            1
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!(
+                    "/projects/other/figures/{}/proposal-preview-requests",
+                    figure.id
+                ),
+                Value::Null
+            )
+            .await
+            .0,
+            404
+        );
+        assert_eq!(
+            request(
+                app,
+                "GET",
+                &format!("{preview}?expected_revision=0"),
+                Value::Null
+            )
+            .await
+            .0,
+            409
+        );
+    }
+    #[tokio::test]
+    async fn inset_http_validates_revision_and_requires_review() {
+        let mut store = Store::in_memory().unwrap();
+
+        use base64::Engine;
+        let url=format!("data:image/svg+xml;base64,{}",base64::engine::general_purpose::STANDARD.encode(b"<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><path d='M0 0h100v100H0z'/></svg>"));
+        let (scene, target) = visualization::image::insert(
+            &json!({"elements":[]}),
+            visualization::image::Image {
+                file_id: "source",
+                data_url: &url,
+                width: 100,
+                height: 100,
+                provenance: json!({"asset":{"license":"cc0"}}),
+            },
+            0.,
+            0.,
+        )
+        .unwrap();
+        store.create_project("p", "Study").unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &scene)
+            .unwrap();
+        let spec = json!({"element_id":target,"region":{"x":0.1,"y":0.2,"width":0.4,"height":0.5},"x":600,"y":100,"max_size":320,"title":"Detail"});
+
+        let app = router(store);
+        let path = format!("/projects/p/figures/{}", figure.id);
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!("{path}/image-info?element_id={target}&expected_revision=1"),
+                Value::Null
+            )
+            .await
+            .1["natural_width"],
+            100
+        );
+        let input = json!({"expected_revision":1,"inset":spec});
+        let (status, proposal) = request(
+            app.clone(),
+            "POST",
+            &format!("{path}/insets"),
+            input.clone(),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(proposal["document"]["elements"][0], scene["elements"][0]);
+        assert_eq!(
+            request(app.clone(), "GET", &path, Value::Null).await.1["metadata"]["revision"],
+            1
+        );
+        let mut stale = input;
+        stale["expected_revision"] = json!(0);
+        assert_eq!(
+            request(app.clone(), "POST", &format!("{path}/insets"), stale)
+                .await
+                .0,
+            409
+        );
+        assert_eq!(
+            request(
+                app.clone(),
+                "GET",
+                &format!(
+                    "/projects/other/figures/{}/image-info?element_id={target}&expected_revision=1",
+                    figure.id
+                ),
+                Value::Null
+            )
+            .await
+            .0,
+            404
+        );
+
+        let accept = format!(
+            "{path}/proposals/{}/accept",
+            proposal["id"].as_str().unwrap()
+        );
+        assert_eq!(
+            request(app.clone(), "POST", &accept, Value::Null).await.0,
+            200
+        );
+        let anchor = proposal["document"]["elements"][3]["id"].as_str().unwrap();
+        let (status, checked) = request(
+            app.clone(),
+            "GET",
+            &format!("{path}/inset-status?element_id={anchor}&expected_revision=2"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(checked["changed"], false);
+        let (status, refreshed) = request(
+            app.clone(),
+            "POST",
+            &format!("{path}/insets/refresh"),
+            json!({"element_id":anchor,"expected_revision":2}),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(refreshed["base_revision"], 2);
+        assert_eq!(refreshed["document"]["files"], scene["files"]);
+        assert_eq!(
+            request(
+                app,
+                "POST",
+                &format!("{path}/insets/refresh"),
+                json!({"element_id":anchor,"expected_revision":1})
+            )
+            .await
+            .0,
+            409
+        );
     }
     #[tokio::test]
     async fn scientific_planning_persists_clarification_before_a_reviewable_sketch() {
@@ -1100,6 +1336,135 @@ async fn planning_sketch(
         )?);
         proposal.as_object_mut().unwrap().remove("document");
         Ok(proposal)
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CandidatePreviewQuery {
+    expected_revision: i64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CandidatePreviewRequest {
+    expected_revision: i64,
+    #[serde(default)]
+    retry_failed: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CandidatePreviewCompletion {
+    base_revision: i64,
+    document_sha256: String,
+    renderer: String,
+    #[serde(rename = "dataURL")]
+    data_url: Option<String>,
+    error: Option<String>,
+}
+async fn proposal_preview_requests(
+    State(s): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(
+            service.store().proposal_render_requests(&project, &id)?
+        ))
+    })
+    .await
+}
+async fn request_proposal_preview(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Json(input): Json<CandidatePreviewRequest>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().request_proposal_preview(
+            &project,
+            &id,
+            &proposal,
+            input.expected_revision,
+            input.retry_failed
+        )?))
+    })
+    .await
+}
+async fn read_proposal_preview(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Query(input): Query<CandidatePreviewQuery>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().proposal_preview(
+            &project,
+            &id,
+            &proposal,
+            input.expected_revision
+        )?))
+    })
+    .await
+}
+async fn complete_proposal_preview(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Json(input): Json<CandidatePreviewCompletion>,
+) -> Response {
+    work(s, move |service| {
+        service.store().complete_proposal_preview(
+            &project,
+            &id,
+            &proposal,
+            visualization::proposal_preview::PreviewCompletion {
+                base_revision: input.base_revision,
+                document_sha256: &input.document_sha256,
+                data_url: input.data_url.as_deref(),
+                error: input.error.as_deref(),
+                renderer: &input.renderer,
+            },
+        )?;
+        Ok(json!({"ok":true}))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviseProposalInput {
+    expected_revision: i64,
+    parent_document_sha256: String,
+    summary: String,
+    operations: Option<Vec<visualization::scene::Operation>>,
+    arrangement: Option<visualization::arrange::Spec>,
+    markup_ids: Option<Vec<String>>,
+}
+async fn read_proposal(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().proposal(&project, &id, &proposal)?))
+    })
+    .await
+}
+async fn revise_proposal(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Json(input): Json<ReviseProposalInput>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.revise_proposal(
+            &project,
+            &id,
+            input.expected_revision,
+            &visualization::service::ProposalRevisionInput {
+                parent_proposal_id: proposal,
+                parent_document_sha256: input.parent_document_sha256,
+                summary: input.summary,
+                operations: input.operations,
+                arrangement: input.arrangement,
+                markup_ids: input.markup_ids
+            }
+        )?))
     })
     .await
 }

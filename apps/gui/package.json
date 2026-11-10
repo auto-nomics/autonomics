@@ -24,6 +24,7 @@
     "test:deck": "node tests/deck-viewer.mjs",
     "test:canvas": "node tests/canvas-editor.mjs",
     "test:canvas:gateway": "node tests/canvas-gateway.mjs",
+    "test:canvas:selection": "node tests/canvas-selection-context.mjs",
     "test:canvas:sources": "node tests/canvas-sources.mjs",
     "test:canvas:live": "cargo build -p api-server --example visualization_live && node tests/canvas-live.mjs",
     "test:canvas:native": "cargo build -p api-server --example visualization_native && node tests/canvas-native.mjs",

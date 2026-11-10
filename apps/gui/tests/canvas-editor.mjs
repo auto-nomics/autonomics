@@ -22,6 +22,7 @@ try {
   await page.route('**/api/v1/**', async route => {
     const path = new URL(route.request().url()).pathname.replace('/api/v1', '');
     if (path === '/events') return;
+    if (path.endsWith('/proposal-preview-requests')) return route.fulfill({ json: [] });
     if (path === '/visualization/bioart/search') return route.fulfill({ json: { assets: [{ id: 1, title: 'Test cell', source_url: 'https://bioart.niaid.nih.gov/asset/1', licenses: ['CC0'], creators: ['NIH'] }] } });
     if (path === '/visualization/bioart/1/image') return route.fulfill({ json: { asset: { id: 1, title: 'Test cell', source_url: 'https://bioart.niaid.nih.gov/asset/1', licenses: ['CC0'] }, sha256: 'test-image', file: {}, dataURL: await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = 20; canvas.height = 20; return canvas.toDataURL(); }) } });
     if (path === '/visualization/projects') return route.fulfill({ json: [{ id: 'study', title: 'Study' }] });

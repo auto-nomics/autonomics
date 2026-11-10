@@ -21,7 +21,14 @@ enum ActionSchema {
     List,
     Read,
     ReadImage,
+    ImageInfo,
+    InsetStatus,
+    RefreshInset,
+    Inset,
     ReadPreview,
+    ReadProposalPreview,
+    ReadProposal,
+    ReviseProposal,
     ReadMarkup,
     ListMarkups,
     ReadPlan,
@@ -31,6 +38,7 @@ enum ActionSchema {
     Sketch,
     Propose,
     Apply,
+    Arrange,
 }
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
@@ -52,10 +60,22 @@ struct SceneSchema {
 }
 #[tool(
     name = "visualization",
-    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, read_image, read_preview, read_markup, list_markups, read_plan, save_plan, sketch_plan, create, sketch, propose, apply. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. When a proposed change addresses review markup, pass its IDs in markup_ids after reading and reconciling those reviews; this links the candidate to those notes without closing them. The user can explicitly close linked notes when adopting the proposal. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries, markups_pagination.next_before and object-linked review annotations as well as the scene. Use list_markups with before, limit (1..100) and optional status open/resolved to retrieve older reviews; repeat next_before until null. Filter status open to find outstanding reviews even when newer records are resolved; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
+    description = "Manage editable scientific figures shared with the GUI. Actions: projects, list, read, image_info, inset, inset_status, refresh_inset, read_image, read_preview, read_proposal_preview, read_proposal, revise_proposal, read_markup, list_markups, read_plan, save_plan, sketch_plan, create, sketch, propose, apply, arrange. For comparison or step panels, declare panels [{id,title,column,row}] and assign every node.panel to a declared ID. Panels compile to native editable frames with independent internal layouts; explicit cross-panel edges use editable scene-level connectors routed around nodes and titles. Updating a frame x/y moves its children and adjusts external connector endpoints; removing a frame detaches and preserves its contents. Use read_plan/save_plan to maintain a versioned scientific brief with message, audience, nodes, edges, assumptions, relationship_note and questions [{id,question,answer}]. Save incomplete briefs to persist focused clarification questions; never invent missing scientific relationships. Resolve the questions and review the structural plan with the user before sketch_plan. sketch_plan only generates a proposal from a ready brief at the exact planning_version and expected_revision. Once an existing figure has a saved brief, use sketch_plan rather than direct sketch. For sketch, supply figure_id and expected_revision to propose a new sketch in the active figure; omit figure_id only when creating a separate figure. Prefer propose for changes that should be previewed in the GUI before acceptance. When a proposed change addresses review markup, pass its IDs in markup_ids after reading and reconciling those reviews; this links the candidate to those notes without closing them. The user can explicitly close linked notes when adopting the proposal. read omits embedded image bytes; use read_image with element_id to view a reference image as a vision tool result. read_proposal with proposal_id and expected_revision returns an immutable candidate scene with image bytes omitted, its full stored document_sha256 and parent lineage. revise_proposal creates a new child from that candidate (not the saved scene), retaining previous edits and files; pass proposal_id, document_sha256, expected_revision, title, and exactly one operations or arrangement. Parent must be pending at the current figure base revision; rejected/accepted or stale parents must be reconciled with the saved scene. Parent stays immutable and is not automatically adopted/rejected. If the parent has open review links, explicitly pass markup_ids (including [] to drop) for reviews still addressed by the child; do not silently inherit resolved or no-longer-addressed notes. read_proposal_preview with proposal_id and expected_revision requests an independent browser render of that exact immutable candidate, then waits briefly for the open canvas renderer and returns a vision block. It never adopts the proposal. Inspect scope, document_sha256, base_revision, current_revision and proposal_status; if base_is_current is false, reconcile with the current saved scene. If no renderer is open or a render fails, it reports an error and never substitutes the saved-canvas preview. After fixing render resources, retry_preview:true explicitly requeues a failed render. read_preview returns the full canvas PNG for the current saved revision when the GUI has captured one; never fall back to a stale preview. read_markup with markup_id returns saved review ink over its exact historical canvas as a vision block. The result declares at_revision and current_revision; if they differ, reconcile the historical review with the current scene before proposing edits. Read returns recent markup summaries, markups_pagination.next_before and object-linked review annotations as well as the scene. Use list_markups with before, limit (1..100) and optional status open/resolved to retrieve older reviews; repeat next_before until null. Filter status open to find outstanding reviews even when newer records are resolved; use these notes to interpret selected markup. Use read before apply/propose; use expected_revision from read, never guess it. Use {op:reroute,id} to recompute a generated cross-panel arrow after moving components, from its current bindings and current label size; preserve user text, styles and evidence. Prefer propose for review. Detached endpoints or rotated bound nodes must be resolved first. apply operations are JSON objects: {op:add,element:{id,...}}, {op:update,id,changes:{...}}, {op:remove,id}. Removing an illustrated semantic anchor also removes its owned image and labels: do not remove those IDs again. Connected arrows survive with cleared bindings. Ordinary shape or arrow removal leaves its bound text detached. When the user requests removing a component and its relationships, explicitly remove the affected arrows and their text IDs, preserve unrelated objects, and never invent a replacement relationship. Labels, arrows and icons must remain separate editable elements. Position updates move owned labels/images and ordinary straight connector endpoints. For rotated or elbowed connectors, supply geometry edits explicitly. Preserve unrelated objects, do not flatten the figure into a bitmap. image_info requires element_id and expected_revision and returns actual file dimensions, crop and provenance without image bytes. inset requires expected_revision and inset {element_id,region:{x,y,width,height},x,y,max_size,title}; region is fractional in the current visible image after flips, before rotation; x/y position the new detail panel. Use image_info and read_image first. This creates a pending proposal with editable image crop, region box and neutral callout, preserving original files and licensing. inset_status with element_id (inset anchor/image) and expected_revision compares the current source against its recorded historical snapshot; changed does not merely mean a later figure revision. refresh_inset with the same arguments proposes a refresh in the existing panel, keeping object IDs, panel/title, styles and unrelated objects. The saved fractional region is applied to the current source viewport; replacing the source may change its scientific content. Read status and images before refreshing; if detail_edited is true, local file/crop edits will be replaced only with discard_detail_edits:true. Missing members, ambiguous ownership or rotated panels must be resolved first. To delete a whole inset, remove its anchor_id once; this also removes its owned image/title and matching region/callout decorations, preserving the source image and other insets. Do not repeat cascaded IDs. Insets are frozen snapshots tied to the source revision; later source edits do not refresh them or move the region annotation automatically. Read the saved scene and its group membership before arrange. arrange requires arrangement and expected_revision and proposes alignment or equal edge-gap distribution of existing components without changing their relationships. Native groups, semantic anchors and owned labels/images move together; overlapping selections collapse to one unit. Distribution needs at least three independent units, uses equal edge gaps when space permits and the editor's anchored-center fallback when the span is too small. Exclude inset region/callout annotations. Native ink and unrounded zero-roughness polylines can be part of arranged components. A connector inside a selected component must translate rigidly with its bound endpoints; keep between-component connectors outside those groups. Rotated arrow-bound text and rough/curved/elbowed bounds still require native geometry. Locked members and unsupported independently moved curved/rotated/elbowed connectors must be resolved before arranging. Review crossings/overlaps visually; arrangement does not automatically reroute arrows. Scientific claims require user review. GUI unsaved changes are not included; ask the user to save before editing them."
 )]
 pub struct FigureInput {
-    #[desc = "projects | list | read | read_image | read_preview | read_markup | list_markups | read_plan | save_plan | sketch_plan | create | sketch | propose | apply"]
+    #[desc = "For revise_proposal: copy the parent candidate document_sha256 from read_proposal or read_proposal_preview; this is not its PNG hash. Requires proposal_id, expected_revision and title; exactly one operations or arrangement."]
+    pub document_sha256: Option<String>,
+    #[desc = "For read_proposal/read_proposal_preview/revise_proposal: copy proposal_id from the proposal result ID. Requires figure_id and expected_revision for the current figure head; image is the immutable candidate, not the saved canvas."]
+    pub proposal_id: Option<String>,
+    #[desc = "For read_proposal_preview only: explicitly requeue a failed browser render after fixing its resources. Ready images never change."]
+    pub retry_preview: Option<bool>,
+    #[desc = "For arrange: {element_ids:[existing IDs],mode:left|center|right|top|middle|bottom|distribute_horizontal|distribute_vertical}. Requires expected_revision. Expands native groups and owned images/labels; frames keep their contents. Only creates a pending proposal."]
+    pub arrangement: Option<visualization::arrange::Spec>,
+    #[desc = "For refresh_inset only: explicitly permit replacing local file/crop edits reported by inset_status. Defaults false; proposal remains pending for user review."]
+    pub discard_detail_edits: Option<bool>,
+    #[desc = "For inset only: source image ID, fractional visible region, new panel x/y, max_size (32..2048) and title (1..80 characters). Frozen revision-bound snapshot; never invent image dimensions."]
+    pub inset: Option<visualization::inset::Spec>,
+    #[desc = "projects | list | read | image_info | inset | inset_status | refresh_inset | read_image | read_preview | read_proposal_preview | read_proposal | revise_proposal | read_markup | list_markups | read_plan | save_plan | sketch_plan | create | sketch | propose | apply | arrange"]
     #[schemars(with = "ActionSchema")]
     pub action: String,
     #[desc = "Opaque project ID: copy verbatim from the active tab context or projects. Never compose or guess IDs."]
@@ -66,7 +86,7 @@ pub struct FigureInput {
     pub element_id: Option<String>,
     #[desc = "Review markup ID from read or the user handoff; required for read_markup"]
     pub markup_id: Option<String>,
-    #[desc = "For propose only: IDs of open review markups actually addressed by these edits. Read each with read_markup first; include only addressed reviews, including historical reviews reconciled with the current scene. Does not resolve notes; the user chooses whether to close them when accepting the proposal."]
+    #[desc = "For propose/arrange/revise_proposal: IDs of open review markups actually addressed by these edits. Read each with read_markup first; include only addressed reviews, including historical reviews reconciled with the current scene. Does not resolve notes; the user chooses whether to close them when accepting the proposal."]
     pub markup_ids: Option<Vec<String>>,
     #[desc = "list_markups cursor: copy next_before from the previous page; omit for the newest page"]
     pub before: Option<String>,
@@ -108,9 +128,13 @@ fn required(value: Option<String>, name: &str) -> Result<String, ToolError> {
 }
 fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
     let mut service = VisualizationService::new(Store::open(path).map_err(failure)?);
-    if input.action != "propose" && input.markup_ids.as_ref().is_some_and(|ids| !ids.is_empty()) {
+    if !matches!(
+        input.action.as_str(),
+        "propose" | "arrange" | "revise_proposal"
+    ) && input.markup_ids.as_ref().is_some_and(|ids| !ids.is_empty())
+    {
         return Err(invalid(
-            "markup_ids is only supported for propose; review resolution requires user acceptance",
+            "markup_ids is only supported for propose, arrange or revise_proposal; review resolution requires user acceptance",
         ));
     }
     if input.action == "projects" {
@@ -287,6 +311,164 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
                     })?
             ))
         }
+        "arrange" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            let spec = input
+                .arrangement
+                .ok_or_else(|| invalid("arrangement is required"))?;
+            let scene = service.current(&project, &id).map_err(failure)?;
+            if scene.revision != revision {
+                return Err(failure(visualization::Error::Conflict));
+            }
+            let next = visualization::arrange::compile(&scene.document, &spec).map_err(failure)?;
+            let mut proposal = json!(
+                service
+                    .store()
+                    .propose_with_markups(
+                        &project,
+                        &id,
+                        revision,
+                        "整理所选组件的对齐与间距",
+                        &next,
+                        input.markup_ids.as_deref().unwrap_or(&[])
+                    )
+                    .map_err(failure)?
+            );
+            proposal.as_object_mut().unwrap().remove("document");
+            Ok(proposal)
+        }
+        "inset_status" | "refresh_inset" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            let target = required(input.element_id, "element_id is required")?;
+            if input.action == "inset_status" {
+                visualization_assets::inset_status(
+                    service.store(),
+                    &project,
+                    &id,
+                    revision,
+                    &target,
+                )
+                .map_err(failure)
+            } else {
+                let mut proposal = json!(
+                    visualization_assets::refresh_inset(
+                        service.store(),
+                        &project,
+                        &id,
+                        revision,
+                        &target,
+                        input.discard_detail_edits.unwrap_or(false)
+                    )
+                    .map_err(failure)?
+                );
+                proposal.as_object_mut().unwrap().remove("document");
+                Ok(proposal)
+            }
+        }
+        "image_info" | "inset" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            if input.action == "inset" {
+                let spec = input.inset.ok_or_else(|| invalid("inset is required"))?;
+                Ok(json!(
+                    visualization_assets::inset(service.store(), &project, &id, revision, &spec)
+                        .map_err(failure)?
+                ))
+            } else {
+                let target = required(input.element_id, "element_id is required")?;
+                let mut info = visualization_assets::image_info(
+                    service.store(),
+                    &project,
+                    &id,
+                    revision,
+                    &target,
+                )
+                .map_err(failure)?;
+                info.as_object_mut().unwrap().remove("dataURL");
+                Ok(info)
+            }
+        }
+        "read_proposal" | "revise_proposal" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            let proposal_id = required(input.proposal_id, "proposal_id is required")?;
+            if input.action == "revise_proposal" {
+                let operations = input
+                    .operations
+                    .map(serde_json::from_value::<Vec<visualization::scene::Operation>>)
+                    .transpose()
+                    .map_err(failure)?;
+                let request = visualization::service::ProposalRevisionInput {
+                    parent_proposal_id: proposal_id,
+                    parent_document_sha256: required(
+                        input.document_sha256,
+                        "document_sha256 is required",
+                    )?,
+                    summary: required(input.title, "title is required")?,
+                    operations,
+                    arrangement: input.arrangement,
+                    markup_ids: input.markup_ids,
+                };
+                let mut result = json!(
+                    service
+                        .revise_proposal(&project, &id, revision, &request)
+                        .map_err(failure)?
+                );
+                result.as_object_mut().unwrap().remove("document");
+                Ok(result)
+            } else {
+                let current = service
+                    .store()
+                    .get(&project, &id)
+                    .map_err(failure)?
+                    .revision;
+                if current != revision {
+                    return Err(failure(visualization::Error::Conflict));
+                }
+                let mut proposal = service
+                    .store()
+                    .proposal(&project, &id, &proposal_id)
+                    .map_err(failure)?;
+                if let Some(files) = proposal
+                    .document
+                    .get_mut("files")
+                    .and_then(Value::as_object_mut)
+                {
+                    for file in files.values_mut() {
+                        if let Some(file) = file.as_object_mut() {
+                            file.remove("dataURL");
+                        }
+                    }
+                }
+                Ok(
+                    json!({"proposal":proposal,"current_revision":current,"base_is_current":proposal.base_revision==current,"image_data_omitted":true}),
+                )
+            }
+        }
+        "read_proposal_preview" => {
+            let revision = input
+                .expected_revision
+                .ok_or_else(|| invalid("expected_revision is required"))?;
+            let proposal = required(input.proposal_id, "proposal_id is required")?;
+            Ok(json!(
+                service
+                    .store()
+                    .request_proposal_preview(
+                        &project,
+                        &id,
+                        &proposal,
+                        revision,
+                        input.retry_preview.unwrap_or(false)
+                    )
+                    .map_err(failure)?
+            ))
+        }
         "read_image" => {
             let scene = service.current(&project, &id).map_err(failure)?;
             if input
@@ -378,12 +560,63 @@ impl ToolFunction for FigureTool {
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let image = matches!(
             input.action.as_str(),
-            "read_image" | "read_preview" | "read_markup"
+            "read_image" | "read_preview" | "read_markup" | "read_proposal_preview"
         );
+        let candidate = if input.action == "read_proposal_preview" {
+            Some((
+                input.project_id.clone(),
+                input.figure_id.clone(),
+                input.proposal_id.clone(),
+                input.expected_revision,
+            ))
+        } else {
+            None
+        };
         let path = self.path.clone();
         let mut value = tokio::task::spawn_blocking(move || execute(path, input))
             .await
             .map_err(failure)??;
+        if let Some((project, figure, proposal, revision)) = candidate {
+            let (project, figure, proposal, revision) = (
+                project.ok_or_else(|| invalid("project_id is required"))?,
+                figure.ok_or_else(|| invalid("figure_id is required"))?,
+                proposal.ok_or_else(|| invalid("proposal_id is required"))?,
+                revision.ok_or_else(|| invalid("expected_revision is required"))?,
+            );
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(6);
+            while value["render_status"] == "requested" && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                let (path, project, figure, proposal) = (
+                    self.path.clone(),
+                    project.clone(),
+                    figure.clone(),
+                    proposal.clone(),
+                );
+                value = tokio::task::spawn_blocking(move || {
+                    let store = Store::open(path).map_err(failure)?;
+                    Ok::<Value, ToolError>(json!(
+                        store
+                            .proposal_preview(&project, &figure, &proposal, revision)
+                            .map_err(failure)?
+                    ))
+                })
+                .await
+                .map_err(failure)??;
+            }
+            if value["render_status"] == "requested" {
+                return Err(invalid(
+                    "Candidate preview is queued; keep its project canvas open and retry read_proposal_preview. No saved-canvas image was substituted.",
+                ));
+            }
+            if value["render_status"] == "failed" {
+                return Err(invalid(&format!(
+                    "Candidate rendering failed: {}. Fix the resources, then retry_preview:true.",
+                    value["error"]
+                        .as_str()
+                        .unwrap_or("unknown browser rendering error")
+                )));
+            }
+        }
         if image {
             let data_url = value
                 .as_object_mut()
@@ -458,6 +691,249 @@ mod tests {
                 .contains("sketch_plan")
         );
         assert!(!schema.to_string().contains("\"$ref\""));
+    }
+    #[tokio::test]
+    async fn proposal_preview_tool_waits_for_renderer_and_never_falls_back_to_saved_image() {
+        const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        async fn publish(path: PathBuf, figure: String, proposal: String) {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                let store = Store::open(&path).unwrap();
+                if let Some(job) = store
+                    .proposal_render_requests("p", &figure)
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.proposal_id == proposal)
+                {
+                    store
+                        .complete_proposal_preview(
+                            "p",
+                            &figure,
+                            &proposal,
+                            visualization::proposal_preview::PreviewCompletion {
+                                base_revision: job.base_revision,
+                                document_sha256: &job.document_sha256,
+                                data_url: Some(PNG),
+                                error: None,
+                                renderer: "test-worker",
+                            },
+                        )
+                        .unwrap();
+                    return;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "render request was not published"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
+            .unwrap();
+        store.save_preview("p", &figure.id, 1, PNG).unwrap();
+        let p = store
+            .propose(
+                "p",
+                &figure.id,
+                1,
+                "Candidate",
+                &json!({"elements":[{"id":"candidate","type":"rectangle"}]}),
+            )
+            .unwrap();
+        let tool = registrations(path.clone()).remove(0);
+        let input = json!({"action":"read_proposal_preview","project_id":"p","figure_id":figure.id,"proposal_id":p.id,"expected_revision":1});
+        let worker = tokio::spawn(publish(path.clone(), figure.id.clone(), p.id.clone()));
+        let result =
+            serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
+                .unwrap();
+        worker.await.unwrap();
+        assert_eq!(result["content"][1]["type"], "image");
+        assert_eq!(result["content"][1]["source"]["media_type"], "image/png");
+        let caption: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(caption["scope"], "proposal_candidate");
+        assert_eq!(caption["proposal_id"], p.id);
+        assert_eq!(caption["proposal_status"], "pending");
+        assert!(caption.get("dataURL").is_none());
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        store.accept_proposal("p", &figure.id, &p.id).unwrap();
+        let mut historical = input;
+        historical["expected_revision"] = json!(2);
+        let result =
+            serde_json::to_value(tool.implementation.execute(historical).await.unwrap()).unwrap();
+        let caption: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(caption["current_revision"], 2);
+        assert_eq!(caption["proposal_status"], "accepted");
+        assert_eq!(caption["base_is_current"], false);
+        let failed = store
+            .propose("p", &figure.id, 2, "Failed", &json!({"elements":[]}))
+            .unwrap();
+        let queued = store
+            .request_proposal_preview("p", &figure.id, &failed.id, 2, false)
+            .unwrap();
+        store
+            .complete_proposal_preview(
+                "p",
+                &figure.id,
+                &failed.id,
+                visualization::proposal_preview::PreviewCompletion {
+                    base_revision: 2,
+                    document_sha256: &queued.document_sha256,
+                    data_url: None,
+                    error: Some("missing image"),
+                    renderer: "test-worker",
+                },
+            )
+            .unwrap();
+        let mut retry = json!({"action":"read_proposal_preview","project_id":"p","figure_id":figure.id,"proposal_id":failed.id,"expected_revision":2});
+        assert!(tool.implementation.execute(retry.clone()).await.is_err());
+        retry["retry_preview"] = json!(true);
+        let worker = tokio::spawn(publish(path.clone(), figure.id.clone(), failed.id.clone()));
+        assert!(tool.implementation.execute(retry).await.is_ok());
+        worker.await.unwrap();
+        store.save_preview("p", &figure.id, 2, PNG).unwrap();
+        let no_renderer = store
+            .propose("p", &figure.id, 2, "No renderer", &json!({"elements":[]}))
+            .unwrap();
+        let error=tool.implementation.execute(json!({"action":"read_proposal_preview","project_id":"p","figure_id":figure.id,"proposal_id":no_renderer.id,"expected_revision":2})).await.err().unwrap();
+        assert!(error.to_string().contains("queued"));
+        assert_eq!(
+            store
+                .proposal_preview("p", &figure.id, &no_renderer.id, 2)
+                .unwrap()
+                .render_status,
+            "requested"
+        );
+    }
+    #[tokio::test]
+    async fn arrange_tool_proposes_with_review_links_and_keeps_revision_until_adopted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+        store.create_project("p", "Study").unwrap();
+        let plan=serde_json::from_value(json!({"message":"Synthetic layout","audience":"Researchers","nodes":[{"id":"a","label":"A","column":0,"row":0},{"id":"b","label":"B","column":1,"row":1},{"id":"c","label":"C","column":2,"row":0}]})).unwrap();
+        let scene = visualization::sketch::compile(&plan).unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &scene)
+            .unwrap();
+        let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+        let review = store
+            .create_markup(
+                "p",
+                &figure.id,
+                1,
+                "Align these components",
+                &[visualization::markup::Stroke {
+                    kind: visualization::markup::Kind::Draw,
+                    points: vec![[0., 0.], [30., 30.]],
+                }],
+                png,
+            )
+            .unwrap();
+        let tool = registrations(path).remove(0);
+        let input = json!({"action":"arrange","project_id":"p","figure_id":figure.id,"expected_revision":1,"arrangement":{"element_ids":["node-0","node-1","node-2"],"mode":"top"},"markup_ids":[review.id]});
+        let result =
+            serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
+                .unwrap();
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        assert!(result["content"].get("document").is_none());
+        let proposal = store.proposals("p", &figure.id).unwrap().remove(0);
+        assert_eq!(proposal.review_markups.len(), 1);
+        assert_eq!(proposal.review_markups[0].id, review.id);
+        let nodes = proposal.document["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["type"] == "rectangle")
+            .collect::<Vec<_>>();
+        assert!(nodes.iter().all(|n| n["y"] == nodes[0]["y"]));
+        assert_eq!(store.markups("p", &figure.id).unwrap()[0].status, "open");
+        let mut stale = input;
+        stale["expected_revision"] = json!(0);
+        assert!(tool.implementation.execute(stale).await.is_err());
+        store
+            .accept_proposal_with_reviews("p", &figure.id, &proposal.id, true)
+            .unwrap();
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 2);
+        assert_eq!(
+            store.markups("p", &figure.id).unwrap()[0].status,
+            "resolved"
+        );
+        assert_eq!(store.revision("p", &figure.id, 1).unwrap().document, scene);
+    }
+    #[tokio::test]
+    async fn inset_tool_proposes_and_does_not_expose_image_bytes_in_info() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("figures.sqlite");
+        let mut store = Store::open(&path).unwrap();
+
+        use base64::Engine;
+        let url=format!("data:image/svg+xml;base64,{}",base64::engine::general_purpose::STANDARD.encode(b"<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'><path d='M0 0h100v100H0z'/></svg>"));
+        let (scene, target) = visualization::image::insert(
+            &json!({"elements":[]}),
+            visualization::image::Image {
+                file_id: "source",
+                data_url: &url,
+                width: 100,
+                height: 100,
+                provenance: json!({"asset":{"license":"cc0"}}),
+            },
+            0.,
+            0.,
+        )
+        .unwrap();
+        store.create_project("p", "Study").unwrap();
+        let figure = store
+            .create("p", "Figure", "excalidraw/v2", &scene)
+            .unwrap();
+        let spec = json!({"element_id":target,"region":{"x":0.1,"y":0.2,"width":0.4,"height":0.5},"x":600,"y":100,"max_size":320,"title":"Detail"});
+
+        let tool = registrations(path).remove(0);
+        let info=serde_json::to_value(tool.implementation.execute(json!({"action":"image_info","project_id":"p","figure_id":figure.id,"element_id":target,"expected_revision":1})).await.unwrap()).unwrap();
+        assert_eq!(info["content"]["natural_width"], 100);
+        assert!(info["content"].get("dataURL").is_none());
+        let mut input = json!({"action":"inset","project_id":"p","figure_id":figure.id,"expected_revision":1,"inset":spec});
+        let result =
+            serde_json::to_value(tool.implementation.execute(input.clone()).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            result["content"]["document"]["elements"]
+                .as_array()
+                .unwrap()
+                .len(),
+            6
+        );
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+        input["expected_revision"] = json!(0);
+        assert!(tool.implementation.execute(input).await.is_err());
+        store
+            .accept_proposal("p", &figure.id, result["content"]["id"].as_str().unwrap())
+            .unwrap();
+
+        let target = &result["content"]["document"]["elements"][3]["id"];
+        let checked=serde_json::to_value(tool.implementation.execute(json!({"action":"inset_status","project_id":"p","figure_id":figure.id,"element_id":target,"expected_revision":2})).await.unwrap()).unwrap();
+        assert_eq!(checked["content"]["changed"], false);
+        assert!(!checked.to_string().contains("data:image"));
+        let refreshed=serde_json::to_value(tool.implementation.execute(json!({"action":"refresh_inset","project_id":"p","figure_id":figure.id,"element_id":target,"expected_revision":2})).await.unwrap()).unwrap();
+        assert_eq!(refreshed["content"]["base_revision"], 2);
+        assert!(refreshed["content"].get("document").is_none());
+        let anchor = &result["content"]["document"]["elements"][3]["id"];
+        let removal=serde_json::to_value(tool.implementation.execute(json!({"action":"propose","project_id":"p","figure_id":figure.id,"expected_revision":2,"title":"Remove inset","operations":[{"op":"remove","id":anchor}]})).await.unwrap()).unwrap();
+        let saved_removal = store
+            .proposals("p", &figure.id)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.id == removal["content"]["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(saved_removal.document["elements"], scene["elements"]);
+        assert_eq!(saved_removal.document["files"], scene["files"]);
+        assert_eq!(store.get("p", &figure.id).unwrap().revision, 2);
     }
     #[tokio::test]
     async fn planning_tools_preserve_answers_and_require_a_ready_version_for_sketches() {
@@ -717,6 +1193,12 @@ mod tests {
             .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
             .unwrap();
         let input = |revision| FigureInput {
+            inset: None,
+            arrangement: None,
+            proposal_id: None,
+            document_sha256: None,
+            retry_preview: None,
+            discard_detail_edits: None,
             action: "apply".into(),
             project_id: Some("p".into()),
             figure_id: Some(figure.id.clone()),

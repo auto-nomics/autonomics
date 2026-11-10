@@ -58,7 +58,7 @@ pub fn crop(source: &Value, width: u32, height: u32) -> Result<[f64; 4], Invalid
     }
     Ok(result)
 }
-fn edge(center: [f64; 2], size: [f64; 2], angle: f64, toward: [f64; 2]) -> [f64; 2] {
+pub(crate) fn edge(center: [f64; 2], size: [f64; 2], angle: f64, toward: [f64; 2]) -> [f64; 2] {
     let d = [toward[0] - center[0], toward[1] - center[1]];
     let (s, c) = angle.sin_cos();
     let local = [c * d[0] + s * d[1], -s * d[0] + c * d[1]];
@@ -108,28 +108,36 @@ pub fn compile(
         number(source, "height")?,
         number(source, "angle")?,
     );
-    if w <= 0. || h <= 0. {
+    if w <= 0. || h <= 0. || w > 1e6 || h > 1e6 || x.abs() > 1e6 || y.abs() > 1e6 {
         return Err(InvalidImage("invalid source dimensions"));
     }
     let scale = source["scale"]
         .as_array()
         .ok_or(InvalidImage("invalid image flip"))?;
-    if scale.len() != 2 || scale.iter().any(|v| !matches!(v.as_i64(), Some(-1 | 1))) {
+    if scale.len() != 2
+        || scale
+            .iter()
+            .any(|v| !matches!(v.as_f64(), Some(v) if v == -1. || v == 1.))
+    {
         return Err(InvalidImage("invalid image flip"));
     }
     let [cx, cy, cw, ch] = crop(source, width, height)?;
-    let u = if scale[0] == -1 {
+    let u = if scale[0].as_f64() == Some(-1.) {
         1. - r.x - r.width
     } else {
         r.x
     };
-    let v = if scale[1] == -1 {
+    let v = if scale[1].as_f64() == Some(-1.) {
         1. - r.y - r.height
     } else {
         r.y
     };
     let native_crop = json!({"x":cx+u*cw,"y":cy+v*ch,"width":r.width*cw,"height":r.height*ch,"naturalWidth":width,"naturalHeight":height});
     let roi_size = [r.width * w, r.height * h];
+    // Exclude subpixel degeneracy before scaling and boundary intersections.
+    if roi_size.iter().any(|size| *size < 1e-6) || r.width * cw < 1e-6 || r.height * ch < 1e-6 {
+        return Err(InvalidImage("inset region is too small"));
+    }
     let (s, c) = angle.sin_cos();
     let original_center = [x + w / 2., y + h / 2.];
     let d = [
@@ -225,20 +233,57 @@ pub fn compile(
     roi["customData"] = json!({"inset":reference,"annotationKind":"inset_region"});
     let start = edge(roi_center, roi_size, angle, center);
     let end = edge(center, [border_width, border_height], 0., roi_center);
-    let min = [start[0].min(end[0]), start[1].min(end[1])];
     let mut line = base(
         line_id,
         "arrow",
-        min[0],
-        min[1],
+        start[0],
+        start[1],
         (start[0] - end[0]).abs(),
         (start[1] - end[1]).abs(),
     );
-    line.as_object_mut().unwrap().extend(json!({"strokeColor":"#64748b","strokeStyle":"dashed","startArrowhead":null,"endArrowhead":null,"elbowed":false,"points":[[start[0]-min[0],start[1]-min[1]],[end[0]-min[0],end[1]-min[1]]],"startBinding":{"elementId":roi_id,"focus":0,"gap":8},"endBinding":{"elementId":anchor_id,"focus":0,"gap":8},"customData":{"inset":reference,"annotationKind":"inset_callout"}}).as_object().unwrap().clone());
+    line.as_object_mut().unwrap().extend(json!({"strokeColor":"#64748b","strokeStyle":"dashed","startArrowhead":null,"endArrowhead":null,"elbowed":false,"points":[[0.,0.],[end[0]-start[0],end[1]-start[1]]],"startBinding":{"elementId":roi_id,"focus":0,"gap":8},"endBinding":{"elementId":anchor_id,"focus":0,"gap":8},"customData":{"inset":reference,"annotationKind":"inset_callout"}}).as_object().unwrap().clone());
     let mut next = document.clone();
     next["elements"]
         .as_array_mut()
         .unwrap()
         .extend([roi, line, anchor, image, label]);
     Ok(next)
+}
+
+/// Only explicitly recorded, reciprocal review decorations belong to an inset.
+/// Never infer ownership from group membership or delete the source image.
+pub(crate) fn annotations(elements: &[Value], anchor_id: &str) -> Vec<String> {
+    let Some(anchor) = elements
+        .iter()
+        .find(|e| e["id"].as_str() == Some(anchor_id))
+    else {
+        return vec![];
+    };
+    let reference = &anchor["customData"]["inset"];
+    if reference["kind"] != "image_inset_snapshot"
+        || reference["anchor_id"].as_str() != Some(anchor_id)
+        || reference["image_id"] != anchor["customData"]["visualAssetElementId"]
+    {
+        return vec![];
+    }
+    [
+        ("region_id", "inset_region"),
+        ("callout_id", "inset_callout"),
+    ]
+    .into_iter()
+    .filter_map(|(field, kind)| {
+        let id = reference[field].as_str()?;
+        if id == anchor_id || reference["source_element_id"].as_str() == Some(id) {
+            return None;
+        }
+        elements
+            .iter()
+            .find(|e| {
+                e["id"].as_str() == Some(id)
+                    && e["customData"]["annotationKind"] == kind
+                    && e["customData"]["inset"] == *reference
+            })
+            .map(|_| id.to_owned())
+    })
+    .collect()
 }

@@ -162,3 +162,84 @@ pub(crate) async fn geometry(
     })
     .await
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Inset {
+    expected_revision: i64,
+    inset: visualization::inset::Spec,
+}
+pub(crate) async fn image_info(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Query(input): Query<Palette>,
+) -> Response {
+    work(shared, move |store| {
+        visualization_assets::image_info(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.element_id,
+        )
+    })
+    .await
+}
+pub(crate) async fn inset(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Json(input): Json<Inset>,
+) -> Response {
+    work(shared, move |store| {
+        Ok(json!(visualization_assets::inset(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.inset
+        )?))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RefreshInset {
+    element_id: String,
+    expected_revision: i64,
+    #[serde(default)]
+    discard_detail_edits: bool,
+}
+pub(crate) async fn inset_status(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Query(input): Query<Palette>,
+) -> Response {
+    work(shared, move |store| {
+        visualization_assets::inset_status(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.element_id,
+        )
+    })
+    .await
+}
+pub(crate) async fn refresh_inset(
+    State(shared): State<Shared>,
+    Path((project, id)): Path<(String, String)>,
+    Json(input): Json<RefreshInset>,
+) -> Response {
+    work(shared, move |store| {
+        Ok(json!(visualization_assets::refresh_inset(
+            store,
+            &project,
+            &id,
+            input.expected_revision,
+            &input.element_id,
+            input.discard_detail_edits
+        )?))
+    })
+    .await
+}

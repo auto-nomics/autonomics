@@ -42,3 +42,13 @@ sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格�
 
 
 `bioicons geometry` 使用 `project_id/figure_id/expected_revision/element_id` 及 `parts` 返回的 `sha256/part_id` 读取端点与曲线控制点（编号 PNG + 无图像字节的 JSON 摘要）。`edit_parts` 可传 `points:[{index,position:[x,y]}]`，坐标为当前快照的 SVG 根坐标。只改指定点，不自动平滑；同一路径不可同时传 `points` 和 `translate`，采用后重新读取编号。路径最多 512 个点，单次最多改 64 个不同点，退化导致拓扑改变会被拒绝。编号是图形坐标，不是生物学身份。
+
+`image_info` 在明确 `element_id` 和 `expected_revision` 后返回图片实际尺寸、裁剪和来源（不返回嵌入文件）。`inset` 接收同一版本与 `inset: {element_id,region:{x,y,width,height},x,y,max_size,title}`，生成待审阅的局部放大快照提案。region 为当前可见图片镜像后、旋转前的比例区域；max_size 为 32..2048。使用前应 read/read_image 检查源图。复用原始文件，不栅格化 SVG；保留许可和版本来源。快照不会随原图移动或修改自动刷新，区域框为独立注释。
+
+删除整个放大图时只 remove 其 `customData.inset.anchor_id`：会清理归属匹配的区域框、引导线及内容组，保留源图、其他快照及独立注释。不要再显式 remove 已级联删除的 ID。
+
+`inset_status` 使用 `element_id`（原始放大图锚点或图片 ID）和 `expected_revision` 比较源图与历史快照，不返回图片字节；`changed` 不单凭画布版本判断。`refresh_inset` 用相同参数生成待审阅提案，保持原比例区域与稳定 ID，保留边框、标题、样式和其他对象；源图变化可能改变比例区域的科学含义，需先 read_image/read_preview 核对。若 `detail_edited` 为真，只有显式指定 `discard_detail_edits:true` 才会在提案中替换放大图独立修改的文件/裁剪。源图缺失、归属不明和旋转后的放大面板须先解决；刷新仍是固定版本快照，不是后台自动同步。
+
+`arrange` 接受 `arrangement:{element_ids:[...],mode:left|center|right|top|middle|bottom|distribute_horizontal|distribute_vertical}` 和精确 `expected_revision`，返回待审阅提案（不返回嵌入图稿字节）。读取完整明确的目标后操作；原生组合、语义锚点及所属标签/素材一起移动，父子重复选择会合并；分布至少三个独立组件。空间不足时沿用编辑器的中心退化方式，仍需核对重叠。可携带 `markup_ids` 关联实际回应的标记，采用时才按用户选择关闭。排除放大区域/引导线注释，先处理锁定或缺失对象；支持手绘点列与无抖动、无圆角的线段/折线边界；被选组合内部的绑定连接线必须与端点同幅移动，不能为满足外部绑定而拉伸组合。分开移动的曲线/旋转/肘线、粗糙连接线和旋转箭头绑定文字仍需原生几何适配。不推断关系、不自动避障，保留来源和文件；必要时另行 reroute。
+
+`read_proposal_preview` 使用 `proposal_id` 和当前 `expected_revision` 请求候选图 PNG，最多短暂等待约 6 秒。返回 `scope=proposal_candidate`、文档 SHA、基础/当前版本、提案状态、renderer 和独立图像块；候选没有因此采用。检查 `base_is_current`，不要把历史候选当作当前文档。相关画布需保持打开（内部切到 Agent 标签可继续后台渲染）；未就绪或失败明确报错，不回退到正式画布图像。资源修复后可用 `retry_preview:true` 重排失败请求；成功图像不可覆盖。模型看图与选择正确修正动作仍需真实案例验证。
