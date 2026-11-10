@@ -326,7 +326,25 @@ fn system_prompt_requires_dedicated_node_priority() {
 #[test]
 fn plugin_rsi_defaults_builder_and_backward_compatibility() {
     let config = RuntimeConfig::default();
-    assert!(config.plugin_rsi.environments.list().len() >= 32);
+    // Only the base images are seeded — tool images come from the
+    // project's own GHCR namespace via the plugin manifests.
+    assert_eq!(
+        config
+            .plugin_rsi
+            .environments
+            .list()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![
+            "alpine",
+            "bioconductor",
+            "debian",
+            "python",
+            "rocker-verse",
+            "ubuntu",
+        ]
+    );
     for (id, environment) in config.plugin_rsi.environments.list() {
         ImageReference::parse(&environment.reference)
             .unwrap_or_else(|error| panic!("default environment `{id}` is invalid: {error}"));

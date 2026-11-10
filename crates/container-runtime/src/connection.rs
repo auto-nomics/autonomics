@@ -35,8 +35,13 @@ pub struct ContainerImageResolution {
 /// agree on.
 #[async_trait]
 pub trait PodmanConnection: Send + Sync {
-    fn image_resolution(&self, _reference: &str) -> Result<ContainerImageResolution, ContainerRuntimeError> {
-        Err(ContainerRuntimeError::Invalid("resident OCI to SIF mapping unavailable for this runtime".into()))
+    fn image_resolution(
+        &self,
+        _reference: &str,
+    ) -> Result<ContainerImageResolution, ContainerRuntimeError> {
+        Err(ContainerRuntimeError::Invalid(
+            "resident OCI to SIF mapping unavailable for this runtime".into(),
+        ))
     }
     /// Optional observation entry for existing runtimes. Implementations that
     /// cannot probe a worker continue to report unknown rather than inventing

@@ -46,8 +46,8 @@ pub fn podman_state_root() -> PathBuf {
 pub fn default_panel_cache_root() -> PathBuf {
     // The same env override data-catalog honours: one root, one copy of
     // every panel bundle, shared by provisioning and container mounts.
-    if let Some(root) = std::env::var_os("AUTONOMICS_PANEL_CACHE_ROOT")
-        .filter(|value| !value.is_empty())
+    if let Some(root) =
+        std::env::var_os("AUTONOMICS_PANEL_CACHE_ROOT").filter(|value| !value.is_empty())
     {
         return PathBuf::from(root);
     }

@@ -8,8 +8,8 @@
 //! already satisfies the readiness check.
 
 use std::collections::BTreeSet;
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use color_eyre::Result;
 use container_plugin::factory::Plugin;
@@ -148,14 +148,16 @@ async fn install_model(config: &gateway::RuntimeConfig) -> Result<()> {
 /// overlay commits layers with cheap hardlink/mount work, so the store
 /// lock rotates quickly and parallel pulls pay off; vfs commits are
 /// full-copy extractions that hold the store lock for the whole layer,
-/// so wide concurrency only queues pull processes behind one writer.
+/// so wide concurrency only queues pull processes behind one writer —
+/// and each Podman pull already opens several parallel layer downloads,
+/// so two concurrent pulls multiply the load on a flaky link.
 /// `AUTONOMICS_IMAGE_PULL_CONCURRENCY` overrides (clamped to 1..=16;
 /// 1 restores a fully sequential pull).
 fn pull_concurrency(storage_driver: Option<&str>) -> usize {
     let default = match storage_driver {
         Some("overlay") => 4,
         // vfs and any unrecognised/legacy setting stay conservative.
-        _ => 2,
+        _ => 1,
     };
     std::env::var("AUTONOMICS_IMAGE_PULL_CONCURRENCY")
         .ok()
@@ -178,13 +180,12 @@ fn short_label(reference: &str) -> &str {
 /// image and a summary line prints every 15 seconds.
 async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]) -> Result<()> {
     let declared: BTreeSet<String> = diagnostics::enumerate_images(config, plugins).await?;
-    let infra = container_runtime::ContainerExecutionInfra::for_operator_state_dir(
-        &config.state_dir,
-    )
-    .map_err(|error| {
-        color_eyre::eyre::eyre!("invalid container execution configuration: {error}")
-    })?;
-    let local = container_runtime::images::local_digests_with_config(&infra.config)
+    let infra =
+        container_runtime::ContainerExecutionInfra::for_operator_state_dir(&config.state_dir)
+            .map_err(|error| {
+                color_eyre::eyre::eyre!("invalid container execution configuration: {error}")
+            })?;
+    let local = container_runtime::images::local_images_with_config(&infra.config)
         .await
         .map_err(|error| color_eyre::eyre::eyre!("cannot list local images: {error}"))?;
     let missing: Vec<String> = declared
