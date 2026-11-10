@@ -1,3 +1,5 @@
+import { boundedContextText, useEditorContextSnapshot } from "@/app/workbench/editor-context-snapshots";
+import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useProjectSidebarSlot } from "./sidebar-slot";
@@ -66,6 +68,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
   workspaceState.current = { project, path, connected, busy, buffers };
   const dirty = contents !== original;
   const localDirty = dirty || Object.values(buffers).some(buffer => buffer.contents !== buffer.original);
+  useEditorContextSnapshot(editor.id, { project, path, dirty: localDirty, ...boundedContextText(contents), scope: "当前项目文件内容，包含未保存的修改（最多 24000 字符）" });
   const anyDirty = localDirty || Object.values(vscodeDirty).some(Boolean);
   useEffect(() => { if (active) setContainer("projects"); }, [active]);
   useEffect(() => { patchEditorState(editor.id, { dirty: anyDirty, project, containerVersion }); }, [editor.id, anyDirty, project, containerVersion]);
@@ -456,6 +459,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
         <span className="flex-1" />
         <Button size="icon-xs" variant="ghost" aria-label="刷新项目" title="刷新项目" disabled={busy} onClick={() => void refresh()}><RefreshCw /></Button>
         <Button size="icon-xs" variant={creating ? "secondary" : "ghost"} aria-label="新建项目" title="新建项目" aria-pressed={creating} disabled={busy} onClick={() => setCreating(!creating)}><FolderPlus /></Button>
+        <ViewLocationMenu id="projects" primaryOnly />
         </div>
         <div id="project-sidebar-panel-projects" role="tabpanel" aria-labelledby="project-sidebar-tab-projects" hidden={sidebarTab !== "projects"} className="min-h-0 flex-1 overflow-auto py-2">
           {projects.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">暂无项目</p>}

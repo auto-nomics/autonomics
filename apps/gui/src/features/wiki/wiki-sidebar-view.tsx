@@ -1,3 +1,4 @@
+import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 /**
  * Wiki sidebar: the browse view (formerly the "home" tab) plus the global
  * actions that used to live in the panel's tab row — new entry, search
@@ -128,13 +129,14 @@ export function WikiSidebarView({ onOpenGraph }: { onOpenGraph: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-2">
-        <Button size="icon-sm" variant={mode === "browse" ? "secondary" : "ghost"} aria-label="浏览词条" title="浏览词条" onClick={() => setMode("browse")}><Folder /></Button>
-        <Button size="icon-sm" variant={mode === "search" ? "secondary" : "ghost"} aria-label="搜索词条" title="搜索词条" onClick={() => { setMode("search"); requestAnimationFrame(() => inputRef.current?.focus()); }}><Search /></Button>
-        <Button size="icon-sm" variant="ghost" aria-label="打开知识图谱" title="打开知识图谱" onClick={onOpenGraph}><Network /></Button>
+        <Button size="icon-xs" variant={mode === "browse" ? "secondary" : "ghost"} aria-label="浏览词条" title="浏览词条" onClick={() => setMode("browse")}><Folder /></Button>
+        <Button size="icon-xs" variant={mode === "search" ? "secondary" : "ghost"} aria-label="搜索词条" title="搜索词条" onClick={() => { setMode("search"); requestAnimationFrame(() => inputRef.current?.focus()); }}><Search /></Button>
+        <Button size="icon-xs" variant="ghost" aria-label="打开知识图谱" title="打开知识图谱" onClick={onOpenGraph}><Network /></Button>
         <span className="flex-1" />
-        <Button size="icon-sm" variant="ghost" aria-label="检索(Ctrl+K)" title="检索(Ctrl+K)" onClick={openWikiSearch}><Search /></Button>
-        <Button size="icon-sm" variant="ghost" aria-label="新建词条" title="新建词条" disabled={creating} onClick={() => void createNew()}>{creating ? <Loader2 className="animate-spin" /> : <FilePlus2 />}</Button>
-        <Button size="icon-sm" variant="ghost" aria-label="回收站" title="回收站" onClick={() => void (async () => { setRecycleOpen(true); setRecycle(await listRecycle().catch(() => [])); })()}><Trash2 /></Button>
+        <Button size="icon-xs" variant="ghost" aria-label="检索(Ctrl+K)" title="检索(Ctrl+K)" onClick={openWikiSearch}><Search /></Button>
+        <Button size="icon-xs" variant="ghost" aria-label="新建词条" title="新建词条" disabled={creating} onClick={() => void createNew()}>{creating ? <Loader2 className="animate-spin" /> : <FilePlus2 />}</Button>
+        <Button size="icon-xs" variant="ghost" aria-label="回收站" title="回收站" onClick={() => void (async () => { setRecycleOpen(true); setRecycle(await listRecycle().catch(() => [])); })()}><Trash2 /></Button>
+        <ViewLocationMenu id="wiki" primaryOnly />
       </div>
       {mode === "search" && <div className="shrink-0 px-3 pt-3">
         <div className="relative">

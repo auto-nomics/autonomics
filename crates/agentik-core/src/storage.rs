@@ -393,6 +393,74 @@ pub struct SessionRecord {
     pub fork_point_message_id: Option<String>,
 }
 
+/// Select the same sole context for runtime restoration and client hydration.
+/// A persisted binding wins; a missing bound record is a recovery error.
+/// Legacy identities without a binding use deterministic activity ordering.
+pub fn select_agent_context_record(
+    bound_id: Option<Uuid>,
+    records: Vec<SessionRecord>,
+) -> Result<Option<SessionRecord>, StorageError> {
+    match bound_id {
+        Some(id) => records
+            .into_iter()
+            .find(|record| record.session_id == id)
+            .map(Some)
+            .ok_or_else(|| {
+                StorageError::RecoveryRequired(format!(
+                    "bound context {id} is missing; refusing a replacement"
+                ))
+            }),
+        None => Ok(records
+            .into_iter()
+            .max_by_key(|record| (record.last_active, record.started_at, record.session_id))),
+    }
+}
+
+#[cfg(test)]
+mod context_record_tests {
+    use super::*;
+
+    fn record(id: u128, activity: i64, created: i64) -> SessionRecord {
+        SessionRecord {
+            session_id: Uuid::from_u128(id),
+            title: None,
+            started_at: created,
+            ended_at: None,
+            last_active: activity,
+            telemetry: ContextTelemetry::default(),
+            parent_session_id: None,
+            fork_point_message_id: None,
+        }
+    }
+
+    #[test]
+    fn context_selection_preserves_binding_and_legacy_order() {
+        let records = vec![record(1, 1, 1), record(2, 10, 3), record(3, 10, 3)];
+        let bound = Uuid::from_u128(1);
+        assert_eq!(
+            select_agent_context_record(Some(bound), records.clone())
+                .unwrap()
+                .unwrap()
+                .session_id,
+            bound
+        );
+        for ordering in [records.clone(), records.into_iter().rev().collect()] {
+            assert_eq!(
+                select_agent_context_record(None, ordering)
+                    .unwrap()
+                    .unwrap()
+                    .session_id,
+                Uuid::from_u128(3)
+            );
+        }
+        assert!(select_agent_context_record(None, vec![]).unwrap().is_none());
+        assert!(matches!(
+            select_agent_context_record(Some(bound), vec![record(2, 99, 99)]),
+            Err(StorageError::RecoveryRequired(_))
+        ));
+    }
+}
+
 /// One explicitly tracked conversation turn.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentTurnRecord {

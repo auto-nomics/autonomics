@@ -62,15 +62,16 @@ export function AddToContext({ resource }: { resource: ContextResource }) {
   </Button>;
 }
 
-export function ContextBasket() {
+export function ContextBasket({ actions }: { actions?: ReactNode }) {
   const basket = useContextBasket();
   const [preview, setPreview] = useState<ContextResource | null>(null);
   if (!basket) return null;
-  return <section aria-label="上下文篮子" className="flex flex-col gap-2 border-b px-3 py-2">
-    <div className="flex min-w-0 items-center gap-2 text-xs">
+  return <section aria-label="上下文篮子" className="flex shrink-0 flex-col gap-1 px-3 py-1.5">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       <Paperclip className="size-3.5 shrink-0" />
       <span>会话引用</span><Badge variant="secondary" aria-live="polite">{basket.resources.length}</Badge>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={basket.contextLabel}>{basket.contextLabel}</span>
+      <span className="flex-1" />
+      {actions}
       {basket.resources.length > 0 && <Button size="xs" variant="ghost" onClick={basket.clear}>清空引用</Button>}
     </div>
     {basket.resources.length > 0 && <ul className="flex max-h-32 flex-col gap-1 overflow-y-auto">

@@ -1,3 +1,4 @@
+import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 /**
  * VFS browser sidebar: a lazy directory tree over the whole virtual
  * namespace plus file management (new folder / new file / upload /
@@ -259,17 +260,17 @@ export function VfsSidebar() {
         <Server className="size-3.5 text-muted-foreground" />
         <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">VFS</span>
         <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/70" title={activeDir}>{activeDir}</span>
-        <Button size="icon-sm" variant="ghost" aria-label="新建文件夹" title={`在 ${activeDir} 新建文件夹`} disabled={busy || !writable} onClick={() => void newFolder()}>
+        <Button size="icon-xs" variant="ghost" aria-label="新建文件夹" title={`在 ${activeDir} 新建文件夹`} disabled={busy || !writable} onClick={() => void newFolder()}>
           <FolderPlus className="size-3.5" />
         </Button>
-        <Button size="icon-sm" variant="ghost" aria-label="新建文件" title={`在 ${activeDir} 新建文件`} disabled={busy || !writable} onClick={() => void newFile()}>
+        <Button size="icon-xs" variant="ghost" aria-label="新建文件" title={`在 ${activeDir} 新建文件`} disabled={busy || !writable} onClick={() => void newFile()}>
           <FilePlus2 className="size-3.5" />
         </Button>
-        <Button size="icon-sm" variant="ghost" aria-label="上传文件" title={`上传到 ${activeDir}`} disabled={busy || !writable} onClick={() => void upload()}>
+        <Button size="icon-xs" variant="ghost" aria-label="上传文件" title={`上传到 ${activeDir}`} disabled={busy || !writable} onClick={() => void upload()}>
           <Upload className="size-3.5" />
         </Button>
         <Button
-          size="icon-sm"
+          size="icon-xs"
           variant="ghost"
           className="ml-auto"
           aria-label="重新加载"
@@ -281,6 +282,7 @@ export function VfsSidebar() {
         >
           <RefreshCw className="size-3.5" />
         </Button>
+        <ViewLocationMenu id="vfs" primaryOnly />
       </div>
       {!writable && (
         <p className="border-b bg-muted/40 px-2 py-1 text-[10px] text-muted-foreground">

@@ -197,15 +197,24 @@ impl App {
         idx
     }
 
-    /// Hydrate a leaf's data: ask the daemon for the agent's context list
-    /// (the reply arrives as `AgentEvent::ContextList` through the event
-    /// stream) and prefetch the model info for the render cache. Used
+    /// Hydrate a leaf from the shared context metadata endpoint and
+    /// prefetch model info. Live `ContextList` events still refresh it. Used
     /// when a leaf opens and when a dormant leaf's identity re-activates.
     pub(super) fn hydrate_leaf(&mut self, name: &str) {
         let client = self.client.clone();
         let agent = name.to_string();
+        let tx = self.app_event_tx.clone();
         self.spawn_client_task("list_contexts", move || async move {
-            let _ = client.list_contexts(&agent).await;
+            match client.list_contexts(&agent).await {
+                Ok(response) => tx.send(crate::app_event::AppEvent::ContextListKnown {
+                    agent,
+                    context: response.context,
+                }),
+                Err(error) => tx.send(crate::app_event::AppEvent::ShowError {
+                    title: "Failed to load agent context".into(),
+                    detail: Some(error.to_string()),
+                }),
+            }
         });
         self.refresh_agent_model_info(name);
     }

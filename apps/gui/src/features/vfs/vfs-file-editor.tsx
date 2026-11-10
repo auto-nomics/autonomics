@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { boundedContextText, useEditorContextSnapshot } from "@/app/workbench/editor-context-snapshots";
 import { FileText, Lock, RotateCw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { patchEditorState, type EditorRef } from "@/app/workbench/workbench-store";
@@ -31,6 +32,11 @@ export function VfsFileEditorBody({ editor }: { editor: EditorRef }) {
   const [conflict, setConflict] = useState(false);
   const [error, setError] = useState("");
   const dirty = load.state === "text" && draft !== original;
+  useEditorContextSnapshot(editor.id, {
+    path, readOnly, dirty, state: load.state,
+    ...(load.state === "text" ? boundedContextText(draft) : {}),
+    scope: load.state === "text" ? "当前文件内容，包含未保存的修改（最多 24000 字符）" : "文件标识与加载状态",
+  });
 
   useEffect(() => {
     patchEditorState(editor.id, { dirty, path });

@@ -1009,7 +1009,7 @@ impl AgentStorage for TursoAgentStorage {
                 let mut rows = self
                     .conn
                     .query(
-                        "SELECT id, name, config_json, created_at, last_active
+                        r"SELECT id, name, config_json, created_at, last_active
                          FROM agents WHERE name LIKE ?1 ESCAPE '\'
                          ORDER BY last_active DESC LIMIT ?2",
                         params_from_iter([pattern, Value::Integer(limit as i64)]),
@@ -2106,6 +2106,41 @@ mod tests {
         let agents = store.list_agents().await.unwrap();
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].name, "first");
+    }
+
+    #[tokio::test]
+    async fn test_search_agents_literal_characters_order_and_limit() {
+        let store = TursoAgentStorage::open_in_memory().await.unwrap();
+        for (name, activity) in [
+            ("/root/methylation_method", 1),
+            ("/root/methylationXmethod", 2),
+            ("/root/100%", 3),
+            (r"/root/back\slash", 4),
+        ] {
+            let mut record = sample_record(name);
+            record.last_active = activity;
+            store.upsert_agent(record).await.unwrap();
+        }
+        for (query, expected) in [
+            ("methylation_method", "/root/methylation_method"),
+            ("%", "/root/100%"),
+            (r"\", r"/root/back\slash"),
+        ] {
+            let found = store.search_agents(Some(query), 100).await.unwrap();
+            assert_eq!(found.len(), 1, "query {query:?}");
+            assert_eq!(found[0].name, expected);
+        }
+        let found = store.search_agents(Some("METHM"), 1).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "/root/methylationXmethod");
+        assert!(
+            store
+                .search_agents(Some("missing"), 100)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.search_agents(None, 2).await.unwrap().len(), 2);
     }
 
     #[tokio::test]

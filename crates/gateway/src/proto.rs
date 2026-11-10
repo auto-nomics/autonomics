@@ -225,6 +225,13 @@ pub struct BibliographyArticleDetail {
 
 // ── Hydration ─────────────────────────────────────────────────────────
 
+/// Identity and authoritative sole context for live and dormant agent views.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentContextResponse {
+    pub agent_id: Uuid,
+    pub context: Option<ContextInfo>,
+}
+
 /// One frame of a `Lagged` notification: the subscriber fell behind the
 /// broadcast buffer and must re-hydrate from `GET /state`.
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

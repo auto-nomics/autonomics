@@ -736,8 +736,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             )}
           </div>
 
-          <ContextBasket />
-          {props.contextTarget}
+          <ContextBasket actions={props.contextTarget} />
           <AgentComposer
             activeAgent={activeAgent}
             draft={draft}

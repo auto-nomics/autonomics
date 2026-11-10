@@ -1,3 +1,4 @@
+import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 /**
  * DeckSidebarView — the "decks" sidebar container: deck list (title /
  * slide count / updated time), click opens the deck tab; "新建" opens a
@@ -101,6 +102,7 @@ export function DeckSidebarView(): React.ReactNode {
         <span className="flex-1 truncate text-xs font-semibold tracking-wide text-muted-foreground">幻灯片</span>
         <Button size="icon-sm" variant="ghost" aria-label="刷新幻灯片" title="刷新" onClick={() => void refresh()}><RefreshCw /></Button>
         <Button size="icon-sm" variant="ghost" aria-label="新建幻灯片" title="新建" onClick={() => setDialogOpen(true)}><Plus /></Button>
+        <ViewLocationMenu id="decks" primaryOnly />
       </div>
       <div className="flex border-b px-2" role="tablist" aria-label="幻灯片侧栏">
         <button role="tab" aria-selected={tab === "decks"} className="px-3 py-2 text-xs aria-selected:border-b-2 aria-selected:border-primary" onClick={() => setTab("decks")}>演示文稿</button>

@@ -2,8 +2,8 @@ import { WorkbenchViewSlot } from "../view-host";
 import { startViewDrag, viewDropTarget } from "../view-drag";
 import { Button } from "@/components/ui/button";
 import { useWorkbenchViews } from "../view-registry";
-import { moveWorkbenchView, setSecondarySidebarWidth, toggleSecondarySidebar, useViewLayout, workbenchViewLocation } from "../view-layout";
-import { setPanelVisible } from "../workbench-store";
+import { setSecondarySidebarWidth, toggleSecondarySidebar, useViewLayout, workbenchViewLocation } from "../view-layout";
+import { ViewLocationMenu } from "../view-location-menu";
 
 export function SecondarySidebar() {
   const layout = useViewLayout();
@@ -29,8 +29,7 @@ export function SecondarySidebar() {
       return <section key={view.id} aria-label={view.title} className="flex min-h-48 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 flex-wrap items-center gap-1 border-b p-1 text-xs">
           <span draggable onDragStart={event => startViewDrag(event, view.id)} className="mr-auto px-1">{view.title}</span>
-          <Button size="xs" variant="ghost" onClick={() => moveWorkbenchView(view.id, "primarySidebar")}>移回主侧边栏</Button>
-          <Button size="xs" variant="ghost" onClick={() => { moveWorkbenchView(view.id, "panel"); setPanelVisible(true); }}>移到底部面板</Button>
+          <ViewLocationMenu id={view.id} />
         </div>
         <WorkbenchViewSlot id={view.id} />
       </section>;

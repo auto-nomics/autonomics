@@ -1,3 +1,4 @@
+import { ViewLocationMenu } from "../view-location-menu";
 import { useState } from "react";
 import { History, List, Plus, Search, SlidersHorizontal } from "lucide-react";
 import { AgentInspector, AgentStatusIcon, leafName, openAgentDialog, statusLabel } from "@/features/agent";
@@ -33,6 +34,7 @@ export function AgentSidebar({ onSpawn }: { onSpawn: () => void }) {
       <span className="flex-1" />
       <Button size="icon-sm" variant="ghost" aria-label="恢复 Agent" title="恢复 Agent" onClick={() => openAgentDialog("resume")}><History /></Button>
       <Button size="icon-sm" variant="ghost" aria-label="创建 Agent" title="创建 Agent" onClick={onSpawn}><Plus /></Button>
+      <ViewLocationMenu id="agents" primaryOnly />
     </div>
     <div id="agent-sidebar-list" role="tabpanel" aria-label="Agent 列表" hidden={view !== "list"} className={cn("min-h-0 flex-1 flex-col", view === "list" ? "flex" : "hidden")}>
       <div className="relative mx-3 mt-3">

@@ -404,15 +404,18 @@ try {
     return store.getWorkbenchState().groups.active;
   }), focusedContext, 'workbench view focus retains editor target');
   await rail.getByRole('button', { name: 'Wiki', exact: true }).click();
-  await sidebar.getByRole('button', { name: '将视图移到底部面板', exact: true }).click();
+  await sidebar.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '底部面板', exact: true }).click();
   const bottom = page.getByRole('region', { name: '底部面板' });
   await bottom.getByRole('tab', { name: '知识库', exact: true }).waitFor();
   assert.equal(await bottom.getByRole('tab', { name: '知识库', exact: true }).getAttribute('aria-selected'), 'true');
   await page.reload();
   await bottom.getByRole('tab', { name: '知识库', exact: true }).waitFor();
-  await bottom.getByRole('button', { name: '移回侧边栏', exact: true }).click();
+  await bottom.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '主侧边栏', exact: true }).click();
   assert.equal(await bottom.getByRole('tab', { name: '知识库', exact: true }).count(), 0);
-  await sidebar.getByRole('button', { name: '将视图移到辅助侧边栏', exact: true }).click();
+  await sidebar.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '辅助侧边栏', exact: true }).click();
   const secondary = page.getByRole('complementary', { name: '辅助侧边栏', exact: true });
   await secondary.getByRole('region', { name: '知识库', exact: true }).waitFor();
   await secondary.getByRole('button', { name: '隐藏辅助侧边栏', exact: true }).click();
@@ -428,7 +431,8 @@ try {
   await page.reload();
   await secondary.getByRole('region', { name: '知识库', exact: true }).waitFor();
   assert.equal((await secondary.boundingBox()).width, initialSecondaryWidth + 10, 'secondary sidebar width persists');
-  await secondary.getByRole('button', { name: '移回主侧边栏', exact: true }).click();
+  await secondary.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '主侧边栏', exact: true }).click();
   await secondary.waitFor({ state: 'detached' });
   const guardedClose = await page.evaluate(async () => {
     const store = await import('/src/app/workbench/workbench-store.ts');
@@ -444,7 +448,8 @@ try {
   });
   assert.deepEqual(guardedClose, { rejected: true, kept: true, accepted: true }, 'all programmatic closes enforce the editor guard');
   await rail.getByRole('button', { name: 'Agent', exact: true }).click();
-  await sidebar.getByRole('button', { name: '将视图移到底部面板', exact: true }).click();
+  await sidebar.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '底部面板', exact: true }).click();
   await bottom.getByRole('button', { name: '创建 Agent', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   await page.keyboard.press('Escape');
@@ -454,7 +459,8 @@ try {
   });
   assert.equal(await bottom.getByRole('tab', { name: '事件流', exact: true }).getAttribute('aria-selected'), 'true', 'legacy panel commands select their registered view');
   await bottom.getByRole('tab', { name: 'Agent', exact: true }).click();
-  await bottom.getByRole('button', { name: '移到辅助侧边栏', exact: true }).click();
+  await bottom.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '辅助侧边栏', exact: true }).click();
   await secondary.getByRole('button', { name: '创建 Agent', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   await page.keyboard.press('Escape');
@@ -469,7 +475,8 @@ try {
   });
   await secondary.getByRole('region', { name: '动态辅助视图', exact: true }).waitFor();
   await rail.getByRole('button', { name: '动态辅助视图', exact: true }).waitFor();
-  await secondary.getByRole('button', { name: '移回主侧边栏', exact: true }).click();
+  await secondary.getByRole('button', { name: '视图位置', exact: true }).click();
+  await page.getByRole('menuitemradio', { name: '主侧边栏', exact: true }).click();
   await sidebar.getByText('动态辅助视图', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('autonomics.workbench.v2')).sidebar.container), 'dynamic-view-fixture', 'custom view becomes the active primary container');
   await page.evaluate(() => window.disposeDynamicView());

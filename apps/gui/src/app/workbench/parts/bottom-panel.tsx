@@ -4,9 +4,10 @@ import { cn } from "@/lib/utils";
 import { WorkbenchViewSlot } from "../view-host";
 import { startViewDrag, viewDropTarget } from "../view-drag";
 import { useWorkbenchViews } from "../view-registry";
-import { moveWorkbenchView, selectPanelView, useViewLayout, workbenchViewLocation } from "../view-layout";
+import { selectPanelView, useViewLayout, workbenchViewLocation } from "../view-layout";
 import { setPanelTab, setPanelVisible, useWorkbenchState, type PanelTab } from "../workbench-store";
 import "../panel-views";
+import { ViewLocationMenu } from "../view-location-menu";
 
 export function BottomPanel() {
   const state = useWorkbenchState();
@@ -19,7 +20,8 @@ export function BottomPanel() {
         if (["events", "notices", "terminal"].includes(view.id)) { selectPanelView(null); setPanelTab(view.id as PanelTab); }
         else selectPanelView(view.id);
       }}>{view.title}{view.id === "notices" && state.panel.unreadNotices > 0 && <span className="ml-1">{state.panel.unreadNotices}</span>}</button>)}
-      {selected && <><Button size="xs" variant="ghost" onClick={() => moveWorkbenchView(selected.id, "primarySidebar")}>移回侧边栏</Button><Button size="xs" variant="ghost" onClick={() => moveWorkbenchView(selected.id, "secondarySidebar")}>移到辅助侧边栏</Button></>}
+      <span className="flex-1" />
+      {selected && <ViewLocationMenu id={selected.id} />}
       <Button size="icon-xs" variant="ghost" className="ml-auto" aria-label="收起面板" onClick={() => setPanelVisible(false)}><X /></Button>
     </div>
     {selected && <WorkbenchViewSlot key={selected.id} id={selected.id} />}

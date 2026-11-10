@@ -24,6 +24,7 @@ import {
 import { DeckEditorBody, registerDeckOpener } from "@/features/deck";
 import { getDeckDocument } from "@/features/deck/deck-document";
 import { findWikiDocument } from "@/features/wiki/wiki-document";
+import { boundedContextText, editorContextSnapshot } from "./editor-context-snapshots";
 import { ProjectEditor } from "@/features/projects/project-editor";
 import { PluginManager } from "@/features/projects/plugin-manager";
 import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
@@ -278,7 +279,12 @@ export function registerWorkbenchEditorKinds(): void {
     agentContext: (editor) => {
       const state = stateOf(editor);
       const current = state.stack[state.cursor];
-      return { entryId: current?.entryId ?? String(editor.params.entryId ?? ""), title: current?.title || state.title, mode: state.mode };
+      const entryId = current?.entryId ?? String(editor.params.entryId ?? "");
+      const document = findWikiDocument(entryId);
+      return { entryId, title: current?.title || state.title, mode: state.mode,
+        ...(document ? boundedContextText(document.state.content) : {}),
+        scope: document ? "知识词条当前内容，包含未保存的修改（最多 24000 字符）" : "知识词条标识与阅读状态",
+      };
     },
     title: (editor) => {
       const state = editor.state as WikiEntryEditorState | null;
@@ -366,6 +372,8 @@ export function registerWorkbenchEditorKinds(): void {
   registerEditorKind({
     kind: "plugin-projects",
     agentContext: (editor) => {
+      const live = editorContextSnapshot(editor.id);
+      if (live) return live;
       const state = editor.state as { project?: string; dirty?: boolean; containerVersion?: number } | null;
       return { project: state?.project ?? null, dirty: state?.dirty ?? false, containerVersion: state?.containerVersion ?? null, scope: "项目标识与编辑状态，不含文件正文" };
     },
@@ -396,6 +404,7 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "vfs-file",
+    agentContext: (editor) => editorContextSnapshot(editor.id) ?? { path: String(editor.params.path ?? ""), scope: "文件标识（内容尚未加载）" },
     title: (editor) => {
       const path = String(editor.params.path ?? "");
       return path.split("/").filter(Boolean).pop() || path || "文件";

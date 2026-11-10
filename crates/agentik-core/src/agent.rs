@@ -528,21 +528,10 @@ impl Agent {
     ) -> std::result::Result<Option<crate::storage::SessionRecord>, StorageError> {
         let records = storage.list_session_records(agent_id).await?;
         let count = records.len();
-        let selected = match storage.agent_context_id(agent_id).await? {
-            Some(id) => Some(
-                records
-                    .into_iter()
-                    .find(|record| record.session_id == id)
-                    .ok_or_else(|| {
-                        StorageError::RecoveryRequired(format!(
-                            "bound context {id} is missing; refusing a replacement"
-                        ))
-                    })?,
-            ),
-            None => records
-                .into_iter()
-                .max_by_key(|record| (record.last_active, record.started_at, record.session_id)),
-        };
+        let selected = crate::storage::select_agent_context_record(
+            storage.agent_context_id(agent_id).await?,
+            records,
+        )?;
         if let Some(record) = &selected {
             storage
                 .bind_agent_context(agent_id, record.session_id)

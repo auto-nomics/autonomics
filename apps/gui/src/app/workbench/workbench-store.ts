@@ -42,6 +42,8 @@ export type WorkbenchState = {
   editorLayout: EditorLayout;
   /** Last focused wiki editor, retained while its graph tab is active. */
   lastWikiEditorId: EditorId | null;
+  /** Most recently focused document that can be attached to an agent. */
+  lastContextEditorId: EditorId | null;
   /** Main-group share of the split layout, percent (25–75). */
   splitRatio: number;
 };
@@ -100,6 +102,7 @@ function defaultState(): WorkbenchState {
     groups: { active: "main", main: { editors: [], activeId: null }, secondary: null, extra: {} },
     editorLayout: { group: "main" },
     lastWikiEditorId: null,
+    lastContextEditorId: null,
     splitRatio: 50,
   };
 }
@@ -206,6 +209,7 @@ function reviveState(raw: unknown): WorkbenchState | null {
     },
     editorLayout: { group: "main" },
     lastWikiEditorId: typeof source.lastWikiEditorId === "string" ? source.lastWikiEditorId : null,
+    lastContextEditorId: typeof source.lastContextEditorId === "string" ? source.lastContextEditorId : null,
     splitRatio: clampPercent(source.splitRatio ?? NaN, 25, 75, 50),
   };
   const ids = new Set(allGroups(state.groups).map(([id]) => id));
@@ -262,6 +266,7 @@ function persist() {
       groups: state.groups,
       editorLayout: state.editorLayout,
       lastWikiEditorId: state.lastWikiEditorId,
+      lastContextEditorId: state.lastContextEditorId,
       splitRatio: state.splitRatio,
     }));
   } catch {
@@ -275,7 +280,9 @@ function commit(next: WorkbenchState) {
   const editors = allGroups(next.groups).flatMap(([, group]) => group.editors);
   const lastWikiEditorId = activeEditor?.kind === "wiki-entry" ? activeEditor.id
     : editors.some(editor => editor.kind === "wiki-entry" && editor.id === next.lastWikiEditorId) ? next.lastWikiEditorId : null;
-  state = { ...next, lastWikiEditorId, revision: next.revision + 1 };
+  const lastContextEditorId = activeEditor && editorKind(activeEditor.kind)?.agentContext ? activeEditor.id
+    : editors.some(editor => editor.id === next.lastContextEditorId && editorKind(editor.kind)?.agentContext) ? next.lastContextEditorId : null;
+  state = { ...next, lastWikiEditorId, lastContextEditorId, revision: next.revision + 1 };
   persist();
   for (const listener of listeners) listener();
 }

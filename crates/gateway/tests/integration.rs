@@ -32,6 +32,92 @@ where
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn context_hydration_uses_bound_session_without_activating_dormant_agent() {
+    use agentik_core::storage::AgentRecord;
+    use agentik_sdk::AgentMessageExt;
+    use uuid::Uuid;
+
+    let daemon = start_mock_gateway("unused").await;
+    let client = daemon.client();
+    let storage = daemon.infra.storage.as_ref();
+    let id = Uuid::new_v4();
+    let path = "/root/parent/methylation_method";
+    storage
+        .upsert_agent(AgentRecord {
+            id,
+            name: path.into(),
+            config_json: serde_json::json!({}),
+            created_at: 1,
+            last_active: 1,
+        })
+        .await
+        .unwrap();
+    let bound = Uuid::new_v4();
+    storage.start_session(id, bound).await.unwrap();
+    storage
+        .append_message(
+            bound,
+            &agentik_sdk::types::messages::Message::user("bound conversation"),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    let newer = Uuid::new_v4();
+    storage.start_session(id, newer).await.unwrap();
+    storage
+        .append_message(
+            newer,
+            &agentik_sdk::types::messages::Message::user("unrelated newer conversation"),
+        )
+        .await
+        .unwrap();
+    storage.bind_agent_context(id, bound).await.unwrap();
+
+    // TUI and GUI use this same context response and history endpoint.
+    let context = client.list_contexts(path).await.unwrap();
+    assert_eq!(context.agent_id, id);
+    assert_eq!(context.context.unwrap().id, bound);
+    let messages = client.session_history(id, bound).await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert!(
+        serde_json::to_string(&messages)
+            .unwrap()
+            .contains("bound conversation")
+    );
+    assert!(client.state().await.unwrap().agents.is_empty());
+    let found = client
+        .search_storage_agents("methylation_method", 100)
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].id, id);
+
+    let empty_id = Uuid::new_v4();
+    storage
+        .upsert_agent(AgentRecord {
+            id: empty_id,
+            name: "/root/empty".into(),
+            config_json: serde_json::json!({}),
+            created_at: 2,
+            last_active: 2,
+        })
+        .await
+        .unwrap();
+    let empty = client.list_contexts("/root/empty").await.unwrap();
+    assert_eq!(empty.agent_id, empty_id);
+    assert!(empty.context.is_none());
+    assert_eq!(
+        client
+            .list_contexts("/root/missing")
+            .await
+            .unwrap_err()
+            .status(),
+        Some(404)
+    );
+    daemon.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn spawn_chat_turn_and_shutdown_over_the_wire() {
     let gateway_daemon = start_mock_gateway("The answer is 2.").await;
     let client = gateway_daemon.client();
@@ -129,6 +215,9 @@ async fn spawn_chat_turn_and_shutdown_over_the_wire() {
         .find(|a| a.path == path)
         .expect("agent listed in /state");
     assert_eq!(state_agent.model.as_deref(), Some("mock-model"));
+    let context = client.list_contexts(&path).await.unwrap();
+    assert_eq!(Some(context.agent_id), state_agent.agent_id);
+    assert_eq!(context.context.unwrap().id, refreshed.contexts[&path].id);
 
     // Hot-swap the model through the same control path the gateway's
     // PUT /agents/{name}/model handler uses, then expect the change

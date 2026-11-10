@@ -228,6 +228,7 @@ export function useAgentRuntime() {
   const historyLoadSeq = useRef<Record<string, number>>({});
   const loadedHistory = useRef<Record<string, string>>({});
   const historyInFlight = useRef(new Map<string, Promise<void>>());
+  const contextRequests = useRef(new Map<string, object>());
   // Events received while a transcript is being fetched must be applied
   // after the snapshot, otherwise the response replaces the live updates.
   const historyEventBuffers = useRef<Record<string, { contextId: string; events: GatewayFrame[] }>>({});
@@ -304,28 +305,41 @@ export function useAgentRuntime() {
     }
   }, [activeAgent, selectedAgentId, selectedContextId, ensureAgentHistory]);
 
+  // Both clients hydrate through /agents/{path}/context. The daemon
+  // resolves the identity and its bound context; clients never select a
+  // conversation from a list of historical sessions.
   useEffect(() => {
-    let cancelled = false;
+    if (booting || !connected) return;
     for (const path of openTabs) {
-      if (agents.some(agent => agent.path === path && agent.agent_id) && contexts[path]) continue;
+      const agentId = agents.find(agent => agent.path === path)?.agent_id ?? storedIds[path];
+      const contextId = activeContexts[path] ?? contexts[path]?.id;
+      if ((agentId && contextId) || contextRequests.current.has(path)) continue;
+      const request = {};
+      contextRequests.current.set(path, request);
       void (async () => {
         try {
-          const page: StoredAgent[] = await gatewayRequest("GET", `/storage/agents?q=${encodeURIComponent(path)}&limit=100`);
-          const record = page.find(agent => agent.name === path);
-          if (!record || cancelled) return;
-          setStoredIds(current => current[path] === record.id ? current : { ...current, [path]: record.id });
-          if (contexts[path]) return;
-          const sessions: ContextInfo[] = await gatewayRequest("GET", `/storage/agents/${record.id}/sessions`);
-          const latest = sessions.reduce<ContextInfo | undefined>((a, b) => !a || b.last_active > a.last_active ? b : a, undefined);
-          if (latest && !cancelled) {
-            setContexts(current => current[path] ? current : { ...current, [path]: latest });
-            setActiveContexts(current => current[path] ? current : { ...current, [path]: latest.id });
+          const response: { agent_id: string; context: ContextInfo | null } = await gatewayRequest(
+            "GET", `/agents/${encodeURIComponent(path)}/context`,
+          );
+          if (contextRequests.current.get(path) !== request || !openTabsRef.current.includes(path)) return;
+          if (!response?.agent_id) throw new Error("Context response is missing the agent identity");
+          setStoredIds(current => current[path] === response.agent_id ? current : { ...current, [path]: response.agent_id });
+          // A live announcement may have arrived during the request. Keep
+          // that newer context instead of installing an older response.
+          if (response.context) {
+            const context = response.context;
+            setContexts(current => current[path] ? current : { ...current, [path]: context });
+            setActiveContexts(current => current[path] ? current : { ...current, [path]: context.id });
           }
-        } catch (error) { console.warn("Failed to load agent history metadata", error); }
+        } catch (error) {
+          if (contextRequests.current.get(path) === request) {
+            contextRequests.current.delete(path);
+            if (openTabsRef.current.includes(path)) appendMessage(path, makeItem("error", `加载历史失败: ${String(error)}`));
+          }
+        }
       })();
     }
-    return () => { cancelled = true; };
-  }, [openTabs, agents, contexts]);
+  }, [booting, connected, openTabs, agents, contexts, activeContexts, storedIds, appendMessage]);
 
   /** Records a live frame into the bottom-panel feeds. Called only on
    *  arrival — buffered events replay straight into handleFrame so the
@@ -555,6 +569,7 @@ export function useAgentRuntime() {
     }
   }, []);
   const hydrate = useCallback(async () => {
+    contextRequests.current.clear();
     try {
       const probe = await probeGateway();
       if (!probe.running) throw new Error(`${probe.addr} (未认证)`);
@@ -696,6 +711,7 @@ export function useAgentRuntime() {
   /** Closing a tab is a pure view operation: the live registry and the
    *  persisted identity are untouched. The daemon owns lifecycle. */
   const closeTab = (path: string) => {
+    contextRequests.current.delete(path);
     const index = openTabs.indexOf(path);
     const next = openTabs.filter((tab) => tab !== path);
     setOpenTabs(next);
@@ -750,6 +766,7 @@ export function useAgentRuntime() {
 
 
   const resumeAgent = async (stored: StoredAgent) => {
+    setStoredIds(current => current[stored.name] === stored.id ? current : { ...current, [stored.name]: stored.id });
     const running = agents.find((agent) => agent.agent_id === stored.id);
     if (running) {
       selectAgent(running.path);

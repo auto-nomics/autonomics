@@ -122,30 +122,37 @@ try {
   const targetId = await page.evaluate(async () => {
     const store = await import('/src/app/workbench/workbench-store.ts');
     const registry = await import('/src/app/workbench/editor-registry.ts');
-    registry.registerEditorKind({ kind: 'context-fixture', title: () => '目标文档', body: () => null, mount: 'keep-alive', agentContext: editor => ({ selection: editor.state?.selection ?? 'first' }) });
+    registry.registerEditorKind({ kind: 'context-fixture', title: () => '目标文档', body: () => null, mount: 'keep-alive', agentContext: editor => ({ selection: editor.state?.selection ?? 'first', content: window.fixtureDocument ?? '' }) });
     store.openEditor({ kind: 'context-fixture', params: {}, activate: false });
     return store.allGroups(store.getWorkbenchState().groups).flatMap(([, group]) => group.editors).find(editor => editor.kind === 'context-fixture').id;
   });
-  const targetPicker = page.locator('[data-agent-workspace="/root/alpha"]').getByRole('combobox', { name: 'Agent 上下文目标' });
-  await targetPicker.selectOption(targetId);
+  const targetPicker = page.locator('[data-agent-workspace="/root/alpha"]').getByRole('button', { name: '绑定文档上下文' });
+  await targetPicker.click();
+  await page.getByRole('dialog').getByRole('option', { name: '目标文档', exact: true }).click();
   await page.evaluate(async id => {
     const store = await import('/src/app/workbench/workbench-store.ts');
     store.patchEditorState(id, { selection: 'latest selection' });
   }, targetId);
+  await page.evaluate(() => { window.fixtureDocument = 'latest live document without a layout update'; });
   await composer.fill('Use the pinned document'); await go('发送');
   await page.waitForTimeout(100);
   assert.ok(sends.at(-1).text.includes('latest selection'), 'pinned target sends its latest state');
+  assert.ok(sends.at(-1).text.includes('latest live document without a layout update'), 'send resolves the live document again');
+  await page.locator('[data-agent-workspace="/root/alpha"]').getByRole('button', { name: '预览文档上下文' }).click();
+  await page.getByRole('dialog').getByText(/latest live document without a layout update/).waitFor();
+  await page.keyboard.press('Escape');
   await page.evaluate(async id => {
     const store = await import('/src/app/workbench/workbench-store.ts');
     store.closeEditor(id);
   }, targetId);
-  assert.equal(await targetPicker.inputValue(), '', 'closing the target clears its binding');
+  assert.equal(await targetPicker.innerText(), '绑定文档', 'closing the target clears its binding');
   await page.evaluate(async () => {
     const store = await import('/src/app/workbench/workbench-store.ts');
     store.openEditor({ kind: 'context-fixture', params: {}, activate: false });
   });
-  assert.equal(await targetPicker.inputValue(), '', 'reopening a resource does not restore a closed binding');
-  await targetPicker.selectOption('$follow');
+  assert.equal(await targetPicker.innerText(), '绑定文档', 'reopening a resource does not restore a closed binding');
+  await targetPicker.click();
+  await page.getByRole('dialog').getByRole('option', { name: /跟随当前文档/ }).click();
   await page.evaluate(async id => {
     const store = await import('/src/app/workbench/workbench-store.ts');
     store.activateEditorById(id);
@@ -157,7 +164,7 @@ try {
   await composer.fill('Use the followed document'); await go('发送');
   await page.waitForTimeout(100);
   assert.ok(sends.at(-1).text.includes('followed document selection'), 'follow mode retains the document when chat gains focus');
-  await targetPicker.selectOption('');
+  await page.locator('[data-agent-workspace="/root/alpha"]').getByRole('button', { name: '解除文档绑定' }).click();
   await page.setViewportSize({ width: 390, height: 844 }); await composer.waitFor();
   // Mobile keeps the nav drawer closed (invisible, outside the a11y tree);
   // its edge-swipe opens on TouchEvents, so drive the gesture synthetically.
@@ -169,6 +176,66 @@ try {
   await page.getByRole('button', { name: 'Bibliography library' }).waitFor(); await composer.waitFor(); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth));
   await page.waitForTimeout(250); // settle the workspace entrance animation
   await page.screenshot({ path: '/tmp/autonomics-workbench-mobile.png' }); assert.deepEqual(errors, []);
+
+  // A new agent has no context ID yet. Bind a real file with unsaved
+  // changes before the first message, and retain the binding on activation.
+  const fresh = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+  fresh.setDefaultTimeout(10000);
+  fresh.on('pageerror', error => errors.push(error.message));
+  await fresh.addInitScript(() => {
+    const original = window.fetch;
+    window.fetch = (input, init) => String(input).endsWith('/api/v1/events')
+      ? Promise.resolve(new Response(new ReadableStream({
+        start(controller) { window.sendContextEvent = text => controller.enqueue(new TextEncoder().encode(text)); },
+      }), { headers: { 'Content-Type': 'text/event-stream' } }))
+      : original(input, init);
+  });
+  const firstSends = [];
+  await fresh.route('**/api/v1/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/state')) return route.fulfill({ json: {
+      last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }], contexts: {},
+    } });
+    if (path.endsWith('/storage/agents') || path.endsWith('/sessions') || path.endsWith('/history')) return route.fulfill({ json: [] });
+    if (path.endsWith('/context')) return route.fulfill({ json: { agent_id: 'a1', context: null } });
+    if (path.endsWith('/vfs/text')) return route.fulfill({ json: { contents: '# Methylation method', size: 20, truncated: false } });
+    if (path.endsWith('/messages')) firstSends.push(route.request().postDataJSON());
+    return route.fulfill({ json: {} });
+  });
+  await fresh.goto(origin);
+  await fresh.getByPlaceholder('输入消息…').waitFor();
+  await fresh.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.openEditor({ kind: 'vfs-file', params: { path: 'workspace://notes/methylation.md' } });
+  });
+  await fresh.getByRole('textbox', { name: '编辑 workspace://notes/methylation.md', exact: true }).fill('Unsaved methylation protocol');
+  await fresh.locator('[role="tab"][title="/root/alpha"]').click();
+  const freshBinding = fresh.getByRole('button', { name: '绑定文档上下文', exact: true });
+  await freshBinding.click();
+  await fresh.getByRole('dialog').getByRole('option', { name: 'methylation.md', exact: true }).click();
+  assert.equal(await freshBinding.innerText(), 'methylation.md', 'binding works before a session exists');
+  await fresh.getByRole('button', { name: '预览文档上下文' }).click();
+  await fresh.getByRole('dialog').getByText(/Unsaved methylation protocol/).waitFor();
+  await fresh.keyboard.press('Escape');
+  await fresh.getByPlaceholder('输入消息…').fill('Review this protocol');
+  await fresh.getByRole('button', { name: '发送', exact: true }).click();
+  await fresh.waitForTimeout(100);
+  assert.ok(firstSends[0].text.includes('Unsaved methylation protocol'), 'first message includes the current unsaved file');
+  const activated = fresh.waitForResponse(response => response.url().endsWith('/agents/a1/sessions/first/history'));
+  await fresh.evaluate(() => window.sendContextEvent(`id: 1\nevent: agent\ndata: ${JSON.stringify({ agent: '/root/alpha', event: { ContextActivated: { id: 'first', title: null } } })}\n\n`));
+  await activated;
+  assert.equal(await freshBinding.innerText(), 'methylation.md', 'activation retains the chosen document');
+  await fresh.getByRole('complementary', { name: '工作台侧栏', exact: true }).getByRole('button', { name: '视图位置', exact: true }).click();
+  await fresh.getByRole('menuitemradio', { name: '主侧边栏', exact: true }).waitFor();
+  await fresh.waitForTimeout(200); // let the menu entrance animation settle
+  await fresh.screenshot({ path: '/tmp/autonomics-context-and-sidebar.png' });
+  await fresh.keyboard.press('Escape');
+  await fresh.setViewportSize({ width: 390, height: 844 });
+  await freshBinding.waitFor();
+  assert.ok(await fresh.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'bound document fits mobile');
+  await fresh.screenshot({ path: '/tmp/autonomics-context-bound-mobile.png' });
+  assert.deepEqual(errors, []);
+  await fresh.close();
   console.log('workbench-context: all assertions passed');
 } catch (error) { console.error(error); throw error; }
 finally { await browser?.close(); server.kill(); }

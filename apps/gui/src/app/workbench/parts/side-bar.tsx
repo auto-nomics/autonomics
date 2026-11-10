@@ -22,8 +22,8 @@ import { WindowControls } from "./window-controls";
 import "../builtin-views";
 import { workbenchView, useWorkbenchViews } from "../view-registry";
 import { moveWorkbenchView, useViewLayout, workbenchViewLocation } from "../view-layout";
-import { setPanelVisible } from "../workbench-store";
-import { startViewDrag, viewDropTarget } from "../view-drag";
+import { viewDropTarget } from "../view-drag";
+import { ViewLocationMenu } from "../view-location-menu";
 
 
 
@@ -32,9 +32,8 @@ function ContainerBody({ container }: { container: ContainerId; mobile: boolean;
   const layout = useViewLayout();
   const Body = workbenchView(container)?.body;
   if (!Body) return null;
-  const movable = true;
   if (workbenchViewLocation(container, layout) !== "primarySidebar") return <Button variant="ghost" onClick={() => moveWorkbenchView(container, "primarySidebar")}>将视图移回侧边栏</Button>;
-  return <>{movable && <div draggable onDragStart={event => startViewDrag(event, container)} aria-label="拖动视图" className="flex shrink-0 flex-wrap"><Button size="xs" variant="ghost" onClick={() => { moveWorkbenchView(container, "panel"); setPanelVisible(true); }}>将视图移到底部面板</Button><Button size="xs" variant="ghost" onClick={() => moveWorkbenchView(container, "secondarySidebar")}>将视图移到辅助侧边栏</Button></div>}<WorkbenchViewSlot id={container} /></>;
+  return <WorkbenchViewSlot id={container} />;
 }
 
 export function SideBar(props: {
@@ -167,16 +166,14 @@ export function SideBar(props: {
 }
 
 function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
-  const state = useWorkbenchState();
   return (
     <>
       {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && container !== "decks" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {workbenchView(container)?.title}
         </span>
-        <span className="ml-auto text-[10px] text-muted-foreground/70" aria-hidden>
-          {state.containerViews[container]}
-        </span>
+        <span className="flex-1" />
+        <ViewLocationMenu id={container} />
       </div>}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <ContainerBody container={container} mobile={mobile} onSpawn={onSpawn} />
