@@ -3,19 +3,20 @@ import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useProjectSidebarSlot } from "./sidebar-slot";
+import { PluginOverview, type InstalledPlugin, type PluginProject } from "./plugin-manager";
+import { PluginTools } from "./plugin-tools";
 import { ProjectFileTree } from "./project-file-tree";
 import { CodeEditor } from "./code-editor";
 import { DebugClient } from "./debug-client";
 import { DebugInspector } from "./debug-inspector";
 import { applyTextEdits, type FileEdits } from "./workspace-edit";
 import { publishProjectChanges, type ProjectFileChange } from "./watch-events";
-import { FileCode2, FilePlus2, Folder, FolderPlus, PanelLeftOpen, Pencil, RefreshCw, Save, TerminalSquare, Trash2, X } from "lucide-react";
+import { FileCode2, FilePlus2, Folder, FolderPlus, PanelLeftOpen, Pencil, RefreshCw, Save, StopCircle, TerminalSquare, Trash2, X } from "lucide-react";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getGroup, patchEditorState, setContainer, setPanelTab, setPanelVisible, setSidebarCollapsed, useWorkbenchState, type EditorRef } from "@/app/workbench/workbench-store";
 
-type Project = { name: string; status: string | null; image: string | null; error: string | null };
 type Environment = { id: string; reference: string };
 type Buffer = { contents: string; original: string };
 
@@ -28,9 +29,13 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [filesRevision, setFilesRevision] = useState(0);
   const [saveVersion, setSaveVersion] = useState(0);
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
+  const [projects, setProjects] = useState<PluginProject[]>([]);
+  const [installed, setInstalled] = useState<InstalledPlugin[]>([]);
+  const [overview, setOverview] = useState(true);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [project, setProject] = useState("");
+  const [recovery, setRecovery] = useState(false);
   const [connected, setConnected] = useState(false);
   const [vscodeFrames, setVscodeFrames] = useState<Record<string, string>>({});
   const [vscodeDirty, setVscodeDirty] = useState<Record<string, boolean>>({});
@@ -102,9 +107,9 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [list, env] = await Promise.all([gatewayRequest("GET", "/plugin-projects"), gatewayRequest("GET", "/plugins/environments")]);
-      setProjects(list.projects); setEnvironments(env.environments);
-      setEnvironment((current) => current || env.environments[0]?.id || "");
+      const [list, env, plugins] = await Promise.all([gatewayRequest("GET", "/plugin-projects"), gatewayRequest("GET", "/plugins/environments"), gatewayRequest("GET", "/plugins")]);
+      setProjects(list.projects ?? []); setEnvironments(env.environments ?? []); setInstalled(plugins.plugins ?? []); setProjectsLoaded(true);
+      setEnvironment((current) => current || env.environments?.[0]?.id || "");
       setFilesRevision(value => value + 1);
       setError("");
     } catch (cause: unknown) {
@@ -146,7 +151,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [vscodeFrames]);
   useEffect(() => {
-    if (!project) return;
+    if (!project || recovery) return;
     let cancelled = false;
     const check = async () => {
       try {
@@ -156,8 +161,9 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     };
     const timer = window.setInterval(() => void check(), 5000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [project]);
+  }, [project, recovery]);
   useEffect(() => {
+    if (recovery) return;
     if (!project || !connected) { setFiles([]); setDirectories([]); setLoadingFiles(false); return; }
     let cancelled = false;
     setLoadingFiles(true);
@@ -166,7 +172,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
       .catch((cause) => { if (!cancelled) setError(String(cause)); })
       .finally(() => { if (!cancelled) setLoadingFiles(false); });
     return () => { cancelled = true; };
-  }, [project, connected, filesRevision]);
+  }, [project, connected, filesRevision, recovery]);
   useEffect(() => {
     if (!project || !connected) { setWatchError(""); return; }
     type Entry = { path: string; kind: "file" | "directory"; stamp: string };
@@ -235,19 +241,26 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     return () => window.removeEventListener("beforeunload", warn);
   }, [anyDirty]);
 
-  const mayLeave = () => !localDirty || window.confirm("项目中有未保存的修改，是否放弃？");
+  const mayLeave = () => !(localDirty || vscodeDirty[project]) || window.confirm("项目中有未保存的修改，是否放弃？");
   const selectProject = async (next: string, rebuild = false) => {
     if (next !== project && !mayLeave()) return;
     if (rebuild && (localDirty || vscodeDirty[project]) && !window.confirm("重建容器会关闭工作台，请先保存未保存的修改。是否继续？")) return;
     setBusy(true); setConnecting(next); setError("");
     if (rebuild) setConnected(false);
     try {
-      await gatewayRequest("POST", `/plugin-projects/${encodeURIComponent(next)}/container${rebuild ? "?rebuild=true" : ""}`);
+      const needsRepair = !!projects.find(item => item.name === next)?.error;
+      if (needsRepair) {
+        const result = await gatewayRequest("GET", `/plugin-projects/${encodeURIComponent(next)}/dev-files`);
+        setFiles(result.files ?? []); setDirectories([]);
+      } else {
+        await gatewayRequest("POST", `/plugin-projects/${encodeURIComponent(next)}/container${rebuild ? "?rebuild=true" : ""}`);
+      }
+      setRecovery(needsRepair);
       if (rebuild) setContainerVersion(value => value + 1);
-      setConnected(true);
+      setConnected(!needsRepair);
       setFilesRevision(value => value + 1);
-      setSidebarTab("files");
-      if (next !== project) { setProject(next); setBuffers({}); setConflicts({}); setBreakpoints({}); setDebugStatus(""); setDebugOutput(""); setDebugThread(undefined); setPath(""); setTreeSelection(undefined); setDirectoryMove(undefined); setNavigation(undefined); setContents(""); setOriginal(""); setFiles([]); setDirectories([]); }
+      setSidebarTab("files"); setOverview(false);
+      if (next !== project) { setProject(next); setBuffers({}); setConflicts({}); setBreakpoints({}); setDebugStatus(""); setDebugOutput(""); setDebugThread(undefined); setPath(""); setTreeSelection(undefined); setDirectoryMove(undefined); setNavigation(undefined); setContents(""); setOriginal(""); if (!needsRepair) { setFiles([]); setDirectories([]); } }
     } catch (cause) {
       if (next === project) {
         try { const status = await gatewayRequest("GET", `/plugin-projects/${encodeURIComponent(next)}/container`); setConnected(status.connected === true); }
@@ -257,8 +270,33 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     }
     finally { setBusy(false); setConnecting(""); }
   };
+  const initialProject = useRef(String(editor.params.name ?? (editor.state as { project?: string } | null)?.project ?? ""));
+  useEffect(() => {
+    if (projectsLoaded && initialProject.current) { const name = initialProject.current; initialProject.current = ""; void selectProject(name); }
+  }, [projectsLoaded]);
+
+  const pluginAction = async (name: string, action: "uninstall" | "rollback") => {
+    if (!window.confirm(action === "uninstall" ? `卸载插件 ${name}？工作区与快照将保留。` : `回滚 ${name} 到上一份快照？`)) return;
+    setBusy(true); setError("");
+    try { await gatewayRequest("POST", `/plugins/${encodeURIComponent(name)}/${action}`); await refresh(); }
+    catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  };
+  const stopContainer = async () => {
+    if ((localDirty || vscodeDirty[project]) && !window.confirm("停止容器会关闭 VS Code 工作台，请先保存修改。是否继续？")) return;
+    setBusy(true); setError("");
+    try {
+      await gatewayRequest("DELETE", `/plugin-projects/${encodeURIComponent(project)}/container`);
+      debugRef.current?.dispose(); debugRef.current = null;
+      setConnected(false); setShowVscode(false);
+      setVscodeFrames(current => { const next = { ...current }; delete next[project]; return next; });
+      setVscodeDirty(current => { const next = { ...current }; delete next[project]; return next; });
+      setContainerVersion(value => value + 1);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  };
   const openFile = async (next: string, target?: { line: number; column: number }, preferVscode = false): Promise<boolean> => {
-    if (!connected) return false;
+    if (!connected && !recovery) return false;
     const cachedDirty = buffers[next] && buffers[next].contents !== buffers[next].original;
     if (preferVscode && vscodeUrl && !cachedDirty) {
       setBusy(true); setError("");
@@ -275,7 +313,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     if (cached) { setPath(next); setContents(cached.contents); setOriginal(cached.original); setTreeSelection({ path: next, kind: "file" }); setNavigation(current => target ? { path: next, ...target, id: (current?.id ?? 0) + 1 } : undefined); return true; }
     setBusy(true); setError("");
     try {
-      const result = await gatewayRequest("GET", `/plugin-projects/${encodeURIComponent(project)}/file?path=${encodeURIComponent(next)}`);
+      const result = await gatewayRequest("GET", `/plugin-projects/${encodeURIComponent(project)}/${recovery ? "dev-file" : "file"}?path=${encodeURIComponent(next)}`);
       setBuffers(current => ({ ...current, [next]: { contents: result.contents, original: result.contents } }));
       setPath(next); setContents(result.contents); setOriginal(result.contents);
       setTreeSelection({ path: next, kind: "file" });
@@ -285,14 +323,15 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
     finally { setBusy(false); }
   };
   const save = async () => {
-    if (!connected || !path || !dirty || busy) return;
+    if ((!connected && !recovery) || !path || !dirty || busy) return;
     setBusy(true); setError("");
     try {
-      await gatewayRequest("PUT", `/plugin-projects/${encodeURIComponent(project)}/file`, { path, contents, original });
+      await gatewayRequest("PUT", `/plugin-projects/${encodeURIComponent(project)}/${recovery ? "dev-file" : "file"}`, { path, contents, original });
       setOriginal(contents);
       setBuffers(current => ({ ...current, [path]: { contents, original: contents } }));
       setConflicts(current => { const next = { ...current }; delete next[path]; return next; });
       setSaveVersion(version => version + 1);
+      if (recovery) await refresh();
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
@@ -412,32 +451,39 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
       await gatewayRequest("POST", "/plugin-projects", { name, environment_id: environment, purpose });
       await refresh(); setCreating(false); setName(""); setPurpose("");
       await gatewayRequest("POST", `/plugin-projects/${encodeURIComponent(name)}/container`);
-      setConnected(true);
-      setSidebarTab("files"); setProject(name); setBuffers({}); setConflicts({}); setBreakpoints({}); setDebugStatus(""); setDebugOutput(""); setDebugThread(undefined); setPath(""); setTreeSelection(undefined); setDirectoryMove(undefined); setNavigation(undefined); setContents(""); setOriginal(""); setFiles([]); setDirectories([]);
+      setConnected(true); setRecovery(false);
+      setSidebarTab("files"); setOverview(false); setProject(name); setBuffers({}); setConflicts({}); setBreakpoints({}); setDebugStatus(""); setDebugOutput(""); setDebugThread(undefined); setPath(""); setTreeSelection(undefined); setDirectoryMove(undefined); setNavigation(undefined); setContents(""); setOriginal(""); setFiles([]); setDirectories([]);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   };
   const selected = projects.find((item) => item.name === project);
-  return <section aria-label="插件项目" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDown={(event) => {
+  return <section aria-label="插件管理" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDown={(event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void save(); }
   }}>
+    <header className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+      <h1 className="mr-auto text-sm font-semibold">插件管理{!overview && project ? ` · ${project}` : ""}</h1>
+      <Button size="sm" variant={overview ? "secondary" : "ghost"} onClick={() => setOverview(true)}>插件总览</Button>
+      {project && <Button size="sm" variant={!overview ? "secondary" : "ghost"} onClick={() => setOverview(false)}>返回项目</Button>}
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => void refresh()}><RefreshCw />刷新</Button>
+      <Button size="sm" disabled={busy} onClick={() => setCreating(!creating)}>新建插件</Button>
+    </header>
     {(workbench.sidebar.collapsed || workbench.sidebar.container !== "projects") && <div className="flex shrink-0 border-b px-2 py-1">
-      <Button size="sm" variant="ghost" onClick={() => { setContainer("projects"); setSidebarCollapsed(false); }}><PanelLeftOpen />项目与文件</Button>
+      <Button size="sm" variant="ghost" onClick={() => { setContainer("projects"); setSidebarCollapsed(false); }}><PanelLeftOpen />插件与文件</Button>
     </div>}
     {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
     {watchError && <div role="status" className="border-b px-4 py-2 text-xs text-muted-foreground">{watchError}</div>}
     {connecting && <div role="status" className="border-b px-4 py-2 text-xs text-muted-foreground">正在连接 {connecting} 的开发容器…</div>}
-    {project && !connected && <div role="status" className="flex items-center gap-2 border-b bg-amber-500/10 px-4 py-2 text-xs">开发容器已断开，文件暂为只读。<Button size="xs" variant="outline" disabled={busy} onClick={() => void selectProject(project)}>重新连接</Button></div>}
+    {project && !connected && <div role="status" className="flex items-center gap-2 border-b bg-amber-500/10 px-4 py-2 text-xs">{recovery ? "修复模式：可编辑项目文件，修复 manifest 后重新连接开发容器。" : "开发容器已断开，文件暂为只读。"}<Button size="xs" variant="outline" disabled={busy} onClick={() => void selectProject(project)}>重新连接</Button></div>}
     {creating && <form onSubmit={(event) => void create(event)} className="grid gap-2 border-b bg-muted/30 p-4 sm:grid-cols-2">
-      <label className="grid gap-1 text-xs">项目名称<Input required pattern="[a-z][a-z0-9-]*[a-z0-9]|[a-z]" value={name} onChange={(event) => setName(event.target.value)} placeholder="my-plugin" /></label>
-      <label className="grid gap-1 text-xs">开发环境<select required className="h-9 rounded-md border bg-background px-2 text-sm" value={environment} onChange={(event) => setEnvironment(event.target.value)}><option value="">选择已批准的环境</option>{environments.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
-      <label className="grid gap-1 text-xs sm:col-span-2">项目用途<Input required value={purpose} onChange={(event) => setPurpose(event.target.value)} /></label>
-      <div className="flex gap-2 sm:col-span-2"><Button disabled={busy || !environment} size="sm" type="submit">创建</Button><Button size="sm" type="button" variant="ghost" onClick={() => setCreating(false)}>取消</Button></div>
+      <label className="grid gap-1 text-xs">插件名称<Input required pattern="[a-z][a-z0-9-]*[a-z0-9]|[a-z]" value={name} onChange={(event) => setName(event.target.value)} placeholder="my-plugin" /></label>
+      <label className="grid gap-1 text-xs">运行环境（已批准）<select required className="h-9 rounded-md border bg-background px-2 text-sm" value={environment} onChange={(event) => setEnvironment(event.target.value)}><option value="">选择已批准的环境</option>{environments.map((item) => <option key={item.id} value={item.id}>{item.id}</option>)}</select></label>
+      <label className="grid gap-1 text-xs sm:col-span-2">用途<Input required value={purpose} onChange={(event) => setPurpose(event.target.value)} /></label>
+      <div className="flex gap-2 sm:col-span-2"><Button disabled={busy || !environment} size="sm" type="submit">创建并打开项目</Button><Button size="sm" type="button" variant="ghost" onClick={() => setCreating(false)}>取消</Button></div>
     </form>}
     {active && slot && createPortal(
-      <aside aria-label="插件项目导航" className="flex min-h-0 flex-1 flex-col">
+      <aside aria-label="插件导航" className="flex min-h-0 flex-1 flex-col">
         <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-1">
-        <div role="tablist" aria-label="插件项目侧栏" className="flex min-w-0 items-center gap-0.5">
+        <div role="tablist" aria-label="插件侧栏" className="flex min-w-0 items-center gap-0.5">
           {([
             { id: "projects", label: "项目", icon: Folder },
             { id: "files", label: "文件", icon: FileCode2 },
@@ -446,7 +492,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
             aria-selected={sidebarTab === id} aria-controls={`project-sidebar-panel-${id}`}
             tabIndex={sidebarTab === id ? 0 : -1}
             className={`flex h-7 items-center gap-1 rounded-md px-1 text-xs ${sidebarTab === id ? "bg-secondary text-secondary-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground"}`}
-            onClick={() => setSidebarTab(id)}
+            onClick={() => { setSidebarTab(id); if (id === "files" && project) setOverview(false); }}
             onKeyDown={(event) => {
               if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
               event.preventDefault();
@@ -458,7 +504,7 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
         </div>
         <span className="flex-1" />
         <Button size="icon-xs" variant="ghost" aria-label="刷新项目" title="刷新项目" disabled={busy} onClick={() => void refresh()}><RefreshCw /></Button>
-        <Button size="icon-xs" variant={creating ? "secondary" : "ghost"} aria-label="新建项目" title="新建项目" aria-pressed={creating} disabled={busy} onClick={() => setCreating(!creating)}><FolderPlus /></Button>
+        <Button size="icon-xs" variant={creating ? "secondary" : "ghost"} aria-label="新建插件" title="新建插件" aria-pressed={creating} disabled={busy} onClick={() => setCreating(!creating)}><FolderPlus /></Button>
         <ViewLocationMenu id="projects" primaryOnly />
         </div>
         <div id="project-sidebar-panel-projects" role="tabpanel" aria-labelledby="project-sidebar-tab-projects" hidden={sidebarTab !== "projects"} className="min-h-0 flex-1 overflow-auto py-2">
@@ -475,21 +521,28 @@ export function ProjectEditor({ editor }: { editor: EditorRef }) {
               <Button size="icon-xs" variant="ghost" aria-label={treeSelection?.kind === "directory" ? "重命名文件夹" : "重命名文件"} title="重命名所选项目" disabled={busy || !connected || !treeSelection || !!debugRef.current} onClick={() => void renameFile()}><Pencil /></Button>
               <Button size="icon-xs" variant="ghost" aria-label={treeSelection?.kind === "directory" ? "删除文件夹" : "删除文件"} title="删除所选项目" disabled={busy || !connected || !treeSelection || !!debugRef.current} onClick={() => void deleteFile()}><Trash2 /></Button>
             </div>
-            {!connected ? <p className="px-3 py-2 text-xs text-muted-foreground">开发容器未连接</p> : loadingFiles && files.length === 0 && directories.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">文件加载中…</p> : files.length === 0 && directories.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">暂无文件</p> : null}
-            <ProjectFileTree key={project} files={files} directories={directories} selected={treeSelection?.path ?? ""} disabled={busy || !connected} directoryMove={directoryMove} onOpen={(file) => void openFile(file, undefined, true)} onSelectDirectory={(folder) => setTreeSelection({ path: folder, kind: "directory" })} />
+            {!connected && !recovery ? <p className="px-3 py-2 text-xs text-muted-foreground">开发容器未连接</p> : loadingFiles && files.length === 0 && directories.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">文件加载中…</p> : files.length === 0 && directories.length === 0 ? <p className="px-3 py-2 text-xs text-muted-foreground">暂无文件</p> : null}
+            <ProjectFileTree key={project} files={files} directories={directories} selected={treeSelection?.path ?? ""} disabled={busy || (!connected && !recovery)} directoryMove={directoryMove} onOpen={(file) => void openFile(file, undefined, true)} onSelectDirectory={(folder) => setTreeSelection({ path: folder, kind: "directory" })} />
           </>}
         </div>
       </aside>, slot)}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {overview && <PluginOverview projects={projects} installed={installed} busy={busy} onOpen={name => void selectProject(name)} onAction={(name, action) => void pluginAction(name, action)} />}
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${overview ? "hidden" : ""}`}>
+        {project && <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1">
+          <span className="mr-auto text-xs text-muted-foreground" data-dev-session-state={connected ? "running" : "exited"}>开发容器{connected ? "已连接" : "已断开"}</span>
+          <Button size="xs" variant="ghost" disabled={busy || !connected || !!debugRef.current} onClick={() => void selectProject(project, true)}><RefreshCw />重启容器</Button>
+          <Button size="xs" variant="ghost" disabled={busy || !connected} onClick={() => void stopContainer()}><StopCircle />停止容器</Button>
+        </div>}
         {selected?.error && <div role="status" className="border-b bg-amber-500/10 p-3 text-xs">项目 manifest 需要修复：{selected.error}</div>}
         {vscodeUrl && <div className="flex shrink-0 gap-1 border-b px-2 py-1"><Button size="xs" variant={showVscode ? "secondary" : "ghost"} onClick={() => setShowVscode(true)}>VS Code 工作台</Button>{path && <Button size="xs" variant={!showVscode ? "secondary" : "ghost"} onClick={() => setShowVscode(false)}>项目编辑器</Button>}</div>}
         {Object.entries(vscodeFrames).map(([frameProject, url]) => <iframe key={frameProject} title={`${frameProject} VS Code 工作台`} src={url} className={`min-h-0 w-full flex-1 border-0 ${showVscode && project === frameProject ? "" : "hidden"}`} inert={project === frameProject && !connected} sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads allow-pointer-lock" allow="clipboard-read; clipboard-write" referrerPolicy="no-referrer" />)}
         <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${showVscode && vscodeUrl ? "hidden" : ""}`}>
         {path && conflicts[path] && <div role="status" className="flex items-center gap-2 border-b bg-amber-500/10 px-3 py-2 text-xs"><span>{conflicts[path] === "deleted" ? "该文件已在容器中删除，当前缓冲区仍被保留。" : "该文件已在容器中更改，当前未保存内容仍被保留。"}</span>{conflicts[path] === "changed" && <Button size="xs" variant="outline" disabled={busy || !connected} onClick={() => void reloadFile()}>重新读取</Button>}</div>}
         {Object.keys(buffers).length > 0 && <div className="flex shrink-0 overflow-x-auto border-b" role="tablist" aria-label="打开的项目文件">{Object.entries(buffers).map(([file, buffer]) => <div key={file} className={`flex shrink-0 items-center border-r ${file === path ? "bg-accent" : "text-muted-foreground"}`}><button type="button" role="tab" aria-selected={file === path} title={file} disabled={busy} className="max-w-48 truncate px-3 py-2 text-xs" onClick={() => void openFile(file)}>{file.split("/").at(-1)}{buffer.contents !== buffer.original ? " •" : ""}</button><button type="button" aria-label={`关闭 ${file}`} title={`关闭 ${file}`} disabled={busy} className="mr-1 rounded p-1 hover:bg-muted" onClick={() => closeBuffer(file)}><X className="size-3" /></button></div>)}</div>}
-        {path ? <><div className="flex items-center gap-2 border-b px-4 py-2 text-sm"><span className="min-w-0 flex-1 truncate" title={path}>{path}{dirty ? " •" : ""}</span>{path.endsWith(".py") && <Button size="sm" variant="outline" disabled={dirty || busy || !connected || !!debugRef.current} title={dirty ? "请先保存文件" : "在开发容器中调试"} onClick={() => void startDebug()}>开始调试</Button>}<Button size="sm" variant="outline" disabled={!dirty || busy || !connected} onClick={() => void save()}><Save /> 保存</Button></div><CodeEditor project={project} path={path} value={contents} readOnly={!connected || busy} lspEnabled={connected} saveVersion={saveVersion} navigation={navigation} breakpoints={breakpoints[path]} onToggleBreakpoint={toggleBreakpoint} onNavigate={(file, line, column) => openFile(file, { line, column })} onChange={changeContents} onSave={() => void save()} onApplyEdits={applyWorkspaceEdits} /></> : <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">{project ? "从左侧选择文件开始编辑" : "选择或创建一个插件项目"}</div>}
+        {path ? <><div className="flex items-center gap-2 border-b px-4 py-2 text-sm"><span className="min-w-0 flex-1 truncate" title={path}>{path}{dirty ? " •" : ""}</span>{path.endsWith(".py") && <Button size="sm" variant="outline" disabled={dirty || busy || !connected || !!debugRef.current} title={dirty ? "请先保存文件" : "在开发容器中调试"} onClick={() => void startDebug()}>开始调试</Button>}<Button size="sm" variant="outline" disabled={!dirty || busy || (!connected && !recovery)} onClick={() => void save()}><Save /> 保存</Button></div><CodeEditor project={project} path={path} value={contents} readOnly={(!connected && !recovery) || busy} lspEnabled={connected} saveVersion={saveVersion} navigation={navigation} breakpoints={breakpoints[path]} onToggleBreakpoint={toggleBreakpoint} onNavigate={(file, line, column) => openFile(file, { line, column })} onChange={changeContents} onSave={() => void save()} onApplyEdits={applyWorkspaceEdits} /></> : <div className="flex flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">{project ? "从左侧选择文件开始编辑" : "选择或创建一个插件项目"}</div>}
         </div>
         {debugStatus && <div className="shrink-0 border-t px-3 py-2 text-xs"><div className="flex flex-wrap items-center gap-2"><span role="status">{debugStatus}</span>{debugRef.current && <><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("continue")}>继续</Button><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("next")}>单步跳过</Button><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("stepIn")}>单步进入</Button><Button size="xs" variant="outline" disabled={debugThread === undefined} onClick={() => debugCommand("stepOut")}>单步跳出</Button><Button size="xs" variant="outline" onClick={stopDebug}>停止</Button></>}</div>{debugThread !== undefined && debugRef.current && <DebugInspector key={debugStop} client={debugRef.current} thread={debugThread} onNavigate={(file, line, column) => void openFile(file, { line, column })} />}{debugOutput && <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap">{debugOutput}</pre>}</div>}
+        {project && <PluginTools key={project} project={project} dirty={localDirty || !!vscodeDirty[project]} disabled={busy || (!connected && !recovery)} saveVersion={saveVersion + filesRevision} onChanged={refresh} />}
         <Button className="m-2 self-start" size="sm" variant="ghost" onClick={() => { setPanelTab("terminal"); setPanelVisible(true); }}><TerminalSquare />终端</Button>
       </div>
   </section>;

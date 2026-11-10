@@ -212,6 +212,31 @@ function reviveState(raw: unknown): WorkbenchState | null {
     lastContextEditorId: typeof source.lastContextEditorId === "string" ? source.lastContextEditorId : null,
     splitRatio: clampPercent(source.splitRatio ?? NaN, 25, 75, 50),
   };
+  // Fold the former manager and development tabs into one plugin workspace.
+  const pluginKinds = new Set(["plugin-projects", "plugin-manager", "plugin-dev"]);
+  const pluginEditors = allGroups(state.groups).flatMap(([, group]) => group.editors).filter(editor => pluginKinds.has(editor.kind));
+  const focused = getGroup(state.groups, state.groups.active);
+  const preferred = pluginEditors.find(editor => editor.id === focused?.activeId)
+    ?? pluginEditors.find(editor => editor.kind === "plugin-projects") ?? pluginEditors[0];
+  if (preferred) {
+    const id = `plugin-projects:${editorKey({})}`;
+    let inserted = false;
+    for (const [groupId, group] of allGroups(state.groups)) {
+      const editors: EditorRef[] = [];
+      for (const editor of group.editors) {
+        if (!pluginKinds.has(editor.kind)) { editors.push(editor); continue; }
+        if (inserted) continue;
+        editors.push({ ...preferred, id, kind: "plugin-projects", params: preferred.kind === "plugin-dev" ? { name: preferred.params.name } : {} });
+        inserted = true;
+      }
+      const wasPluginActive = pluginEditors.some(editor => editor.id === group.activeId);
+      const activeId = wasPluginActive ? (editors.some(editor => editor.id === id) ? id : editors[0]?.id ?? null) : group.activeId;
+      state.groups = putGroup(state.groups, groupId, { editors, activeId });
+    }
+    if (pluginEditors.some(editor => editor.id === state.lastContextEditorId)) state.lastContextEditorId = id;
+    const pluginGroup = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
+    if (pluginGroup && pluginEditors.some(editor => editor.id === focused?.activeId)) state.groups.active = pluginGroup[0];
+  }
   const ids = new Set(allGroups(state.groups).map(([id]) => id));
   state.editorLayout = validLayout(source.editorLayout, ids) ? source.editorLayout : [...ids].slice(1).reduce<EditorLayout>((layout, id) => ({ axis: "horizontal", ratio: state.splitRatio, first: layout, second: { group: id } }), { group: "main" });
   if (!getGroup(state.groups, state.groups.active)) state.groups.active = "main";

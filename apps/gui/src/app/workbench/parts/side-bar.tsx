@@ -147,7 +147,7 @@ export function SideBar(props: {
             </div>
           </div>
           <SideBarContent container={container} mobile={props.mobile} onSpawn={props.onSpawn} />
-          <Button variant="ghost" className="justify-start" onClick={() => { setContainer("projects"); openEditor({ kind: "plugin-projects" }); }}>插件项目</Button>
+          <Button variant="ghost" className="justify-start" onClick={() => { setContainer("projects"); openEditor({ kind: "plugin-projects" }); }}>插件管理</Button>
           <MobileDrawerFooter onLogout={props.onLogout} />
         </aside>
       </>

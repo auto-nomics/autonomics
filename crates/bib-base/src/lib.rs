@@ -47,6 +47,7 @@ pub mod nodes;
 pub mod oa_fetch;
 pub mod pmc_pdf;
 pub mod query;
+pub mod rss;
 pub mod saved_searches;
 pub mod search;
 mod search_analyzer;

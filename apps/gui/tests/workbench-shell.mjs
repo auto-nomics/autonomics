@@ -156,7 +156,7 @@ try {
 
   // Research tools open as independent tabs from the activity bar.
   const bibSidebar = page.locator('aside[data-slot=workbench-sidebar]');
-  for (const [name, title] of [['Discover', '发现'], ['Snapshots', '快照']]) {
+  for (const [name, title] of [['Discover', '发现'], ['Snapshots', '快照'], ['Subscriptions', '订阅']]) {
     assert.equal(await bibSidebar.getByRole('button', { name, exact: true }).count(), 0);
     await rail.getByRole('button', { name, exact: true }).click();
     await page.getByRole('tab', { name: title, exact: true }).waitFor();
@@ -164,7 +164,7 @@ try {
   await rail.getByRole('button', { name: 'Discover', exact: true }).click();
   assert.equal(await page.getByRole('tab', { name: '发现', exact: true }).getAttribute('aria-selected'), 'true');
   await page.reload();
-  for (const title of ['发现', '快照']) {
+  for (const title of ['发现', '快照', '订阅']) {
     const tab = page.getByRole('tab', { name: title, exact: true });
     await tab.waitFor();
     await tab.getByRole('button', { name: `关闭 ${title}` }).click();

@@ -7,6 +7,7 @@
 
 pub mod bib;
 mod discovery;
+mod rss;
 pub mod server;
 mod snapshots;
 pub mod deck;

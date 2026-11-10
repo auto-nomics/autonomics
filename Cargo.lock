@@ -1290,6 +1290,7 @@ dependencies = [
  "openalex",
  "opendal",
  "quick-xml 0.38.4",
+ "regex",
  "reqwest 0.13.5",
  "schemars 1.2.2",
  "semantic-scholar",

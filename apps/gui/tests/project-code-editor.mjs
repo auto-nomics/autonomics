@@ -102,8 +102,8 @@ try {
     return route.fulfill({ json: responses[path] ?? {} });
   });
   await page.goto(origin);
-  await page.getByRole('button', { name: '插件项目', exact: true }).click();
-  const side = page.getByRole('complementary', { name: '插件项目导航' });
+  await page.getByRole('button', { name: '插件管理', exact: true }).click();
+  const side = page.getByRole('complementary', { name: '插件导航' });
   await side.getByRole('button', { name: /alpha/ }).click();
   await page.getByTitle('alpha VS Code 工作台').waitFor();
   await page.frameLocator('iframe[title="alpha VS Code 工作台"]').getByText('isolated workbench').waitFor();
@@ -341,7 +341,7 @@ try {
   bridgeDirty = true;
   await page.waitForTimeout(2500);
   page.once('dialog', dialog => { assert.match(dialog.message(), /未保存/); return dialog.dismiss(); });
-  await page.getByRole('button', { name: '关闭 插件项目' }).click();
+  await page.getByRole('button', { name: '关闭 插件管理' }).click();
   assert.equal(await page.getByTitle('alpha VS Code 工作台').count(), 1);
   assert.deepEqual(errors, []);
   console.log('project-code-editor: all assertions passed');

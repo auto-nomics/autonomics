@@ -83,6 +83,9 @@ fn s2_client_from_env() -> Arc<semantic_scholar::S2Client> {
 /// (`Arc`-backed).
 #[derive(Clone)]
 pub struct BibShared {
+    /// RSS/Atom feed subscriptions: feeds, inbox items and scheduler state.
+    pub rss: crate::rss::RssStore,
+    rss_scheduler: Arc<tokio::sync::OnceCell<crate::rss::RssScheduler>>,
     /// Immutable user-owned execution captures, in the canonical DB on disk.
     pub search_snapshots: crate::search_snapshots::SnapshotStore,
     pub discovery_acquisitions: crate::discovery_acquisition::DiscoveryAcquisitions,
@@ -177,6 +180,9 @@ impl BibShared {
             crate::search_snapshots::SnapshotStore::open(path.as_ref().to_string_lossy().as_ref())
                 .await
                 .map_err(|error| crate::Error::Unknown(error.to_string()))?;
+        let rss = crate::rss::RssStore::open(path.as_ref().to_string_lossy().as_ref())
+            .await
+            .map_err(|error| crate::Error::Unknown(error.to_string()))?;
         let eutils = Arc::new(eutils::EutilsClient::from_env());
         let arxiv = Arc::new(arxiv::ArxivClient::new());
         let http = http_client_from(http_opts);
@@ -194,6 +200,8 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            rss,
+            rss_scheduler: Default::default(),
             search_snapshots,
             discovery_acquisitions: Default::default(),
             discovery_sessions: Default::default(),
@@ -228,6 +236,9 @@ impl BibShared {
         let search_snapshots = crate::search_snapshots::SnapshotStore::open(":memory:")
             .await
             .map_err(|error| crate::Error::Unknown(error.to_string()))?;
+        let rss = crate::rss::RssStore::open(":memory:")
+            .await
+            .map_err(|error| crate::Error::Unknown(error.to_string()))?;
         let eutils = Arc::new(eutils::EutilsClient::from_env());
         let arxiv = Arc::new(arxiv::ArxivClient::new());
         let http = http_client_from(http_opts);
@@ -245,6 +256,8 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            rss,
+            rss_scheduler: Default::default(),
             search_snapshots,
             discovery_acquisitions: Default::default(),
             discovery_sessions: Default::default(),
@@ -264,6 +277,17 @@ impl BibShared {
                 crate::extraction::MAX_CONCURRENT_EXTRACTIONS,
             )),
         })
+    }
+
+    /// Start one host-owned RSS scheduler. Clones share its handle; closing a
+    /// GUI view does not stop background checks.
+    pub async fn rss_service(&self) -> crate::rss::Result<crate::rss::RssScheduler> {
+        self.rss_scheduler
+            .get_or_try_init(|| async {
+                Ok(crate::rss::RssScheduler::start(self.clone(), 2))
+            })
+            .await
+            .cloned()
     }
 
     /// Attach the mounted, agent-visible filesystem used to store original

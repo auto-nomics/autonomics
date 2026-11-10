@@ -9,6 +9,7 @@ const workspaces: Array<[BibliographyWorkspace, string]> = [
   ["library", "Library"],
   ["discover", "Discover"],
   ["snapshots", "Snapshots"],
+  ["subscriptions", "Subscriptions"],
 ];
 
 export function mountBibliography(target: HTMLElement) {

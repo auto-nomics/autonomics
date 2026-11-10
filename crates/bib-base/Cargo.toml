@@ -45,6 +45,7 @@ agentik-sdk = { path = "../agentik-sdk" }
 schemars.workspace = true
 sha2 = "0.10"
 quick-xml = { version = "0.38", features = ["serialize"] }
+regex = "1"
 base64 = "0.22"
 vfs = { path = "../vfs" }
 

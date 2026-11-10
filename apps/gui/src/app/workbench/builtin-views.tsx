@@ -1,4 +1,4 @@
-import { Camera, Compass, Library, type LucideIcon } from "lucide-react";
+import { Camera, Compass, Library, Rss, type LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { setProjectSidebarSlot } from "@/features/projects/sidebar-slot";
 import { setBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -16,6 +16,7 @@ const BIB_VIEWS: readonly { id: BibliographyWorkspace; label: string; name: stri
   { id: "library", label: "文献库", name: "Bibliography library", icon: Library },
   { id: "discover", label: "发现", name: "Discover", icon: Compass },
   { id: "snapshots", label: "快照", name: "Snapshots", icon: Camera },
+  { id: "subscriptions", label: "订阅", name: "Subscriptions", icon: Rss },
 ];
 
 function BibliographyView({ mobile }: WorkbenchViewProps) {
@@ -49,10 +50,10 @@ registerWorkbenchView({ id: "bibliography", title: "文献与证据", defaultLoc
 function ProjectsView() {
   const { editor: active } = useActiveEditorContext();
 
-    return <><div ref={setProjectSidebarSlot} className="flex min-h-0 flex-1 flex-col" />{active?.kind !== "plugin-projects" && <Button variant="ghost" onClick={() => openEditor({ kind: "plugin-projects" })}>打开插件项目</Button>}</>;
+    return <><div ref={setProjectSidebarSlot} className="flex min-h-0 flex-1 flex-col" />{active?.kind !== "plugin-projects" && <Button variant="ghost" onClick={() => openEditor({ kind: "plugin-projects" })}>打开插件管理</Button>}</>;
 
 }
-registerWorkbenchView({ id: "projects", title: "插件项目", defaultLocation: "primarySidebar", body: ProjectsView });
+registerWorkbenchView({ id: "projects", title: "插件管理", defaultLocation: "primarySidebar", body: ProjectsView });
 
 function WikiView() {
 

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -26,8 +26,6 @@ import { getDeckDocument } from "@/features/deck/deck-document";
 import { findWikiDocument } from "@/features/wiki/wiki-document";
 import { boundedContextText, editorContextSnapshot } from "./editor-context-snapshots";
 import { ProjectEditor } from "@/features/projects/project-editor";
-import { PluginManager } from "@/features/projects/plugin-manager";
-import { PluginDevEditorBody } from "@/features/projects/plugin-dev-editor";
 import { VfsFileEditorBody } from "@/features/vfs";
 import { ConfigView, DagView, FlowView } from "@/features/system";
 import { HpcJobsEditorView } from "@/features/hpc";
@@ -363,9 +361,9 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "bibliography",
-    title: (editor) => ({ discover: "发现", snapshots: "快照",  }[String(editor.params.workspace)] ?? "文献与证据"),
-    name: (editor) => ({ discover: "Discover", snapshots: "Snapshots",  }[String(editor.params.workspace)] ?? "Bibliography"),
-    icon: (editor) => ({ discover: Compass, snapshots: Camera,  }[String(editor.params.workspace)] ?? Library),
+    title: (editor) => ({ discover: "发现", snapshots: "快照", subscriptions: "订阅" }[String(editor.params.workspace)] ?? "文献与证据"),
+    name: (editor) => ({ discover: "Discover", snapshots: "Snapshots", subscriptions: "Subscriptions" }[String(editor.params.workspace)] ?? "Bibliography"),
+    icon: (editor) => ({ discover: Compass, snapshots: Camera, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
     mount: "keep-alive",
   });
@@ -377,30 +375,12 @@ export function registerWorkbenchEditorKinds(): void {
       const state = editor.state as { project?: string; dirty?: boolean; containerVersion?: number } | null;
       return { project: state?.project ?? null, dirty: state?.dirty ?? false, containerVersion: state?.containerVersion ?? null, scope: "项目标识与编辑状态，不含文件正文" };
     },
-    title: () => "插件项目",
-    name: () => "Plugin projects",
+    title: () => "插件管理",
+    name: () => "Plugins",
     icon: () => FolderCode,
     body: ProjectEditor,
     mount: "keep-alive",
     confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("当前文件有未保存的修改，关闭将丢弃修改。继续？"),
-  });
-  registerEditorKind({
-    kind: "plugin-manager",
-    title: () => "插件管理",
-    name: () => "Plugin manager",
-    icon: () => FolderCode,
-    body: PluginManager,
-    mount: "keep-alive",
-  });
-  registerEditorKind({
-    kind: "plugin-dev",
-    title: (editor) => `开发 · ${String(editor.params.name ?? "")}`,
-    name: (editor) => `Plugin dev (${String(editor.params.name ?? "")})`,
-    icon: () => FlaskConical,
-    // keep-alive is load-bearing: the terminal session and unsaved file
-    // edits survive tab switches.
-    body: PluginDevEditorBody,
-    mount: "keep-alive",
   });
   registerEditorKind({
     kind: "vfs-file",
