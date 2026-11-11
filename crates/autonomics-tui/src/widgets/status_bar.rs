@@ -55,7 +55,7 @@ impl Widget for StatusBar<'_> {
             AgentStatus::Error => ("x", theme.error, "error"),
             AgentStatus::Cancelled => ("⊘", theme.text_faint, "cancelled"),
             AgentStatus::Compacting => ("◐", theme.accent_alt, "compacting"),
-            AgentStatus::Waiting => ("[ ]", theme.info, "waiting"),
+            AgentStatus::Waiting => ("▮▮", theme.info, "waiting"),
         };
 
         // While compacting, replace the static label with a spinning

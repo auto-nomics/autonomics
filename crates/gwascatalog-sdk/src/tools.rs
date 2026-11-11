@@ -5,12 +5,11 @@
 //! Summary Statistics API) have been migrated to DAG source nodes
 //! (`source_gwascatalog_*`, registered by the io bundle) and their tool
 //! layers removed. The one tool left here covers the operation with no
-//! node-side equivalent in the paginated-JSON sense:
+//! node-side equivalent:
 //!
 //! - `download` — full per-study summary-statistics **files** from the
-//!   HTTPS FTP mirror (hundreds of MiB). The `source_gwascatalog_download`
-//!   node wraps the same fetch as a FileSet output; this tool remains for
-//!   interactive, progress-streamed downloads outside a DAG.
+//!   HTTPS FTP mirror (hundreds of MiB), for interactive, progress-streamed
+//!   downloads outside a DAG.
 //!
 //! Wire into an agent's toolset via [`gwascatalog_registrations`].
 

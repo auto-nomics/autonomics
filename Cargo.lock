@@ -9191,26 +9191,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
-name = "nhanes"
-version = "0.1.0"
-dependencies = [
- "arrow-array 58.4.0",
- "arrow-schema 58.4.0",
- "async-trait",
- "dag-core",
- "datafusion",
- "reqwest 0.13.5",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "vfs",
-]
-
-[[package]]
 name = "nix"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9388,7 +9368,6 @@ dependencies = [
  "liblzma",
  "lzf-sys",
  "nemo",
- "nhanes",
  "openalex",
  "opendal",
  "opentargets",

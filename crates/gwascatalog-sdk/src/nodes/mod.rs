@@ -3,7 +3,7 @@
 //! The tool layer ([`crate::tools`]) answers interactive, human-oriented
 //! queries; these nodes are the dataflow half — the same three EBI APIs
 //! (Solr search, curated REST, summary statistics) emitting DataFrames that
-//! feed analysis pipelines, plus a FileSet-emitting bulk download node.
+//! feed analysis pipelines.
 //! Kinds:
 //!
 //! - `search`: `source_gwascatalog_search` — Solr full-text search
@@ -15,11 +15,8 @@
 //! - `unpublished`: `source_gwascatalog_unpublished_studies`
 //! - `summary_associations`: `source_gwascatalog_summary_associations` —
 //!   harmonised per-variant summary statistics
-//! - `download`: `source_gwascatalog_download` — full summary-statistics
-//!   files as a FileSet of VFS objects
 
 pub mod associations;
-pub mod download;
 pub mod efo_traits;
 pub mod search;
 pub mod snps;
@@ -44,11 +41,6 @@ pub(crate) mod util {
     /// One DataFrame output port (the layout of every table-emitting kind).
     pub fn df_port() -> NodePorts {
         NodePorts::new().add_output_port(None)
-    }
-
-    /// One FileSet output port (bulk download).
-    pub fn file_set_port() -> NodePorts {
-        NodePorts::new().add_output_port_of_type(None, PortType::FileSet)
     }
 
     /// Normalize an output path to its canonical `vfs://` form: bare

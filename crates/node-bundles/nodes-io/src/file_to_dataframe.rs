@@ -1371,53 +1371,6 @@ mod tests {
         assert!(message.contains("XPORT"), "{message}");
     }
 
-    /// Live end-to-end: download DEMO_J from CDC and read it back. Requires
-    /// network access to wwwn.cdc.gov.
-    #[tokio::test]
-    #[ignore = "hits the live CDC NHANES endpoint"]
-    async fn live_nhanes_download_reads_into_dataframe() {
-        use crate::NhanesDownloadNodeFactory;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("DEMO_J.xpt");
-        let (ctx, storage) = OpendalFileStorage::new_temp().register_to_ctx();
-        let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
-        let spec = serde_json::json!({
-            "component": "Demographics",
-            "cycle": "2017-2018",
-            "file_pattern": "DEMO_J",
-            "path": path.to_str().unwrap()
-        });
-        let mut download = NhanesDownloadNodeFactory
-            .build(spec, node_ctx.clone())
-            .unwrap();
-        download
-            .execute(
-                &node_ctx,
-                &[],
-                &dag_core::dag::node_event::NodeReporter::noop(),
-            )
-            .await
-            .unwrap();
-
-        let mut reader = FileToDataFrameNode::new(Some(path.to_str().unwrap().to_owned()), None);
-        let outputs = reader
-            .execute(
-                &node_ctx,
-                &[],
-                &dag_core::dag::node_event::NodeReporter::noop(),
-            )
-            .await
-            .unwrap();
-        let df = outputs.dataframe(0).unwrap();
-        assert!(
-            df.schema().index_of_column_by_name(None, "SEQN").is_some(),
-            "DEMO_J must expose the SEQN participant identifier"
-        );
-        let rows = df.clone().count().await.unwrap();
-        assert!(rows > 5000, "DEMO_J 2017-2018 has ~9254 rows, got {rows}");
-    }
-
     #[test]
     fn parses_tabular_delimiters() {
         assert_eq!(parse_delimiter("\\t"), Ok(b'\t'));

@@ -9,8 +9,8 @@
 //! removed. The one tool left here has no node-side equivalent:
 //!
 //! - `download_files` — authenticated bulk summary-statistics file
-//!   download to storage (the OpenGWAS API requires a token; plain
-//!   `http_fetch` cannot substitute).
+//!   download to storage (the OpenGWAS API requires a token; no
+//!   unauthenticated node can substitute).
 
 pub mod download;
 

@@ -127,8 +127,8 @@ impl NodeFactory for SummaryAssociationsNodeFactory {
          study_accession, trait, hm_code, effect_allele, other_allele, \
          effect_allele_frequency, odds_ratio, ci_lower, ci_upper, beta, \
          standard_error, p_value`.\n\n\
-         For full per-study files on disk (hundreds of MiB, consumed \
-         downstream by `file_to_dataframe`) use `source_gwascatalog_download`."
+         For full per-study files on disk use the `gwascatalog_download_summary_stats` \
+         tool, then read the result with `file_to_dataframe`."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -505,8 +505,8 @@ impl DagNode for SummaryAssociationsNode {
                     "source_gwascatalog_summary_associations: `variant_id` ({rs}) queries are \
                      no longer supported — the GWAS Catalog Summary Statistics API was retired \
                      upstream (410 Gone) and the FTP mirror is study-keyed only. Query by \
-                     `study_accession`, or download full files with source_gwascatalog_download \
-                     and filter locally."
+                     `study_accession`, or download full files with the \
+                     gwascatalog_download_summary_stats tool and filter locally."
                 )));
             }
             (Some(_), None) => {}

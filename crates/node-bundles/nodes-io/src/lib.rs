@@ -12,7 +12,6 @@ pub mod file_to_dataframe;
 pub mod file_transform;
 pub mod gmt_import;
 pub mod h5ad_obs_to_dataframe;
-pub mod http_fetch;
 pub mod image_registry;
 pub mod multiomic_concordance;
 pub mod parquet_sql;
@@ -97,7 +96,6 @@ pub use eutils::nodes::geo::{
 pub use gwascatalog_sdk::nodes::associations::{
     AssociationsNode, AssociationsNodeFactory, StudyAssociationsNode, StudyAssociationsNodeFactory,
 };
-pub use gwascatalog_sdk::nodes::download::{DownloadNode, DownloadNodeFactory};
 pub use gwascatalog_sdk::nodes::efo_traits::{EfoTraitsNode, EfoTraitsNodeFactory};
 pub use gwascatalog_sdk::nodes::search::{SearchNode, SearchNodeFactory};
 pub use gwascatalog_sdk::nodes::snps::{SnpsNode, SnpsNodeFactory};
@@ -137,8 +135,6 @@ pub use nemo::nodes::{
     NemoDatasetsNodeFactory, NemoDatasetsSpec, NemoMatricesNode, NemoMatricesNodeFactory,
     NemoMatricesSpec,
 };
-pub use nhanes::nodes::download::{NhanesDownloadNode, NhanesDownloadNodeFactory};
-pub use nhanes::nodes::files::{NhanesFilesNode, NhanesFilesNodeFactory};
 pub use protocolio::nodes::materials::{ProtocolioMaterialsNode, ProtocolioMaterialsNodeFactory};
 pub use protocolio::nodes::pdf::{ProtocolioPdfNode, ProtocolioPdfNodeFactory};
 pub use protocolio::nodes::protocol::{ProtocolioProtocolNode, ProtocolioProtocolNodeFactory};
@@ -219,7 +215,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(file_set_select::FileSetSelectNodeFactory));
         registry.register(Box::new(archive_nodes::ArchiveInspectNodeFactory));
         registry.register(Box::new(archive_nodes::ArchiveExtractNodeFactory));
-        registry.register(Box::new(http_fetch::HttpFetchNodeFactory));
         registry.register(Box::new(
             h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
         ));
@@ -297,8 +292,6 @@ impl NodePlugin for Plugin {
             source_semantic_scholar::S2AuthorSearchNodeFactory {},
         ));
         registry.register(Box::new(CrossrefWorksNodeFactory {}));
-        registry.register(Box::new(NhanesFilesNodeFactory {}));
-        registry.register(Box::new(NhanesDownloadNodeFactory {}));
         registry.register(Box::new(AlphaFoldPredictionNodeFactory));
         registry.register(Box::new(InterProEntryNodeFactory));
         registry.register(Box::new(PubChemCompoundNodeFactory));
@@ -415,9 +408,6 @@ impl NodePlugin for Plugin {
         ));
         registry.register(Box::new(
             gwascatalog_sdk::nodes::summary_associations::SummaryAssociationsNodeFactory,
-        ));
-        registry.register(Box::new(
-            gwascatalog_sdk::nodes::download::DownloadNodeFactory,
         ));
     }
 }

@@ -402,6 +402,20 @@ impl HostControl {
         .flatten()
     }
 
+    /// List the direct subagents of the named agent from the persisted
+    /// identity registry. Dormant virtual-actor identities are included;
+    /// join with [`Self::get_status`] for liveness.
+    pub async fn list_sub_agents(
+        &self,
+        agent_name: &str,
+    ) -> Option<Vec<agentik_core::storage::AgentRecord>> {
+        self.ask(|tx| HostCommand::ListSubAgents {
+            agent_name: agent_name.into(),
+            reply_tx: tx,
+        })
+        .await
+    }
+
     /// List all agents persisted in the storage graph (Phase 4 query
     /// entry). Includes agents that are not currently registered with
     /// the host (e.g. leftover from a previous process run). The caller
@@ -526,6 +540,14 @@ pub enum HostCommand {
     /// Query host + topology status.
     GetStatus {
         reply_tx: oneshot::Sender<HostStatus>,
+    },
+
+    /// List the direct subagents (children) of the named agent, from the
+    /// persisted identity registry (path-prefix query — includes dormant
+    /// virtual-actor identities, not just live instances).
+    ListSubAgents {
+        agent_name: String,
+        reply_tx: oneshot::Sender<Vec<agentik_core::storage::AgentRecord>>,
     },
 
     /// Route a task description to the best-matching agent.

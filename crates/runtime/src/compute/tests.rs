@@ -1674,9 +1674,9 @@ async fn readiness_requires_a_resident_network_policy_pin() {
         .unwrap();
     select(&f.registry, "network");
     let nodes = vec![dag_core::registry::NodeInfo {
-        address: "io/http_fetch".into(),
+        address: "io/file_download".into(),
         plugin: "io".into(),
-        kind: "http_fetch".into(),
+        kind: "file_download".into(),
         desc: String::new(),
         deprecated: false,
         data_bundles: vec![],

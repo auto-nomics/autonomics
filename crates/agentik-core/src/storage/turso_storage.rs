@@ -987,6 +987,27 @@ impl AgentStorage for TursoAgentStorage {
         collect_rows(&mut rows, row_to_record).await
     }
 
+    async fn list_child_agents(
+        &self,
+        parent_path: &str,
+    ) -> Result<Vec<AgentRecord>, StorageError> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id, name, config_json, created_at, last_active
+                 FROM agents
+                 WHERE name LIKE ?1 AND name NOT LIKE ?2
+                 ORDER BY last_active DESC",
+                params_from_iter([
+                    Value::Text(format!("{parent_path}/%")),
+                    Value::Text(format!("{parent_path}/%/%")),
+                ]),
+            )
+            .await?;
+
+        collect_rows(&mut rows, row_to_record).await
+    }
+
     async fn search_agents(
         &self,
         query: Option<&str>,

@@ -250,7 +250,6 @@ mod tests {
             "source_gwascatalog_efo_traits",
             "source_gwascatalog_unpublished_studies",
             "source_gwascatalog_summary_associations",
-            "source_gwascatalog_download",
         ] {
             let ports = registry
                 .get_node_ports(kind)

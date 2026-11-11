@@ -22,7 +22,7 @@ pub(crate) fn status_icon(status: &AgentStatus) -> &'static str {
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "x",
         AgentStatus::Cancelled => "⊘",
-        AgentStatus::Waiting => "[ ]",
+        AgentStatus::Waiting => "▮▮",
         AgentStatus::Compacting => "⟳",
     }
 }

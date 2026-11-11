@@ -46,7 +46,6 @@ pub use tools::gwascatalog_registrations;
 
 // DAG source-node surface (nodes/).
 pub use nodes::associations::{AssociationsNodeFactory, StudyAssociationsNodeFactory};
-pub use nodes::download::DownloadNodeFactory;
 pub use nodes::efo_traits::EfoTraitsNodeFactory;
 pub use nodes::search::SearchNodeFactory;
 pub use nodes::snps::SnpsNodeFactory;
@@ -70,5 +69,4 @@ pub fn register_nodes(registry: &mut NodeRegistry) {
     registry.register(Box::new(
         nodes::summary_associations::SummaryAssociationsNodeFactory,
     ));
-    registry.register(Box::new(nodes::download::DownloadNodeFactory));
 }

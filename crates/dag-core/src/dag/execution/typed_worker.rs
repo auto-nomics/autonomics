@@ -362,7 +362,7 @@ pub(super) fn lower_worker_task(
     settings.validate()?;
     if matches!(
         execution.node.kind(),
-        "http_fetch" | "http_head" | "file_download"
+        "http_head" | "file_download"
     ) && execution.node.plugin_identity().is_none()
         && settings
             .native_environment

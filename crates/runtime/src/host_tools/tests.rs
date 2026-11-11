@@ -111,6 +111,14 @@ async fn list_agents_returns_only_visible_agents_and_no_topology() {
     };
 
     let task = tokio::spawn(async move { tool.run(ListAgentsInput {}).await });
+    // The tool queries persisted children first (dormant identities),
+    // then the live registry for current status.
+    match cmd_rx.recv().await.unwrap() {
+        HostCommand::ListSubAgents { reply_tx, .. } => {
+            let _ = reply_tx.send(vec![]);
+        }
+        _ => panic!("expected ListSubAgents, got a different command variant"),
+    }
     match cmd_rx.recv().await.unwrap() {
         HostCommand::GetStatus { reply_tx } => {
             let _ = reply_tx.send(synthetic_status());
@@ -142,6 +150,71 @@ async fn list_agents_returns_only_visible_agents_and_no_topology() {
         assert!(payload.get(key).is_none(), "leaked `{key}`: {payload}");
     }
     assert!(payload["profiles"].is_array(), "{payload}");
+    assert!(payload["dormant_children"].as_array().unwrap().is_empty(), "{payload}");
+}
+
+/// Persisted children without a live instance surface as dormant
+/// entries — status is derived (dormant + last activity), never a
+/// fabricated lifecycle value. Live children are NOT duplicated into
+/// the dormant list.
+#[tokio::test]
+async fn list_agents_merges_dormant_children_from_storage() {
+    use agentik_core::storage::AgentRecord;
+
+    fn record(name: &str, last_active: i64) -> AgentRecord {
+        AgentRecord {
+            id: uuid::Uuid::new_v4(),
+            name: name.into(),
+            config_json: serde_json::json!({}),
+            created_at: 0,
+            last_active,
+        }
+    }
+
+    let (control, mut cmd_rx) = test_control();
+    let tool = ListAgentsTool {
+        control,
+        self_path: agentik_types::AgentPath::try_from("/root/p/c1").unwrap(),
+    };
+
+    let task = tokio::spawn(async move { tool.run(ListAgentsInput {}).await });
+    // One live child (gc) + one dormant child (ghost). The storage
+    // layer's contract guarantees direct children only — grandchildren
+    // and foreign branches are filtered out by `list_child_agents`
+    // before the reply reaches the tool.
+    match cmd_rx.recv().await.unwrap() {
+        HostCommand::ListSubAgents { reply_tx, .. } => {
+            let _ = reply_tx.send(vec![
+                record("/root/p/c1/gc", 100),
+                record("/root/p/c1/ghost", 200),
+            ]);
+        }
+        _ => panic!("expected ListSubAgents command"),
+    }
+    match cmd_rx.recv().await.unwrap() {
+        HostCommand::GetStatus { reply_tx } => {
+            let _ = reply_tx.send(synthetic_status());
+        }
+        _ => panic!("expected GetStatus command"),
+    }
+    let result = task.await.unwrap().unwrap();
+    let payload = match result.content {
+        agentik_sdk::types::ToolResultContent::Json(value) => value,
+        other => panic!("expected JSON content, got {other:?}"),
+    };
+
+    let dormant = payload["dormant_children"].as_array().expect("dormant array");
+    assert_eq!(dormant.len(), 1, "{payload}");
+    assert_eq!(dormant[0]["path"], "/root/p/c1/ghost");
+    assert_eq!(dormant[0]["name"], "ghost");
+    assert_eq!(dormant[0]["last_active"], 200);
+    assert_eq!(dormant[0]["dormant"], true);
+    // The live child stays in `agents` only, not duplicated.
+    let agents = payload["agents"].as_array().expect("agents array");
+    assert!(
+        agents.iter().any(|a| a["path"] == "/root/p/c1/gc"),
+        "{payload}"
+    );
 }
 
 /// Textual view of a `ToolResult`'s content for assertion purposes.

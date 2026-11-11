@@ -77,7 +77,7 @@ impl ComputeRegistry {
                 && node.resident_plugin.is_none()
                 && matches!(
                     node.kind.as_str(),
-                    "http_fetch" | "file_download" | "http_head"
+                    "file_download" | "http_head"
                 )
             {
                 match &target.network_policy_sha256 {

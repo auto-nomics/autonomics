@@ -100,7 +100,6 @@ members = [
   "crates/string-sdk",
   "crates/enrichr-sdk",
   "crates/kegg",
-  "crates/nhanes",
   "crates/node-bundles/nodes-rd",
   "stat_crates/dl",
   "crates/node-bundles/nodes-dl",

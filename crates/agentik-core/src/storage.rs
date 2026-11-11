@@ -231,6 +231,15 @@ pub trait AgentStorage: Send + Sync {
     async fn get_agent(&self, agent_id: Uuid) -> Result<Option<AgentRecord>, StorageError>;
     async fn get_agent_by_name(&self, name: &str) -> Result<Option<AgentRecord>, StorageError>;
     async fn list_agents(&self) -> Result<Vec<AgentRecord>, StorageError>;
+    /// List the DIRECT children of the identity at `parent_path`
+    /// (`/root/a` → `/root/a/child`, not `/root/a/child/grand`).
+    /// Hierarchy is encoded in the path itself — the `agent_relations`
+    /// table exists but is never written — so this is a path-prefix
+    /// query, newest activity first.
+    async fn list_child_agents(
+        &self,
+        parent_path: &str,
+    ) -> Result<Vec<AgentRecord>, StorageError>;
     /// Search persisted identities by ordered path characters (case-insensitive
     /// SQL `LIKE`), newest activity first, capped to `limit`. Backs the
     /// frontend agent picker: identities are searched and paged, never
