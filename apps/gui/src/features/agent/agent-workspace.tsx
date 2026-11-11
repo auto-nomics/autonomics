@@ -18,7 +18,7 @@ import { ContextBasket, useContextBasket } from "@/features/context/context-bask
 import { TokenUsageBadge } from "./token-usage";
 import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
 import { renderMarkdown } from "@/lib/markdown";
-import type { AgentInfo, ChatItem, CompactionView, ModelRow, StoredAgent } from "@/types";
+import type { AgentInfo, ChatItem, CompactionView, ModelRow, QueuedMessage, StoredAgent } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -70,6 +70,10 @@ function CompactionPanel({ compaction }: { compaction: CompactionView }) {
   useLayoutEffect(() => {
     setOpen(compaction.running || !!compaction.error);
   }, [compaction.running, compaction.error]);
+
+  // Progress belongs to the active pass. Keep failures visible, but dismiss
+  // successful (including no-op) passes instead of leaving a stale panel.
+  if (!compaction.running && !compaction.error) return null;
 
   return (
     <section aria-label="上下文压缩" className="rounded-md border bg-muted/30 p-3 text-sm" aria-live="polite">
@@ -331,6 +335,7 @@ export type AgentWorkspaceProps = {
   activeAgent: string;
   statuses: Record<string, string>;
   messages: ChatItem[];
+  queuedMessages?: QueuedMessage[];
   compaction?: CompactionView;
   /** True while the active agent's session history is being fetched;
    *  renders chat-shaped skeleton placeholders instead of the transcript. */
@@ -356,7 +361,7 @@ export type AgentWorkspaceProps = {
   /** Sets the per-agent reasoning-effort override. */
   onChangeEffort: (path: string, effort: string) => Promise<void>;
   onDraftChange: (value: string) => void;
-  onSendMessage: (context?: string) => void;
+  onSendMessage: (context?: string) => Promise<boolean>;
   /** 终止当前回复(POST /agents/{id}/cancel)。回合进行中发送按钮变成
    *  终止键;取消后后端发 LifecycleChanged(Cancelled),composer 露出
    *  「已终止」状态直到下一个回合。 */
@@ -385,7 +390,10 @@ export type AgentWorkspaceProps = {
 
 export function AgentWorkspace(props: AgentWorkspaceProps) {
   const basket = useContextBasket();
-  const sendMessage = () => props.onSendMessage(serializeContext(basket?.resources ?? []));
+  const sendMessage = async () => {
+    const resources = basket?.resources ?? [];
+    if (await props.onSendMessage(serializeContext(resources))) basket?.clearSent(resources);
+  };
   const {
     dockedSlot,
     agents,
@@ -420,7 +428,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   };
   useEffect(() => () => { if (searchTimer.current) clearTimeout(searchTimer.current); }, []);
   const [atBottom, setAtBottom] = useState(true);
-  const [windowStart, setWindowStart] = useState(0);
+  const [messageWindow, setMessageWindow] = useState(() => ({
+    length: messages.length,
+    start: Math.max(0, messages.length - DEFAULT_WINDOW),
+  }));
   const transcriptRef = useRef<HTMLDivElement>(null);
   // The transcript subtree remounts whenever its portal target changes
   // (standby→docked slot, float collapse/expand), replacing the viewport
@@ -436,6 +447,19 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   const windowStartRef = useRef(0);
   const pendingAnchorRef = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
 
+  // Adjust before rendering children. Doing this in an effect first mounts
+  // the entire fetched history (Markdown, tool payloads and DOM included),
+  // blocking every workbench panel before the tail window can take effect.
+  const windowStart = messageWindow.length === messages.length
+    ? messageWindow.start
+    : atBottomRef.current
+      ? Math.max(0, messages.length - DEFAULT_WINDOW)
+      : Math.min(messageWindow.start, Math.max(0, messages.length - 1));
+  if (messageWindow.length !== messages.length) {
+    setMessageWindow({ length: messages.length, start: windowStart });
+  }
+  windowStartRef.current = windowStart;
+
   const activeInfo = agents.find((agent) => agent.path === activeAgent);
   const running = statusLabel(statuses[activeAgent]);
 
@@ -445,8 +469,8 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   const applyWindowStart = useCallback((next: number) => {
     windowStartRef.current = next;
-    setWindowStart(next);
-  }, []);
+    setMessageWindow({ length: messages.length, start: next });
+  }, [messages.length]);
 
   const loadEarlier = useCallback(() => {
     const viewport = transcriptRef.current;
@@ -463,13 +487,6 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
     });
   };
-
-  // Slide the window tail-forward while the user sits at the bottom; freeze it
-  // in place when they have scrolled up so streaming cannot yank their view.
-  useEffect(() => {
-    const tail = Math.max(0, messages.length - DEFAULT_WINDOW);
-    applyWindowStart(atBottomRef.current ? tail : Math.min(windowStartRef.current, Math.max(0, messages.length - 1)));
-  }, [messages.length, applyWindowStart]);
 
   // Restore the scroll position after prepending earlier messages.
   useLayoutEffect(() => {
@@ -542,7 +559,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   });
 
   const clampedStart = Math.min(windowStart, Math.max(0, messages.length - 1));
-  const visibleMessages = messages.slice(clampedStart, atBottom ? undefined : clampedStart + MAX_WINDOW);
+  const visibleMessages = messages.slice(clampedStart, clampedStart + MAX_WINDOW);
   const hiddenCount = clampedStart;
 
   const searchToggle = (
@@ -736,6 +753,21 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
             )}
           </div>
 
+          {!!props.queuedMessages?.length && (
+            <section aria-label="待处理消息" className="mx-3 mt-2 shrink-0 overflow-hidden rounded-lg border border-primary/20 bg-primary/5">
+              <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground" role="status"><CircleDashed className="size-3.5" aria-hidden="true" />待处理消息<span className="tabular-nums">{props.queuedMessages.length}</span></div>
+              <ol className="max-h-40 space-y-2 overflow-y-auto px-3 pb-3">
+                {props.queuedMessages.map((item, index) => {
+                  const parsed = parseContextMessage(item.text);
+                  return <li key={item.id} className="rounded-md border bg-background/60 px-2.5 py-2 text-xs">
+                    <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground"><span>消息 {index + 1}</span><span>{item.status === "sending" ? "发送中…" : "已排队 · 等待 Agent 接收"}</span></div>
+                    <p className="max-h-24 overflow-y-auto whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{parsed?.text ?? item.text}</p>
+                    {!!parsed?.resources.length && <p className="mt-1 text-[10px] text-muted-foreground">附带 {parsed.resources.length} 条引用</p>}
+                  </li>;
+                })}
+              </ol>
+            </section>
+          )}
           <ContextBasket actions={props.contextTarget} />
           <AgentComposer
             activeAgent={activeAgent}

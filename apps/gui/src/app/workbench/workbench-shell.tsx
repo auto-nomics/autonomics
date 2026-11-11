@@ -95,13 +95,14 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
   return <ContextBasketScope scope={scope} label={leafName(path)}>
     <AgentWorkspace contextTarget={binding.control} dockedSlot={slot} agents={runtime.agents.some(agent => agent.path === path) ? runtime.agents : [...runtime.agents, { path, agent_id: null, status: "Idle", ...runtime.agentModels[path] }]} activeAgent={path} statuses={runtime.statuses}
       messages={runtime.messages[path] ?? []} historyLoading={runtime.historyLoading[path] ?? false}
+      queuedMessages={runtime.queuedMessages[path] ?? []}
       compaction={runtime.compactions[path]}
       streaming={runtime.streaming[path] ?? null} usage={runtime.usage[path] ?? null} display={runtime.display}
       draft={runtime.drafts[path] ?? ""} busy={runtime.sendingPaths[path] ? "send" : runtime.busy === "send" ? null : runtime.busy}
       onDraftChange={value => runtime.setDraftFor(path, value)} onSendMessage={context => {
         const attached = parseContextMessage(context ?? "")?.resources ?? [];
         const resource = binding.getResource();
-        void runtime.sendMessageTo(path, resource ? serializeContext([...attached, resource]) : context);
+        return runtime.sendMessageTo(path, resource ? serializeContext([...attached, resource]) : context);
       }}
       onCancel={() => void gatewayRequest("POST", `/agents/${path}/cancel`).catch(cause => window.alert(String(cause)))}
       onCompact={() => void gatewayRequest("POST", `/agents/${path}/compact`).catch(cause => window.alert(String(cause)))}

@@ -54,8 +54,8 @@ impl BibCore {
     /// of ambiguous locations. Articles without extracted full text are
     /// refused: nothing is selectable to attach a note to. On success the
     /// quote's exact byte range is persisted as an anchor proof inside
-    /// `rects[0]`, and the rect itself carries UTF-16 `space:"char"`
-    /// offsets the GUI text reader renders directly.
+    /// `rects[0]`. Text files use UTF-16 character offsets; PDFs require
+    /// validated page geometry from the matching structured source map.
     pub async fn add_anchored_annotation(
         &self,
         input: AnchoredNoteInput,
@@ -75,10 +75,19 @@ impl BibCore {
         // Canonical text: the extracted full text. There is no abstract
         // fallback — a note must attach to a passage the reader can
         // highlight, and the abstract is not part of the reading surface.
-        let canonical = self
-            .get_fulltext(&input.article_id)
-            .await?
-            .and_then(|ft| ft.text_content)
+        let attachment_key = match input.attachment_key.clone() {
+            Some(key) => Some(key),
+            None => crate::zotero_model::attachment_for_article(&self.conn(), &input.article_id)
+                .await?
+                .map(|attachment| attachment.key),
+        };
+        let fulltext = match attachment_key.as_deref() {
+            Some(key) => self.get_attachment_fulltext(&input.article_id, key).await?,
+            None => self.get_fulltext(&input.article_id).await?,
+        };
+        let canonical = fulltext
+            .as_ref()
+            .and_then(|ft| ft.text_content.clone())
             .filter(|text| !text.trim().is_empty());
         let text = canonical.ok_or_else(|| {
             Error::Anchor(format!(
@@ -132,7 +141,7 @@ impl BibCore {
         // reader; the anchor proof records the verified byte range.
         let utf16_start = utf16_offset(&text, matched.start_byte);
         let utf16_end = utf16_offset(&text, matched.end_byte);
-        let rects = vec![crate::types::AnnotationRect {
+        let mut rects = vec![crate::types::AnnotationRect {
             left: utf16_start as f64,
             top: 0.0,
             width: (utf16_end - utf16_start) as f64,
@@ -147,6 +156,33 @@ impl BibCore {
             }),
         }];
 
+        let mut page = 1;
+        if let Some(ft) = fulltext
+            .as_ref()
+            .filter(|ft| ft.file_format == bib_types::FileFormat::Pdf)
+        {
+            let storage = input.pdf_storage.as_ref().ok_or_else(|| Error::Anchor(
+                "PDF anchoring failed; annotation aborted: bibliography file storage is unavailable".into()
+            ))?;
+            let geometry = crate::zotero_extract::anchor_pdf_quote(
+                storage,
+                &input.article_id,
+                attachment_key.as_deref(),
+                ft,
+                &resolved.quote,
+            )
+            .await
+            .map_err(|error| {
+                Error::Anchor(format!(
+                    "PDF anchoring failed; annotation aborted (nothing saved): {error}"
+                ))
+            })?;
+            page = geometry.page;
+            let proof = rects[0].anchor.clone();
+            rects = geometry.rects;
+            rects[0].anchor = proof;
+        }
+
         let annotation = self
             .insert_annotation(AnnotationDraft {
                 article_id: &input.article_id,
@@ -155,10 +191,10 @@ impl BibCore {
                 comment: Some(note),
                 tags: input.tags,
                 // GUI text-reader annotations are page 1 by convention.
-                page: Some(1),
+                page: Some(page),
                 color: input.color,
                 rects: Some(rects),
-                attachment_key: input.attachment_key.as_deref(),
+                attachment_key: attachment_key.as_deref(),
             })
             .await?;
         Ok(crate::types::AnchoredAnnotation {
@@ -393,6 +429,8 @@ struct AnnotationDraft<'a> {
 
 /// Input for [`BibCore::add_anchored_annotation`].
 pub struct AnchoredNoteInput {
+    /// Storage required to validate PDF source geometry before inserting.
+    pub pdf_storage: Option<std::sync::Arc<vfs::OpendalFileStorage>>,
     pub article_id: String,
     /// Verbatim passage from the canonical text the note anchors to.
     pub quote: String,
@@ -755,8 +793,8 @@ mod tests {
         core.upsert_fulltext(&FullText {
             article_id: "test".into(),
             attachment_key: None,
-            file_path: "vfs:///paper.pdf".into(),
-            file_format: FileFormat::Pdf,
+            file_path: "vfs:///paper.txt".into(),
+            file_format: FileFormat::Txt,
             text_content: Some(text.into()),
             source: FullTextSource::UserUpload,
             file_hash: None,
@@ -774,6 +812,7 @@ mod tests {
 
     fn anchored_input(quote: &str, note: &str) -> AnchoredNoteInput {
         AnchoredNoteInput {
+            pdf_storage: None,
             article_id: "test".into(),
             quote: quote.into(),
             note: Some(note.into()),
@@ -782,6 +821,85 @@ mod tests {
             tags: Vec::new(),
             attachment_key: None,
         }
+    }
+
+    #[tokio::test]
+    async fn anchored_pdf_failure_aborts_without_writing() {
+        let core = anchored_fixture("A real quote").await;
+        let mut ft = core.get_fulltext("test").await.unwrap().unwrap();
+        ft.file_format = FileFormat::Pdf;
+        core.upsert_fulltext(&ft).await.unwrap();
+        let error = core
+            .add_anchored_annotation(anchored_input("A real quote", "note"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("annotation aborted"), "{error}");
+        assert!(
+            core.list_annotations("test", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let mut input = anchored_input("A real quote", "note");
+        input.pdf_storage = Some(std::sync::Arc::new(vfs::OpendalFileStorage::new_temp()));
+        let error = core.add_anchored_annotation(input).await.unwrap_err();
+        assert!(
+            error.to_string().contains("source map unavailable"),
+            "{error}"
+        );
+        assert!(
+            core.list_annotations("test", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn anchored_pdf_persists_reader_geometry_and_rejects_stale_map() {
+        let core = anchored_fixture("A real quote").await;
+        let mut ft = core.get_fulltext("test").await.unwrap().unwrap();
+        ft.file_format = FileFormat::Pdf;
+        core.upsert_fulltext(&ft).await.unwrap();
+        let storage = std::sync::Arc::new(vfs::OpendalFileStorage::new_temp());
+        let structure = serde_json::json!({
+            "schemaVersion": "1.2.0",
+            "metadata": {"processor": {"type": "pdf", "version": 15}, "source": {"hash": "pdf-hash"}},
+            "catalog": {"pages": [{"viewRect": [0, 0, 600, 800], "contentRange": [[0], [1]]}]},
+            "content": [{"type": "paragraph", "anchor": {"pageRects": [[0, 60, 700, 180, 720]]},
+                "content": [{"text": "A real quote"}]}]
+        });
+        let mut cache = crate::zotero_extract::StructuredCache {
+            file_path: ft.file_path.clone(),
+            file_hash: ft.file_hash.clone(),
+            structure,
+        };
+        let object = crate::stored_files::structured_object_path("test", None);
+        let path = crate::stored_files::vfs_virtual_path(&object).unwrap();
+        storage
+            .write_bytes(&path, serde_json::to_vec(&cache).unwrap())
+            .await
+            .unwrap();
+        let mut input = anchored_input("A real quote", "note");
+        input.pdf_storage = Some(storage.clone());
+        let created = core.add_anchored_annotation(input).await.unwrap();
+        let rect = &created.annotation.rects.as_ref().unwrap()[0];
+        assert_eq!(created.annotation.page, Some(1));
+        assert_eq!(rect.space.as_deref(), Some("pdf"));
+        assert_eq!(rect.left, 0.1);
+        assert_eq!(rect.width, 0.2);
+        assert!(rect.text_range.is_some());
+        assert!(rect.anchor.is_some());
+        cache.file_path = "replaced.pdf".into();
+        storage
+            .write_bytes(&path, serde_json::to_vec(&cache).unwrap())
+            .await
+            .unwrap();
+        let mut input = anchored_input("A real quote", "must not save");
+        input.pdf_storage = Some(storage);
+        let error = core.add_anchored_annotation(input).await.unwrap_err();
+        assert!(error.to_string().contains("stale"), "{error}");
+        assert_eq!(core.list_annotations("test", None).await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -888,6 +1006,7 @@ mod tests {
             .unwrap();
         let error = bare
             .add_anchored_annotation(AnchoredNoteInput {
+                pdf_storage: None,
                 article_id: "bare".into(),
                 quote: "anything".into(),
                 note: Some("body".into()),

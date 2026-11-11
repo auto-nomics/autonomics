@@ -18,7 +18,7 @@ pub(crate) fn status_icon(status: &AgentStatus) -> &'static str {
         AgentStatus::Idle | AgentStatus::Aborted => "●",
         AgentStatus::Requesting => "◐",
         AgentStatus::Streaming => "◑",
-        AgentStatus::ToolRunning => "*",
+        AgentStatus::ToolRunning => "⚙",
         AgentStatus::Retrying => "↻",
         AgentStatus::Error => "x",
         AgentStatus::Cancelled => "⊘",

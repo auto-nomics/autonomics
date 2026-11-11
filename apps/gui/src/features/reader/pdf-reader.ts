@@ -18,6 +18,7 @@ import { AnnotationInspector, type AnnotationPatch, type ReaderAnnotation } from
 import { openTxtReader } from "./txt-reader";
 import { ReadingModeView, DEFAULT_READING_APPEARANCE, sourcePageRects, type ReadingAppearance } from "./reading-mode";
 import type { StructuredDocumentText } from "@/vendor/zotero-sdt.generated";
+import { anchorQuote } from "../../../../../tools/zotero-extractor/anchor.mjs";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -420,7 +421,8 @@ class ZoteroStylePdfReader {
     this.annotationInspector = new AnnotationInspector(this.root,
       (id, patch) => this.updateAnnotation(id, patch),
       id => this.deleteAnnotation(id),
-      () => { this.hideSelectionPopup(); window.getSelection()?.removeAllRanges(); });
+      () => { this.hideSelectionPopup(); window.getSelection()?.removeAllRanges(); },
+      this.workspace.onReference ? annotation => this.workspace.onReference?.({ text: annotation.content, page: annotation.page }) : undefined);
     this.restoreReadingAppearance();
     this.renderAppearancePopup();
 
@@ -1260,6 +1262,22 @@ class ZoteroStylePdfReader {
         annotationPath(this.articleId, this.attachmentKey),
       );
       this.annotations = response.annotations ?? [];
+      // Older agent notes stored character offsets even for PDFs. Resolve
+      // those against the source map rather than treating offsets as boxes.
+      const legacy = this.annotations.filter(annotation => annotation.rects?.some((rect: { space?: string }) => rect.space === 'char'));
+      if (legacy.length) {
+        const structured = await gatewayRequest("POST", structurePath(this.articleId, this.attachmentKey));
+        for (const annotation of legacy) {
+          try {
+            const geometry = anchorQuote(structured?.structure, annotation.content);
+            annotation.page = geometry.page;
+            annotation.rects = geometry.rects;
+          } catch (error) {
+            annotation.rects = [];
+            this.setStatus(`Annotation ${annotation.id} could not be anchored: ${String(error)}`);
+          }
+        }
+      }
       this.renderAnnotations();
       this.renderAnnotationList();
     } catch (error) {
@@ -1693,7 +1711,9 @@ class ZoteroStylePdfReader {
     const response = await gatewayRequest("PATCH", `/bib/annotations/${encodeURIComponent(id)}`, patch);
     const annotation = response.annotation as ReaderAnnotation;
     if (!this.destroyed) {
-      this.annotations = this.annotations.map(value => value.id === id ? annotation : value);
+      // Metadata PATCH cannot change geometry; preserve resolved legacy PDF
+      // anchors even when the server still returns their old character rects.
+      this.annotations = this.annotations.map(value => value.id === id ? { ...annotation, page: value.page, rects: value.rects } : value);
       this.renderAnnotations(); this.renderAnnotationList();
     }
     return annotation;

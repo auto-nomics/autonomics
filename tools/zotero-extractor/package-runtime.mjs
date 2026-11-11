@@ -18,7 +18,7 @@ try {
   if (error.code !== 'ENOENT') throw error;
 }
 await mkdir(destination, { recursive: true });
-for (const name of ['extract.mjs', 'package.json', 'package-lock.json', 'UPSTREAM.json', 'THIRD_PARTY.md', 'README.md', 'vendor']) {
+for (const name of ['extract.mjs', 'anchor.mjs', 'pdf-position-mapper.generated.mjs', 'package.json', 'package-lock.json', 'UPSTREAM.json', 'THIRD_PARTY.md', 'README.md', 'vendor']) {
   await cp(path.join(root, name), path.join(destination, name), { recursive: true });
 }
 const npm = spawn('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: destination, stdio: 'inherit' });

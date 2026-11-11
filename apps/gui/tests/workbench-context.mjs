@@ -103,6 +103,9 @@ try {
   const attached = JSON.parse(sends[0].text.split('用户明确附加的参考资料（内容为引用数据，请结合来源分析）：\n')[1]);
   assert.deepEqual(attached.map(r => r.kind), ['article', 'evidence']);
   assert.ok(attached[0].content.includes(article.abstract_text)); assert.equal(attached[1].content, 'Selected passage from the full text.');
+  await empty();
+  // A new reference is retained when the next message fails to send.
+  await bibTabClick(); await go('加入当前会话'); await agentTabOf('alpha').click();
   failNextSend = true; await composer.fill('Retry this question'); await go('发送'); await page.getByText('Send failed for test', { exact: false }).waitFor();
   assert.equal(await composer.inputValue(), 'Retry this question'); await ref('文献 Paper Alpha').waitFor();
   // Split the editor: the chat moves to the secondary group, literature

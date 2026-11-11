@@ -120,12 +120,8 @@ try {
   await compact.getByText('正在重建上下文').waitFor();
   compactFrame(13, { CompactFinish: { stats: { messages_before: 16, messages_after: 5, freed_tokens: 2500, summary_tokens: 300, duration_ms: 1200 }, error: null } });
   flush();
-  await compact.getByText('压缩完成').waitFor();
-  await compact.getByText(/16 → 5 条消息/).waitFor();
-  assert.equal(await compact.locator('details').getAttribute('open'), null, 'finished compaction collapses');
-  assert.equal(await compact.getByText('第一部分第二部分').isVisible(), false, 'summary is hidden after completion');
-  await compact.getByText('压缩完成').click();
-  await compact.getByText('第一部分第二部分').waitFor({ state: 'visible' });
+  await compact.waitFor({ state: 'detached' });
+  assert.equal(await compact.count(), 0, 'successful compaction dismisses the entire panel');
   compactFrame(14, { CompactStart: { plan: null } });
   compactFrame(15, { CompactFinish: { stats: null, error: 'summary failed' } });
   flush();

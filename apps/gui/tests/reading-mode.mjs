@@ -67,7 +67,8 @@ try {
       window.$RefreshSig$ = () => type => type;
       window.__vite_plugin_react_preamble_installed__ = true;
       const { openPdfReader } = await import('/src/features/reader/pdf-reader.ts');
-    window.reader = await openPdfReader({ articleId, title: 'Synthetic reference links' });
+    window.references = [];
+    window.reader = await openPdfReader({ articleId, title: 'Synthetic reference links', onReference: reference => window.references.push(reference) });
   }, articleId);
   await open();
   const reading = () => page.waitForSelector('.zotero-pdf-reader[data-reading-mode=true] .reader-reflow-article');
@@ -122,6 +123,8 @@ try {
   await page.waitForSelector('.reader-annotation-outline');
   assert.equal(annotations.length, 1, 'Clicking a highlight must not delete it');
   assert.equal(await inspector.getAttribute('data-slot'), 'hover-card-content');
+  await inspector.getByRole('button', { name: '发送到 Agent' }).click();
+  assert.deepEqual(await page.evaluate(() => window.references), [{ text: 'The invented sources', page: 1 }]);
   await inspector.hover();
   await page.mouse.move(10, 10);
   await page.waitForTimeout(300);

@@ -37,6 +37,7 @@ export class AnnotationInspector {
     private update: (id: string, patch: AnnotationPatch) => Promise<ReaderAnnotation>,
     private remove: (id: string) => Promise<void>,
     private clearTextSelection: () => void,
+    private onReference?: (annotation: ReaderAnnotation) => void,
   ) {
     this.popup.className = 'reader-annotation-editor';
     this.outline.className = 'reader-annotation-outline'; this.outline.hidden = true;
@@ -119,6 +120,7 @@ export class AnnotationInspector {
       <textarea aria-label="Annotation comment" placeholder="Add comment" rows="3">${escapeHtml(comment)}</textarea>
       <div class="reader-annotation-tags"></div>
       <input class="reader-annotation-tag-input" aria-label="Add annotation tags" placeholder="Add tags…" />
+      ${this.onReference && annotation.kind !== 'comment' ? '<button type="button" class="reader-annotation-reference" data-annotation-action="reference">发送到 Agent</button>' : ''}
       <div class="reader-annotation-options" hidden>
         <div class="reader-annotation-colors" role="group" aria-label="Highlight color">${annotationPalette().map(color => `<button type="button" data-annotation-color="${color}" aria-label="Color ${color}" style="--annotation-color:${color}"></button>`).join('')}</div>
         <button type="button" data-annotation-action="copy">Copy highlighted text</button>
@@ -160,6 +162,9 @@ export class AnnotationInspector {
     });
     this.popup.querySelector('[data-annotation-action=copy]')!.addEventListener('click', () => {
       void navigator.clipboard.writeText(annotation.content).catch(() => this.status('Could not copy text'));
+    });
+    this.popup.querySelector('[data-annotation-action=reference]')?.addEventListener('click', () => {
+      this.onReference?.(annotation);
     });
     this.popup.querySelector('[data-annotation-action=delete]')!.addEventListener('click', () => {
       this.flush();

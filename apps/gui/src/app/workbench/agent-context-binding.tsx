@@ -39,12 +39,12 @@ export function useAgentContextBinding() {
   const label = mode === "$follow" ? `跟随 · ${resource?.title ?? "待选择文档"}` : resource?.title ?? "绑定文档";
   const choose = (value: string) => { setMode(value); setPickerOpen(false); };
 
-  const control = <div className="flex min-w-0 items-center gap-0.5" data-agent-context-binding="">
-    <Button size="xs" variant={mode ? "secondary" : "ghost"} className="min-w-0 shrink justify-start"
+  const control = <div className="flex min-w-0 max-w-full items-center gap-0.5" data-agent-context-binding="">
+    <Button size="xs" variant={mode ? "secondary" : "ghost"} className="min-w-0 flex-1 justify-start"
       aria-label="绑定文档上下文" title={mode ? `${label} · 点击更换` : "选择文档，每次发送时附加最新状态"}
       onClick={() => setPickerOpen(true)}>
       {mode === "$follow" ? <MousePointer2 data-icon="inline-start" /> : <Link2 data-icon="inline-start" />}
-      <span className="max-w-48 truncate">{label}</span>
+      <span className="min-w-0 truncate">{label}</span>
     </Button>
     {resource && <Button size="icon-xs" variant="ghost" aria-label="预览文档上下文" title="预览下次发送时附加的内容" onClick={() => setPreviewOpen(true)}><Eye /></Button>}
     {mode && <Button size="icon-xs" variant="ghost" aria-label="解除文档绑定" title="解除文档绑定" onClick={() => setMode("")}><X /></Button>}

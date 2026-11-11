@@ -63,3 +63,21 @@ Tests cover native and reflow highlight clicks, multiline bounds, native drag
 selection, comments/tags/colors, persistence after reopening, failed-save retry,
 explicit deletion, old-schema migration, canonical Zotero metadata and unchanged
 source geometry. Existing PDF selection/rotation tests remain in place.
+
+## Agent PDF notes
+
+`bib_add_note` verifies the quote against the selected attachment's extracted
+text, then resolves it through the matching Zotero SDT source map before writing.
+PDF notes store normalized PDF rectangles, the actual page number and an exact
+semantic range; TXT notes retain UTF-16 character offsets. The tool response
+includes page and rectangles so the agent can inspect the resolved position.
+Missing/stale source maps, unmappable or ambiguous PDF quotes, invalid geometry
+and ranges spanning multiple pages return an explicit error and abort creation
+before any database write. Split multi-page quotes into one note per page.
+Opening Reading Mode generates a missing source map.
+
+The PDF reader also resolves older agent notes with `space:"char"` in memory
+when loading them, preserving their comment and tags. Failed legacy positioning
+is shown in the reader status instead of painting character offsets as page
+coordinates. Regenerate the host mapper with
+`node tools/zotero-extractor/build-anchor.mjs` after updating pinned Zotero code.

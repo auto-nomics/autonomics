@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
-import { Check, Plus, X, Paperclip } from "lucide-react";
+import { Check, Plus, X, Paperclip, FileText, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -13,6 +13,7 @@ type Basket = {
   add: (resource: ContextResource) => void;
   remove: (resource: ContextResource) => void;
   clear: () => void;
+  clearSent: (sent: ContextResource[]) => void;
   forScope: (scope: string | null, label: string) => Basket;
 };
 const BasketContext = createContext<Basket | null>(null);
@@ -39,6 +40,7 @@ export function ContextBasketProvider({ scope, contextLabel, onAdd, children }: 
       },
       remove: resource => update(current => current.filter(item => resourceKey(item) !== resourceKey(resource))),
       clear: () => update(() => []),
+      clearSent: sent => update(current => current.filter(item => !sent.includes(item))),
     };
   };
   return <BasketContext.Provider value={forScope(scope, contextLabel)}>{children}</BasketContext.Provider>;
@@ -66,27 +68,31 @@ export function ContextBasket({ actions }: { actions?: ReactNode }) {
   const basket = useContextBasket();
   const [preview, setPreview] = useState<ContextResource | null>(null);
   if (!basket) return null;
-  return <section aria-label="上下文篮子" className="flex shrink-0 flex-col gap-1 px-3 py-1.5">
-    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-      <Paperclip className="size-3.5 shrink-0" />
-      <span>会话引用</span><Badge variant="secondary" aria-live="polite">{basket.resources.length}</Badge>
+  return <section aria-label="上下文篮子" className="flex min-w-0 shrink-0 flex-col gap-2 px-3 py-2">
+    <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <Paperclip className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="shrink-0">会话引用</span><Badge variant="secondary" className="h-4 min-w-4 px-1 text-[10px] tabular-nums" aria-live="polite">{basket.resources.length}</Badge>
       <span className="flex-1" />
-      {actions}
-      {basket.resources.length > 0 && <Button size="xs" variant="ghost" onClick={basket.clear}>清空引用</Button>}
+      {basket.resources.length > 0 && <Button size="icon-xs" variant="ghost" aria-label="清空引用" title="清空引用" onClick={basket.clear}><Trash2 /></Button>}
     </div>
-    {basket.resources.length > 0 && <ul className="flex max-h-32 flex-col gap-1 overflow-y-auto">
-      {basket.resources.map(resource => <li key={resourceKey(resource)} className="flex min-w-0 items-center gap-1">
-        <Button size="xs" variant="secondary" className="min-w-0 flex-1 justify-start" title={`预览：${resource.title}`} onClick={() => setPreview(resource)}>
-          <span className="shrink-0">{contextKindLabel[resource.kind]}</span><span className="truncate">{resource.title}</span>
-        </Button>
-        <Button size="icon-xs" variant="ghost" aria-label={`移除引用：${resource.title}`} onClick={() => basket.remove(resource)}><X /></Button>
+    {actions && <div className="min-w-0 max-w-full [&>[data-agent-context-binding]]:w-full">{actions}</div>}
+    {basket.resources.length > 0 && <ul className="flex max-h-48 min-w-0 flex-col gap-1.5 overflow-y-auto" aria-label="已附加的引用">
+      {basket.resources.map(resource => <li key={resourceKey(resource)} className="group flex min-w-0 items-start overflow-hidden rounded-lg border bg-muted/20 transition-colors hover:bg-muted/40">
+        <button type="button" aria-label={`${contextKindLabel[resource.kind]} ${resource.title}`} className="flex min-w-0 flex-1 items-start gap-2 rounded-md p-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" title={`预览：${resource.title}`} onClick={() => setPreview(resource)}>
+          <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground"><FileText className="size-3.5" aria-hidden="true" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="line-clamp-2 text-xs leading-5 [overflow-wrap:anywhere]">{resource.title}</span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground"><span className="shrink-0">{contextKindLabel[resource.kind]}</span><span aria-hidden="true">·</span><span className="truncate">{resource.scope}</span></span>
+          </span>
+        </button>
+        <Button size="icon-xs" variant="ghost" className="mt-1.5 mr-1 shrink-0 text-muted-foreground" aria-label={`移除引用：${resource.title}`} title="移除引用" onClick={() => basket.remove(resource)}><X /></Button>
       </li>)}
     </ul>}
     <Dialog open={Boolean(preview)} onOpenChange={open => { if (!open) setPreview(null); }}>
       <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader><DialogTitle>{preview?.title}</DialogTitle><DialogDescription>{preview?.scope}</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle className="pr-6 leading-relaxed [overflow-wrap:anywhere]">{preview?.title}</DialogTitle><DialogDescription>{preview?.scope}</DialogDescription></DialogHeader>
         <p className="break-all text-xs text-muted-foreground">来源：{preview?.source}{preview?.revision ? ` · 版本：${preview.revision}` : ""}</p>
-        <pre className="whitespace-pre-wrap break-words text-sm">{preview?.content}</pre>
+        <pre className="whitespace-pre-wrap text-sm leading-relaxed [overflow-wrap:anywhere]">{preview?.content}</pre>
       </DialogContent>
     </Dialog>
   </section>;

@@ -51,9 +51,19 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState(1);
   const zoomRef = useRef(1);
   const zoomAnchor = useRef<{ x: number; y: number; graphX: number; graphY: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!viewport) return;
+    const updateSize = () => setViewportSize({ width: viewport.clientWidth, height: viewport.clientHeight });
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [viewport]);
 
   useEffect(() => {
     if (!viewport) return;
@@ -139,6 +149,8 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
   }, [snapshot]);
 
   const selectedNode = snapshot?.nodes.find((node) => node.id === selected) ?? null;
+  const canvasWidth = Math.max(layout?.width ?? 0, viewportSize.width / zoom);
+  const canvasHeight = Math.max(layout?.height ?? 0, viewportSize.height / zoom);
   const changeZoom = (value: number) => {
     const next = Math.max(0.25, Math.min(3, value));
     if (viewport && next !== zoomRef.current) {
@@ -163,8 +175,8 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
       <div className="relative min-h-0 flex-1">
       {snapshot && layout && snapshot.nodes.length > 0 ? (
           <ScrollArea className="h-full" scrollOrientation="both" viewportRef={setViewport} viewportLabel="DAG graph" viewportTabIndex={0}>
-          <div style={{ width: layout.width * zoom, height: layout.height * zoom }}>
-          <div className="relative origin-top-left" style={{ width: layout.width, height: layout.height, transform: `scale(${zoom})`, backgroundImage: "radial-gradient(var(--border) 1px, transparent 1px)", backgroundSize: "20px 20px" }}>
+          <div style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
+          <div className="relative origin-top-left" style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})`, backgroundImage: "radial-gradient(var(--border) 1px, transparent 1px)", backgroundSize: "20px 20px" }}>
             <svg width={layout.width} height={layout.height} className="absolute inset-0 pointer-events-none">
               {snapshot.edges.map((edge) => {
                 const from = layout.positions.get(edge.from);

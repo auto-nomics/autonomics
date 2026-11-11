@@ -110,6 +110,92 @@ impl ZoteroExtractor {
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct PdfQuoteGeometry {
+    pub page: u32,
+    pub rects: Vec<crate::types::AnnotationRect>,
+}
+
+/// Fail closed before inserting a note if its source PDF cannot be positioned.
+pub(crate) async fn anchor_pdf_quote(
+    storage: &vfs::OpendalFileStorage,
+    article_id: &str,
+    attachment_key: Option<&str>,
+    fulltext: &bib_types::FullText,
+    quote: &str,
+) -> Result<PdfQuoteGeometry> {
+    let object = crate::stored_files::structured_object_path(article_id, attachment_key);
+    let path = crate::stored_files::vfs_virtual_path(&object).expect("SDT path");
+    let bytes = match crate::extraction::read_full(storage, &path).await {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == opendal::ErrorKind::NotFound && attachment_key.is_some() => {
+            let legacy = crate::stored_files::structured_object_path(article_id, None);
+            crate::extraction::read_full(
+                storage,
+                &crate::stored_files::vfs_virtual_path(&legacy).expect("SDT path"),
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    }
+    .map_err(|error| {
+        Error::Anchor(format!(
+            "PDF source map unavailable: {error}; open Reading Mode to generate it, then retry"
+        ))
+    })?;
+    let cache: StructuredCache = serde_json::from_slice(&bytes)?;
+    if !cache.matches(fulltext) {
+        return Err(Error::Anchor(
+            "PDF source map is stale; re-extract the attachment before retrying".into(),
+        ));
+    }
+    let script = ZoteroExtractor::entrypoint().with_file_name("anchor.mjs");
+    let bundled_node = script.with_file_name("node");
+    let node = std::env::var_os("ZOTERO_NODE").unwrap_or_else(|| {
+        if bundled_node.is_file() {
+            bundled_node.into_os_string()
+        } else {
+            "node".into()
+        }
+    });
+    let mut child = Command::new(node)
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| Error::Anchor(format!("cannot start PDF anchor resolver: {error}")))?;
+    let payload =
+        serde_json::to_vec(&serde_json::json!({"structure": cache.structure, "quote": quote}))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let operation = async move {
+        let write = async move {
+            stdin.write_all(&payload).await?;
+            drop(stdin);
+            std::io::Result::Ok(())
+        };
+        let (write, output) = tokio::join!(write, child.wait_with_output());
+        write?;
+        output
+    };
+    let output = tokio::time::timeout(Duration::from_secs(30), operation)
+        .await
+        .map_err(|_| Error::Anchor("PDF anchor resolver timed out".into()))??;
+    if !output.status.success() {
+        return Err(Error::Anchor(
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        ));
+    }
+    let geometry: PdfQuoteGeometry = serde_json::from_slice(&output.stdout)?;
+    if geometry.page == 0 || geometry.rects.is_empty() {
+        return Err(Error::Anchor(
+            "PDF anchor resolver returned no page geometry".into(),
+        ));
+    }
+    Ok(geometry)
+}
+
 #[async_trait]
 impl TextExtractor for ZoteroExtractor {
     fn name(&self) -> &'static str {

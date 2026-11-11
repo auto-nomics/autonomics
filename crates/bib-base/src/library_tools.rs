@@ -1240,7 +1240,10 @@ impl ToolFunction for BibRequestFulltextTool {
                   rendered under the highlighted passage. Articles without extracted full \
                   text are refused — request it with bib_request_fulltext first (the abstract \
                   is not a highlightable surface). Highlighted notes render in the reader and \
-                  are searchable."
+                  are searchable. PDF notes additionally require a current source map and a \
+                  unique quote on one PDF page. If PDF positioning fails, the tool returns \
+                  an explicit error and creates no annotation; shorten/disambiguate the \
+                  quote or open Reading Mode to regenerate the source map before retrying."
 )]
 pub struct BibAddNoteInput {
     #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
@@ -1261,6 +1264,7 @@ pub struct BibAddNoteInput {
 
 pub struct BibAddNoteTool {
     pub bib: Arc<BibBase>,
+    pub storage: Option<Arc<vfs::OpendalFileStorage>>,
 }
 
 #[async_trait]
@@ -1271,6 +1275,7 @@ impl ToolFunction for BibAddNoteTool {
         let anchored = self
             .bib
             .add_anchored_annotation(crate::annotations::AnchoredNoteInput {
+                pdf_storage: self.storage.clone(),
                 article_id: input.article_id.clone(),
                 quote: input.quote,
                 note: Some(input.note),
@@ -1290,6 +1295,8 @@ impl ToolFunction for BibAddNoteTool {
             "comment": anchored.annotation.comment,
             "tags": anchored.annotation.tags,
             "color": anchored.annotation.color,
+            "page": anchored.annotation.page,
+            "rects": anchored.annotation.rects,
             "anchor": {
                 "source": anchored.anchor.source,
                 "source_hash": anchored.anchor.source_hash,
@@ -1810,7 +1817,10 @@ pub fn bib_library_registrations(
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
-        R::from(BibAddNoteTool { bib: bib.clone() }),
+        R::from(BibAddNoteTool {
+            bib: bib.clone(),
+            storage: Some(file_storage.clone()),
+        }),
         R::from(BibDeleteTool { bib: bib.clone() }),
         R::from(BibReadFigureTool {
             bib: bib.clone(),
@@ -2623,8 +2633,8 @@ mod tests {
         bib.upsert_fulltext(&bib_types::FullText {
             article_id: article.id.clone(),
             attachment_key: None,
-            file_path: "vfs:///literature/x/paper.pdf".into(),
-            file_format: bib_types::FileFormat::Pdf,
+            file_path: "vfs:///literature/x/paper.txt".into(),
+            file_format: bib_types::FileFormat::Txt,
             text_content: None,
             source: bib_types::FullTextSource::UserUpload,
             file_hash: None,
@@ -2646,7 +2656,10 @@ mod tests {
         .await
         .unwrap();
 
-        let tool = BibAddNoteTool { bib: bib.clone() };
+        let tool = BibAddNoteTool {
+            bib: bib.clone(),
+            storage: None,
+        };
         let result = tool
             .run(BibAddNoteInput {
                 article_id: article.id.clone(),

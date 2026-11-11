@@ -6,7 +6,7 @@
 
 import { DagMinimap } from "@/features/system/dag-minimap";
 import { Fragment } from "react";
-import { Copy, History, RefreshCw } from "lucide-react";
+import { Check, Circle, CircleDashed, Copy, History, RefreshCw, X } from "lucide-react";
 import type { AgentInfo, ChatItem } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,12 +18,12 @@ import type { DisplaySettings } from "./agent";
 import { statusLabel } from "./agent";
 import { TokenUsageBadge } from "./token-usage";
 
-function planStepIcon(status: unknown) {
-  const value = String(status ?? "");
-  if (value === "Completed") return <span className="text-emerald-500">✓</span>;
-  if (value === "Cancelled") return <span className="text-destructive">✗</span>;
-  if (value === "InProgress") return <span className="animate-pulse text-sky-400">◐</span>;
-  return <span className="text-muted-foreground">•</span>;
+function planStepStatus(status: unknown) {
+  const value = String(status ?? "").replace(/[_\s-]/g, "").toLowerCase();
+  if (value === "completed") return { label: "Completed", Icon: Check, style: "text-emerald-600 dark:text-emerald-400", completed: true, active: false };
+  if (value === "inprogress") return { label: "In progress", Icon: CircleDashed, style: "text-primary", completed: false, active: true };
+  if (value === "cancelled" || value === "canceled") return { label: "Cancelled", Icon: X, style: "text-muted-foreground", completed: false, active: false };
+  return { label: "Pending", Icon: Circle, style: "text-muted-foreground", completed: false, active: false };
 }
 
 export type AgentInspectorProps = {
@@ -48,7 +48,9 @@ export type AgentInspectorProps = {
 export function AgentInspector(props: AgentInspectorProps) {
   const { activeAgent, activeInfo, plan, usage, display, inspectorOpen } = props;
   const running = statusLabel(props.status);
-  const planSteps: any[] = plan?.update?.plan ?? [];
+  const planSteps: { step: string; status: string }[] = plan?.update?.plan ?? [];
+  const completedSteps = planSteps.filter(step => planStepStatus(step.status).completed).length;
+  const explanation = plan?.update?.explanation;
 
   return (
     <ScrollArea className="min-h-0 flex-1" contentClassName="space-y-4 p-3">
@@ -87,17 +89,40 @@ export function AgentInspector(props: AgentInspectorProps) {
       </section>
 
       <section>
-        <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Plan</h2>
+        <div className="mb-1.5 flex items-center justify-between gap-2">
+          <h2 className="text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Plan</h2>
+          {planSteps.length > 0 && <span className="text-[11px] tabular-nums text-muted-foreground" aria-live="polite">{completedSteps} / {planSteps.length} completed</span>}
+        </div>
         {planSteps.length ? (
-          <div className="space-y-1">
-            {planSteps.map((step, index) => (
-              <div key={index} className="flex items-start gap-2 rounded-md border bg-card p-1.5 text-xs">
-                <span className="mt-px shrink-0">{planStepIcon(step.status)}</span>
-                <span className={cn("min-w-0", step.status === "Completed" && "text-muted-foreground line-through")}>
-                  {step.step}
-                </span>
+          <div className="overflow-hidden rounded-lg border bg-card">
+            <div className="px-3 pt-3 pb-2">
+              <div role="progressbar" aria-label="Plan completion" aria-valuemin={0} aria-valuemax={planSteps.length} aria-valuenow={completedSteps} className="h-1 overflow-hidden rounded-full bg-muted">
+                <div className="h-full rounded-full bg-emerald-500 transition-[width] motion-reduce:transition-none" style={{ width: `${completedSteps / planSteps.length * 100}%` }} />
               </div>
-            ))}
+            </div>
+            {typeof explanation === "string" && explanation.trim() && (
+              <p className="mx-3 mb-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{explanation}</p>
+            )}
+            <ol className="space-y-1 p-1.5 pt-0" aria-label="Plan steps">
+              {planSteps.map((step, index) => {
+                const state = planStepStatus(step.status);
+                const Icon = state.Icon;
+                return (
+                  <li key={index} aria-current={state.active ? "step" : undefined} className={cn("flex items-start gap-2.5 rounded-md border border-transparent px-2 py-2 text-xs", state.active && "border-primary/20 bg-primary/5")}>
+                    <span className={cn("mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full", state.style, state.active && "bg-primary/10", state.completed && "bg-emerald-500/10")}>
+                      <Icon className="size-3.5" aria-hidden="true" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="mb-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]">
+                        <span className="tabular-nums text-muted-foreground">Step {index + 1}</span>
+                        <span className={state.style}>{state.label}</span>
+                      </div>
+                      <p className={cn("whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]", state.completed && "text-muted-foreground", state.active && "font-medium")}>{step.step}</p>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
         ) : (
           <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No active plan</div>

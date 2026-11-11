@@ -45,6 +45,12 @@ export type ChatItem = {
   time: number;
 };
 
+export type QueuedMessage = {
+  id: number;
+  text: string;
+  status: "sending" | "queued";
+};
+
 export type AgentInfo = {
   path: string;
   agent_id: string | null;

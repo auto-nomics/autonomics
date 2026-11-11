@@ -190,6 +190,7 @@ export function useAgentRuntime() {
   const [activeAgent, setActiveAgent] = useState("");
   const [statuses, setStatuses] = useState<Record<string, string>>({});
   const [messages, setMessages] = useState<MessageMap>({});
+  const [queuedMessages, setQueuedMessages] = useState<Record<string, import("@/types").QueuedMessage[]>>({});
   const [compactions, setCompactions] = useState<Record<string, import("@/types").CompactionView>>({});
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [streaming, setStreaming] = useState<Record<string, ChatItem | null>>({});
@@ -257,14 +258,26 @@ export function useAgentRuntime() {
         "GET",
         `/agents/${agentId}/sessions/${contextId}/history`,
       );
-      const history: ChatItem[] = (Array.isArray(response) ? response : response.messages ?? [])
-        .flatMap(convertMessage);
+      const raw: BackendMessage[] = Array.isArray(response) ? response : response.messages ?? [];
+      const history: ChatItem[] = [];
+      let sliceStart = performance.now();
+      for (const message of raw) {
+        if (historyLoadSeq.current[agentPath] !== seq) return;
+        for (const item of convertMessage(message)) history.push(item);
+        // Large transcripts also have substantial normalization work (tool
+        // JSON serialization in particular). Yield to input/paint between
+        // slices, keeping the snapshot private until it is complete.
+        if (performance.now() - sliceStart >= 8) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          sliceStart = performance.now();
+        }
+      }
       if (historyLoadSeq.current[agentPath] !== seq) return;
       loadedHistory.current[agentPath] = `${agentId}:${contextId}`;
       setMessages((current) => ({ ...current, [agentPath]: history }));
       setRawMessages((current) => ({
         ...current,
-        [`${agentPath}:${contextId}`]: Array.isArray(response) ? response : response.messages ?? [],
+        [`${agentPath}:${contextId}`]: raw,
       }));
     } catch (cause) {
       if (historyLoadSeq.current[agentPath] === seq) {
@@ -425,6 +438,11 @@ export function useAgentRuntime() {
       } else if (event.ToolBackgroundComplete !== undefined) {
         appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
+        setQueuedMessages(current => {
+          const queue = current[agent] ?? [];
+          const index = queue.findIndex(item => item.text === event.UserMessageAcknowledged);
+          return index < 0 ? current : { ...current, [agent]: queue.filter((_, position) => position !== index) };
+        });
         appendMessage(agent, makeItem("user", event.UserMessageAcknowledged));
         // Only user-authored prompts belong in the Ctrl+R history;
         // MessageInjected items are non-user (delegate/background/harness).
@@ -685,15 +703,21 @@ export function useAgentRuntime() {
 
   const sendMessageTo = async (path: string, context = "") => {
     const text = (draftsRef.current[path] ?? "").trim();
-    if (!text || !path || sendingRef.current.has(path)) return;
+    if (!text || !path || sendingRef.current.has(path)) return false;
     sendingRef.current.add(path);
+    const pending = { id: makeItem("user", text).id, text: text + context, status: "sending" as const };
+    setQueuedMessages(current => ({ ...current, [path]: [...(current[path] ?? []), pending] }));
     setSendingPaths(current => ({ ...current, [path]: true }));
     setDraftFor(path, "");
     try {
       await gatewayRequest("POST", `/agents/${path}/messages`, { text: text + context });
+      setQueuedMessages(current => ({ ...current, [path]: (current[path] ?? []).map(item => item.id === pending.id ? { ...item, status: "queued" } : item) }));
+      return true;
     } catch (cause) {
+      setQueuedMessages(current => ({ ...current, [path]: (current[path] ?? []).filter(item => item.id !== pending.id) }));
       setDrafts(current => ({ ...current, [path]: current[path] || text }));
       appendMessage(path, makeItem("error", String(cause)));
+      return false;
     } finally {
       sendingRef.current.delete(path);
       setSendingPaths(current => ({ ...current, [path]: false }));
@@ -896,6 +920,7 @@ export function useAgentRuntime() {
     sendingPaths,
     sendMessage,
     sendMessageTo,
+    queuedMessages,
     // model switching
     modelCatalog,
     loadModelCatalog,
