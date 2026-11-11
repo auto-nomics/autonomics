@@ -46,6 +46,8 @@ pub mod mineru;
 pub mod nodes;
 pub mod oa_fetch;
 pub mod pmc_pdf;
+#[cfg(feature = "pubmed_local")]
+pub mod pubmed_local;
 pub mod query;
 pub mod rss;
 pub mod saved_searches;

@@ -48,6 +48,80 @@ use crate::{Error, Result};
 const HARVEST_PAGE: usize = 100;
 const HARVEST_CAP: usize = 1000;
 
+/// Whether the gateway carries the local PubMed mirror source.
+fn has_pubmed_local(gateway: &Arc<LiteratureGateway>) -> bool {
+    #[cfg(feature = "pubmed_local")]
+    {
+        gateway
+            .source_names()
+            .iter()
+            .any(|name| *name == crate::pubmed_local::UNIFIED_SOURCE)
+    }
+    #[cfg(not(feature = "pubmed_local"))]
+    {
+        let _ = gateway;
+        false
+    }
+}
+
+/// Run the local PubMed mirror as an in-process unified source. Records
+/// join the same merge as `local`; failures surface as a failed source
+/// status without failing the call.
+#[cfg(feature = "pubmed_local")]
+async fn run_pubmed_local(
+    gateway: &Arc<LiteratureGateway>,
+    request: &UnifiedSearchRequest,
+    limit: usize,
+) -> std::result::Result<LocalOutcome, String> {
+    use chrono::Utc;
+
+    let search = crate::pubmed_local::structured_from_request(request)
+        .map_err(|e| e.to_string())?;
+    let batch = gateway
+        .search_from(crate::pubmed_local::UNIFIED_SOURCE, &search, limit)
+        .await
+        .map_err(|e| e.to_string())?;
+    let fingerprint = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(crate::pubmed_local::UNIFIED_SOURCE.as_bytes());
+        hasher.update(search.keywords.clone().unwrap_or_default().join("\n"));
+        hasher.update(
+            search
+                .mesh
+                .clone()
+                .unwrap_or_default()
+                .join("\n"),
+        );
+        format!("sha256:{:x}", hasher.finalize())
+    };
+    let retrieved_at = Utc::now().to_rfc3339();
+    let records: Vec<DiscoveryRecord> = batch
+        .articles
+        .into_iter()
+        .enumerate()
+        .map(|(rank, article)| DiscoveryRecord {
+            source: crate::pubmed_local::UNIFIED_SOURCE.to_string(),
+            article,
+            source_rank: rank + 1,
+            query_fingerprint: fingerprint.clone(),
+            retrieved_at: retrieved_at.clone(),
+            executed_parameters: [
+                ("engine".to_string(), "duckdb-mirror".to_string()),
+                ("page_size".to_string(), limit.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            query_translation: None,
+        })
+        .collect();
+    Ok(LocalOutcome {
+        records,
+        snippets: HashMap::new(),
+        total: batch.total as u64,
+    })
+}
+
 /// Map discovery errors into the crate error surface, preserving the
 /// distinction callers act on (invalid input vs. missing session).
 fn session_err(error: DiscoverySessionError) -> Error {
@@ -287,16 +361,24 @@ pub async fn unified_search(
 
     let mut sources = request.sources.clone();
     if sources.is_empty() {
+        // When the local PubMed mirror is attached it replaces remote
+        // pubmed in the default fan-out (the mirror is a superset of what
+        // eutils returns for the same query, minus the newest updatefiles).
+        let mirror = has_pubmed_local(gateway);
         sources = vec![
             LOCAL_SOURCE.to_string(),
-            "pubmed".to_string(),
+            if mirror { "pubmed_local".to_string() } else { "pubmed".to_string() },
             "openalex".to_string(),
         ];
     }
     let want_local = sources.iter().any(|name| name == LOCAL_SOURCE);
+    #[cfg(feature = "pubmed_local")]
+    let want_mirror = sources.iter().any(|name| name == crate::pubmed_local::UNIFIED_SOURCE);
+    #[cfg(not(feature = "pubmed_local"))]
+    let want_mirror = false;
     let externals: Vec<String> = sources
         .into_iter()
-        .filter(|name| name != LOCAL_SOURCE)
+        .filter(|name| name != LOCAL_SOURCE && name != "pubmed_local")
         .collect();
 
     let mut statuses: Vec<UnifiedSourceStatus> = Vec::new();
@@ -327,6 +409,38 @@ pub async fn unified_search(
                     total: None,
                     delivered_records: 0,
                     failure: Some(failure),
+                });
+            }
+        }
+    }
+
+    // Local PubMed mirror: in-process source, same status surface.
+    #[cfg(feature = "pubmed_local")]
+    if want_mirror {
+        match run_pubmed_local(gateway, &request, limit).await {
+            Ok(outcome) => {
+                statuses.push(UnifiedSourceStatus {
+                    source: crate::pubmed_local::UNIFIED_SOURCE.to_string(),
+                    local: true,
+                    phase: DiscoverySourcePhase::Ready,
+                    total: Some(outcome.total),
+                    delivered_records: outcome.records.len(),
+                    failure: None,
+                });
+                records.extend(outcome.records);
+            }
+            Err(failure) => {
+                statuses.push(UnifiedSourceStatus {
+                    source: crate::pubmed_local::UNIFIED_SOURCE.to_string(),
+                    local: true,
+                    phase: DiscoverySourcePhase::Failed,
+                    total: None,
+                    delivered_records: 0,
+                    failure: Some(SourceFailure::new(
+                        SourceFailureKind::Unsupported,
+                        failure,
+                        false,
+                    )),
                 });
             }
         }

@@ -21,7 +21,7 @@ rcsb = { path = "../rcsb" }
 string-sdk = { path = "../string-sdk" }
 kegg = { path = "../kegg" }
 gwascatalog-sdk = { path = "../gwascatalog-sdk" }
-data-engine = { path = "../data-engine" }
+data-engine = { path = "../data-engine", features = ["bundle-pubmed-local"] }
 data-engine-tools = { path = "../data-engine-tools" }
 data-catalog = { path = "../data-catalog" }
 container-plugin = { path = "../container-plugin" }

@@ -1,11 +1,9 @@
-[build]
-# AVX2 + FMA available on this host (i5-12400F). Enables SIMD auto-vectorization
-# of the hot gaussian2_pdf / binomial loops in the mixer crate.
-rustflags = ["-C", "target-cpu=generic"]
-
-# [target.x86_64-unknown-linux-musl]
-# linker = "clang"
-#
-# [env]
-# CC_x86_64-unknown-linux-musl = "clang"
-# CXX_x86_64-unknown-linux-musl = "clang++"
+# Link the system DuckDB for the `pubmed_local` literature-mirror feature
+# (bib-base → nodes-io → data-engine → runtime). The bundled engine build is
+# 5–20× slower on the mirror's hash joins than the distribution build
+# (Arch `pacman -S duckdb`, currently 1.5.6 — same engine as the CLI that
+# maintains the mirror's indexes and FTS). Buildtime bindgen regenerates
+# bindings from the installed headers, so minor version bumps are safe.
+[env]
+DUCKDB_LIB_DIR = "/usr/lib"
+DUCKDB_INCLUDE_DIR = "/usr/include"

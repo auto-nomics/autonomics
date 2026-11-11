@@ -190,14 +190,21 @@ impl BibShared {
         let openalex = openalex_client_from_env();
         let crossref = crossref_client_from_env();
         let s2 = s2_client_from_env();
-        let gateway = Arc::new(LiteratureGateway::with_all_shared_clients(
+        let mut gateway = LiteratureGateway::with_all_shared_clients(
             eutils.clone(),
             arxiv.clone(),
             http.clone(),
             openalex.clone(),
             crossref.clone(),
             s2.clone(),
-        ));
+        );
+        // Local PubMed mirror: preferred (first) when present — fetches and
+        // searches hit the 40M-article local copy instead of E-utilities.
+        #[cfg(feature = "pubmed_local")]
+        if let Some(db) = crate::pubmed_local::try_open_from_env() {
+            gateway.prepend_source(Arc::new(crate::pubmed_local::LocalPubmedSource::new(db)));
+        }
+        let gateway = Arc::new(gateway);
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
             rss,

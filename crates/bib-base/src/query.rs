@@ -1013,6 +1013,15 @@ impl LiteratureGateway {
         self.sources.push(source);
     }
 
+    /// Register a source **ahead of** all others.
+    ///
+    /// Used for preferred sources: [`LiteratureGateway::fetch`] tries
+    /// sources in registration order, so a prepended local mirror wins
+    /// over the equivalent remote API.
+    pub fn prepend_source(&mut self, source: Arc<dyn LiteratureSource>) {
+        self.sources.insert(0, source);
+    }
+
     /// Names of all registered sources.
     pub fn source_names(&self) -> Vec<&'static str> {
         self.sources.iter().map(|s| s.name()).collect()

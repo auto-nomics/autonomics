@@ -84,6 +84,10 @@ toml.workspace = true
 [features]
 default = ["literature"]
 literature = ["dep:bib-base"]
+# Local PubMed DuckDB mirror: registers `source_pubmed_local`,
+# `pubmed_mesh_analysis` and `pubmed_author_network` on top of the
+# literature bundle. Adds the bundled DuckDB engine (~5 min compile).
+pubmed_local = ["literature", "bib-base/pubmed_local"]
 
 [dev-dependencies]
 tokio-util = { version = "0.7", features = ["rt"] }

@@ -427,6 +427,9 @@ impl ComputeRegistry {
                 "source_literature", "source_literature_fetch", "literature_fulltext",
                 "source_literature_citations", "source_s2_recommendations", "bib_save",
                 "evidence_merge", "evidence_export",
+                // Local PubMed mirror nodes run in-process (shared DuckDB
+                // handle, read-only) — no container/cluster execution.
+                "source_pubmed_local", "pubmed_mesh_analysis", "pubmed_author_network",
             ],
         });
         write_bytes_new(&profile_path, profile.to_string().as_bytes())?;

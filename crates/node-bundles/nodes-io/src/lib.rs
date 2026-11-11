@@ -61,6 +61,12 @@ pub use bib_base::nodes::literature_fulltext::{
 pub use bib_base::nodes::literature_search::{
     LiteratureSearchNode, LiteratureSearchNodeFactory, LiteratureSearchSpec,
 };
+#[cfg(feature = "pubmed_local")]
+pub use bib_base::nodes::pubmed_local::{
+    PubmedAuthorsNode, PubmedAuthorsNodeFactory, PubmedAuthorsSpec, PubmedLocalNode,
+    PubmedLocalNodeFactory, PubmedLocalOutput, PubmedLocalSpec, PubmedMeshMode, PubmedMeshNode,
+    PubmedMeshNodeFactory, PubmedMeshSpec,
+};
 #[cfg(feature = "literature")]
 pub use bib_base::nodes::s2_recommendations::{
     S2RecommendationsNode, S2RecommendationsNodeFactory, S2RecommendationsSpec,
@@ -317,6 +323,12 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(ReactomeParticipantsNodeFactory {}));
         #[cfg(feature = "literature")]
         registry.register(Box::new(LiteratureSearchNodeFactory {}));
+        #[cfg(feature = "pubmed_local")]
+        registry.register(Box::new(PubmedLocalNodeFactory {}));
+        #[cfg(feature = "pubmed_local")]
+        registry.register(Box::new(PubmedMeshNodeFactory {}));
+        #[cfg(feature = "pubmed_local")]
+        registry.register(Box::new(PubmedAuthorsNodeFactory {}));
         registry.register(Box::new(GeoEInfoNodeFactory));
         registry.register(Box::new(GeoESearchNodeFactory));
         registry.register(Box::new(GeoESummaryNodeFactory));

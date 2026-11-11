@@ -49,6 +49,14 @@ regex = "1"
 base64 = "0.22"
 vfs = { path = "../vfs" }
 
+# Local PubMed DuckDB mirror (feature `pubmed_local`). Links the **system**
+# DuckDB (Arch: `pacman -S duckdb`) — the bundled engine is 5–20× slower on
+# the mirror's hash joins than the distribution build, and the mirror's
+# indexes/FTS were built by the system CLI. Build-time requirements:
+#   DUCKDB_LIB_DIR=/usr/lib DUCKDB_INCLUDE_DIR=/usr/include
+# `buildtime_bindgen` regenerates bindings from the installed headers.
+duckdb = { version = "1.20000", default-features = false, features = ["buildtime_bindgen"], optional = true }
+
 # DAG evidence-channel nodes (see `src/nodes/`); pulls no node-registry
 # features beyond the factory/node traits.
 dag-core = { path = "../dag-core" }
@@ -61,6 +69,9 @@ workspace = true
 [features]
 # Enables live-API end-to-end tests (require network connectivity).
 e2e = []
+# Local PubMed DuckDB mirror (read-only, ~74 GB): registers a
+# `pubmed_local` literature source and the high-throughput DAG nodes.
+pubmed_local = ["dep:duckdb"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["net", "io-util"] }

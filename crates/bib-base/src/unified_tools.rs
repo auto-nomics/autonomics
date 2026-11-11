@@ -43,7 +43,11 @@ use crate::unified_search;
                   parentheses for grouping. \
                   \
                   Sources: `local` (your saved library, full-text and annotations), plus \
+                  `pubmed_local` (offline 40M-article PubMed mirror, BM25 keyword + \
+                  MeSH/journal/author/year filters; cannot express `NOT` or nested \
+                  booleans — complex queries fail this source but others continue), \
                   `pubmed`, `openalex`, `arxiv`, `crossref`, `semantic_scholar`. Default \
+                  `[local, pubmed_local, openalex]` when the mirror is attached, else \
                   `[local, pubmed, openalex]`. Use `[\"local\"]` for library-only. \
                   \
                   Returns merged candidates (title, authors, year, DOI, snippet, \
@@ -67,7 +71,7 @@ use crate::unified_search;
 pub struct LiteratureSearchInput {
     #[desc = "Query (local syntax: terms, OR/NOT, \"phrases\", field:value, year:A..B, parentheses)"]
     pub query: String,
-    #[desc = "Sources to search: `local` and/or `pubmed`, `openalex`, `arxiv`, `crossref`, `semantic_scholar`. Default [local, pubmed, openalex]"]
+    #[desc = "Sources to search: `local` and/or `pubmed_local` (offline mirror), `pubmed`, `openalex`, `arxiv`, `crossref`, `semantic_scholar`. Default [local, pubmed_local, openalex] when the mirror is attached"]
     pub sources: Option<Vec<String>>,
     #[desc = "Publication year lower bound"]
     pub year_from: Option<u16>,

@@ -23,6 +23,8 @@ pub mod literature_citations;
 pub mod literature_fetch;
 pub mod literature_fulltext;
 pub mod literature_search;
+#[cfg(feature = "pubmed_local")]
+pub mod pubmed_local;
 pub mod s2_recommendations;
 
 use dag_core::dag::DagError;
