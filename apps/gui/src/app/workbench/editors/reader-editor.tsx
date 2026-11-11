@@ -121,7 +121,7 @@ function ReaderEditorBody({ editor }: EditorContext) {
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {!error && <Loader2 className="pointer-events-none absolute left-1/2 top-1/2 -ml-4 -mt-4 size-8 animate-spin text-muted-foreground" />}
-      <div ref={hostRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col" data-reader-host={params.articleId} />
+      <div ref={hostRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" data-reader-host={params.articleId} />
     </div>
   );
 }

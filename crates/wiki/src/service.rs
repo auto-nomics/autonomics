@@ -482,13 +482,14 @@ impl WikiHandle {
             .collect())
     }
 
-    /// 附加一张图像(filename 扩展名决定 MIME,仅图像白名单)。
+    /// 附加已校验格式、大小与文件名的图像。
     pub async fn attach_image(
         &self,
         entry_id: uuid::Uuid,
         filename: String,
         data: Vec<u8>,
     ) -> Result<AttachmentMeta> {
+        crate::attachments::validate_image(&filename, &data)?;
         self.call(|reply| WikiCommand::AttachImage {
             entry_id,
             filename,

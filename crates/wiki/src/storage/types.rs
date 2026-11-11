@@ -178,7 +178,7 @@ pub struct AttachmentMeta {
 
 /// 图像附件能力:元数据落 sqlite,blob 走 [`crate::storage::blob::BlobStore`]。
 ///
-/// 软删除不动附件(恢复即回来);`purge_entry` 连元数据与 blob 一起清。
+/// 软删除不动附件(恢复即回来);`purge_entry` 无跨词条引用时连元数据与 blob 一起清。
 #[async_trait]
 pub trait WikiAttachmentStorage: Send + Sync {
     /// 为词条附加一张图像(`filename` 的扩展名决定 MIME,仅图像白名单;
@@ -197,7 +197,8 @@ pub trait WikiAttachmentStorage: Send + Sync {
         entry_id: uuid::Uuid,
         attachment_id: uuid::Uuid,
     ) -> Result<(AttachmentMeta, Vec<u8>)>;
-    /// 摘除附件(删元数据行 + 尽力删 blob);不存在是幂等 no-op。
+    /// 摘除附件(删元数据行 + 尽力删 blob);当前正文或保留版本仍引用时拒绝。
+    /// 不存在是幂等 no-op。
     async fn detach_attachment(
         &self,
         entry_id: uuid::Uuid,

@@ -1,0 +1,3 @@
+### Structural Biology (RCSB PDB)
+- Structure discovery, entry/polymer/assembly metadata, and structure files flow through the DAG nodes `source_rcsb_search`, `source_rcsb_entry`, `source_rcsb_polymer_entity`, `source_rcsb_assembly`, and `source_rcsb_structure`.
+- Use `rcsb_structure_preview` (tool) for a bounded mmCIF/PDB/FASTA preview when reading a structure interactively inside the conversation

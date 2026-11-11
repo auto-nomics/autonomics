@@ -20,6 +20,10 @@ pub enum Error {
     /// 行数据与预期形状不符(列类型错、`alias` 不是合法 JSON 等)。
     #[error("corrupt row: {0}")]
     CorruptRow(String),
+    #[error("{0}")]
+    InvalidAttachment(String),
+    #[error("图片仍被引用，无法删除：{0}")]
+    AttachmentInUse(String),
     /// 兜底:业务规则或未归类错误,消息原样透出。
     #[error("{0}")]
     Unknown(String),

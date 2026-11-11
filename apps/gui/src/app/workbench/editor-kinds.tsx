@@ -37,6 +37,7 @@ import {
   getWorkbenchState,
   activateEditorById,
   setContainer,
+  setContainerView,
   setSidebarCollapsed,
   closeEditor,
   allGroups,
@@ -48,6 +49,7 @@ import {
   type WikiEntryEditorState,
   type DeckEditorState,
 } from "./workbench-store";
+import { useActiveEditorContext } from "./active-editor-context";
 import { useWorkbenchRuntime } from "./runtime-context";
 
 // ---------------------------------------------------------------------------
@@ -60,9 +62,16 @@ function BibliographyEditorBody({ editor }: EditorContext) {
   const sidebarSlot = useBibliographySidebarSlot();
   const desktop = useMediaQuery("(min-width: 768px)");
   const active = allGroups(groups).some(([, group]) => group.activeId === editor.id);
+  const focused = useActiveEditorContext().editor?.id === editor.id;
+  const externalSidebar = desktop || workspace === "subscriptions";
+  useEffect(() => {
+    if (!focused || (workspace !== "library" && workspace !== "subscriptions")) return;
+    setContainer("bibliography");
+    setContainerView("bibliography", workspace);
+  }, [focused, workspace]);
   return (
     <section aria-label="文献工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <BibliographyView workspace={workspace} active={active} sidebarSlot={desktop ? sidebarSlot : undefined} externalSidebar={desktop} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
+      <BibliographyView workspace={workspace} active={active} sidebarSlot={focused && externalSidebar ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
     </section>
   );
 }

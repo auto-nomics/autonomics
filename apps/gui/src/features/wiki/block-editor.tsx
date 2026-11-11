@@ -49,7 +49,10 @@ import {
   splitMarkdownBlocks,
   type MarkdownBlock,
 } from "./markdown";
-import { attachmentRawUrl, uploadAttachment } from "./wiki-api";
+import { listAttachments, uploadAttachment, type AttachmentMeta } from "./wiki-api";
+
+import { wikiImageMarkdown } from "@/lib/wiki-attachment-ref";
+import { useWikiImages, WikiAttachmentImage } from "./wiki-images";
 
 interface FocusRequest {
   key: string;
@@ -59,13 +62,18 @@ interface FocusRequest {
 
 const RenderedBlock = memo(function RenderedBlock({
   raw,
+  entryId,
   onActivate,
 }: {
   raw: string;
+  entryId: string;
   onActivate: () => void;
 }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useWikiImages(ref, `${entryId}\n${raw}`);
   return (
     <div
+      ref={ref}
       className="wiki-block md"
       onMouseDown={(event) => {
         // Copy buttons work in preview — they don't flip the block.
@@ -79,7 +87,7 @@ const RenderedBlock = memo(function RenderedBlock({
         if (event.button !== 0) return;
         onActivate();
       }}
-      dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(raw) }}
+      dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(raw, entryId) }}
     />
   );
 });
@@ -93,14 +101,41 @@ export function BlockEditor({
   entryId,
   initialContent,
   onChange,
+  onUploadsChange,
+  getContent,
 }: {
   entryId: string;
   initialContent: string;
   onChange: (content: string) => void;
+  onUploadsChange?: (pending: boolean) => void;
+  getContent?: () => string;
 }) {
   const [blocks, setBlocks] = useState<MarkdownBlock[]>(() =>
     splitMarkdownBlocks(initialContent),
   );
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
+  const readContent = useRef(getContent);
+  readContent.current = getContent;
+  const pendingTokens = useRef(new Set<string>());
+  const mounted = useRef(true);
+  const reportChange = useRef(onChange);
+  reportChange.current = onChange;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (!pendingTokens.current.size) return;
+      const current = readContent.current?.() ?? joinMarkdownBlocks(blocksRef.current);
+      const next = current.replace(/<!--wiki-image-upload:([^>]+)-->/g, (marker, token: string) => pendingTokens.current.has(token) ? "" : marker);
+      if (next !== current) reportChange.current(next);
+    };
+  }, []);
+  type Upload = { token: string; file: File; status: "uploading" | "failed"; error?: string };
+  const [uploads, setUploads] = useState<Upload[]>([]);
+  const [attachments, setAttachments] = useState<AttachmentMeta[] | null>(null);
+  const [showAttachments, setShowAttachments] = useState(false);
+  useEffect(() => { onUploadsChange?.(uploads.length > 0); return () => onUploadsChange?.(false); }, [uploads.length, onUploadsChange]);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -108,6 +143,7 @@ export function BlockEditor({
   useEffect(() => {
     if (joinMarkdownBlocks(blocks) === initialContent) return;
     const next = splitMarkdownBlocks(initialContent).map((block, index) => ({ ...block, key: blocks[index]?.key ?? block.key }));
+    blocksRef.current = next;
     setBlocks(next);
     if (editingKey && !next.some(block => block.key === editingKey)) setEditingKey(null);
     // Local edits already update blocks before reporting content upward.
@@ -117,10 +153,11 @@ export function BlockEditor({
 
   const applyBlocks = useCallback(
     (next: MarkdownBlock[]) => {
+      blocksRef.current = next;
       setBlocks(next);
-      onChange(joinMarkdownBlocks(next));
+      reportChange.current(joinMarkdownBlocks(next));
     },
-    [onChange],
+    [],
   );
 
   const startEdit = useCallback((key: string, caret: number | "end" = "end") => {
@@ -286,6 +323,58 @@ export function BlockEditor({
     applyBlocks(next);
   };
 
+  const latestBlocks = () => {
+    const content = readContent.current?.();
+    return content !== undefined && content !== joinMarkdownBlocks(blocksRef.current)
+      ? splitMarkdownBlocks(content).map((block, i) => ({ ...block, key: blocksRef.current[i]?.key ?? block.key }))
+      : blocksRef.current;
+  };
+  const insertImageText = (text: string) => {
+    const current = latestBlocks();
+    const el = textareaRef.current;
+    const index = current.findIndex(block => block.key === editingKey);
+    if (index >= 0 && el) {
+      const block = current[index];
+      const start = el.selectionStart, end = el.selectionEnd;
+      const insertion = `\n\n${text}\n\n`;
+      applyBlocks(current.map((item, i) => i === index ? { ...block, raw: block.raw.slice(0, start) + insertion + block.raw.slice(end) } : item));
+      setFocusRequest({ key: block.key, caret: start + insertion.length });
+    } else {
+      const next = [...current];
+      const last = next.at(-1);
+      if (last) next[next.length - 1] = { ...last, raw: last.raw.replace(/\n*$/, "\n\n") };
+      next.push(newMarkdownBlock(`${text}\n\n`));
+      applyBlocks(next);
+    }
+  };
+  const replaceUpload = (token: string, replacement: string) => {
+    const marker = `<!--wiki-image-upload:${token}-->`;
+    const current = latestBlocks();
+    if (!current.some(block => block.raw.includes(marker))) return;
+    applyBlocks(current.map(block => ({ ...block, raw: block.raw.replaceAll(marker, replacement) })));
+  };
+  const performUpload = async (job: Upload) => {
+    setUploads(items => items.map(item => item.token === job.token ? { ...item, status: "uploading", error: undefined } : item));
+    try {
+      const meta = await uploadAttachment(entryId, job.file);
+      if (!mounted.current) return;
+      const markdown = wikiImageMarkdown(entryId, meta.attachment_id ?? meta.id ?? "", meta.filename);
+      replaceUpload(job.token, markdown);
+      pendingTokens.current.delete(job.token);
+      setUploads(items => items.filter(item => item.token !== job.token));
+    } catch (error) {
+      if (mounted.current) setUploads(items => items.map(item => item.token === job.token ? { ...item, status: "failed", error: String(error) } : item));
+    }
+  };
+  const uploadImages = (files: File[]) => {
+    if (!files.length) return;
+    const jobs: Upload[] = files.map(file => ({ token: crypto.randomUUID(), file, status: "uploading" }));
+    jobs.forEach(job => pendingTokens.current.add(job.token));
+    insertImageText(jobs.map(job => `<!--wiki-image-upload:${job.token}-->`).join("\n\n"));
+    setUploads(items => [...items, ...jobs]);
+    for (const job of jobs) void performUpload(job);
+  };
+
   const editingIndex = blocks.findIndex((block) => block.key === editingKey);
 
   // Rendered code blocks keep a working copy button (mirrors the reader).
@@ -398,31 +487,30 @@ export function BlockEditor({
   const separator = <span className="mx-1 h-4 w-px shrink-0 bg-border" />;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2"
+      onPaste={event => {
+        const files = Array.from(event.clipboardData.files).filter(file => file.type.startsWith("image/"));
+        if (files.length) { event.preventDefault(); uploadImages(files); }
+      }}
+      onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+      onDrop={event => {
+        if (!event.dataTransfer.files.length) return;
+        event.preventDefault();
+        uploadImages(Array.from(event.dataTransfer.files));
+      }}>
       <input
         ref={fileInput}
         type="file"
         accept="image/*"
         className="hidden"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
+        multiple
+        onChange={event => {
+          const files = Array.from(event.target.files ?? []);
           event.target.value = "";
-          if (!file) return;
-          void (async () => {
-            try {
-              const meta = await uploadAttachment(entryId, file);
-              const id = meta.attachment_id ?? meta.id ?? "";
-              const markdown = `![${file.name}](${attachmentRawUrl(entryId, id)})`;
-              if (editingKey) insertSnippet(`\n${markdown}`);
-              else appendBlock(`\n${markdown}`);
-              toast.success(`已上传并插入 ${file.name}`);
-            } catch (error) {
-              toast.error((error as Error).message);
-            }
-          })();
+          uploadImages(files);
         }}
       />
-      <div className="wiki-toolbar flex flex-wrap items-center gap-0.5 rounded-md border bg-muted/30 px-1 py-1">
+      <div onMouseDown={event => { if (event.target instanceof HTMLElement && event.target.closest("button")) event.preventDefault(); }} className="wiki-toolbar flex flex-wrap items-center gap-0.5 rounded-md border bg-muted/30 px-1 py-1">
         {tool("一级标题", <Heading1 className="h-4 w-4" />, () => setHeading(1))}
         {tool("二级标题", <Heading2 className="h-4 w-4" />, () => setHeading(2))}
         {tool("三级标题", <Heading3 className="h-4 w-4" />, () => setHeading(3))}
@@ -452,11 +540,28 @@ export function BlockEditor({
           () => fileInput.current?.click(),
           false,
         )}
+        {tool("插入已有图片", <ImagePlus className="h-4 w-4" />, () => {
+          setShowAttachments(value => !value);
+          void listAttachments(entryId).then(setAttachments).catch(error => toast.error(String(error)));
+        }, false)}
         <span className="flex-1" />
         <span className="px-1 text-[11px] leading-tight text-muted-foreground">
           点击块编辑 · 空行 Enter 结块 · Ctrl+Enter 新块 · Ctrl+B/I/K · 右键块菜单
         </span>
       </div>
+      {uploads.length > 0 && <div className="space-y-1 px-3 text-xs" aria-live="polite">{uploads.map(job => <div key={job.token}>
+        {job.file.name}：{job.status === "uploading" ? "上传中…" : job.error}
+        {job.status === "failed" && <button type="button" className="ml-2 underline" onClick={() => void performUpload(job)}>重试</button>}
+        <button type="button" className="ml-2 underline" onClick={() => { replaceUpload(job.token, ""); pendingTokens.current.delete(job.token); setUploads(items => items.filter(item => item.token !== job.token)); }}>移除占位</button>
+      </div>)}</div>}
+      {showAttachments && <div className="grid max-h-60 grid-cols-4 gap-2 overflow-auto px-3 text-xs" aria-label="已有图片">
+        {attachments === null ? "加载中…" : attachments.length === 0 ? "暂无附件" : attachments.map(meta => {
+          const id = meta.attachment_id ?? meta.id ?? "";
+          return <div key={id}><WikiAttachmentImage entryId={entryId} attachmentId={id} filename={meta.filename} />
+            <button type="button" className="underline" onMouseDown={event => event.preventDefault()} onClick={() => { insertImageText(wikiImageMarkdown(entryId, id, meta.filename)); setShowAttachments(false); }}>插入 {meta.filename}</button>
+          </div>;
+        })}
+      </div>}
       <ScrollArea className="min-h-0 flex-1" contentClassName="px-3 py-2">
         <div className="flex flex-col gap-1.5 pb-16" onClick={onContainerClick}>
           {blocks.map((block, index) =>
@@ -479,6 +584,7 @@ export function BlockEditor({
               <ContextMenu key={block.key}>
                 <ContextMenuTrigger render={<div />}>
                   <RenderedBlock
+                    entryId={entryId}
                     raw={block.raw}
                     onActivate={() => startEdit(block.key)}
                   />

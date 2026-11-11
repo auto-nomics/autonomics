@@ -246,7 +246,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
       <main
         data-workbench=""
         data-sidebar-collapsed={state.sidebar.collapsed || undefined}
-        className="relative grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] bg-background text-foreground"
+        className="relative grid h-full w-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] bg-background text-foreground"
       >
         <div className="flex min-h-0 min-w-0">
           <ActivityBar

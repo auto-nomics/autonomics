@@ -7,6 +7,7 @@ pub struct SystemPromptBuilder {
     identity: String,
     tooluse_guidance: String,
     skill_guidance: String,
+    wiki_guidance: String,
     extra_sections: Vec<String>,
 }
 impl SystemPromptBuilder {
@@ -33,9 +34,9 @@ impl SystemPromptBuilder {
     /// behavioral guidance, so it belongs in the system prompt.
     pub fn build_tooluse_guidance(mut self) -> Self {
         self.tooluse_guidance = concat!(
-            include_str!("tooluse_guidance.md"),
+            include_str!("system_prompt/tooluse_guidance.md"),
             "\n",
-            include_str!("plan_guidance.md"),
+            include_str!("system_prompt/plan_guidance.md"),
         )
         .to_string();
         self
@@ -49,7 +50,16 @@ impl SystemPromptBuilder {
     /// separately by the runtime and stays snapshot-stable for
     /// prompt-cache friendliness).
     pub fn build_skill_guidance(mut self) -> Self {
-        self.skill_guidance = concat!("\n", include_str!("skill_guidance.md"),).to_string();
+        self.skill_guidance = concat!("\n", include_str!("system_prompt/skill_guidance.md"),).to_string();
+        self
+    }
+
+    /// Append the wiki knowledge-base guidance section: when to distill
+    /// conversation/literature findings into the wiki and the maintenance
+    /// rules. Static behavioral guidance, so it belongs in the system prompt.
+    pub fn build_wiki_guidance(mut self) -> Self {
+        self.wiki_guidance =
+            concat!("\n", include_str!("system_prompt/wiki_guidance.md")).to_string();
         self
     }
 
@@ -66,6 +76,10 @@ impl SystemPromptBuilder {
         }
         if !self.skill_guidance.is_empty() {
             system_prompt.push_str(&self.skill_guidance);
+            system_prompt.push('\n');
+        }
+        if !self.wiki_guidance.is_empty() {
+            system_prompt.push_str(&self.wiki_guidance);
             system_prompt.push('\n');
         }
         if !self.tooluse_guidance.is_empty() {

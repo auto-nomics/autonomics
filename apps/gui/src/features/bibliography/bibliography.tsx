@@ -356,10 +356,10 @@ export function BibliographyView({ workspace = "library", active = true, sidebar
     setMounted(current => (current.has(workspace) ? current : new Set([...current, workspace])));
   }, [workspace]);
   return <div className="flex min-h-0 flex-1 flex-col">
-    {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView sidebarSlot={sidebarSlot} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
+    {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView sidebarSlot={workspace === "library" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
     {mounted.has("discover") && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
     {mounted.has("snapshots") && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={active && workspace === "snapshots"} /></div>}
-    {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><RssSubscriptions active={active && workspace === "subscriptions"} /></div>}
+    {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><RssSubscriptions active={active && workspace === "subscriptions"} sidebarSlot={workspace === "subscriptions" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
   </div>;
 }
 

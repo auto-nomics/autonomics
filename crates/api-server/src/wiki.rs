@@ -7,7 +7,7 @@
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete as rdelete, get, post, put},
 };
@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use wiki::service::WikiHandle;
 use wiki::storage::types::{ListFilter, SearchFilter};
 
-const MAX_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+const MAX_UPLOAD_BYTES: usize = wiki::attachments::MAX_IMAGE_BYTES;
 
 #[derive(Deserialize, Default)]
 struct ListQuery {
@@ -112,6 +112,15 @@ fn api_err(e: wiki::error::Error) -> ApiErr {
             StatusCode::SERVICE_UNAVAILABLE,
             format!("wiki worker unavailable: {msg}"),
         ),
+        wiki::error::Error::Storage(wiki::storage::error::Error::InvalidAttachment(message)) => {
+            error(StatusCode::BAD_REQUEST, message)
+        }
+        wiki::error::Error::Storage(wiki::storage::error::Error::AttachmentInUse(message)) => {
+            error(
+                StatusCode::CONFLICT,
+                format!("图片仍被引用，无法删除：{message}"),
+            )
+        }
         other => internal(other),
     }
 }
@@ -182,7 +191,7 @@ pub fn router(handle: Arc<WikiHandle>) -> Router {
         .route("/graph", get(graph))
         .route("/search", get(search_get).post(search_post))
         .route("/recycle", get(recycle))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 64 * 1024))
         .with_state(handle)
 }
 
@@ -537,6 +546,7 @@ async fn upload_attachment(
 async fn download_attachment(
     State(handle): State<Arc<WikiHandle>>,
     Path((id, attachment_id)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Result<Response, Response> {
     let entry_id = match parse_uuid(&id, "entry") {
         Ok(id) => id,
@@ -550,25 +560,51 @@ async fn download_attachment(
         .get_attachment(entry_id, attachment_id)
         .await
         .map_err(|e| api_err(e).into_response())?;
-    let mime: axum::http::HeaderValue = meta
-        .mime
-        .parse()
-        .map_err(|_| internal("invalid stored mime type").into_response())?;
-    Ok((
-        [
-            (header::CONTENT_TYPE, mime),
-            (
-                header::CONTENT_DISPOSITION,
-                axum::http::HeaderValue::from_str(&format!(
-                    "inline; filename=\"{}\"",
-                    meta.filename.replace('"', "")
-                ))
-                .map_err(|_| internal("invalid filename").into_response())?,
-            ),
-        ],
-        data,
-    )
-        .into_response())
+    let etag = format!("\"{}\"", meta.sha256);
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        header::ETAG,
+        etag.parse()
+            .map_err(|_| internal("invalid hash").into_response())?,
+    );
+    response_headers.insert(header::CACHE_CONTROL, "private, no-cache".parse().unwrap());
+    response_headers.insert(header::X_CONTENT_TYPE_OPTIONS, "nosniff".parse().unwrap());
+    // Also applies when an SVG is opened as its own document.
+    response_headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        "sandbox; default-src 'none'; style-src 'unsafe-inline'"
+            .parse()
+            .unwrap(),
+    );
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|tag| tag.trim().trim_start_matches("W/") == etag || tag.trim() == "*")
+        })
+    {
+        return Ok((StatusCode::NOT_MODIFIED, response_headers).into_response());
+    }
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        meta.mime
+            .parse()
+            .map_err(|_| internal("invalid stored mime type").into_response())?,
+    );
+    let filename: String = meta
+        .filename
+        .chars()
+        .filter(|c| c.is_ascii() && !c.is_control() && !matches!(c, '\"' | '\\'))
+        .collect();
+    response_headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("inline; filename=\"{filename}\"")
+            .parse()
+            .map_err(|_| internal("invalid filename").into_response())?,
+    );
+    Ok((response_headers, data).into_response())
 }
 
 async fn detach_attachment(

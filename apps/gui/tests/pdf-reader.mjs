@@ -36,7 +36,7 @@ server.stderr.on('data', chunk => { output += chunk; });
 let browser;
 try {
   for (let attempt = 0; ; attempt++) {
-    if (server.exitCode !== null || attempt > 100) throw new Error(`Vite failed: ${output}`);
+    if (server.exitCode !== null || attempt > 600) throw new Error(`Vite failed: ${output}`);
     if (output.includes(origin)) break;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
@@ -46,7 +46,8 @@ try {
     for (const rotation of [0, 90, 180, 270]) {
       // With the sidebar closed these widths produce exactly 100% fit width.
       const pageWidth = rotation % 180 ? 792 : 612;
-      const page = await browser.newPage({ viewport: { width: pageWidth + 44, height: 1100 }, deviceScaleFactor: dpr });
+      const viewportWidth = pageWidth + (pageWidth + 24 <= 768 ? 24 : 48);
+      const page = await browser.newPage({ viewport: { width: viewportWidth, height: 1100 }, deviceScaleFactor: dpr });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       let annotations = [];
@@ -137,6 +138,22 @@ try {
       assert.equal(await page.locator('.reader-text-layer span').count(), 1, 'Stale text layers after rapid zoom');
       assert.ok(!(await page.locator('[data-output=status]').textContent()).includes('failed'));
       if (dpr === 1 && rotation === 0) {
+        for (const width of [320, 375, 430, 768]) {
+          await page.setViewportSize({ width, height: 800 });
+          await page.locator('[data-action=fit-width]').evaluate(button => button.click());
+          await page.waitForTimeout(250);
+          await ready();
+          const fits = await page.evaluate(() => {
+            const area = document.querySelector('.reader-page-area');
+            const wrapper = document.querySelector('.reader-page-wrapper').getBoundingClientRect();
+            const bounds = area.getBoundingClientRect();
+            return area.scrollWidth <= area.clientWidth + 1
+              && wrapper.left >= bounds.left && wrapper.right <= bounds.right + 1
+              && document.documentElement.scrollWidth <= innerWidth;
+          });
+          assert.ok(fits, `Fit width overflows at mobile width ${width}`);
+        }
+        await page.setViewportSize({ width: viewportWidth, height: 1100 });
         await page.evaluate(async () => {
           const host = document.createElement('div'); host.id = 'reader-host';
           Object.assign(host.style, { position: 'relative', width: '500px', height: '600px' }); document.body.append(host);
@@ -163,6 +180,42 @@ try {
       console.log(`PASS DPR=${dpr}, rotation=${rotation}: 100%, zoom, glyph bounds, highlights, rapid zoom`);
     }
   }
+  const workbenchPage = await browser.newPage({ viewport: { width: 375, height: 812 } });
+  await workbenchPage.route('**/api/session', route => route.fulfill({ json: {} }));
+  await workbenchPage.route('**/api/v1/**', route => {
+    const url = route.request().url();
+    if (url.endsWith('/events')) return new Promise(() => {});
+    if (url.endsWith('/state')) return route.fulfill({ json: {
+      last_seq: 0, agents: [], contexts: {}, display_settings: {},
+    } });
+    if (url.endsWith('/fulltext/raw')) return route.fulfill({ contentType: 'application/pdf', body: fixture(0) });
+    return route.fulfill({ json: { annotations: [], articles: [], collections: [], total: 0 } });
+  });
+  await workbenchPage.goto(origin);
+  await workbenchPage.locator('[data-workbench]').waitFor();
+  await workbenchPage.evaluate(async () => {
+    localStorage.setItem('autonomics.pdf.sidebarOpen', '0');
+    const { openEditor } = await import('/src/app/workbench/workbench-store.ts');
+    openEditor({ kind: 'reader', params: { articleId: 'mobile-regression', title: 'Very long PDF document title '.repeat(12) }, activate: true });
+  });
+  await workbenchPage.locator('[data-reader-host] .reader-text-layer span').waitFor();
+  for (const width of [320, 375, 430, 768]) {
+    await workbenchPage.setViewportSize({ width, height: 812 });
+    await workbenchPage.waitForTimeout(300);
+    for (const action of ['fit-width', 'zoom-in', 'sidebar']) {
+      await workbenchPage.locator(`[data-reader-host] [data-action="${action}"]`).evaluate(button => button.click());
+      await workbenchPage.waitForTimeout(250);
+      const bounds = await workbenchPage.evaluate(() => ({
+        document: document.documentElement.scrollWidth,
+        workbench: document.querySelector('[data-workbench]').getBoundingClientRect().width,
+        host: document.querySelector('[data-reader-host]').getBoundingClientRect().right,
+      }));
+      assert.ok(bounds.document <= width && bounds.workbench <= width && bounds.host <= width + 1,
+        `PDF expands workbench at ${width}px after ${action}: ${JSON.stringify(bounds)}`);
+    }
+  }
+  await workbenchPage.close();
+  console.log('PASS mobile PDF inside workbench: fit, zoom, sidebar, long title');
 } finally {
   await browser?.close();
   server.kill();

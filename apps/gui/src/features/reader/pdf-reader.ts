@@ -1885,7 +1885,9 @@ class ZoteroStylePdfReader {
     if (this.fitMode !== "custom") {
       const proxy = await this.document.getPage(1);
       const base = proxy.getViewport({ scale: 1, rotation: (proxy.rotate + this.rotation) % 360 });
-      const availableWidth = Math.max(180, this.pageArea.clientWidth - 44);
+      const pagesStyle = getComputedStyle(this.pages);
+      const horizontalPadding = parseFloat(pagesStyle.paddingLeft) + parseFloat(pagesStyle.paddingRight);
+      const availableWidth = Math.max(1, this.pageArea.clientWidth - horizontalPadding);
       const availableHeight = Math.max(180, this.pageArea.clientHeight - 72);
       this.zoom = this.fitMode === "page"
         ? Math.min(availableWidth / base.width, availableHeight / base.height)

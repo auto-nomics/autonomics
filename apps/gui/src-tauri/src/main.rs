@@ -26,6 +26,8 @@ fn main() {
             gateway::start_events,
             gateway::frontend_ready,
             gateway::upload_bib_fulltext,
+            gateway::upload_wiki_image,
+            gateway::wiki_image_raw,
             gateway::vfs_download_raw,
             gateway::vfs_upload,
             gateway::bib_fulltext_raw,

@@ -289,6 +289,15 @@ impl WikiEntryStorage for TursoWikiStorage {
                 while let Some(row) = rows.next().await? {
                     keys.push(text_col(&row, 0)?);
                 }
+                let mut attachments = conn
+                    .query(
+                        "SELECT id FROM attachments WHERE entry_id = ?1",
+                        turso::params![id.clone()],
+                    )
+                    .await?;
+                while let Some(row) = attachments.next().await? {
+                    ensure_attachment_unused(conn, &id, &text_col(&row, 0)?, Some(&id)).await?;
+                }
                 conn.execute(
                     "DELETE FROM entry_links WHERE from_id = ?1 OR to_id = ?1",
                     turso::params![id.clone()],
@@ -829,6 +838,7 @@ impl WikiAttachmentStorage for TursoWikiStorage {
         filename: String,
         data: Vec<u8>,
     ) -> Result<AttachmentMeta> {
+        crate::attachments::validate_image(&filename, &data)?;
         let Some((mime, ext)) = image_type_from_filename(&filename) else {
             return Err(Error::Unknown(format!(
                 "不支持的图像格式:{filename}(白名单:png/jpg/jpeg/gif/webp/svg/bmp/avif)"
@@ -954,27 +964,37 @@ impl WikiAttachmentStorage for TursoWikiStorage {
         entry_id: uuid::Uuid,
         attachment_id: uuid::Uuid,
     ) -> Result<()> {
-        let key: Option<String> = {
-            let conn = self.conn.lock().await;
-            let mut rows = conn
-                .query(
-                    "SELECT storage_key FROM attachments WHERE id = ?1 AND entry_id = ?2",
-                    turso::params![attachment_id.to_string(), entry_id.to_string()],
-                )
-                .await?;
-            let key = match rows.next().await? {
-                Some(row) => Some(text_col(&row, 0)?),
-                None => None,
-            };
-            if key.is_some() {
-                conn.execute(
-                    "DELETE FROM attachments WHERE id = ?1 AND entry_id = ?2",
-                    turso::params![attachment_id.to_string(), entry_id.to_string()],
-                )
-                .await?;
-            }
-            key
-        };
+        let conn = self.conn.lock().await;
+        let mut key: Option<String> = None;
+        run_in_txn(&conn, |conn| {
+            let key = &mut key;
+            Box::pin(async move {
+                let mut rows = conn
+                    .query(
+                        "SELECT storage_key FROM attachments WHERE id = ?1 AND entry_id = ?2",
+                        turso::params![attachment_id.to_string(), entry_id.to_string()],
+                    )
+                    .await?;
+                if let Some(row) = rows.next().await? {
+                    ensure_attachment_unused(
+                        conn,
+                        &entry_id.to_string(),
+                        &attachment_id.to_string(),
+                        None,
+                    )
+                    .await?;
+                    *key = Some(text_col(&row, 0)?);
+                    conn.execute(
+                        "DELETE FROM attachments WHERE id = ?1 AND entry_id = ?2",
+                        turso::params![attachment_id.to_string(), entry_id.to_string()],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
+        drop(conn);
         if let Some(key) = key {
             if let Some(blob) = &self.blob {
                 if let Err(error) = blob.delete(&key).await {
@@ -1590,4 +1610,46 @@ mod tests {
     fn like_escape_covers_wildcards() {
         assert_eq!(like_escape("50%_off\\x"), r"50\%\_off\\x");
     }
+}
+
+/// Check live documents, recycle-bin documents and all retained snapshots in the deletion transaction.
+async fn ensure_attachment_unused(
+    conn: &Connection,
+    owner: &str,
+    attachment: &str,
+    excluding: Option<&str>,
+) -> Result<()> {
+    let mut rows = conn
+        .query("SELECT id, title, content FROM entries", ())
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let source = text_col(&row, 0)?;
+        if excluding == Some(source.as_str()) {
+            continue;
+        }
+        if crate::attachments::references(&text_col(&row, 2)?, &source, owner, attachment) {
+            return Err(Error::AttachmentInUse(format!(
+                "词条「{}」({source})",
+                text_col(&row, 1)?
+            )));
+        }
+    }
+    let mut rows = conn
+        .query("SELECT entry_id, version, snapshot FROM entry_versions", ())
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let source = text_col(&row, 0)?;
+        if excluding == Some(source.as_str()) {
+            continue;
+        }
+        let snapshot: KnowledgeEntryData = serde_json::from_str(&text_col(&row, 2)?)?;
+        if crate::attachments::references(&snapshot.content, &source, owner, attachment) {
+            return Err(Error::AttachmentInUse(format!(
+                "词条「{}」({source}) 历史版本 {}",
+                snapshot.title,
+                row.get::<i64>(1)?
+            )));
+        }
+    }
+    Ok(())
 }

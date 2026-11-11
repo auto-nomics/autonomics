@@ -162,9 +162,19 @@ impl Agent {
         }
     }
 
+    /// Append an extra system-prompt section; see
+    /// [`AgentBuilder::with_system_prompt_section`] for the accumulate
+    /// (vs replace) semantics.
     pub fn set_system_prompt_section(&mut self, section: impl Into<String>) {
         if let Some(shared) = Arc::get_mut(&mut self.shared) {
-            shared.system_prompt_section = Some(section.into());
+            let section = section.into();
+            let joined = match shared.system_prompt_section.take() {
+                Some(existing) if !existing.is_empty() => {
+                    format!("{existing}\n{section}")
+                }
+                _ => section,
+            };
+            shared.system_prompt_section = Some(joined);
         }
     }
 

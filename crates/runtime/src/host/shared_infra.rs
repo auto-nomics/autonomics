@@ -67,57 +67,6 @@ impl BrowserPool {
     }
 }
 
-// AgentKind carries the same tool-capability flags as RuntimeConfig, so we
-// can build a dynamic system prompt that only mentions tools the kind
-// actually enables.
-impl PromptCapabilities for agentik_core::AgentKind {
-    fn enable_bibliography(&self) -> bool {
-        (*self).enable_bibliography()
-    }
-    fn enable_opengwas(&self) -> bool {
-        (*self).enable_opengwas()
-    }
-    fn enable_opentargets(&self) -> bool {
-        (*self).enable_opentargets()
-    }
-    fn enable_gwascatalog(&self) -> bool {
-        (*self).enable_gwascatalog()
-    }
-    fn enable_chembl(&self) -> bool {
-        (*self).enable_chembl()
-    }
-    fn enable_rcsb(&self) -> bool {
-        (*self).enable_rcsb()
-    }
-    fn enable_string(&self) -> bool {
-        (*self).enable_string()
-    }
-    fn enable_kegg(&self) -> bool {
-        (*self).enable_kegg()
-    }
-    fn enable_dag_history(&self) -> bool {
-        (*self).enable_dag_history()
-    }
-    fn enable_plugin_rsi(&self) -> bool {
-        (*self).enable_plugin_rsi()
-    }
-    fn enable_browser(&self) -> bool {
-        (*self).enable_browser()
-    }
-    fn enable_resource_downloads(&self) -> bool {
-        (*self).enable_resource_downloads()
-    }
-    fn enable_wiki_read(&self) -> bool {
-        (*self).enable_wiki_read()
-    }
-    fn enable_wiki_write(&self) -> bool {
-        (*self).enable_wiki_write()
-    }
-    fn enable_hpc(&self) -> bool {
-        (*self).enable_hpc()
-    }
-}
-
 /// Process-level shared infrastructure created once and reused by all agents.
 ///
 /// Cloning is cheap — every field is `Arc`-backed.
@@ -922,9 +871,15 @@ async fn open_environment_dev(
     // The builder is a second PodmanRuntime handle: the execution infra
     // stores its runtime as `Arc<dyn PodmanConnection>`, which cannot be
     // upcast to the separate `ImageBuildConnection` trait. Both handles
-    // resolve the same CLI from the environment and hold no mutable state.
+    // resolve the same CLI from the environment, share the operator's
+    // private storage config (explicit --root/--runroot), and hold no
+    // mutable state. `from_env()` here would silently fall back to the
+    // host-default graphroot (~/.local/share/containers), which broke the
+    // RSI build gate when that path was a dangling symlink.
     let image_builder: Arc<dyn container_runtime::ImageBuildConnection> =
-        Arc::new(container_runtime::PodmanRuntime::from_env());
+        Arc::new(container_runtime::PodmanRuntime::new(
+            container_execution.config.clone(),
+        ));
     let image_publisher: plugin_rsi::SharedImagePublisher =
         Arc::new(plugin_rsi::PodmanImagePublisher::new(
             plugin_rsi::ImageRegistryConfig {

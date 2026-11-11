@@ -24,11 +24,10 @@ use crate::file_to_dataframe::{
     FileFormat, FileToDataFrameNode, FileToDataFrameNodeFactory, TabularReadOptions,
 };
 use crate::image_registry::registry_image;
-// The single-cell family moved to the manifest plugin; these pins stay
-// because the generic Python scripting runtime renders onto the same image.
-const SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY: &str = "single-cell-preprocessor";
-const SINGLE_CELL_WORKFLOW_IMAGE_DIGEST: &str =
-    "sha256:c34c26428d13804c2528bc734805c1ccfe909353604ac08da0ce9c68890e7e18";
+// Dedicated, preinstalled Python IO runtime; built from containers/python-io.
+const PYTHON_IO_IMAGE_REPOSITORY: &str = "python-io";
+const PYTHON_IO_IMAGE_DIGEST: &str =
+    "sha256:68872ecf914a961590775b57919c36efda31867d9e2a1a7dc21b7eef1b867fa6";
 // The visualization family moved to the manifest plugin; these pins stay
 // because the generic R scripting runtime renders onto the same image.
 const VISUALIZATION_IMAGE_REPOSITORY: &str = "visualization";
@@ -44,16 +43,13 @@ pub const PYTHON_SCRIPT_KIND: &str = "python_script";
 pub const R_SCRIPT_KIND: &str = "r_script";
 
 /// The digest-pinned images the built-in script nodes render onto
-/// (same GHCR images the migrated manifest families use). The
+/// (dedicated Python IO image and the existing R visualization image). The
 /// readiness check enumerates these alongside the environment catalog
 /// and plugin-manifest images so `prepare` can pre-pull everything the
 /// daemon path would otherwise pull lazily at node execution.
 pub fn builtin_script_images() -> Vec<String> {
     [
-        (
-            SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
-            SINGLE_CELL_WORKFLOW_IMAGE_DIGEST,
-        ),
+        (PYTHON_IO_IMAGE_REPOSITORY, PYTHON_IO_IMAGE_DIGEST),
         (VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST),
     ]
     .into_iter()
@@ -632,10 +628,9 @@ pub fn container_spec(
 ) -> Result<ContainerCommandSpec, String> {
     validate(spec)?;
     let image = match runtime {
-        ScriptRuntime::Python => registry_image(
-            SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
-            SINGLE_CELL_WORKFLOW_IMAGE_DIGEST,
-        )?,
+        ScriptRuntime::Python => {
+            registry_image(PYTHON_IO_IMAGE_REPOSITORY, PYTHON_IO_IMAGE_DIGEST)?
+        }
         ScriptRuntime::R => {
             registry_image(VISUALIZATION_IMAGE_REPOSITORY, VISUALIZATION_IMAGE_DIGEST)?
         }
@@ -1009,6 +1004,11 @@ impl NodeFactory for ScriptNodeFactory {
         if that node does not exist, report the analysis as unsupported rather than \
         reimplementing it in Python.\n\
 \n\
+        The dedicated Python IO image preinstalls pandas, polars, PyArrow, \
+        Excel readers/writers, fsspec/s3fs, requests/httpx, SQLAlchemy/DuckDB, \
+        JSON/YAML/XML helpers, and zstandard. DataFrame variables use pandas; \
+        import polars explicitly to use its API.\n\
+\n\
         Legacy mode keeps input_table/file_input and output_table/CSV outputs. \
         Generic mode is selected by a non-empty outputs array: each input or output \
         spec creates a DAG port and exposes `<name>` plus `<name>_path` variables \
@@ -1103,11 +1103,7 @@ mod tests {
         assert_ne!(images[0], images[1]);
         assert_eq!(
             images[0],
-            registry_image(
-                SINGLE_CELL_WORKFLOW_IMAGE_REPOSITORY,
-                SINGLE_CELL_WORKFLOW_IMAGE_DIGEST
-            )
-            .unwrap()
+            registry_image(PYTHON_IO_IMAGE_REPOSITORY, PYTHON_IO_IMAGE_DIGEST).unwrap()
         );
     }
 
@@ -1331,6 +1327,7 @@ mod tests {
             pids_limit: None,
         };
         let container = container_spec(ScriptRuntime::Python, &spec).unwrap();
+        assert_eq!(container.image, builtin_script_images()[0]);
         assert_eq!(container.command.as_slice(), ["python"]);
         assert_eq!(container.network, "isolated");
         assert!(container.files.contains_key("user_code.py"));

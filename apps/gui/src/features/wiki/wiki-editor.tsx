@@ -6,6 +6,9 @@
  * `onNavigate` — the host owns the per-tab history stack.
  */
 
+import { insertWikiImage } from "./wiki-document";
+import { wikiImageMarkdown } from "@/lib/wiki-attachment-ref";
+import { WikiAttachmentImage } from "./wiki-images";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Loader2, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
@@ -15,7 +18,6 @@ import { Input } from "@/components/ui/input";
 import { EditorView } from "./editor-view";
 import { ReadingView, type WikiMode } from "./reading-view";
 import {
-  attachmentRawUrl,
   createEntry,
   deleteEntry,
   detachAttachment,
@@ -110,9 +112,9 @@ export function WikiEntrySurface({
             entry={entry}
             navigation={navigation}
             onModeChange={onModeChange}
-            onSaved={(saved) => {
+            onSaved={(saved, stayEditing) => {
               cacheEntry(saved);
-              onModeChange("read");
+              if (!stayEditing) onModeChange("read");
               bumpWikiRevision();
               onSaved?.(saved);
             }}
@@ -124,7 +126,10 @@ export function WikiEntrySurface({
             <ReadingView
               entry={entry}
               navigation={navigation}
-              footer={<SidePanel entry={entry} onNavigate={onNavigate} />}
+              footer={<SidePanel entry={entry} onNavigate={onNavigate} onInsert={meta => {
+                insertWikiImage(entry, wikiImageMarkdown(entry.id, meta.attachment_id ?? meta.id ?? "", meta.filename));
+                onModeChange("edit");
+              }} />}
               onModeChange={onModeChange}
               onDelete={() =>
                 void (async () => {
@@ -196,14 +201,16 @@ export function WikiEntrySurface({
 function SidePanel({
   entry,
   onNavigate,
+  onInsert,
 }: {
   entry: WikiEntry;
   onNavigate: (entryId: string, title?: string) => void;
+  onInsert: (meta: AttachmentMeta) => void;
 }) {
   return (
     <div className="mx-auto mt-12 max-w-3xl border-t pb-8 pt-4 text-sm" aria-label="链接与历史">
       <LinksTab entry={entry} onNavigate={onNavigate} />
-      <DetailSection title="附件"><FilesTab entry={entry} /></DetailSection>
+      <DetailSection title="附件"><FilesTab entry={entry} onInsert={onInsert} /></DetailSection>
       <DetailSection title="历史"><HistoryTab entry={entry} /></DetailSection>
     </div>
   );
@@ -387,7 +394,7 @@ function LinkSection({
   );
 }
 
-function FilesTab({ entry }: { entry: WikiEntry }) {
+function FilesTab({ entry, onInsert }: { entry: WikiEntry; onInsert: (meta: AttachmentMeta) => void }) {
   const [items, setItems] = useState<AttachmentMeta[] | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -436,14 +443,8 @@ function FilesTab({ entry }: { entry: WikiEntry }) {
             const id = item.attachment_id ?? item.id ?? "";
             return (
               <li key={id} className="rounded-md border p-1.5">
-                <a href={attachmentRawUrl(entry.id, id)} target="_blank" rel="noreferrer">
-                  <img
-                    src={attachmentRawUrl(entry.id, id)}
-                    alt={item.filename}
-                    className="h-20 w-full rounded object-contain"
-                    loading="lazy"
-                  />
-                </a>
+                <WikiAttachmentImage entryId={entry.id} attachmentId={id} filename={item.filename} />
+                <button type="button" className="mt-1 underline" onClick={() => onInsert(item)}>插入正文</button>
                 <div className="mt-1 flex items-center justify-between gap-1">
                   <span className="truncate text-[11px]">{item.filename}</span>
                   <button

@@ -87,8 +87,9 @@ server.stderr.on('data', (chunk) => {
 let browser;
 const errors = [];
 try {
-  for (let attempt = 0; ; attempt++) {
-    if (server.exitCode !== null || attempt > 100) throw new Error(`Vite failed: ${output}`);
+  const readyDeadline = Date.now() + 30_000;
+  for (;;) {
+    if (server.exitCode !== null || Date.now() > readyDeadline) throw new Error(`Vite failed: ${output}`);
     if (output.includes(origin)) break;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -207,7 +208,7 @@ try {
     await route.fulfill({ json: {} });
   });
 
-  await page.goto(origin);
+  await page.goto(origin, { timeout: 90_000 });
   await page.locator('input[type="password"]').fill(TOKEN);
   await page.locator('button[type="submit"]').click();
   await page.getByText('Gateway 已连接').waitFor();

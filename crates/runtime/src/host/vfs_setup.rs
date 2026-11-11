@@ -56,7 +56,8 @@ pub(super) fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
 /// Mount every root a container executor may write outputs under.
 ///
 /// Two construction paths exist and both are load-bearing: the executor
-/// infra builds its workspace from `state_dir/containers/workspace`
+/// infra builds its workspace from `state_dir/containers/workspace` or
+/// `state_dir/containers-overlay/workspace`, depending on the storage driver
 /// (`ContainerExecutionInfra::for_operator_state_dir`), while this module
 /// historically mounted only the `PodmanConfig::from_env()` root
 /// (`state/work`, or an env override). Mounting just one lets container
@@ -67,10 +68,17 @@ pub(super) fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
 /// matching makes the specific identity mounts win once present.
 pub(super) fn ensure_executor_workspace_mounts(manifest: &mut VfsManifest, config: &RuntimeConfig) {
     ensure_workspace_mount(manifest, &PodmanConfig::from_env().workspace_root);
-    let operator_root = container_runtime::canonicalize_workspace_root(
-        config.state_dir.join("containers/workspace"),
-    );
-    ensure_workspace_mount(manifest, &operator_root);
+    // Keep both private store layouts readable across storage-driver changes.
+    // Derive roots from the executor configuration so overlay and legacy VFS
+    // outputs cannot fall through to the coordinator's catch-all mount.
+    for driver in [
+        container_runtime::PrivateStorageDriver::Vfs,
+        container_runtime::PrivateStorageDriver::Overlay,
+    ] {
+        let executor = PodmanConfig::for_state_dir_with_storage_driver(&config.state_dir, driver);
+        let root = container_runtime::canonicalize_workspace_root(executor.workspace_root);
+        ensure_workspace_mount(manifest, &root);
+    }
 }
 
 pub(super) async fn build_vfs_with_catalog(
@@ -1263,16 +1271,18 @@ mod plugin_vfs_tests {
 mod executor_workspace_mount_tests {
     use super::*;
 
-    /// Regression: with an operator catch-all root mount (`path = "/"` →
-    /// some study directory), container outputs under
-    /// `state_dir/containers/workspace` must still resolve to their real
-    /// host location — the executor workspace identity mount wins by
-    /// longest-prefix matching instead of falling through to the root.
+    /// Both private storage layouts must override the coordinator's catch-all
+    /// root, including when the overlay directory is a symlink to another disk.
     #[tokio::test]
     async fn executor_workspace_mount_beats_catch_all_root_mount() {
         let home = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
         let catch_all = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let overlay = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(overlay.path(), state.path().join("containers-overlay"))
+            .unwrap();
         let mut manifest = VfsManifest {
             backend: vec![vfs::BackendDefinition {
                 id: "default".into(),
@@ -1287,31 +1297,182 @@ mod executor_workspace_mount_tests {
                 permissions: Default::default(),
             }],
         };
-        let mut config = crate::RuntimeConfig::default();
-        config.state_dir = state.path().to_path_buf();
-        // Pin from_env()'s root to a tempdir via its env override —
-        // touching $HOME would race other tests.
-        // SAFETY: read only by PodmanConfig::from_env below.
-        unsafe { std::env::set_var("AUTONOMICS_DAG_WORK_ROOT", home.path()) };
+        let config = crate::RuntimeConfig {
+            state_dir: state.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        // Reproduce the original failure before adding executor mounts.
+        let unmapped = vfs::OpendalFileStorage::with_mounts(
+            home.path(),
+            Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap()),
+        );
+        let mut outputs = Vec::new();
+        for driver in [
+            container_runtime::PrivateStorageDriver::Vfs,
+            container_runtime::PrivateStorageDriver::Overlay,
+        ] {
+            let executor = PodmanConfig::for_state_dir_with_storage_driver(state.path(), driver);
+            let root = container_runtime::canonicalize_workspace_root(executor.workspace_root);
+            let output = root.join("02/f957/out.zip");
+            std::fs::create_dir_all(output.parent().unwrap()).unwrap();
+            std::fs::write(&output, b"payload").unwrap();
+            assert!(
+                unmapped
+                    .content_length(&output.to_string_lossy())
+                    .await
+                    .is_err()
+            );
+            outputs.push(output);
+        }
 
         ensure_executor_workspace_mounts(&mut manifest, &config);
-
-        let executor_root = state.path().join("containers/workspace");
-        std::fs::create_dir_all(executor_root.join("ab/cd")).unwrap();
-        std::fs::write(executor_root.join("ab/cd/out.zip"), b"payload").unwrap();
-
-        let mounts =
-            std::sync::Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
-        let storage = vfs::OpendalFileStorage::with_mounts(home.path(), mounts);
-        let visible = executor_root.join("ab/cd/out.zip");
-        let path = visible.to_string_lossy().into_owned();
-        let host = storage.local_host_path(&path);
+        let count = manifest.mount.len();
+        ensure_executor_workspace_mounts(&mut manifest, &config);
         assert_eq!(
-            host.as_deref(),
-            Some(visible.as_path()),
-            "container output must resolve to its real host path, not the catch-all root"
+            manifest.mount.len(),
+            count,
+            "mount assembly must be idempotent"
         );
-        let bytes = storage.read_range(&path, 0..7).await.unwrap();
-        assert_eq!(&bytes.to_vec(), b"payload");
+        let mounts = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(home.path(), mounts.clone());
+        use datafusion::object_store::ObjectStoreExt;
+        use futures::TryStreamExt;
+        for output in outputs {
+            let path = output.to_string_lossy();
+            assert_eq!(
+                storage.local_host_path(&path).as_deref(),
+                Some(output.as_path())
+            );
+            assert_eq!(storage.content_length(&path).await.unwrap(), 7);
+            let chunks: Vec<_> = storage
+                .read_stream(&path, 0..7)
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            assert_eq!(chunks.concat(), b"payload");
+            assert!(storage.check_writable(&path).is_err());
+
+            // The DataFusion/scheduler object-store adapter must see it too.
+            let key = datafusion::object_store::path::Path::from(path.trim_start_matches('/'));
+            assert_eq!(mounts.head(&key).await.unwrap().size, 7);
+            assert_eq!(
+                mounts
+                    .get(&key)
+                    .await
+                    .unwrap()
+                    .bytes()
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                b"payload"
+            );
+        }
+    }
+
+    /// Operator diagnostic: reuse an existing ZIP without rerunning its container.
+    /// AUTONOMICS_PUBLICATION_PROBE_ZIP is a host path returned by the executor;
+    /// AUTONOMICS_PUBLICATION_PROBE_STATE selects the daemon's state directory.
+    #[tokio::test]
+    #[ignore = "requires an existing container ZIP and operator VFS manifest"]
+    async fn existing_container_zip_reaches_archive_extract() {
+        use datafusion::prelude::SessionContext;
+        use sha2::{Digest, Sha256};
+
+        let source = std::env::var("AUTONOMICS_PUBLICATION_PROBE_ZIP").unwrap();
+        let state = std::env::var("AUTONOMICS_PUBLICATION_PROBE_STATE").unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let config = crate::RuntimeConfig {
+            state_dir: state.into(),
+            ..Default::default()
+        };
+        let text = std::fs::read_to_string(config.state_dir.join("vfs.toml")).unwrap();
+        let mut manifest = VfsManifest::from_toml(&text).unwrap();
+        ensure_executor_workspace_mounts(&mut manifest, &config);
+        manifest.backend.push(BackendDefinition {
+            id: "publication-probe".into(),
+            config: BackendConfig::local(scratch.path().to_string_lossy().into_owned()),
+        });
+        manifest.mount.push(MountDefinition {
+            domain: None,
+            path: "/publication-probe".into(),
+            backend: "publication-probe".into(),
+            source: "/".into(),
+            read_only: false,
+            permissions: Default::default(),
+        });
+        let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = Arc::new(vfs::OpendalFileStorage::with_mounts(
+            scratch.path(),
+            mounts.clone(),
+        ));
+        let original = std::fs::read(&source).unwrap();
+        assert_eq!(
+            storage.local_host_path(&source),
+            Some(std::path::PathBuf::from(&source))
+        );
+        assert_eq!(
+            storage.content_length(&source).await.unwrap(),
+            original.len() as u64
+        );
+        let bytes = storage
+            .read_range(&source, 0..original.len() as u64)
+            .await
+            .unwrap();
+        assert_eq!(bytes.to_vec(), original);
+        let session = SessionContext::new();
+        session.runtime_env().register_object_store(
+            datafusion::execution::object_store::ObjectStoreUrl::parse("vfs://")
+                .unwrap()
+                .as_ref(),
+            mounts,
+        );
+        let registry =
+            data_engine::default_registry::build_default_registry_with_container_execution(
+                session.runtime_env(),
+                Some(storage.clone()),
+                Arc::new(dag_core::BundleRegistry::new()),
+                Arc::new(container_runtime::ContainerExecutionInfra::from_env()),
+                Some(scratch.path().join("no-plugins")),
+            );
+        let mut node = registry
+            .build_node(
+                "archive_extract",
+                serde_json::json!({
+                    "src": format!("vfs://{source}"),
+                    "destination_prefix": "/publication-probe/extracted"
+                }),
+            )
+            .unwrap();
+        let outputs = node
+            .execute(
+                registry.ctx(),
+                &[],
+                &dag_core::dag::node_event::NodeReporter::noop(),
+            )
+            .await
+            .unwrap();
+        let files = outputs.get(&0).unwrap().as_file_set().unwrap();
+        assert!(!files.is_empty());
+        for file in files {
+            let path = vfs::uri::storage_path(&file.path).unwrap();
+            let size = storage.content_length(path).await.unwrap();
+            assert!(size > 0);
+            assert_eq!(
+                storage.read_range(path, 0..size).await.unwrap().len() as u64,
+                size
+            );
+            println!(
+                "archive_extract readable output: {} ({} bytes)",
+                file.path, size
+            );
+        }
+        println!(
+            "original ZIP: {} bytes, sha256:{:x}",
+            original.len(),
+            Sha256::digest(&original)
+        );
     }
 }

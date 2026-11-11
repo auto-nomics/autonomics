@@ -490,3 +490,87 @@ mod attachments {
         );
     }
 }
+
+#[tokio::test]
+async fn image_references_protect_current_history_and_cross_entry_purge() {
+    use wiki::storage::{blob::MemoryBlobStore, types::WikiAttachmentStorage};
+    let blobs = MemoryBlobStore::new();
+    let storage = TursoWikiStorage::open_in_memory()
+        .await
+        .unwrap()
+        .with_blob_store(blobs.clone());
+    let owner = uuid::Uuid::new_v4();
+    let source = uuid::Uuid::new_v4();
+    storage
+        .create_entry(entry(owner, "图片来源"))
+        .await
+        .unwrap();
+    let meta = storage
+        .attach_image(owner, "plot.png".into(), b"\x89PNG\r\n\x1a\nfake".to_vec())
+        .await
+        .unwrap();
+    let image = meta.id.parse().unwrap();
+    let mut document = entry(source, "引用图片");
+    document.content = wiki::attachments::markdown_ref(&owner.to_string(), &meta.id, "plot.png");
+    storage.create_entry(document.clone()).await.unwrap();
+    assert!(matches!(
+        storage.detach_attachment(owner, image).await,
+        Err(Error::AttachmentInUse(_))
+    ));
+    document.content = "已移除图片".into();
+    storage.update_entry(document).await.unwrap();
+    // The old snapshot still owns a reference, including when its document is in the recycle bin.
+    storage.delete_entry(source).await.unwrap();
+    let error = storage
+        .detach_attachment(owner, image)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("历史版本"), "{error}");
+    storage.delete_entry(owner).await.unwrap();
+    assert!(matches!(
+        storage.purge_entry(owner).await,
+        Err(Error::AttachmentInUse(_))
+    ));
+    assert!(storage.get_attachment(owner, image).await.is_ok());
+    assert_eq!(blobs.keys().await.len(), 1);
+    storage.purge_entry(source).await.unwrap();
+    storage.purge_entry(owner).await.unwrap();
+    assert!(blobs.keys().await.is_empty());
+}
+
+#[tokio::test]
+async fn own_history_blocks_detach_but_allows_purging_whole_entry() {
+    use wiki::storage::{blob::MemoryBlobStore, types::WikiAttachmentStorage};
+    let storage = TursoWikiStorage::open_in_memory()
+        .await
+        .unwrap()
+        .with_blob_store(MemoryBlobStore::new());
+    let owner = uuid::Uuid::new_v4();
+    let mut document = entry(owner, "历史图片");
+    storage.create_entry(document.clone()).await.unwrap();
+    let meta = storage
+        .attach_image(owner, "plot.png".into(), b"\x89PNG\r\n\x1a\nfake".to_vec())
+        .await
+        .unwrap();
+    document.content = format!("![legacy](wiki-attach://{}/plot.png)", meta.id);
+    storage.update_entry(document.clone()).await.unwrap();
+    document.content.clear();
+    storage.update_entry(document).await.unwrap();
+    assert!(matches!(
+        storage
+            .detach_attachment(owner, meta.id.parse().unwrap())
+            .await,
+        Err(Error::AttachmentInUse(_))
+    ));
+    let restored = storage.get_version(owner, 2).await.unwrap();
+    storage.update_entry(restored).await.unwrap();
+    assert!(
+        storage
+            .get_attachment(owner, meta.id.parse().unwrap())
+            .await
+            .is_ok()
+    );
+    storage.delete_entry(owner).await.unwrap();
+    storage.purge_entry(owner).await.unwrap();
+}

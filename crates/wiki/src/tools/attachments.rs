@@ -23,18 +23,15 @@ fn decode_base64(input: &str) -> Result<Vec<u8>, ToolError> {
 
 /// 附件引用的 markdown 片段(展示层解析 `wiki-attach://` 的约定 URI)。
 fn markdown_ref(meta: &crate::storage::types::AttachmentMeta) -> String {
-    format!(
-        "![{}]({}://{}/{})",
-        meta.filename, "wiki-attach", meta.id, meta.filename
-    )
+    crate::attachments::markdown_ref(&meta.entry_id, &meta.id, &meta.filename)
 }
 
 #[tool(
     name = "wiki_attach_image",
-    description = "Attach an image (base64) to a wiki entry. The filename extension picks \
-                   the MIME (png/jpg/jpeg/gif/webp/svg/bmp/avif only); content is stored \
+    description = "Attach an image (base64, at most 50 MiB) to a wiki entry. Validate file \
+                   signatures and static SVG content (png/jpg/jpeg/gif/webp/svg/bmp/avif); bytes are stored \
                    in the blob backend and metadata links it to the entry. Returns the \
-                   attachment id and a ready-to-paste markdown image reference."
+                   attachment id and a portable wiki-attach://entry-id/attachment-id markdown image reference."
 )]
 pub struct WikiAttachImageInput {
     #[desc = "Entry id (UUID string)"]
@@ -170,7 +167,7 @@ impl ToolFunction for WikiGetAttachmentTool {
 #[tool(
     name = "wiki_detach",
     description = "Remove an attachment from a wiki entry: metadata row is deleted and \
-                   the blob is dropped. Idempotent."
+                   the blob is dropped. Rejects images referenced by current entries or retained versions. Idempotent."
 )]
 pub struct WikiDetachInput {
     #[desc = "Entry id (UUID string)"]

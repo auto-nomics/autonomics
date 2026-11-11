@@ -99,8 +99,16 @@ impl AgentBuilder {
         self
     }
 
+    /// Append an extra system-prompt section. Sections accumulate in call
+    /// order (joined by a newline) so a later section — e.g. the volatile
+    /// skill index — supplements, never replaces, an earlier one such as
+    /// the capability prompt from `build_system_prompt`.
     pub fn with_system_prompt_section(mut self, section: impl Into<String>) -> Self {
-        self.system_prompt_section = Some(section.into());
+        let section = section.into();
+        self.system_prompt_section = Some(match self.system_prompt_section.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing}\n{section}"),
+            _ => section,
+        });
         self
     }
 
@@ -241,5 +249,25 @@ impl AgentBuilder {
 impl Default for AgentBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: `with_system_prompt_section` used to overwrite, so the
+    /// runtime's second call (volatile skill index) silently dropped the
+    /// capability prompt from `build_system_prompt`. Sections must accumulate
+    /// in call order.
+    #[test]
+    fn system_prompt_sections_accumulate() {
+        let builder = AgentBuilder::new()
+            .with_system_prompt_section("## Capabilities\nyou have tools")
+            .with_system_prompt_section("## Skills\n- one");
+        assert_eq!(
+            builder.system_prompt_section.as_deref(),
+            Some("## Capabilities\nyou have tools\n## Skills\n- one")
+        );
     }
 }

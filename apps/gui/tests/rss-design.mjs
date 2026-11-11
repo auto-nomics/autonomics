@@ -1,0 +1,22 @@
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+const origin='http://127.0.0.1:1437';
+const vite=spawn(process.execPath,['node_modules/vite/bin/vite.js','--host','127.0.0.1','--port','1437','--strictPort']);
+let output='',browser; vite.stdout.on('data',v=>output+=v);vite.stderr.on('data',v=>output+=v);
+const feed={id:'nature',version:1,spec:{name:'Nature Research',url:'https://example.org/feed',enabled:true,interval_seconds:3600,max_items_per_feed:500},unread_count:1,item_count:2,last_success_ms:Date.now(),next_due_ms:Date.now()+3600000};
+const items=[{id:'one',feed_id:'nature',title:'A new atlas of cellular discovery',summary:'<p>A closer look at the molecular systems that shape human biology.</p>',authors:['Ada Researcher'],published_ms:Date.now(),first_seen_ms:Date.now(),read:false,link:'https://example.org/article',imported_article_id:null},{id:'two',feed_id:'nature',title:'Mapping the next generation of research',summary:'A research perspective.',authors:[],read:true,published_ms:Date.now(),first_seen_ms:Date.now(),imported_article_id:null}];
+try{
+ for(let i=0;!output.includes(origin);i++){if(i>100)throw Error(output);await new Promise(r=>setTimeout(r,50));}
+ browser=await chromium.launch({executablePath:'/usr/bin/chromium',args:['--no-sandbox']});const page=await browser.newPage({viewport:{width:1400,height:900}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.route(origin+'/',r=>r.fulfill({contentType:'text/html',body:'<html><body></body></html>'}));
+ await page.route('**/api/v1/**',r=>{const p=new URL(r.request().url()).pathname;const method=r.request().method(); if(p.endsWith('/items/one')&&method==='PUT')items[0].read=r.request().postDataJSON().read;if(p.endsWith('/items/one')&&method==='POST')items[0].imported_article_id='paper';return r.fulfill({json:p.endsWith('/feeds')?{feeds:[feed]}:p.endsWith('/status')?{scheduler:{running:true,active_checks:0,last_error:null}}:p.endsWith('/items')?{items,next:null}:p.endsWith('/collections')?{collections:[]}: {}});});
+ await page.goto(origin);await page.evaluate(async()=>{await import('/src/app.css');const {default:R}=await import('/@react-refresh');R.injectIntoGlobalHook(window);window.$RefreshReg$=()=>{};window.$RefreshSig$=()=>t=>t;window.__vite_plugin_react_preamble_installed__=true;const {mount}=await import('/tests/rss-design-mount.tsx');mount();});
+ await page.getByRole('heading',{name:items[0].title}).waitFor();
+ await page.getByRole('button',{name:'Unread',exact:true}).click();assert.equal(await page.locator('.rss-article').count(),1);
+ await page.getByRole('button',{name:'All articles',exact:true}).click();await page.getByLabel('Search loaded articles').fill('atlas');assert.equal(await page.locator('.rss-article').count(),1);await page.getByLabel('Search loaded articles').fill('');
+ await page.locator('.rss-article-select').first().click();await page.getByRole('link',{name:'Open original'}).waitFor();await page.screenshot({path:'/tmp/rss-design-desktop.png'});
+ await page.locator('.rss-article-actions').first().getByRole('button',{name:'Mark read',exact:true}).click();await page.locator('.rss-article.is-read').first().waitFor();await page.evaluate(()=>document.documentElement.classList.add('dark'));await page.screenshot({path:'/tmp/rss-design-dark.png'});await page.evaluate(()=>document.documentElement.classList.remove('dark'));await page.getByRole('button',{name:'Import to Library',exact:true}).click();await page.getByText('Imported to library',{exact:true}).waitFor();
+ for(const width of [800,390]){await page.setViewportSize({width,height:850});assert.equal(await page.getByLabel('Feed inbox',{exact:true}).isVisible(),false);await page.getByRole('button',{name:'Back to articles'}).click();assert.equal(await page.locator('.rss-article').count(),2);assert.ok(await page.evaluate(()=>document.body.scrollWidth<=innerWidth));await page.screenshot({path:`/tmp/rss-design-${width}.png`});if(width===390){await page.getByRole('button',{name:'Manage feeds'}).click();await page.getByText('Manage subscription',{exact:false}).click();await page.getByRole('button',{name:'Edit',exact:true}).click();await page.getByRole('textbox',{name:'Feed name'}).waitFor();}else await page.locator('.rss-article-select').first().click();}
+ assert.deepEqual(errors,[]);console.log('RSS design: search, unread filter, preview, import, responsive navigation and mobile feed management passed');
+}finally{await browser?.close();vite.kill('SIGTERM');}

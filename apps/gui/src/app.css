@@ -444,3 +444,7 @@ body {
 .editor-tabs-scroll::-webkit-scrollbar { height: 4px; }
 .editor-tabs-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
 .editor-tabs-scroll:hover::-webkit-scrollbar-thumb, .editor-tabs-scroll:focus-within::-webkit-scrollbar-thumb { background: var(--muted-foreground); }
+
+.wiki-md img, .wiki-block img { height: auto; max-width: 100%; }
+.wiki-md img { cursor: zoom-in; }
+.wiki-image-pending, .wiki-image-error { display: inline-block; padding: .5em; border: 1px dashed var(--border); color: var(--muted-foreground); }

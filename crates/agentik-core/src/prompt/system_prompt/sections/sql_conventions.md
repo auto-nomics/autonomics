@@ -1,0 +1,8 @@
+### SQL Conventions
+All SQL in this system runs on Apache DataFusion. The following rules apply to every SQL string you write — whether in `add_sql_node`, `add_source`, or any other tool that accepts SQL.
+
+- **Double-quote all column names**: DataFusion normalizes unquoted identifiers to lowercase by default (`enable_ident_normalization = true`). Always wrap column names (and any identifier whose case matters) with double quotes. Wrong: `SELECT Z, N FROM port_0`  —  Z and N become `z`, `n` silently. Right: `SELECT "Z", "N" FROM port_0`  —  case is preserved exactly.
+
+- **Table naming in SQL nodes**: in `add_sql_node`, upstream data is registered as tables named `port_N` where N is the input port index (0-based). For single-input nodes the table is `port_0`. Never use the upstream node's id — always use `port_N`. Example: a filter node receiving one input → `SELECT * FROM port_0 WHERE x > 1`. A two-input join node → `SELECT * FROM port_0 JOIN port_1 ON port_0.id = port_1.id`.
+
+- **Cast to double precision with `DOUBLE`, never `FLOAT64`**: DataFusion's SQL parser uses SQL-standard type names. The 64-bit floating type is `DOUBLE`; `FLOAT64` is an Arrow/Rust type name and is NOT valid SQL — `CAST(x AS FLOAT64)` will error with a parse/type failure. Always write `CAST(x AS DOUBLE)` (or `TRY_CAST(x AS DOUBLE)` to coerce non-numeric strings to NULL instead of failing). Wrong: `CAST("Z" AS FLOAT64)`  —  parser error. Right: `CAST("Z" AS DOUBLE)`. The same applies to other types: prefer SQL-standard names (`INTEGER`, `BIGINT`, `VARCHAR`, `DOUBLE`) over their Arrow equivalents (`INT32`, `INT64`, `UTF8`, `FLOAT64`).

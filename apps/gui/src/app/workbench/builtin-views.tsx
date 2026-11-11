@@ -21,12 +21,11 @@ const BIB_VIEWS: readonly { id: BibliographyWorkspace; label: string; name: stri
 
 function BibliographyView({ mobile }: WorkbenchViewProps) {
   const state = useWorkbenchState();
-
-    const active = state.containerViews.bibliography ?? "library";
-    if (!mobile) return <div ref={setBibliographySidebarSlot} className="flex min-h-0 flex-1 flex-col" />;
-    return (
-      <div role="group" aria-label="文献工作区" className="flex flex-col gap-0.5 p-2">
-        {BIB_VIEWS.filter((view) => mobile || view.id === "library").map((view) => (
+  const active = state.containerViews.bibliography ?? "library";
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {mobile && <div role="group" aria-label="文献工作区" className="flex shrink-0 flex-col gap-0.5 p-2">
+        {BIB_VIEWS.map((view) => (
           <Button
             key={view.id}
             size="sm"
@@ -41,9 +40,10 @@ function BibliographyView({ mobile }: WorkbenchViewProps) {
             <span className="truncate text-xs">{view.label}</span>
           </Button>
         ))}
-      </div>
-    );
-
+      </div>}
+      <div ref={setBibliographySidebarSlot} className="flex min-h-0 flex-1 flex-col" />
+    </div>
+  );
 }
 registerWorkbenchView({ id: "bibliography", title: "文献与证据", defaultLocation: "primarySidebar", body: BibliographyView });
 

@@ -855,3 +855,193 @@ pub async fn vfs_upload(
     }
     Ok(payload)
 }
+
+/// Wiki binary bridge: IDs are path segments, and credentials stay in the native host.
+#[tauri::command]
+pub async fn upload_wiki_image(
+    state: State<'_, GatewayState>,
+    entry_id: String,
+    filename: String,
+    data_base64: String,
+) -> Result<Value, String> {
+    upload_wiki_image_request(&state, entry_id, filename, data_base64).await
+}
+async fn upload_wiki_image_request(
+    state: &GatewayState,
+    entry_id: String,
+    filename: String,
+    data_base64: String,
+) -> Result<Value, String> {
+    if data_base64.len() > (MAX_BIB_UPLOAD_BYTES as usize).div_ceil(3) * 4 {
+        return Err("图片超过 50 MiB".into());
+    }
+    let bytes = BASE64
+        .decode(data_base64)
+        .map_err(|error| error.to_string())?;
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(bytes).file_name(filename),
+    );
+    let response = state
+        .http
+        .post(endpoint(
+            &base,
+            &format!("wiki/entries/{}/attachments", encoded_segment(&entry_id)),
+        ))
+        .bearer_auth(token.as_deref().unwrap_or_default())
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = response.status();
+    let payload = response.json::<Value>().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("图片上传失败")
+            .to_owned());
+    }
+    Ok(payload)
+}
+
+#[tauri::command]
+pub async fn wiki_image_raw(
+    state: State<'_, GatewayState>,
+    entry_id: String,
+    attachment_id: String,
+) -> Result<BibBinaryView, String> {
+    wiki_image_request(&state, entry_id, attachment_id).await
+}
+async fn wiki_image_request(
+    state: &GatewayState,
+    entry_id: String,
+    attachment_id: String,
+) -> Result<BibBinaryView, String> {
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let response = state
+        .http
+        .get(endpoint(
+            &base,
+            &format!(
+                "wiki/entries/{}/attachments/{}/raw",
+                encoded_segment(&entry_id),
+                encoded_segment(&attachment_id)
+            ),
+        ))
+        .bearer_auth(token.as_deref().unwrap_or_default())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("图片无法访问：{}", response.status()));
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_owned();
+    if !mime.starts_with("image/") {
+        return Err("附件不是图片".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_BIB_UPLOAD_BYTES)
+    {
+        return Err("图片超过 50 MiB".into());
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        if bytes.len() + chunk.len() > MAX_BIB_UPLOAD_BYTES as usize {
+            return Err("图片超过 50 MiB".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(BibBinaryView {
+        data_base64: BASE64.encode(bytes),
+        content_type: mime,
+    })
+}
+
+#[cfg(test)]
+mod wiki_image_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[tokio::test]
+    async fn wiki_native_binary_bridge_uploads_and_downloads_with_authentication() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let state = GatewayState::for_endpoint(
+            &listener.local_addr().unwrap().to_string(),
+            Some("wiki-token".into()),
+        );
+        let server = tokio::spawn(async move {
+            for upload in [true, false] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0u8; 4096];
+                let header_end;
+                loop {
+                    let size = stream.read(&mut buffer).await.unwrap();
+                    assert!(size > 0);
+                    bytes.extend_from_slice(&buffer[..size]);
+                    if let Some(end) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
+                        header_end = end + 4;
+                        break;
+                    }
+                }
+                let header = String::from_utf8(bytes[..header_end].to_vec())
+                    .unwrap()
+                    .to_ascii_lowercase();
+                assert!(header.contains("authorization: bearer wiki-token"));
+                if upload {
+                    assert!(header.starts_with("post /api/v1/wiki/entries/entry/attachments "));
+                    assert!(header.contains("multipart/form-data; boundary="));
+                    let length: usize = header
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap()
+                        .trim()
+                        .parse()
+                        .unwrap();
+                    while bytes.len() < header_end + length {
+                        let size = stream.read(&mut buffer).await.unwrap();
+                        assert!(size > 0);
+                        bytes.extend_from_slice(&buffer[..size]);
+                    }
+                    let body = String::from_utf8_lossy(&bytes[header_end..]);
+                    assert!(body.contains("filename=\"plot.png\""));
+                    assert!(body.contains("PNG-bytes"));
+                    let payload = br#"{"attachment_id":"image","filename":"plot.png"}"#;
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", payload.len()).as_bytes()).await.unwrap();
+                    stream.write_all(payload).await.unwrap();
+                } else {
+                    assert!(
+                        header.starts_with("get /api/v1/wiki/entries/entry/attachments/image/raw ")
+                    );
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: 9\r\nConnection: close\r\n\r\nPNG-bytes").await.unwrap();
+                }
+            }
+        });
+        let meta = upload_wiki_image_request(
+            &state,
+            "entry".into(),
+            "plot.png".into(),
+            BASE64.encode(b"PNG-bytes"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(meta["attachment_id"], "image");
+        let raw = wiki_image_request(&state, "entry".into(), "image".into())
+            .await
+            .unwrap();
+        assert_eq!(raw.content_type, "image/png");
+        assert_eq!(BASE64.decode(raw.data_base64).unwrap(), b"PNG-bytes");
+        server.await.unwrap();
+    }
+}

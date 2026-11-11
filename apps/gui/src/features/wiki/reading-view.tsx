@@ -4,6 +4,7 @@
  * prompts), copy-able code blocks, and the 阅读/编辑 view switch that
  * SiYuan exposes per document.
  */
+import { useWikiImages } from "./wiki-images";
 import { BookOpen, SquarePen, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -71,6 +72,7 @@ export function ReadingView({
   onMissingLink: (target: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const imagePreview = useWikiImages(containerRef, `${entry.id}\n${entry.content}`, true);
   const [linkExists, setLinkExists] = useState<Record<string, boolean>>({});
 
   // Resolve every wikilink target once per content revision; the DOM pass
@@ -187,8 +189,9 @@ export function ReadingView({
         <div
           ref={containerRef}
           className="md wiki-md mx-auto max-w-3xl break-words text-sm"
-          dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content) }}
+          dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content, entry.id) }}
         />
+        {imagePreview}
         {footer}
       </ScrollArea>
     </div>

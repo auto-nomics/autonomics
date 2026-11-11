@@ -5,7 +5,7 @@ import { useWikiDocument } from "./wiki-document";
  * block editor — plus a dirty-guarded exit back to 阅读模式.
  */
 import { ChevronDown, Loader2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -24,14 +24,17 @@ export function EditorView({
   entry: WikiEntry;
   navigation?: ReactNode;
   onModeChange: (mode: WikiMode) => void;
-  onSaved: (entry: WikiEntry) => void;
+  onSaved: (entry: WikiEntry, stayEditing: boolean) => void;
 }) {
-  const { title, alias, tags, content, saving, entry, model } = useWikiDocument(initialEntry);
+  const { title, alias, tags, content, saving, pendingImages, entry, model } = useWikiDocument(initialEntry);
   const setTitle = (title: string) => model.update({ title });
   const setAlias = (alias: string) => model.update({ alias });
   const setTags = (tags: string) => model.update({ tags });
   const setContent = (content: string) => model.update({ content });
   const setSaving = (saving: boolean) => model.update({ saving });
+  const [uploadSource] = useState(() => crypto.randomUUID());
+  const setUploading = useCallback((pending: boolean) => model.setUploading(uploadSource, pending), [model, uploadSource]);
+  const uploading = pendingImages > 0;
   const [attrsOpen, setAttrsOpen] = useState(false);
 
   const split = (value: string) =>
@@ -44,7 +47,7 @@ export function EditorView({
     content !== entry.content;
 
   async function save() {
-    if (model.state.saving) return;
+    if (model.state.saving || uploading) return;
     const trimmed = title.trim();
     if (!trimmed) {
       toast.error("标题不能为空");
@@ -71,7 +74,7 @@ export function EditorView({
       }
       const saved = { ...latest, title: trimmed, alias: aliasList, tags: tagList, content };
       model.accept(saved, { title, alias, tags, content });
-      onSaved(saved);
+      onSaved(saved, model.dirty || model.state.pendingImages > 0);
       toast.success("已保存(新版本快照已追加)");
     } catch (error) {
       toast.error((error as Error).message);
@@ -120,7 +123,7 @@ export function EditorView({
           <Button
             size="sm"
             onClick={() => void save()}
-            disabled={saving || !title.trim()}
+            disabled={saving || uploading || !title.trim()}
             title="保存 Ctrl+S"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
@@ -163,7 +166,9 @@ export function EditorView({
         key={entry.id}
         entryId={entry.id}
         initialContent={content}
+        getContent={() => model.state.content}
         onChange={setContent}
+        onUploadsChange={setUploading}
       />
     </div>
   );

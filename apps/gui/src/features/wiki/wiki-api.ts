@@ -178,23 +178,24 @@ export async function listAttachments(id: string): Promise<AttachmentMeta[]> {
   return data.attachments;
 }
 
-/**
- * Multipart upload — gatewayRequest is JSON-only, so this mirrors
- * `uploadBibFulltext`'s browser path. Tauri invoke lacks a generic
- * multipart command; the web app is the supported surface for now.
- */
+/** Browser and desktop share the same multipart endpoint and validation. */
 export async function uploadAttachment(id: string, file: File): Promise<AttachmentMeta> {
+  if (file.size > 50 * 1024 * 1024) throw new Error("图片超过 50 MiB 限制");
+  if ("__TAURI_INTERNALS__" in window) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 32768) binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+    return invoke<AttachmentMeta>("upload_wiki_image", { entryId: id, filename: file.name, dataBase64: btoa(binary) });
+  }
   const form = new FormData();
   form.append("file", file, file.name);
-  const response = await fetch(
-    `/api/v1/wiki/entries/${encodeURIComponent(id)}/attachments`,
-    { method: "POST", credentials: "same-origin", body: form },
-  );
+  const response = await fetch(`/api/v1/wiki/entries/${encodeURIComponent(id)}/attachments`,
+    { method: "POST", credentials: "same-origin", body: form });
   const text = await response.text();
-  const payload = text ? JSON.parse(text) : null;
-  if (!response.ok) {
-    throw new Error(payload?.error ?? `Upload ${response.status}`);
-  }
+  let payload;
+  try { payload = text ? JSON.parse(text) : null; } catch { throw new Error(`Upload ${response.status}`); }
+  if (!response.ok) throw new Error(payload?.error ?? `Upload ${response.status}`);
   return payload as AttachmentMeta;
 }
 

@@ -13,9 +13,10 @@
  * renders `<math>` natively and the original TeX stays in
  * `<semantics><annotation>` (copyable).
  */
+import { wikiAttachmentRef, wikiAttachmentUrl } from "./wiki-attachment-ref";
 import DOMPurify from "dompurify";
 import katex from "katex";
-import { Marked, type Tokens } from "marked";
+import { Marked, type Tokens, type Renderer } from "marked";
 
 export function escapeHtml(value: unknown): string {
   return String(value)
@@ -179,6 +180,18 @@ const wikilinkExtension = {
   },
 };
 
+// Upload markers are document-local placeholders, replaced by the editor after upload.
+const imageUploadExtension = {
+  name: "wiki-image-upload",
+  level: "block" as const,
+  start(src: string) { const index = src.indexOf("<!--wiki-image-upload:"); return index < 0 ? undefined : index; },
+  tokenizer(src: string) {
+    const match = /^<!--wiki-image-upload:([0-9a-f-]{36})-->[ \t]*(?:\n|$)/i.exec(src);
+    return match ? { type: "wiki-image-upload", raw: match[0] } : undefined;
+  },
+  renderer() { return '<p class="wiki-image-pending" role="status">图片待插入…</p>'; },
+};
+
 // ── pipeline factory ──────────────────────────────────────────────────
 
 export interface MarkdownPipeline {
@@ -186,16 +199,24 @@ export interface MarkdownPipeline {
   lexer(content: string): Tokens.Generic[];
 }
 
-function createMarkdownPipeline(options: { wikilinks?: boolean } = {}): MarkdownPipeline {
+function createMarkdownPipeline(options: { wikilinks?: boolean; entryId?: string } = {}): MarkdownPipeline {
   const md = new Marked();
   md.use({
     gfm: true,
     breaks: true,
     extensions: [
       ...mathExtensions,
-      ...(options.wikilinks ? [wikilinkExtension] : []),
+      ...(options.wikilinks ? [wikilinkExtension, imageUploadExtension] : []),
     ],
     renderer: {
+      ...(options.wikilinks ? { image(this: Renderer, token: Tokens.Image) {
+        const alt = token.tokens ? this.parser.parseInline(token.tokens, this.parser.textRenderer) : token.text;
+        const ref = wikiAttachmentRef(token.href, options.entryId);
+        const src = ref ? wikiAttachmentUrl(ref.entryId, ref.attachmentId) : token.href;
+        if (src.startsWith("wiki-attach:")) return `<span class="wiki-image-error">图片引用无效：${escapeHtml(alt)}</span>`;
+        const desktop = ref && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+        return `<img${desktop ? "" : ` src="${escapeHtml(src)}"`} alt="${escapeHtml(alt)}"${token.title ? ` title="${escapeHtml(token.title)}"` : ""} loading="lazy" decoding="async"${ref ? ` data-wiki-entry="${escapeHtml(ref.entryId)}" data-wiki-attachment="${escapeHtml(ref.attachmentId)}"` : ""}>`;
+      } } : {}),
       // Code shell (language header + copy button) — views wire their own
       // delegated copy handler.
       code(token: Tokens.Code) {
@@ -237,8 +258,8 @@ export function renderMarkdown(text: string): string {
 /** Wiki pipeline: identical rendering plus `[[wikilink]]` chips. */
 const wikiPipeline = createMarkdownPipeline({ wikilinks: true });
 
-export function renderWikiMarkdown(text: string): string {
-  return DOMPurify.sanitize(wikiPipeline.parse(text), SANITIZE);
+export function renderWikiMarkdown(text: string, entryId?: string): string {
+  return DOMPurify.sanitize(createMarkdownPipeline({ wikilinks: true, entryId }).parse(text), SANITIZE);
 }
 
 /** Block-lexer access for the wiki block editor (lossless splitting). */

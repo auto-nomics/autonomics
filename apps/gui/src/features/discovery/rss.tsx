@@ -1,4 +1,8 @@
+import { ArrowLeft, ArrowUpRight, Check, Inbox, Library, Plus, PanelLeft, RefreshCw, Rss, Search } from "lucide-react";
+import "./rss.css";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { createPortal } from "react-dom";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,7 +88,12 @@ function FeedEditor({ initial, title, onClose, onSave }: { initial: FeedSpec; ti
   </SearchDialog>;
 }
 
-export function RssSubscriptions({ active = true }: { active?: boolean }) {
+export function RssSubscriptions({ active = true, sidebarSlot, externalSidebar = false, onOpenSidebar }: {
+  active?: boolean;
+  sidebarSlot?: HTMLElement | null;
+  externalSidebar?: boolean;
+  onOpenSidebar?: () => void;
+}) {
   const [feeds, setFeeds] = useState<Feed[]>([]);
   const [items, setItems] = useState<FeedItem[]>([]);
   const [next, setNext] = useState<number | null>(null);
@@ -94,9 +103,11 @@ export function RssSubscriptions({ active = true }: { active?: boolean }) {
   const [filterFeed, setFilterFeed] = useState("");
   const [editor, setEditor] = useState<{ initial: FeedSpec; id?: string; version?: number } | null>(null);
   const [confirm, setConfirm] = useState<Feed | null>(null);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showFeeds, setShowFeeds] = useState(false);
+  const [query, setQuery] = useState("");
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const lifecycle = useRef<AbortController | null>(null);
   const mutation = useRef(false);
   const loadSeq = useRef(0);
@@ -120,7 +131,7 @@ export function RssSubscriptions({ active = true }: { active?: boolean }) {
     if (!active) return;
     const abort = new AbortController(); lifecycle.current = abort; let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try { if (!mutation.current) await fetchAll(abort.signal); } catch (failure) { if (!abort.signal.aborted) setError(String(failure)); }
+      try { if (!mutation.current) await fetchAll(abort.signal); } catch (failure) { if (!abort.signal.aborted) toast.error(String(failure), { id: "rss-request-error" }); }
       if (!abort.signal.aborted) timer = setTimeout(() => void poll(), 5000);
     };
     void poll();
@@ -131,36 +142,45 @@ export function RssSubscriptions({ active = true }: { active?: boolean }) {
   }, [active]);
   async function act(work: (signal: AbortSignal) => Promise<void>) {
     const abort = lifecycle.current; if (!abort || mutation.current) return;
-    mutation.current = true; setBusy(true); setError("");
+    mutation.current = true; setBusy(true);
     try { await work(abort.signal); if (!abort.signal.aborted) await fetchAll(abort.signal); }
-    catch (failure) { if (!abort.signal.aborted) setError(String(failure)); }
+    catch (failure) { if (!abort.signal.aborted) toast.error(String(failure), { id: "rss-request-error" }); }
     finally { mutation.current = false; if (!abort.signal.aborted) setBusy(false); }
   }
   const feedName = (id: string) => feeds.find(f => f.id === id)?.spec.name ?? "Feed";
-  return <section aria-label="RSS subscriptions" className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3 text-sm">
-    <header className="flex flex-wrap items-center justify-between gap-2">
-      <h2 className="font-medium">Subscriptions</h2>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => setEditor({ initial: defaultSpec() })}>Add feed</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(async signal => { await fetchAll(signal); })}>Refresh</Button>
-        <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(async signal => { for (const feed of feeds.filter(f => f.spec.enabled)) await gatewayRequest("POST", api(`${path(feed.id)}/check`), undefined, { signal }); })}>Check all</Button>
+  const visibleItems = items.filter(item => (!unreadOnly || !item.read) &&
+    `${item.title} ${item.authors.join(" ")} ${item.summary ?? ""}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const selected = visibleItems.find(item => item.id === selectedId);
+  const unreadCount = feeds.reduce((sum, feed) => sum + feed.unread_count, 0);
+  const selectFeed = (id: string) => { setShowFeeds(false); setFilterFeed(id); filterRef.current = id; setSelectedId(null); if (lifecycle.current) void act(fetchAll); };
+  const importItem = (item: FeedItem) => void act(async signal => {
+    const destination = collections.find(c => c.id === collection);
+    await gatewayRequest("POST", api(`/items${path(item.id)}`), destination ? { collection_id: destination.id } : {}, { signal });
+    toast.success(`Imported “${item.title}” to ${destination?.name ?? "Library"}.`);
+  });
+  const sidebar = (
+    <aside aria-label="Feed list" className={`rss-sidebar ${externalSidebar ? "rss-workbench-sidebar" : ""}`}>
+      <div className="rss-sidebar-actions">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(async signal => { await fetchAll(signal); toast.success("Subscriptions refreshed."); })}><RefreshCw className={busy ? "animate-spin" : ""} />Refresh</Button>
+        <Button size="sm" variant="outline" disabled={busy || !feeds.length} onClick={() => void act(async signal => { let newItems = 0;
+          const failures: string[] = [];
+          for (const feed of feeds.filter(f => f.spec.enabled)) {
+            const result = await gatewayRequest("POST", api(`${path(feed.id)}/check`), undefined, { signal });
+            const outcome = result.outcome as CheckOutcome;
+            if (outcome.status === "error") failures.push(`${feed.spec.name}: ${outcome.error}`);
+            else newItems += outcome.new_items;
+          }
+          if (failures.length) toast.error(failures.join("; "));
+          else toast.success(`Feeds checked · ${newItems} new item(s).`); })}>Check all</Button>
+        <Button size="sm" onClick={() => setEditor({ initial: defaultSpec() })}><Plus />Add feed</Button>
       </div>
-    </header>
-    <p className="text-xs text-muted-foreground">Subscribe to RSS/Atom feeds (journals, arXiv categories, search alerts). Entries are fetched on a schedule and reviewed here before import.</p>
-    {scheduler && <p className="text-xs">{scheduler.running ? `${scheduler.active_checks} check(s) active` : "Background service stopped"}{scheduler.last_error && <span> · Last service error: {scheduler.last_error}</span>}</p>}
-    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
-    {notice && <p role="status" className="text-xs">{notice}</p>}
-    {editor && <FeedEditor key={editor.id ?? "new"} initial={editor.initial} title={editor.id ? "Edit feed" : "Add feed"} onClose={() => setEditor(null)} onSave={async spec => {
-      if (editor.id && editor.version !== undefined) await gatewayRequest("PUT", api(path(editor.id)), { version: editor.version, spec });
-      else await gatewayRequest("POST", api("/feeds"), spec);
-      setEditor(null);
-    }} />}
-    {confirm && <SearchDialog title="Confirm feed deletion" onClose={() => setConfirm(null)}><p className="text-xs">Delete “{confirm.spec.name}”, its inbox items and scheduling state? Imported library papers are kept.</p><div className="mt-3 flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>Keep feed</Button><Button size="sm" disabled={busy} onClick={() => void act(async signal => { await gatewayRequest("DELETE", api(`${path(confirm.id)}?version=${confirm.version}`), undefined, { signal }); setConfirm(null); })}>Confirm deletion</Button></div></SearchDialog>}
 
-    <section aria-label="Feed list" className="space-y-2"><h3 className="font-medium">Feeds</h3>
+      <button className={`rss-nav ${!filterFeed ? "is-active" : ""}`} onClick={() => selectFeed("")}><Inbox size={16} /><span>All feeds</span><span className="rss-count">{unreadCount}</span></button>
+      <div className="rss-sidebar-heading"><h3>Subscriptions</h3><span>{feeds.length}</span></div>
       {!feeds.length && <p className="text-xs">No feeds yet.</p>}
-      {feeds.map(feed => <article key={feed.id} className="space-y-2 rounded border p-2 text-xs">
-        <p className="break-words font-medium">{feed.spec.name}</p>
+      {feeds.map(feed => <article key={feed.id} className={`rss-feed ${filterFeed === feed.id ? "is-active" : ""}`}>
+        <button className="rss-feed-select" aria-pressed={filterFeed === feed.id} onClick={() => selectFeed(feed.id)}><span className="rss-source-icon">{feed.spec.name.slice(0, 1).toUpperCase()}</span><span className="rss-feed-name">{feed.spec.name}</span><span className="rss-count">{feed.unread_count}</span></button>
+        <details className="rss-feed-settings"><summary>Manage subscription{!feed.spec.enabled && " · Paused"}{feed.last_error && " · Error"}</summary>
         <p className="break-words text-muted-foreground">{feed.spec.url}</p>
         <p>{feed.spec.enabled ? `Automatic checks every ${minutes(feed.spec.interval_seconds)} min` : "Paused"} · {feed.item_count} items ({feed.unread_count} unread)</p>
         <p>Last successful check: {date(feed.last_success_ms)} · Next scheduled check: {feed.spec.enabled ? date(feed.next_due_ms) : "Paused"}</p>
@@ -169,47 +189,79 @@ export function RssSubscriptions({ active = true }: { active?: boolean }) {
           <Button size="xs" variant="outline" disabled={busy} onClick={() => void act(async signal => {
             const result = await gatewayRequest("POST", api(`${path(feed.id)}/check`), undefined, { signal });
             const outcome = result.outcome as CheckOutcome;
-            setNotice(outcome.status === "error" ? `Check failed: ${outcome.error}` : outcome.status === "not_modified" ? `No changes since the last check.` : `${outcome.new_items} new item(s).`);
+            if (outcome.status === "error") toast.error(`Check failed: ${outcome.error}`);
+            else toast.success(outcome.status === "not_modified" ? "No changes since the last check." : `${outcome.new_items} new item(s).`);
           })}>Check now</Button>
           <Button size="xs" variant="outline" disabled={busy} onClick={() => void act(async signal => { await gatewayRequest("POST", api(`${path(feed.id)}/enabled`), { version: feed.version, enabled: !feed.spec.enabled }, { signal }); })}>{feed.spec.enabled ? "Pause" : "Resume"}</Button>
           <Button size="xs" variant="ghost" disabled={busy} onClick={() => setEditor({ initial: structuredClone(feed.spec), id: feed.id, version: feed.version })}>Edit</Button>
           <Button size="xs" variant="ghost" disabled={busy} onClick={() => setConfirm(structuredClone(feed))}>Delete</Button>
         </div>
-      </article>)}
-    </section>
-
-    <section aria-label="Feed inbox" className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="font-medium">Inbox</h3>
-        <div className="flex items-center gap-2 text-xs">
-          <label>Show<select aria-label="Inbox feed filter" className="rounded border bg-background p-1" value={filterFeed} onChange={e => { setFilterFeed(e.target.value); if (lifecycle.current) void act(async signal => { const data = await gatewayRequest("GET", api(e.target.value ? `/items?feed=${encodeURIComponent(e.target.value)}&limit=50` : "/items?limit=50"), undefined, { signal }); setItems(data.items); setNext(data.next); }); }}><option value="">All feeds</option>{feeds.map(f => <option key={f.id} value={f.id}>{f.spec.name}</option>)}</select></label>
-          <label>Import destination<select aria-label="RSS import destination" className="rounded border bg-background p-1" value={collection} onChange={e => setCollection(e.target.value)}><option value="">Library</option>{collections.filter(c => !c.deleted).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-        </div>
+      </details></article>)}
+      <div className="rss-sync"><span className={`rss-sync-dot ${scheduler?.running ? "is-running" : ""}`} /><span>{scheduler ? scheduler.running ? scheduler.active_checks ? `${scheduler.active_checks} check(s) active` : "Background sync on" : "Background service stopped" : "Connecting…"}</span></div>
+      {scheduler?.last_error && <p role="alert" className="text-xs text-destructive">{scheduler.last_error}</p>}
+    </aside>
+  );
+  return <section aria-label="RSS subscriptions" className={`rss-workspace ${externalSidebar ? "rss-external-sidebar" : ""} ${showFeeds ? "rss-show-feeds" : ""}`}>
+    {externalSidebar && active && sidebarSlot && createPortal(sidebar, sidebarSlot)}
+    <header className="rss-header">
+      <div className="rss-brand"><Rss className="size-4 text-muted-foreground" /><div><h2>Subscriptions</h2></div></div>
+      <div className="rss-header-actions">{externalSidebar ? <Button size="icon-sm" variant="ghost" aria-label="Show subscriptions sidebar" onClick={onOpenSidebar}><PanelLeft /></Button> : <Button className="rss-manage-toggle" size="sm" variant="outline" onClick={() => setShowFeeds(old => !old)}>Manage feeds</Button>}
       </div>
-      {!items.length && <p className="text-xs">No inbox items loaded.</p>}
-      {items.map(item => <article key={item.id} className="space-y-2 rounded border p-2 text-xs">
-        <p className="break-words font-medium">{item.title}</p>
-        <p>{feedName(item.feed_id)} · {item.read ? "Read" : "Unread"} · published {date(item.published_ms)} · first seen {date(item.first_seen_ms)}</p>
-        {item.authors.length > 0 && <p className="text-muted-foreground">{item.authors.join(", ")}</p>}
-        {item.summary && <p className="break-words text-muted-foreground">{item.summary.slice(0, 400)}{item.summary.length > 400 && "…"}</p>}
-        {item.link && <a href={item.link} target="_blank" rel="noreferrer" className="break-words underline">{item.link}</a>}
-        <div className="flex flex-wrap gap-1">
-          {item.imported_article_id
-            ? <span role="status">Imported</span>
-            : <Button size="xs" variant="outline" disabled={busy} onClick={() => void act(async signal => {
-                const destination = collections.find(c => c.id === collection);
-                await gatewayRequest("POST", api(`/items${path(item.id)}`), destination ? { collection_id: destination.id } : {}, { signal });
-                setNotice(`Imported “${item.title}” to ${destination?.name ?? "Library"}.`);
-              })}>Import to {collection ? collections.find(c => c.id === collection)?.name ?? "collection" : "Library"}</Button>}
+    </header>
+    {editor && <FeedEditor key={editor.id ?? "new"} initial={editor.initial} title={editor.id ? "Edit feed" : "Add feed"} onClose={() => setEditor(null)} onSave={async spec => {
+      if (editor.id && editor.version !== undefined) await gatewayRequest("PUT", api(path(editor.id)), { version: editor.version, spec });
+      else await gatewayRequest("POST", api("/feeds"), spec);
+      setEditor(null);
+      toast.success(editor.id ? "Feed updated." : "Feed added.");
+      if (lifecycle.current) await fetchAll(lifecycle.current.signal);
+    }} />}
+    {confirm && <SearchDialog title="Confirm feed deletion" onClose={() => setConfirm(null)}><p className="text-xs">Delete “{confirm.spec.name}”, its inbox items and scheduling state? Imported library papers are kept.</p><div className="mt-3 flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={() => setConfirm(null)}>Keep feed</Button><Button size="sm" disabled={busy} onClick={() => void act(async signal => { await gatewayRequest("DELETE", api(`${path(confirm.id)}?version=${confirm.version}`), undefined, { signal }); setConfirm(null); })}>Confirm deletion</Button></div></SearchDialog>}
+
+    <div className={`rss-columns ${selected ? "rss-has-selection" : ""}`}>
+    {!externalSidebar && sidebar}
+
+
+    <section aria-label="Feed inbox" className="rss-timeline">
+      <div className="rss-timeline-header"><div><h3>{filterFeed ? feedName(filterFeed) : "All articles"}</h3><p className="rss-subtitle">{visibleItems.length} loaded articles · {unreadCount} unread across your feeds</p></div>
+        <label className="rss-search"><Search size={15} /><Input aria-label="Search loaded articles" placeholder="Search loaded articles…" value={query} onChange={e => setQuery(e.target.value)} /></label>
+      </div>
+      <div className="rss-toolbar"><div className="rss-tabs" aria-label="Article status"><button aria-pressed={!unreadOnly} className={!unreadOnly ? "is-active" : ""} onClick={() => setUnreadOnly(false)}>All articles</button><button aria-pressed={unreadOnly} className={unreadOnly ? "is-active" : ""} onClick={() => setUnreadOnly(true)}>Unread</button></div>
+        <label className="rss-source-filter">Source<select aria-label="Inbox feed filter" value={filterFeed} onChange={e => selectFeed(e.target.value)}><option value="">All feeds</option>{feeds.map(f => <option key={f.id} value={f.id}>{f.spec.name}</option>)}</select></label>
+      </div>
+      <div className="rss-article-list">
+      {!visibleItems.length && <div className="rss-empty"><span className="rss-empty-icon"><Inbox size={30} strokeWidth={1.3} /></span><h4>{!feeds.length ? "No subscriptions yet." : "You're all caught up."}</h4><p>{!feeds.length ? "Follow journals, arXiv categories, or search alerts. New research will arrive here." : "No loaded articles match this view. Try another filter or check your feeds."}</p>{!feeds.length && <Button size="sm" onClick={() => setEditor({ initial: defaultSpec() })}><Plus />Add your first feed</Button>}</div>}
+      {visibleItems.map(item => <article key={item.id} className={`rss-article ${item.read ? "is-read" : ""} ${selectedId === item.id ? "is-selected" : ""}`}>
+        <button className="rss-article-select" onClick={() => setSelectedId(item.id)} aria-pressed={selectedId === item.id}>
+          <span className="rss-article-meta"><span className="rss-mini-source"><Rss size={11} />{feedName(item.feed_id)}</span><span>{date(item.published_ms ?? item.first_seen_ms)}</span>{!item.read && <span className="rss-unread-dot" title="Unread" />}</span>
+          <h4>{item.title}</h4>
+          {item.summary && <p className="rss-excerpt">{plainSummary(item.summary)}</p>}
+          {item.authors.length > 0 && <span className="rss-authors" title={item.authors.join(", ")}>{item.authors.join(", ")}</span>}
+        </button>
+        <div className="rss-article-actions">
+          {item.imported_article_id ? <span className="rss-imported"><Check size={12} />Imported</span> : <Button size="xs" variant="ghost" disabled={busy} onClick={() => importItem(item)}><Library />Import</Button>}
           <Button size="xs" variant="ghost" disabled={busy} onClick={() => void act(async signal => { await gatewayRequest("PUT", api(`/items${path(item.id)}`), { read: !item.read }, { signal }); })}>{item.read ? "Mark unread" : "Mark read"}</Button>
-          <Button size="xs" variant="ghost" disabled={busy} onClick={() => void act(async signal => { await gatewayRequest("DELETE", api(`/items${path(item.id)}`), undefined, { signal }); })}>Delete</Button>
         </div>
       </article>)}
-      {next !== null && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act(async signal => {
+      {next !== null && <Button className="rss-load-more" size="sm" variant="outline" disabled={busy} onClick={() => void act(async signal => {
         const base = filterFeed ? `/items?feed=${encodeURIComponent(filterFeed)}&` : "/items?";
         const data = await gatewayRequest("GET", api(`${base}before=${next}&limit=50`), undefined, { signal });
         setItems(old => [...old, ...(data.items as FeedItem[])]); setNext(data.next);
       })}>Load more</Button>}
+      </div>
+      <footer className="rss-destination"><Library size={14} /><label>Import destination<select aria-label="RSS import destination" value={collection} onChange={e => setCollection(e.target.value)}><option value="">Library</option>{collections.filter(c => !c.deleted).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></footer>
     </section>
+    <section aria-label="Article preview" className="rss-reader">
+      {selected ? <><div className="rss-reader-toolbar"><Button size="sm" variant="ghost" onClick={() => setSelectedId(null)}><ArrowLeft />Back to articles</Button>{selected.link && safeLink(selected.link) && <a href={selected.link} target="_blank" rel="noreferrer">Open original<ArrowUpRight size={14} /></a>}</div>
+      <div className="rss-reader-content"><p className="rss-eyebrow">{feedName(selected.feed_id)}</p><h3>{selected.title}</h3><p className="rss-subtitle">{date(selected.published_ms ?? selected.first_seen_ms)}</p>{selected.authors.length > 0 && <p className="rss-reader-authors">{selected.authors.join(", ")}</p>}<hr /><p className="rss-reader-summary">{selected.summary ? plainSummary(selected.summary) : "This feed does not include a summary. Open the original article to keep reading."}</p><div className="rss-reader-bottom">{selected.imported_article_id ? <span className="rss-imported"><Check size={14} />Imported to library</span> : <Button size="sm" disabled={busy} onClick={() => importItem(selected)}><Library />Import to {collection ? collections.find(c => c.id === collection)?.name ?? "collection" : "Library"}</Button>}<Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(async signal => { await gatewayRequest("DELETE", api(`/items${path(selected.id)}`), undefined, { signal }); setSelectedId(null); })}>Delete</Button></div></div></> : <div className="rss-empty"><span className="rss-empty-icon"><Rss size={30} strokeWidth={1.3} /></span><h4>Select an article</h4><p>Select an article to read its summary and add it to your research library.</p></div>}
+    </section>
+    </div>
   </section>;
+}
+
+function plainSummary(summary: string) {
+  const document = new DOMParser().parseFromString(summary, "text/html");
+  return document.body.textContent?.trim() ?? "";
+}
+function safeLink(link: string) {
+  try { return ["https:", "http:"].includes(new URL(link).protocol); } catch { return false; }
 }
