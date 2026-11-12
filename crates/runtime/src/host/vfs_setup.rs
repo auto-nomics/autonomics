@@ -55,29 +55,32 @@ pub(super) fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
 
 /// Mount every root a container executor may write outputs under.
 ///
-/// Two construction paths exist and both are load-bearing: the executor
-/// infra builds its workspace from `state_dir/containers/workspace` or
-/// `state_dir/containers-overlay/workspace`, depending on the storage driver
-/// (`ContainerExecutionInfra::for_operator_state_dir`), while this module
-/// historically mounted only the `PodmanConfig::from_env()` root
-/// (`state/work`, or an env override). Mounting just one lets container
-/// outputs fall through to whatever catch-all mount covers the rest of
-/// the host — with an operator root mount (`path = "/"` → a study
-/// directory) that silently misroutes downstream reads to a nonexistent
-/// path and the run fails with `VFS stat … NotFound`. Longest-prefix
-/// matching makes the specific identity mounts win once present.
+/// The current workspace is independent of the Podman storage driver.
+/// Historical workspace roots retain identity mounts so persisted absolute
+/// FileRefs never fall through to an unrelated catch-all VFS mount.
 pub(super) fn ensure_executor_workspace_mounts(manifest: &mut VfsManifest, config: &RuntimeConfig) {
-    ensure_workspace_mount(manifest, &PodmanConfig::from_env().workspace_root);
-    // Keep both private store layouts readable across storage-driver changes.
-    // Derive roots from the executor configuration so overlay and legacy VFS
-    // outputs cannot fall through to the coordinator's catch-all mount.
-    for driver in [
-        container_runtime::PrivateStorageDriver::Vfs,
-        container_runtime::PrivateStorageDriver::Overlay,
+    let executor = PodmanConfig::for_state_dir(&config.state_dir);
+    ensure_workspace_mount(manifest, &executor.workspace_root);
+    // Historical FileRefs contain absolute paths. Keep their identity mounts
+    // readable without moving data or changing the active daemon's storage.
+    for relative in [
+        "state/work",
+        "containers/workspace",
+        "containers-overlay/workspace",
     ] {
-        let executor = PodmanConfig::for_state_dir_with_storage_driver(&config.state_dir, driver);
-        let root = container_runtime::canonicalize_workspace_root(executor.workspace_root);
-        ensure_workspace_mount(manifest, &root);
+        let legacy = config.state_dir.join(relative);
+        if legacy.exists() {
+            // Keep aliases as well as the canonical target: after an offline
+            // move, persisted FileRefs can still name the old symlink leaf.
+            ensure_workspace_mount(manifest, &legacy);
+            if let (Some(parent), Some(name)) = (legacy.parent(), legacy.file_name()) {
+                if let Ok(parent) = parent.canonicalize() {
+                    ensure_workspace_mount(manifest, &parent.join(name));
+                }
+            }
+            let root = container_runtime::canonicalize_workspace_root(legacy);
+            ensure_workspace_mount(manifest, &root);
+        }
     }
 }
 
@@ -1283,6 +1286,10 @@ mod executor_workspace_mount_tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(overlay.path(), state.path().join("containers-overlay"))
             .unwrap();
+        #[cfg(unix)]
+        let moved_work = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(moved_work.path(), overlay.path().join("workspace")).unwrap();
         let mut manifest = VfsManifest {
             backend: vec![vfs::BackendDefinition {
                 id: "default".into(),
@@ -1308,12 +1315,17 @@ mod executor_workspace_mount_tests {
             Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap()),
         );
         let mut outputs = Vec::new();
-        for driver in [
-            container_runtime::PrivateStorageDriver::Vfs,
-            container_runtime::PrivateStorageDriver::Overlay,
+        // Cover the new root and all historical roots, including overlay
+        // storage relocated through a symlink to another disk.
+        for relative in [
+            "work",
+            "state/work",
+            "containers/workspace",
+            "containers-overlay/workspace",
         ] {
-            let executor = PodmanConfig::for_state_dir_with_storage_driver(state.path(), driver);
-            let root = container_runtime::canonicalize_workspace_root(executor.workspace_root);
+            let candidate = state.path().join(relative);
+            std::fs::create_dir_all(&candidate).unwrap();
+            let root = container_runtime::canonicalize_workspace_root(candidate.clone());
             let output = root.join("02/f957/out.zip");
             std::fs::create_dir_all(output.parent().unwrap()).unwrap();
             std::fs::write(&output, b"payload").unwrap();
@@ -1324,6 +1336,13 @@ mod executor_workspace_mount_tests {
                     .is_err()
             );
             outputs.push(output);
+            outputs.push(candidate.join("02/f957/out.zip"));
+            let physical_parent = candidate.parent().unwrap().canonicalize().unwrap();
+            outputs.push(
+                physical_parent
+                    .join(candidate.file_name().unwrap())
+                    .join("02/f957/out.zip"),
+            );
         }
 
         ensure_executor_workspace_mounts(&mut manifest, &config);

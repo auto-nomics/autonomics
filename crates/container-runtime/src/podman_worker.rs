@@ -1237,10 +1237,7 @@ mod tests {
         assert_eq!(storage, &base.join("storage"));
         assert_eq!(runroot, &base.join("run"));
         assert!(!storage.starts_with(runroot) && !runroot.starts_with(storage));
-        assert_eq!(
-            infra.config.workspace_root,
-            temp.path().join("containers/workspace")
-        );
+        assert_eq!(infra.config.workspace_root, temp.path().join("work"));
         infra
             .record_podman_worker_helpers(temp.path(), "after-import")
             .unwrap();

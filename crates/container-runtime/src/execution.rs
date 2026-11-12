@@ -214,10 +214,7 @@ mod tests {
             overlay.run_root.unwrap(),
             state.join("containers-overlay/run")
         );
-        assert_eq!(
-            overlay.workspace_root,
-            state.join("containers-overlay/workspace")
-        );
+        assert_eq!(overlay.workspace_root, state.join("work"));
         // Panels stay on the shared catalog root — one local copy mounted
         // directly by containers, never duplicated per store layout.
         assert_eq!(

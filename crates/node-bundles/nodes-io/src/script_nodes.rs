@@ -149,6 +149,7 @@ pub struct ScriptNode {
     spec: ScriptNodeSpec,
     generic: bool,
     inner: Box<dyn DagNode>,
+    staging_root: std::path::PathBuf,
 }
 
 pub struct ScriptNodeFactory {
@@ -183,6 +184,7 @@ impl Clone for ScriptNode {
             spec: self.spec.clone(),
             generic: self.generic,
             inner: self.inner.clone_box(),
+            staging_root: self.staging_root.clone(),
         }
     }
 }
@@ -719,13 +721,14 @@ fn ensure_staging_parent(path: &str) -> Result<(), DagError> {
 
 /// Temporary host path for one materialized DataFrame input.
 ///
-/// Lives under the persistent dag-tasks root (`script-inputs/` staging
-/// area), not `/tmp`: the path must be on a mount-safe location so the
-/// container staging can symlink it instead of copying, and it must not
-/// churn the tmpfs quota. Deleted by the caller after the inner container
-/// execution; the dag-task GC sweep only ever counts the `script-inputs`
-/// directory as foreign.
-fn temporary_input_path(spec: &ScriptNodeSpec, index: usize, format: &str) -> String {
+/// Lives under the executor's configured work root, including custom runtime
+/// state directories. Deleted by the caller after inner container execution.
+fn temporary_input_path(
+    root: &std::path::Path,
+    spec: &ScriptNodeSpec,
+    index: usize,
+    format: &str,
+) -> String {
     let mut digest = Sha256::new();
     digest.update(&spec.code);
     digest.update(spec.artifact_prefix.as_deref().unwrap_or("").as_bytes());
@@ -734,8 +737,7 @@ fn temporary_input_path(spec: &ScriptNodeSpec, index: usize, format: &str) -> St
         .duration_since(UNIX_EPOCH)
         .map(|value| value.as_nanos())
         .unwrap_or_default();
-    dag_core::dag_tasks_root()
-        .join("script-inputs")
+    root.join("script-inputs")
         .join(format!(
             "autonomics-script-input-{:x}-{}-{}.{}",
             digest.finalize(),
@@ -781,7 +783,12 @@ impl ScriptNode {
                     container_inputs.push(NodeInput::file(index as u8, input.file_value()?.clone()))
                 }
                 ScriptValueKind::Dataframe => {
-                    let path = temporary_input_path(&self.spec, index, &input_spec.format);
+                    let path = temporary_input_path(
+                        &self.staging_root,
+                        &self.spec,
+                        index,
+                        &input_spec.format,
+                    );
                     ensure_staging_parent(&path)?;
                     let frame = input.dataframe()?.clone();
                     let write_result = match input_spec.format.as_str() {
@@ -932,7 +939,7 @@ impl DagNode for ScriptNode {
             .find(|input| input.port == 0)
             .ok_or_else(|| DagError::Schedule("script node requires a DataFrame input".into()))?;
         let frame = data_input.dataframe()?.clone();
-        let path = temporary_input_path(&self.spec, 0, "csv");
+        let path = temporary_input_path(&self.staging_root, &self.spec, 0, "csv");
         ensure_staging_parent(&path)?;
         frame
             .write_csv(
@@ -1081,6 +1088,7 @@ impl NodeFactory for ScriptNodeFactory {
             spec: parsed,
             generic,
             inner: Box::new(inner),
+            staging_root: self.runtime_connection.workspace_root().to_path_buf(),
         }))
     }
 }

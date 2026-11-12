@@ -30,7 +30,8 @@ pub use dag::{
     TypedPodmanResourceControl, TypedPodmanSettings, TypedPodmanUserNamespace,
     TypedRemoteTaskExecutor, TypedSlurmSwapPolicy, TypedWorkerEnvironment, TypedWorkerSettings,
     dag_task_gc_age, dag_task_gc_interval, dag_task_gc_max_bytes, dag_tasks_root,
-    local_task_executor, slurm_backed_executor, sweep_dag_tasks, sweep_dag_tasks_watermark,
+    dag_tasks_root_for_state_dir, local_task_executor, slurm_backed_executor, sweep_dag_tasks,
+    sweep_dag_tasks_watermark,
 };
 pub use node::{
     BundleRegistry, BundleRegistryError, DEFAULT_PORT, DagNode, DataBundle, DataBundleBinding,

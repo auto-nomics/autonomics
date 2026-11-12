@@ -51,8 +51,8 @@ pub use contract::{
 };
 pub use gc::{
     DagTaskGcPolicy, DagTaskGcReport, DagTaskWatermarkReport, dag_task_gc_age,
-    dag_task_gc_interval, dag_task_gc_max_bytes, dag_tasks_root, sweep_dag_tasks,
-    sweep_dag_tasks_watermark,
+    dag_task_gc_interval, dag_task_gc_max_bytes, dag_tasks_root, dag_tasks_root_for_state_dir,
+    sweep_dag_tasks, sweep_dag_tasks_watermark,
 };
 pub use limited::{LimitedTaskExecutor, MAX_REMOTE_TASKS};
 pub use local::{LocalTaskExecutor, local_task_executor};

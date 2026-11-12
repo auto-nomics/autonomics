@@ -15,7 +15,7 @@ use crate::{RuntimeConfig, config::SlurmConfig};
 use container_runtime::{ContainerExecutionInfra, PodmanConnection};
 use dag_core::{
     ProcessRoutingTaskExecutor, RemoteTaskExecutor, TaskExecutor,
-    dag::execution::local_task_executor, dag::execution::slurm_backed_executor,
+    dag::execution::slurm_backed_executor,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -837,7 +837,9 @@ impl ComputeRegistry {
             local,
             local_executor: Arc::new(
                 dag_core::dag::execution::LimitedTaskExecutor::new(
-                    local_task_executor(),
+                    Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                        dag_core::dag_tasks_root_for_state_dir(&config.state_dir),
+                    )),
                     std::thread::available_parallelism()
                         .map(|n| n.get().saturating_sub(2).max(1).min(1024))
                         .unwrap_or(1),
@@ -1307,6 +1309,12 @@ impl ComputeRegistry {
                 }
             }
         }
+        // Remote placement's local fallback keeps its existing admission
+        // behavior while sharing the configured receipt root.
+        let local_fallback: Arc<dyn TaskExecutor> =
+            Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                dag_core::dag_tasks_root_for_state_dir(&self.config.state_dir),
+            ));
         let (executor, containers, hpc, ssh_probe): (
             Arc<dyn TaskExecutor>,
             Arc<dyn PodmanConnection>,
@@ -1349,12 +1357,13 @@ impl ComputeRegistry {
                             &workspace,
                             &self.storage,
                             settings.apptainer_manifest.is_some(),
+                            local_fallback.clone(),
                         )
                         .map_err(|e| e.to_string())?;
                         typed_worker_revision = Some(revision);
                         executor
                     } else {
-                        slurm_backed_executor(slurm.clone(), workspace, local_task_executor())
+                        slurm_backed_executor(slurm.clone(), workspace, local_fallback.clone())
                     };
                 let containers: Arc<dyn PodmanConnection> = if settings.apptainer_manifest.is_some()
                 {
@@ -1474,14 +1483,18 @@ impl ComputeRegistry {
                 ));
                 let executor: Arc<dyn TaskExecutor> =
                     if let Some(path) = &settings.typed_worker_config {
-                        let (executor, _, revision) =
-                            crate::host::hpc_placement::assemble_typed(path, remote, false)
-                                .map_err(|e| e.to_string())?;
+                        let (executor, _, revision) = crate::host::hpc_placement::assemble_typed(
+                            path,
+                            remote,
+                            false,
+                            local_fallback.clone(),
+                        )
+                        .map_err(|e| e.to_string())?;
                         typed_worker_revision = Some(revision);
                         executor
                     } else {
                         Arc::new(ProcessRoutingTaskExecutor::new(
-                            local_task_executor(),
+                            local_fallback.clone(),
                             Some(remote),
                         ))
                     };

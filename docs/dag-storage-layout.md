@@ -11,6 +11,43 @@ Keeping these roles explicit prevents a task cache from being mistaken for a
 result store, and prevents audit receipts from being mistaken for canonical
 data.
 
+## State-root layout
+
+All local task storage defaults derive from the configured `state_dir`
+(`AUTONOMICS_STATE_DIR`, default `~/.autonomics`). Runtime builder overrides
+also apply to task execution, VFS mounts, GC and central storage accounting.
+Role-specific work/receipt environment overrides remain supported.
+
+```text
+{state_dir}/work/                         # task files, independent of driver
+{state_dir}/dag-tasks/                    # local execution receipts
+{state_dir}/containers/storage/           # Podman vfs store
+{state_dir}/containers/run/               # Podman vfs runtime state
+{state_dir}/containers-overlay/storage/   # Podman overlay store
+{state_dir}/containers-overlay/run/       # Podman overlay runtime state
+```
+
+Podman stores contain images, writable container layers and metadata; DAG
+inputs/outputs do not belong in those stores. Remote target execution and
+artifact roots remain target-specific.
+
+### Existing installations
+
+New attempts use the new layout. Old task files and receipts are not moved
+or deleted automatically: a running daemon may still own them, and history
+and caches contain absolute paths. VFS keeps read-only identity mounts for
+`{state_dir}/state/work`, `{state_dir}/containers/workspace` and
+`{state_dir}/containers-overlay/workspace`, including symlink targets.
+The new GC/accounting roots do not sweep these historical directories.
+
+For an offline migration, stop all executors first. Move the old workspace
+to `{state_dir}/work` and leave a symlink at its old absolute location; move
+`state/dag-tasks` to `{state_dir}/dag-tasks` with the same compatibility
+symlink. Do not overwrite or merge an already populated destination without
+checking collisions. If several old workspace roots contain data, retain
+those trees until historical references have been migrated or expired.
+Large-disk deployments may use a symlink for `{state_dir}/work`.
+
 ## 1. Task work directory
 
 Default:
@@ -18,15 +55,17 @@ Default:
 ```text
 $AUTONOMICS_DAG_WORK_ROOT
 # legacy spelling: $AUTONOMICS_PODMAN_WORKSPACE_ROOT
-~/.autonomics/state/work
+~/.autonomics/work
 ```
 
 The host directory is mounted into each container at `/work`. It contains the
 command, staged inputs, declared outputs, undeclared intermediates, and
-`.autonomics` metadata. An auto-generated workdir is content-addressed:
+`.autonomics` metadata. An auto-generated workdir is named by task identity.
+Re-execution claims a fresh directory with an attempt suffix; cache hits retain
+their original path:
 
 ```text
-work/{identity[0..2]}/{identity[2..]}
+work/{identity[0..2]}/{identity[2..]}[-attempt]
 ```
 
 This is the resume/cache layer, comparable to a Nextflow task `work/`
@@ -90,7 +129,7 @@ Default:
 ```text
 $AUTONOMICS_DAG_RECEIPTS_ROOT
 # legacy spelling: $AUTONOMICS_DAG_TASKS_ROOT
-~/.autonomics/state/dag-tasks
+~/.autonomics/dag-tasks
 ```
 
 Each local executor attempt creates a receipt such as:
@@ -128,9 +167,9 @@ deletion must not delete published VFS artifacts.
 
 | Role | Default root / namespace | Purpose | Lives after `run_dag` | Cleanup |
 |---|---|---|---:|---|
-| Task workdir | `state/work` | execution, staging, resume cache | yes | opt-in workdir age GC |
+| Task workdir | `work` | execution, staging, resume cache | yes | opt-in workdir age GC |
 | Published artifact | VFS under `artifact_prefix` | immutable final output | yes | VFS/backend retention policy |
-| Receipt | `state/dag-tasks` | manifests, status, logs, DataFrame evidence | yes | DAG receipt age/watermark GC |
+| Receipt | `dag-tasks` | manifests, status, logs, DataFrame evidence | yes | DAG receipt age/watermark GC |
 
 ## Operator decision rules
 
@@ -140,7 +179,7 @@ deletion must not delete published VFS artifacts.
 - Need to know what ran? Keep the receipt (or first copy its small metadata
   into a durable audit store).
 - Do not use `dag-tasks` as a result store.
-- Do not treat an unpublished `/mnt/.../state/work/...` path as a permanent
+- Do not treat an unpublished `/mnt/.../work/...` path as a permanent
   deliverable.
 
 ## Central lifecycle & storage governance

@@ -319,7 +319,7 @@ impl SharedInfra {
         if config.local_container_execution_required()? {
             spawn_container_gc(&container_execution);
         }
-        spawn_dag_task_gc();
+        spawn_dag_task_gc(&config.state_dir);
 
         let engine_manager = build_engine_manager(
             config,
@@ -942,6 +942,10 @@ async fn build_engine_manager(
         .with_container_execution(Arc::clone(container_execution));
 
     let mut engine = engine_builder.build();
+    let receipt_root = dag_core::dag_tasks_root_for_state_dir(&config.state_dir);
+    engine.set_task_executor(Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+        receipt_root.clone(),
+    )));
     tracing::info!("SharedInfra::open: DataEngine built");
 
     // ── Task executor selection ─────────────────────────────────
@@ -973,6 +977,9 @@ async fn build_engine_manager(
                 &config.state_dir.join("slurm-tasks"),
                 file_storage,
                 config.slurm.apptainer_manifest.is_some(),
+                Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                    receipt_root.clone(),
+                )),
             )?;
             match max_remote_tasks {
                 Some(limit) => engine.set_coordinator_concurrency(limit)?,
@@ -983,7 +990,9 @@ async fn build_engine_manager(
             dag_execution::slurm_backed_executor(
                 settings,
                 config.state_dir.join("slurm-tasks"),
-                dag_execution::local_task_executor(),
+                Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                    receipt_root.clone(),
+                )),
             )
         };
         engine.set_task_executor(executor);
@@ -1003,7 +1012,12 @@ async fn build_engine_manager(
         engine = engine.with_history(history);
     }
 
-    let engine_manager = Arc::new(DataEngineManager::new(engine));
+    let engine_manager = Arc::new(DataEngineManager::with_policy_and_roots(
+        engine,
+        data_engine::runtime::MaintenancePolicy::from_env(),
+        container_execution.config.workspace_root.clone(),
+        receipt_root,
+    ));
     rsi.configure_registry(Arc::new(SharedPluginRegistryControl {
         manager: Arc::clone(&engine_manager),
         execution: Arc::clone(container_execution),

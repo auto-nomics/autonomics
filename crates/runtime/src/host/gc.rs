@@ -82,8 +82,8 @@ pub(super) fn spawn_container_gc(infra: &Arc<ContainerExecutionInfra>) {
 /// dead-owner first, then live-owner ones past a 6h grace, so a long-lived
 /// daemon's history cannot grow without bound either — back down to 75% of
 /// the ceiling.
-pub(super) fn spawn_dag_task_gc() {
-    let root = dag_core::dag_tasks_root();
+pub(super) fn spawn_dag_task_gc(state_dir: &std::path::Path) {
+    let root = dag_core::dag_tasks_root_for_state_dir(state_dir);
     let policy = dag_core::DagTaskGcPolicy {
         min_age: dag_core::dag_task_gc_age(),
         dry_run: false,

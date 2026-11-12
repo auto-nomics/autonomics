@@ -45,23 +45,27 @@ const GC_PENDING_PREFIX: &str = ".gc-";
 
 /// Persistent root for DAG task receipts.
 ///
-/// `$AUTONOMICS_DAG_TASKS_ROOT` when set, else `$HOME/.autonomics/state/
-/// dag-tasks`, else a temp-dir fallback for headless environments without
-/// a home directory.
+/// Role-specific overrides take precedence over the configured state directory.
 pub fn dag_tasks_root() -> PathBuf {
-    if let Some(root) = std::env::var_os(DAG_RECEIPTS_ROOT_ENV).filter(|value| !value.is_empty()) {
-        return PathBuf::from(root);
-    }
-    if let Some(root) = std::env::var_os(DAG_TASKS_ROOT_ENV) {
-        return PathBuf::from(root);
-    }
-    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&home)
-            .join(".autonomics")
-            .join("state")
-            .join("dag-tasks");
-    }
-    std::env::temp_dir().join("autonomics").join("dag-tasks")
+    let state = std::env::var_os("AUTONOMICS_STATE_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| Path::new(&home).join(".autonomics"))
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("autonomics"));
+    dag_tasks_root_for_state_dir(&state)
+}
+
+/// Resolve receipts for an explicit runtime state root, including builder overrides.
+pub fn dag_tasks_root_for_state_dir(state_dir: &Path) -> PathBuf {
+    std::env::var_os(DAG_RECEIPTS_ROOT_ENV)
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os(DAG_TASKS_ROOT_ENV).filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state_dir.join("dag-tasks"))
 }
 
 /// Policy for one sweep of the dag-tasks tree.
@@ -479,14 +483,22 @@ mod tests {
         assert_eq!(dag_tasks_root(), legacy);
         drop(legacy_guard);
 
+        let state = Path::new("/tmp/custom-dag-state");
+        assert_eq!(dag_tasks_root_for_state_dir(state), state.join("dag-tasks"));
+        let state_guard = EnvGuard::set("AUTONOMICS_STATE_DIR", &state.to_string_lossy());
+        assert_eq!(dag_tasks_root(), state.join("dag-tasks"));
+        // Explicit builder state must win over ambient state.
+        assert_eq!(
+            dag_tasks_root_for_state_dir(Path::new("/tmp/builder-state")),
+            Path::new("/tmp/builder-state/dag-tasks")
+        );
+        drop(state_guard);
+
         // Default derives from HOME when present (it is, in test envs).
         if let Some(home) = std::env::var_os("HOME") {
             assert_eq!(
                 dag_tasks_root(),
-                Path::new(&home)
-                    .join(".autonomics")
-                    .join("state")
-                    .join("dag-tasks")
+                Path::new(&home).join(".autonomics").join("dag-tasks")
             );
         }
     }

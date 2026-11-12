@@ -35,12 +35,24 @@ pub fn ensure_backend_env_removed() -> Result<(), String> {
 pub fn podman_state_root() -> PathBuf {
     if let Some(state) = std::env::var_os("AUTONOMICS_STATE_DIR").filter(|value| !value.is_empty())
     {
-        return PathBuf::from(state).join("containers");
+        return PathBuf::from(state);
     }
     if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
-        return Path::new(&home).join(".autonomics").join("state");
+        return Path::new(&home).join(".autonomics");
     }
-    std::env::temp_dir().join("autonomics").join("podman")
+    std::env::temp_dir().join("autonomics")
+}
+
+/// Resolve task work independently of the container storage driver.
+pub fn work_root_for_state_dir(state_dir: &Path) -> PathBuf {
+    let root = std::env::var_os("AUTONOMICS_DAG_WORK_ROOT")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var_os("AUTONOMICS_PODMAN_WORKSPACE_ROOT").filter(|value| !value.is_empty())
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state_dir.join("work"));
+    canonicalize_workspace_root(root)
 }
 
 pub fn default_panel_cache_root() -> PathBuf {

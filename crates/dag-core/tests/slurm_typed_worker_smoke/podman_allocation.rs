@@ -410,7 +410,7 @@ fn validate_backend_records(
         || !leaf[4..].bytes().all(|byte| byte.is_ascii_alphanumeric())
         || backend["schema"] != "ORDINARY_PODMAN_SLURM_LOCAL_BACKEND_V1"
         || backend["workspace"]
-            != json!(Path::new(workspace).join("typed-state/containers/workspace"))
+            != json!(Path::new(workspace).join("typed-state/work"))
         || backend["cleanup"] != "RETAINED_UNTIL_INDEPENDENT_HELPER_STOP_AND_IDENTITY_PROOF"
     {
         return Err("worker did not retain its private node-local Podman backend identity".into());
@@ -496,7 +496,7 @@ def read(parent,name):
  stamp=lambda x:(x.st_dev,x.st_ino,x.st_size,x.st_mode,x.st_uid,x.st_gid,x.st_nlink,x.st_mtime_ns,x.st_ctime_ns)
  assert stamp(s)==stamp(after)==stamp(named)
  return {{'json':json.loads(raw),'sha256':hashlib.sha256(raw).hexdigest(),'bytes':len(raw),'inode':s.st_ino}}
-state=descend(fd,'typed-state');work=descend(state,'containers/workspace')
+state=descend(fd,'typed-state');work=descend(state,'work')
 names=[name for name in os.listdir(work) if name.endswith('.slurm-allocation.json')]
 assert len(names)==1
 result={{'run':read(work,names[0]),'preparation':read(state,'slurm-allocation-preparation.json'),'run_filename':names[0],'backend':read(state,'podman-local-backend.json'),'oci':read(state,'podman-oci-runtime.json')}}
@@ -882,7 +882,7 @@ fn synthetic_backend_records_require_local_siblings_and_exact_pinned_oci_configu
     let configuration = "[engine]\nruntime=\"autonomics-crun\"\nruntime_supports_nocgroup=[\"autonomics-crun\"]\nruntime_supports_json=[\"autonomics-crun\"]\n[engine.runtimes]\nautonomics-crun=[\"/technical/crun\"]\n";
     let valid = json!({"backend":{"json":{
         "schema":"ORDINARY_PODMAN_SLURM_LOCAL_BACKEND_V1","runtime":"/tmp/apm-toy123",
-        "workspace":"/technical/attempt/typed-state/containers/workspace",
+        "workspace":"/technical/attempt/typed-state/work",
         "cleanup":"RETAINED_UNTIL_INDEPENDENT_HELPER_STOP_AND_IDENTITY_PROOF",
         "storage":{"path":"/tmp/apm-toy123/storage","dev":7,"ino":10,"uid":uid,"gid":uid,"mode":0o40700},
         "runroot":{"path":"/tmp/apm-toy123/run","dev":7,"ino":11,"uid":uid,"gid":uid,"mode":0o40700}
@@ -900,7 +900,7 @@ fn synthetic_backend_records_require_local_siblings_and_exact_pinned_oci_configu
         ("/backend/json/storage/uid", json!(999)),
         (
             "/backend/json/workspace",
-            json!("/technical/another/typed-state/containers/workspace"),
+            json!("/technical/another/typed-state/work"),
         ),
         ("/oci/json/path", json!("/untrusted/crun")),
         (

@@ -139,17 +139,18 @@ fn present(path: &Path) -> Result<bool, String> {
 }
 
 async fn output(config: &PodmanConfig, args: &[&str]) -> Result<std::process::Output, String> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        config
-            .async_command()
-            .args(args)
-            .stdin(Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(|_| "container ownership command timed out".to_string())?
-    .map_err(error)
+    // kill_on_drop: when the timeout below drops the future, the podman child
+    // is killed instead of orphaning while still holding the container store's
+    // locks (orphaned holders block every subsequent podman invocation).
+    let mut command = config.async_command();
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .kill_on_drop(true);
+    tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+        .await
+        .map_err(|_| "container ownership command timed out".to_string())?
+        .map_err(error)
 }
 
 impl OwnedIntent {

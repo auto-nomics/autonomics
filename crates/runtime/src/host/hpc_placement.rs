@@ -12,7 +12,7 @@ use std::sync::Arc;
 use data_engine::dag::execution::{
     LimitedTaskExecutor, MAX_REMOTE_TASKS, PlacementTaskExecutor, RemoteTaskExecutor,
     SlurmSettings, SlurmTaskTransport, SshArtifactStore, SshDataHome, TaskExecutor,
-    TypedRemoteTaskExecutor, TypedWorkerSettings, local_task_executor,
+    TypedRemoteTaskExecutor, TypedWorkerSettings,
 };
 use serde::Deserialize;
 
@@ -235,6 +235,7 @@ pub(crate) fn executor(
     workspace: &Path,
     storage: &vfs::OpendalFileStorage,
     remote_container_dispatch: bool,
+    local: Arc<dyn TaskExecutor>,
 ) -> Result<(Arc<dyn TaskExecutor>, Option<usize>, String)> {
     let profile = read_profile(path)?;
     let mut store = SshArtifactStore::new(
@@ -259,7 +260,7 @@ pub(crate) fn executor(
         Arc::new(store),
         workspace,
     ));
-    assemble_typed(path, remote, remote_container_dispatch)
+    assemble_typed(path, remote, remote_container_dispatch, local)
 }
 
 /// Wrap one already-built remote executor with the pinned typed-worker
@@ -270,6 +271,7 @@ pub(crate) fn assemble_typed(
     path: &Path,
     remote: Arc<dyn TaskExecutor>,
     remote_container_dispatch: bool,
+    local: Arc<dyn TaskExecutor>,
 ) -> Result<(Arc<dyn TaskExecutor>, Option<usize>, String)> {
     let profile = read_profile(path)?;
     let source_revision = profile.worker.expected_source_revision.clone();
@@ -284,9 +286,8 @@ pub(crate) fn assemble_typed(
         ) as Arc<dyn TaskExecutor>,
         None => typed,
     };
-    let mut placement =
-        PlacementTaskExecutor::new(local_task_executor(), Some(remote), profile.local_kinds)
-            .map_err(|error| Error::Other(error.to_string()))?;
+    let mut placement = PlacementTaskExecutor::new(local, Some(remote), profile.local_kinds)
+        .map_err(|error| Error::Other(error.to_string()))?;
     if remote_container_dispatch {
         placement = placement.with_remote_container_dispatch();
     }

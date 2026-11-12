@@ -116,10 +116,7 @@ impl PodmanConfig {
         let root = podman_state_root();
         Self {
             program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
-            workspace_root: crate::config::canonicalize_workspace_root(env_path(
-                "AUTONOMICS_DAG_WORK_ROOT",
-                env_path("AUTONOMICS_PODMAN_WORKSPACE_ROOT", root.join("work")),
-            )),
+            workspace_root: crate::config::work_root_for_state_dir(&root),
             panel_cache_root: env_path("AUTONOMICS_PANEL_CACHE_ROOT", default_panel_cache_root()),
             storage_root: None,
             run_root: None,
@@ -144,7 +141,7 @@ impl PodmanConfig {
     pub fn for_state_dir(state_dir: &Path) -> Self {
         Self {
             program: env_value("AUTONOMICS_PODMAN_PROGRAM", "podman"),
-            workspace_root: state_dir.join("containers/workspace"),
+            workspace_root: crate::config::work_root_for_state_dir(state_dir),
             panel_cache_root: crate::config::default_panel_cache_root(),
             storage_root: Some(state_dir.join("containers/storage")),
             run_root: Some(state_dir.join("containers/run")),
@@ -172,7 +169,6 @@ impl PodmanConfig {
             // The panel cache keeps pointing at the shared catalog root in
             // both layouts — one local copy of every bundle.
             let root = state_dir.join("containers-overlay");
-            config.workspace_root = root.join("workspace");
             config.storage_root = Some(root.join("storage"));
             config.run_root = Some(root.join("run"));
             config.storage_driver = Some("overlay".into());
@@ -1543,11 +1539,17 @@ mod tests {
         let overlay =
             PodmanConfig::for_state_dir_with_storage_driver(state, PrivateStorageDriver::Overlay);
         assert_ne!(overlay.storage_root, legacy.storage_root);
-        // Storage/run/workspace move to the separate overlay store; the
+        // Storage/run move to the separate overlay store; the
         // panel cache stays on the shared catalog root in every layout.
         assert_eq!(overlay.panel_cache_root, legacy.panel_cache_root);
+        assert_eq!(overlay.workspace_root, legacy.workspace_root);
+        assert_eq!(overlay.workspace_root, state.join("work"));
+        assert!(
+            !overlay
+                .workspace_root
+                .starts_with(state.join("containers-overlay"))
+        );
         for root in [
-            &overlay.workspace_root,
             overlay.storage_root.as_ref().unwrap(),
             overlay.run_root.as_ref().unwrap(),
         ] {
