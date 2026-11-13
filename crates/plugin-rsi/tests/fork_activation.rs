@@ -53,6 +53,25 @@ script_file = \"{script_file}\"
     )
 }
 
+struct FailOnceRegistry(std::sync::atomic::AtomicBool);
+impl plugin_rsi::PluginRegistryControl for FailOnceRegistry {
+    fn installed_node_addresses(&self) -> plugin_rsi::Result<Vec<String>> {
+        Ok(vec![])
+    }
+    fn reload_plugin(&self, _: &str) -> plugin_rsi::Result<()> {
+        if self.0.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            Err(plugin_rsi::Error::Validation(
+                "injected registry refresh failure".into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    fn uninstall_plugin(&self, _: &str) -> plugin_rsi::Result<()> {
+        Ok(())
+    }
+}
+
 struct NoopRegistry;
 
 impl plugin_rsi::PluginRegistryControl for NoopRegistry {
@@ -283,6 +302,28 @@ script_file = \"scripts/forked.sh\"
     assert_eq!(install_output["validation_report"]["overall"], "pass");
     assert!(install_output["local_commit"].is_string());
     assert!(install_output["local_digest"].is_string());
+    let prior_source = infra.store().installed_source("forked-plugin").unwrap();
+    infra.configure_registry(Arc::new(FailOnceRegistry(
+        std::sync::atomic::AtomicBool::new(true),
+    )));
+    assert!(infra.validate_and_activate_local("forked-plugin").is_err());
+    assert_eq!(
+        infra.store().installed_source("forked-plugin").unwrap(),
+        prior_source
+    );
+    infra.configure_registry(Arc::new(NoopRegistry));
+    let state_report = infra.plugin_status("forked-plugin").unwrap();
+    assert_eq!(state_report["has_unactivated_changes"], false);
+    assert_eq!(
+        state_report["active"]["digest"],
+        install_output["local_digest"]
+    );
+    assert!(
+        infra
+            .validate_and_activate_local_expected("forked-plugin", Some("sha256:stale"))
+            .is_err()
+    );
+
     forked.refresh().unwrap();
     assert_eq!(forked.status(), PluginStatus::Draft);
     assert!(forked.manifest().lifecycle.publication_pending);

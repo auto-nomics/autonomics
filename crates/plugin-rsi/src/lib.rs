@@ -85,3 +85,6 @@ pub use tools::{
     plugin_development_tool_registrations,
 };
 pub use vcs::gitrepo::GitRepo;
+
+pub use runtime::behavior::{BehaviorCase, BehaviorSuite, OutputCheck};
+pub use runtime::identity::content_fingerprint;

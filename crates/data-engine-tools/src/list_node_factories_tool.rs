@@ -38,7 +38,8 @@ impl ToolFunction for ListNodeFactoriesTool {
     type Input = ListNodeFactoriesInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        let nodes = self.client.list_node_factories().map_err(ExecError::from)?;
+        let mut nodes = self.client.list_node_factories().map_err(ExecError::from)?;
+        nodes.sort_by(|a, b| a.address.cmp(&b.address));
 
         let kind = input
             .kind

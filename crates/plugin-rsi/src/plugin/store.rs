@@ -266,6 +266,14 @@ impl PluginStore {
     /// The development workspace remains mutable and keeps its development
     /// status; the DAG always reads the immutable snapshot selected here.
     pub fn install_local(&self, plugin_name: &str) -> Result<LocalInstalledPluginSource> {
+        self.install_local_checked(plugin_name, |_| Ok(()))
+    }
+
+    pub fn install_local_checked(
+        &self,
+        plugin_name: &str,
+        check: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<LocalInstalledPluginSource> {
         let mut operator = self
             .develop(plugin_name)?
             .ok_or_else(|| Error::Validation(format!("unknown plugin `{plugin_name}`")))?;
@@ -345,6 +353,7 @@ impl PluginStore {
             ..Default::default()
         };
         save_manifest(&workspace, &manifest)?;
+        check(&destination)?;
         crate::write_local_plugin_source(
             &self.registry_path,
             plugin_name,

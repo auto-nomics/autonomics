@@ -3,3 +3,6 @@ pub mod dev_session;
 pub mod infra;
 pub mod layout;
 pub mod node_test_run;
+
+pub mod behavior;
+pub mod identity;

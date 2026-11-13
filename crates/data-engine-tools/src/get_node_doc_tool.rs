@@ -40,6 +40,13 @@ impl ToolFunction for GetNodeDocTool {
             .get_node_doc(&input.kind)
             .map_err(ExecError::from)?;
 
-        Ok(ToolResult::success_json(serde_json::json!({ "doc": doc })))
+        let status = input.kind.split_once('/').and_then(|(plugin, _)| {
+            plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+                .plugin_status(plugin)
+                .ok()
+        });
+        Ok(ToolResult::success_json(
+            serde_json::json!({ "doc": doc, "plugin_status": status }),
+        ))
     }
 }

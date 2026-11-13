@@ -17,6 +17,9 @@ mod manifest;
 mod node_create;
 mod node_update;
 mod node_update_doc;
+mod node_upsert;
+mod r_node;
+mod status;
 mod uninstall;
 
 use std::{
@@ -187,6 +190,11 @@ impl PluginDevelopmentToolsetRegistry {
         })
     }
 
+    /// Read-only integration hook for node discovery tools.
+    pub fn plugin_status(&self, plugin: &str) -> RsiResult<serde_json::Value> {
+        self.infra()?.plugin_status(plugin)
+    }
+
     fn infra(&self) -> RsiResult<Arc<PluginInfra>> {
         self.lock(|state| {
             state.infra.clone().ok_or_else(|| {
@@ -293,6 +301,15 @@ pub fn plugin_development_tool_registrations(agent_id: impl Into<String>) -> Vec
             state: state.clone(),
         }),
         ToolRegistration::from(fork::PluginForkTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(status::PluginStatusTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(r_node::PluginRNodeCreateTool {
+            state: state.clone(),
+        }),
+        ToolRegistration::from(node_upsert::PluginNodeUpsertTool {
             state: state.clone(),
         }),
         ToolRegistration::from(install::PluginInstallTool {

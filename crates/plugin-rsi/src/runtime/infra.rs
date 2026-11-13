@@ -6,7 +6,7 @@
 
 use std::{
     path::Path,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use crate::{
@@ -35,6 +35,7 @@ pub trait PluginRegistryControl: Send + Sync {
 /// One trusted plugin subsystem.
 #[derive(Clone)]
 pub struct PluginInfra {
+    pub(crate) activation_lock: Arc<Mutex<()>>,
     store: Arc<PluginStore>,
     environments: EnvironmentRegistry,
     publisher: SharedPluginPublisher,
@@ -62,6 +63,7 @@ impl PluginInfra {
             author_email,
         ));
         Ok(Self {
+            activation_lock: Arc::new(Mutex::new(())),
             store: Arc::clone(&store),
             environments,
             publisher,
@@ -262,26 +264,123 @@ impl PluginInfra {
     /// This integrates the plugin with the DAG before GitHub publication.
     /// The development workspace stays independent of the immutable snapshot.
     pub fn install_local(&self, plugin_name: &str) -> Result<crate::LocalInstalledPluginSource> {
-        let source = self.store.install_local(plugin_name)?;
-        self.reload_plugin(plugin_name)?;
-        Ok(source)
+        let _guard = self
+            .activation_lock
+            .lock()
+            .map_err(|_| Error::Validation("activation lock poisoned".into()))?;
+        let expected = crate::content_fingerprint(&self.store.root().join(plugin_name))?;
+        self.activate_candidate(plugin_name, &expected)
     }
 
-    /// Validate a workspace and immediately activate its immutable snapshot.
-    ///
-    /// Human review and GitHub publication are intentionally not on this path.
-    /// The manifest remains editable while the DAG reads an immutable local
-    /// snapshot, and the background distiller can later publish or merge it.
+    fn activate_candidate(
+        &self,
+        plugin_name: &str,
+        expected: &str,
+    ) -> Result<crate::LocalInstalledPluginSource> {
+        let registry_path = self.store.registry_path();
+        let previous = match std::fs::read(registry_path) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        self.bind_author_suite_if_present(plugin_name)?;
+        let suite = self.behavior_suite(plugin_name)?;
+        let result = self
+            .store
+            .install_local_checked(plugin_name, |candidate| {
+                if crate::content_fingerprint(candidate)? != expected
+                    || crate::content_fingerprint(&self.store.root().join(plugin_name))? != expected
+                {
+                    return Err(Error::Validation(
+                        "workspace changed during validation; revalidate before activation".into(),
+                    ));
+                }
+                let workspace = crate::PluginWorkspace::new(candidate);
+                let manifest: container_plugin::manifest::PluginManifest =
+                    toml::from_str(&workspace.read_text("manifest.toml")?)
+                        .map_err(|e| Error::Validation(e.to_string()))?;
+                let owned: Vec<_> = manifest.nodes.iter().map(|n| n.kind.clone()).collect();
+                let report = crate::validate_workspace(
+                    plugin_name,
+                    &workspace,
+                    &self.catalog(),
+                    &self.installed_node_addresses()?,
+                    &owned,
+                    1,
+                );
+                if !report.passed() {
+                    return Err(Error::Validation(format!(
+                        "frozen candidate engineering validation failed: {:?}",
+                        report
+                    )));
+                }
+                self.validate_behavior_candidate(plugin_name, candidate, suite.as_ref())?;
+                if crate::content_fingerprint(candidate)? != expected
+                    || crate::content_fingerprint(&self.store.root().join(plugin_name))? != expected
+                {
+                    return Err(Error::Validation(
+                        "content changed while behavior tests ran".into(),
+                    ));
+                }
+                Ok(())
+            })
+            .and_then(|source| {
+                self.reload_plugin(plugin_name)?;
+                Ok(source)
+            });
+        if let Err(error) = result {
+            let restore = (|| -> Result<()> {
+                if let Some(bytes) = previous {
+                    std::fs::write(registry_path, bytes)?;
+                } else if registry_path.exists() {
+                    std::fs::remove_file(registry_path)?;
+                }
+                self.store.materialize_registry()?;
+                if self.store.registry_sources()?.contains_key(plugin_name) {
+                    self.reload_plugin(plugin_name)?;
+                } else {
+                    self.unload_plugin(plugin_name)?;
+                }
+                Ok(())
+            })();
+            return match restore {
+                Ok(()) => Err(error),
+                Err(recovery) => Err(Error::Validation(format!(
+                    "ACTIVATION_INCONSISTENT: {error}; restoration failed: {recovery}"
+                ))),
+            };
+        }
+        result
+    }
+
     pub fn validate_and_activate_local(&self, plugin_name: &str) -> Result<LocalActivationOutcome> {
+        self.validate_and_activate_local_expected(plugin_name, None)
+    }
+
+    pub fn validate_and_activate_local_expected(
+        &self,
+        plugin_name: &str,
+        expected: Option<&str>,
+    ) -> Result<LocalActivationOutcome> {
+        let _guard = self
+            .activation_lock
+            .lock()
+            .map_err(|_| Error::Validation("activation lock poisoned".into()))?;
+        let fingerprint = crate::content_fingerprint(&self.store.root().join(plugin_name))?;
+        if expected.is_some_and(|e| e != fingerprint) {
+            return Err(Error::Validation(
+                "development fingerprint mismatch; query plugin_status and revalidate".into(),
+            ));
+        }
         match self.validate_local(plugin_name)? {
             ValidationOutcome::Passed(report) => {
-                let source = self.install_local(plugin_name)?;
+                let source = self.activate_candidate(plugin_name, &fingerprint)?;
                 Ok(LocalActivationOutcome::Activated(report, source))
             }
             ValidationOutcome::NeedsFix(report) => Ok(LocalActivationOutcome::NeedsFix(report)),
-            ValidationOutcome::Submitted(_) => Err(Error::Validation(
-                "local validation returned the review submission state".into(),
-            )),
+            ValidationOutcome::Submitted(_) => {
+                Err(Error::Validation("unexpected review submission".into()))
+            }
         }
     }
 

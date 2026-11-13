@@ -66,6 +66,9 @@ impl ToolFunction for PluginCreateTool {
             let operator = infra
                 .create_plugin(&plugin_name, &environment_id, &purpose)
                 .map_err(tool_error)?;
+            if !operator.workspace().path().join("README.md").exists() {
+                operator.workspace().write_text("README.md", &format!("# {}\n\nPurpose: {}\n\nTODO: document node inputs, outputs, parameters and limitations.\n", plugin_name, purpose)).map_err(tool_error)?;
+            }
             let environment_reference = operator.manifest().image.reference.as_str().to_string();
             Ok(CreateOutput {
                 plugin_vfs_path: operator.development_vfs_path().map_err(tool_error)?,
@@ -87,6 +90,8 @@ impl ToolFunction for PluginCreateTool {
             "environment_reference": output.environment_reference,
             "interpreters": output.interpreters,
             "status": "draft",
+            "documentation_required": true,
+            "next_action": "Complete README.md with actual inputs, outputs and limitations before plugin_install",
         })))
     }
 }
