@@ -89,7 +89,7 @@ try{
  const download=page.waitForEvent('download');await clickCanvasAction(page,'导出 源文件');await download;
  assert.equal(await page.getByRole('button',{name:'Agent 绘图',exact:true}).count(),0);
  assert.equal(await page.getByRole('complementary',{name:'画布 Agent',exact:true}).count(),0);
- await page.getByRole('button',{name:'审阅批注',exact:true}).click();await page.getByRole('button',{name:'框选批注',exact:true}).waitFor();await page.getByRole('button',{name:'审阅批注',exact:true}).press('Escape');assert.equal(await page.getByRole('button',{name:'审阅批注',exact:true}).getAttribute('aria-expanded'),'false');
+ await page.getByRole('button',{name:'审阅批注',exact:true}).click();await page.getByRole('button',{name:'草图标记',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'对象批注',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'框选批注',exact:true}).count(),0);await page.getByRole('button',{name:'审阅批注',exact:true}).press('Escape');assert.equal(await page.getByRole('button',{name:'审阅批注',exact:true}).getAttribute('aria-expanded'),'false');
  await page.getByRole('region',{name:'画布编辑器',exact:true}).screenshot({path:join(directory,'canvas-actions.png')});
  await page.setViewportSize({width:640,height:820});
  const activeSurface=page.locator('[data-canvas-surface]:visible');

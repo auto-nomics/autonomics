@@ -1,6 +1,9 @@
+import { CanvasCodeDrawing } from "./canvas-code-drawing";
+import { CanvasLayers } from "./canvas-layers";
+import { isLayerHidden } from "./canvas-layers-model";
 import { CanvasMaterialBrowser } from "./canvas-material-browser";
 import { CanvasBottomActions } from "./canvas-bottom-actions";
-import { Download, Save, MessageSquare, Shapes, LayoutGrid, History } from "lucide-react";
+import { Download, Save, MessageSquare, Shapes, LayoutGrid, History, Layers } from "lucide-react";
 import { CanvasActionMenu, CanvasActionGroup } from "./canvas-action-menu";
 import { normalizeEmptyNativeFields } from "./canvas-empty-native-fields";
 import { CanvasFrameSwap } from "./canvas-frame-swap";
@@ -29,11 +32,10 @@ import { CanvasFrameFit } from "./canvas-frame-fit";
 import { CanvasRouting } from "./canvas-routing";
 import { CanvasMarkups } from "./canvas-markups";
 import { CanvasHistory } from "./canvas-history";
-import { CanvasRectangleSelect } from "./canvas-rectangle-select";
 import { CanvasProposals } from "./canvas-proposals";
 import { CanvasIllustratorContext } from "./canvas-illustrator-context";
 import { useCanvasIllustrator } from "./use-canvas-illustrator";
-import { CanvasAnnotationDialog } from "./canvas-annotation-dialog";
+import { CanvasSelectionAnnotations } from "./canvas-selection-annotations";
 import { preserveSourceFiles } from "./canvas-source-files";
 import { readCanvas, saveCanvas } from "./canvas-store";
 
@@ -65,9 +67,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const latestTitle = useRef("未命名画布");
   const [title, setTitle] = useState("未命名画布");
   const [error, setError] = useState("");
-  const [rectangleSelect, setRectangleSelect] = useState(false);
   const [proposalRequest, setProposalRequest] = useState<{ id: string }>();
-  const [annotationsOpen, setAnnotationsOpen] = useState(false);
   const [imagesReady, setImagesReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
@@ -140,7 +140,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     if (observed !== baseline.current) throw new Error("请先保存画布再生成预览。");
     setBusy(true);
     try {
-      const render = (size: number) => exportToBlob({ elements, appState: { ...appState, exportWithDarkMode: false, exportEmbedScene: false, exportBackground: true }, files, mimeType: "image/png", maxWidthOrHeight: size });
+      const render = (size: number) => exportToBlob({ elements: elements.filter(element => !isLayerHidden(element)), appState: { ...appState, exportWithDarkMode: false, exportEmbedScene: false, exportBackground: true }, files, mimeType: "image/png", maxWidthOrHeight: size });
       let blob = await render(1280);
       if (blob.size > 4.4 * 1024 * 1024) blob = await render(1024);
       const dataURL = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
@@ -161,8 +161,8 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       if (format === "excalidraw") { download(new Blob([scene], { type: "application/json" }), `${exportTitle}.excalidraw`); return; }
       const manifest = await createSourceManifest({ scene, title: exportTitle, project_id: projectId, figure_id: id, based_on_revision: revision.current, unsaved_changes: scene !== baseline.current || exportTitle !== titleRef.current });
       if (format === "sources") download(new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }), `${exportTitle}.sources.json`);
-      else if (format === "svg") { const svg = await exportToSvg({ elements, appState: { ...appState, exportWithDarkMode: false }, files }); await embedLocalSvgFonts(svg); embedSvgSources(svg, manifest); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${exportTitle}.svg`); }
-      else { const png = await exportToBlob({ elements, appState: { ...appState, exportWithDarkMode: false }, files, mimeType: "image/png" }); download(await embedPngSources(png, manifest), `${exportTitle}.png`); }
+      else if (format === "svg") { const svg = await exportToSvg({ elements: elements.filter(element => !isLayerHidden(element)), appState: { ...appState, exportWithDarkMode: false }, files }); await embedLocalSvgFonts(svg); embedSvgSources(svg, manifest); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${exportTitle}.svg`); }
+      else { const png = await exportToBlob({ elements: elements.filter(element => !isLayerHidden(element)), appState: { ...appState, exportWithDarkMode: false }, files, mimeType: "image/png" }); download(await embedPngSources(png, manifest), `${exportTitle}.png`); }
     } catch (cause) { setError(`导出失败：${String(cause)}`); }
   }
   const hasUnsavedChanges = () => {
@@ -255,21 +255,22 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
           latestTitle.current = name; setTitle(name); dirty(true); setError("");
         }}>重命名</MainMenu.Item><MainMenu.Separator /><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
       <CanvasMaterialBrowser getApi={() => api.current} />
+      <CanvasLayers getApi={() => api.current} />
       <CanvasBottomActions surface={surface}>
         <div data-canvas-action-dock role="toolbar" aria-label="画布快捷操作" className="relative flex max-w-full flex-wrap items-center justify-center gap-0.5 px-1" onPointerDown={event => event.stopPropagation()}>
     <div data-canvas-toolbar role="group" aria-label="画布工具栏" className="flex min-w-0 items-center gap-1">
       <Button size="sm" variant="ghost" disabled={!loaded || busy || !imagesReady} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "保存中…" : !imagesReady ? "图片载入中…" : "保存画布"}</Button>
     </div>
+          <Button size="sm" variant="ghost" onClick={() => api.current?.toggleSidebar({ name: "layers" })}><Layers />图层</Button>
           <CanvasActionMenu label="审阅批注" icon={MessageSquare}>
             <CanvasActionGroup title="审阅与协作">
-      {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => setAnnotationsOpen(true)}>对象批注</Button>}
-      {projectId && <Button size="sm" variant={rectangleSelect ? "default" : "outline"} disabled={!loaded || busy} onClick={() => setRectangleSelect(value => !value)}>{rectangleSelect ? "取消框选" : "框选批注"}</Button>}
       {projectId && <CanvasMarkups agentPath={illustrator.path} projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} capturePreview={capturePreview} isDirty={hasUnsavedChanges} />}
       {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
           <CanvasActionMenu label="对象编辑" icon={Shapes}>
             <CanvasActionGroup title="对象编辑">
+      <CanvasCodeDrawing getApi={() => api.current} disabled={!loaded || busy} />
       {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
@@ -302,11 +303,8 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
         </div>
       </CanvasBottomActions>
       </Excalidraw>
-      {rectangleSelect && <CanvasRectangleSelect getApi={() => api.current} onDone={(count, message) => {
-        setRectangleSelect(false); if (message) setError(message); else setError(""); if (count) setAnnotationsOpen(true);
-      }} />}
+      {projectId && <CanvasSelectionAnnotations surface={surface} agentPath={illustrator.path} projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} />}
     </div></div>}
-    {projectId && <CanvasAnnotationDialog open={annotationsOpen} onOpenChange={setAnnotationsOpen} agentPath={illustrator.path} projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} />}
 
   </section></SvgPathChannel.Provider></CanvasIllustratorContext.Provider>;
 }

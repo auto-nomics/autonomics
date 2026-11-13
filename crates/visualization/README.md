@@ -138,7 +138,7 @@ REST：`GET/POST .../figures/{id}/proposals`，创建参数 `{expected_revision,
 
 Agent `read` 返回场景及批注；GUI 交接草稿包含待处理批注。REST `GET/POST .../figures/{id}/annotations`，创建参数 `{expected_revision,element_ids,note}`；`POST .../annotations/{annotation}/resolve` 标记处理完成。添加批注检测版本冲突，不递增画布版本。圈选辅助关联对象，不保存独立的永久手绘笔迹；整图交接见下节。
 
-画布“圈选批注”使用独立 SVG 覆盖层，在当前视口拖动椭圆选择相交对象；支持缩放坐标换算与 Esc 取消。完成后打开批注面板，用户可将意见关联到选中的对象。圈选轨迹是临时交互，不作为正式元素或永久手绘笔迹保存；持久化的是对象关联与批注意见。
+对象批注通过原生画布选区触发：选中元素后，选区旁显示“批注”浮动按钮，点击后打开就近的批注浮窗。浮窗固定本次对象范围，仅列出关联批注；原生框选、多选、缩放和平移均可使用。批注不作为正式图形导出，保存后可将精确对象与意见交给绑定的插画专家。
 
 真实目录检查：`cargo run -p bioart --example canvas_image -- cell`，会检索并下载首个可导入 PNG，输出尺寸、SHA-256 与上游许可，不写入图像数据或推断许可。
 
@@ -583,7 +583,7 @@ VISUALIZATION_LIVE_REVIEW_SCENE=/path/to/before-markup.json npm --prefix apps/gu
 
 ### 同一位置切换绘图辅助面板
 
-Agent、BioArt 和 BioIcons 面板改为每个画布内的单一活动位置，避免三个固定宽度面板同时挤占绘图区；再次点击当前入口可关闭，入口提供展开状态。面板首次打开后保留挂载，切换时只隐藏，因此 Agent 尚未发送的绘图需求、素材查询及已取得结果不会因换面板而丢失。圈选批注仍可主动打开 Agent 面板，使用相同的切换通道。视口尺寸补偿也作用于这些面板引起的可用区域变化。
+素材浏览器使用画布原生侧栏，切换素材来源时保留查询状态。插画专家通过系统 Agent 标签页沟通；对象批注由选区旁的浮动按钮打开，不再占用专用 Agent 侧栏。
 
 生产构建与完整原生浏览器回归通过。新增用例逐个打开 Agent、BioArt、BioIcons，确认同时只有一个辅助面板可见且绘图区宽度实际减少；每次开合/切换后，以原生像素检查手工缩放与平移保持，正式场景和版本不变。返回 Agent 后，之前填写但未发送的需求原样保留；关闭面板后画布恢复宽度且视角继续保持。
 
@@ -1120,7 +1120,7 @@ Grid 草图的 `column` / `row` 表示逻辑单元格，不再保证固定 400×
 上下文插图真实示例：v83在v79凋亡图上独立加入NIH BioArt线粒体图片，保留原CYCS分子节点和全部图形/来源，另加通用区室限定，再仅移动新图片并采用/导出。图形对象和PNG的默认尺寸、比例、文件hash及许可均核对；该素材化阶段约161秒，不包含重新检索科学来源。图稿见 `target/visualization-evaluations/apoptosis-context-art-v83/context-art-final.png`。
 
 
-真实GUI圈选批注回归入口：`VISUALIZATION_LIVE_SOURCE_REVIEW_CASE=circle-annotation` 配合 `VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE` 的显式保存场景，运行 `apps/gui/tests/canvas-live.mjs`。当前用例需要带 `generic-receptor-note` 的无旋转 EGFR 图稿，验证实际鼠标圈选、对象批注交接、真实模型局部移动、候选PNG、人工采用及源导出；不是任意科研主题或像素区域编辑测试。对象批注保持独立记录，采用候选不会自动完成它。
+真实GUI选区批注回归入口：`VISUALIZATION_LIVE_SOURCE_REVIEW_CASE=circle-annotation` 配合 `VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE` 的显式保存场景，运行 `apps/gui/tests/canvas-live.mjs`。当前用例需要带 `generic-receptor-note` 的无旋转 EGFR 图稿，验证原生对象选择、浮动批注交接、真实模型局部移动、候选PNG、人工采用及源导出；不是任意科研主题或像素区域编辑测试。对象批注保持独立记录，采用候选不会自动完成它。
 
 审阅记录分为两个独立通道：`annotations` 是关联对象ID的批注，`markups` 是带笔迹与审阅图的草图标记。只有 `list_markups` / `read_markup` 返回的标记ID可用于候选 `markup_ids`；对象批注ID不可用于该字段、`read_markup` 或 `list_markups.before`。对象批注可按其说明与对象ID生成普通候选，保持待处理状态，无需先转换成草图标记。GUI交接提供 `review_channels` 明确区分。无匹配草图标记的提案请求会返回可操作的通道错误且不写入候选，不再误报项目不存在。
 

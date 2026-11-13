@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:canvas:code-drawing": "node tests/canvas-code-drawing.mjs",
+    "test:canvas:layers": "node tests/canvas-layers-model.mjs && node tests/canvas-editor.mjs",
     "test:canvas:project-open": "node tests/canvas-project-open.mjs",
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc --noEmit && vite build",

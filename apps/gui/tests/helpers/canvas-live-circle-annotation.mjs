@@ -11,12 +11,12 @@ export async function runLiveCircleAnnotation({page,call,path,send,persist,direc
  const surface=page.locator('[data-canvas-surface]');await surface.locator('.excalidraw:visible').waitFor();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const formal=await call('GET',path),revision=formal.metadata.revision;assert.deepEqual(await call('GET',`${path}/proposals`),[]);
  const zoom=Number((await surface.locator('.reset-zoom-button').innerText()).replace('%',''))/100;
- await page.getByRole('button',{name:'框选批注',exact:true}).click();const overlay=page.getByRole('application',{name:'框选批注区域',exact:true}),box=await overlay.boundingBox(),elements=document.elements.filter(e=>!e.isDeleted);
+ await surface.getByTestId('toolbar-selection').locator('..').click();const box=await surface.boundingBox(),elements=document.elements.filter(e=>!e.isDeleted);
  const minX=Math.min(...elements.map(e=>e.x)),minY=Math.min(...elements.map(e=>e.y)),maxX=Math.max(...elements.map(e=>e.x+e.width)),maxY=Math.max(...elements.map(e=>e.y+e.height));
  const x=box.x+box.width/2+(target.x+target.width/2-(minX+maxX)/2)*zoom,y=box.y+box.height/2+(target.y+target.height/2-(minY+maxY)/2)*zoom;
  assert.ok(x-12>box.x&&x+12<box.x+box.width&&y-9>box.y&&y+9<box.y+box.height);
- await page.mouse.move(x-12,y-9);await page.mouse.down();await page.mouse.move(x+12,y+9,{steps:10});await page.mouse.up();
- const panel=page.getByRole('complementary',{name:'画布 Agent',exact:true});await panel.waitFor();const annotations=panel.getByRole('region',{name:'对象批注',exact:true});
+ await page.mouse.click(x,y);await page.getByRole('button',{name:'批注',exact:true}).click();
+ const panel=page.getByRole('dialog',{name:'对象批注',exact:true});await panel.waitFor();const annotations=panel.getByRole('region',{name:'对象批注',exact:true});
  const request=reflow?'请只将框选的这条通用受体素材范围说明的换行宽度改为280个画布单位。保留完整 originalText 原文、字体、字号、行高、左上角位置和其他所有对象、文件、素材来源、科学关系及历史计划；只重算该文字的自动换行和尺寸，不移动其他对象、不改任何文案、不重画、不检索资料。读取当前正式图稿后生成一份局部候选，查看候选PNG并留待我审阅，不采用、不完成批注。简短中文报告。':'请只将框选的这条通用受体素材范围说明向下移动8个画布单位。完整保留原文、换行、字体、字号、宽度及所有其他对象、科学关系、素材、文件、来源和历史计划。不重新规划或重画，不检索外部资料。读取当前正式图稿并核对选中对象，生成一份局部修改候选，查看候选PNG后留待我审阅，不采用、不完成批注。简短中文报告。';
  await annotations.getByRole('textbox',{name:'批注意见',exact:true}).fill(request);await annotations.getByRole('button',{name:'批注并准备 Agent 修改',exact:true}).click();await page.getByPlaceholder('输入消息…').waitFor();
  const saved=await call('GET',`${path}/annotations`);assert.equal(saved.length,1);const annotation=saved[0];assert.deepEqual(annotation.element_ids,[target.id]);assert.equal(annotation.note,request);assert.equal(annotation.at_revision,revision);
