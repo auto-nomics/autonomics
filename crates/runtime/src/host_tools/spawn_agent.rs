@@ -17,7 +17,7 @@ use crate::control::HostControl;
                    and form interaction — the child gets a private browser \
                    session with browser_* tools. Use profile_segment='curator' \
                    to create or restructure wiki knowledge entries — the child \
-                   is the only role holding wiki write tools. Do not use \
+                   is the only role holding wiki write tools. Use illustrator for editable scientific figures and catalogue artwork. Do not use \
                    developer as an execution service for research data; omit \
                    profile_segment to reuse your own role."
 )]
@@ -25,7 +25,7 @@ pub(super) struct SpawnAgentInput {
     /// Short name for the new agent (a path segment, e.g. `worker`, `analyst`).
     /// Must be lowercase `[a-z0-9_]`, 1-32 chars.
     pub(super) agent_name: String,
-    /// Role to instantiate: `researcher`, `developer`, `browser`, `curator`, \
+    /// Role to instantiate: `researcher`, `developer`, `browser`, `curator`, `illustrator`, \
     /// or omitted to reuse your own role.
     profile_segment: Option<String>,
 }

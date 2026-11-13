@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
 use visualization::{
     Store, image,
-    planning::Brief,
     scene::{self, Operation},
     sketch::{self, Plan},
 };
@@ -130,31 +129,6 @@ fn invalid_panel_structures_are_rejected_without_dropping_relations() {
     let mut p = plan();
     p.panels.clear();
     assert!(sketch::compile(&p).is_err());
-}
-#[test]
-fn panel_planning_is_versioned_and_proposed_before_adoption() -> visualization::Result<()> {
-    let mut store = Store::in_memory()?;
-    store.create_project("p", "Comparison")?;
-    let figure = store.create("p", "Panels", "excalidraw/v2", &json!({"elements":[]}))?;
-    let brief: Brief = serde_json::from_value(serde_json::to_value(plan()).unwrap()).unwrap();
-    let saved = store.save_planning("p", &figure.id, 1, 0, &brief)?;
-    assert!(saved.issues.is_empty());
-    assert_eq!(saved.document.panels.len(), 2);
-    let proposal = store.planned_proposal("p", &figure.id, 1, 1, "Comparison")?;
-    assert_eq!(
-        proposal.document["elements"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|e| e["type"] == "frame")
-            .count(),
-        2
-    );
-    assert_eq!(
-        store.revision("p", &figure.id, 1)?.document["elements"],
-        json!([])
-    );
-    Ok(())
 }
 fn cross_plan() -> Plan {
     let mut p = plan();

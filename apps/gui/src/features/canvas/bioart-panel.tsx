@@ -7,13 +7,18 @@ import { Button } from "@/components/ui/button";
 type Asset = { id: number; title: string; source_url: string; licenses: string[]; creators: string[] };
 type Format = "png" | "svg";
 type AssetImage = { asset: Asset; sha256: string; dataURL: string; file: unknown; format?: Format; width?: number; height?: number; previewDataURL?: string; provenance?: Record<string, unknown> };
-export function BioArtPanel({ getApi }: { getApi: () => ExcalidrawImperativeAPI | null }) {
+export function useBioArtState() {
   const [query, setQuery] = useState("");
   const [format, setFormat] = useState<Format>("png");
   const [assets, setAssets] = useState<Asset[]>([]);
   const [preview, setPreview] = useState<AssetImage | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  return { query, setQuery, format, setFormat, assets, setAssets, preview, setPreview, busy, setBusy, error, setError };
+}
+export function BioArtPanel({ getApi, embedded = false, controller }: { getApi: () => ExcalidrawImperativeAPI | null; embedded?: boolean; controller?: ReturnType<typeof useBioArtState> }) {
+  const local = useBioArtState();
+  const { query, setQuery, format, setFormat, assets, setAssets, preview, setPreview, busy, setBusy, error, setError } = controller ?? local;
   async function previewAsset(id: number) {
     setBusy(true); setError("");
     try { setPreview(await gatewayRequest("GET", `/visualization/bioart/${id}/image?format=${format}`) as AssetImage); }
@@ -36,7 +41,8 @@ export function BioArtPanel({ getApi }: { getApi: () => ExcalidrawImperativeAPI 
       if (placement.pan) api.scrollToContent(elements, { animate: false });
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
   }
-  return <aside aria-label="BioArt 素材" className="w-64 shrink-0 overflow-auto border-l p-2 text-sm">
+  const Container = embedded ? "section" : "aside";
+  return <Container aria-label="BioArt 素材" className={embedded ? "canvas-catalog-panel min-w-0 overflow-auto p-3 text-sm" : "w-72 shrink-0 overflow-auto border-l p-2 text-sm"}>
     <form className="flex gap-1" onSubmit={async event => {
       event.preventDefault(); if (busy || !query.trim()) return; setBusy(true); setError("");
       try { const result = await gatewayRequest("GET", `/visualization/bioart/search?q=${encodeURIComponent(query.trim())}`) as { assets: Asset[] }; setAssets(result.assets); setPreview(null); }
@@ -46,5 +52,5 @@ export function BioArtPanel({ getApi }: { getApi: () => ExcalidrawImperativeAPI 
     {error && <p role="alert" className="my-2 text-destructive">{error}</p>}
     <p className="my-2 text-xs text-muted-foreground">素材独立插入，保留来源与许可。SVG 插入后可选中图片，通过“素材编辑”调整颜色与路径；不支持的格式会提示原因。</p>
     {assets.map(asset => <article key={asset.id} className="my-2 rounded border p-2"><p>{asset.title}</p>{preview?.asset.id === asset.id && <figure className="my-2"><img alt={preview.asset.title} src={preview.previewDataURL ?? preview.dataURL} className="max-h-48 w-full rounded bg-white object-contain" /><figcaption className="mt-1 text-xs text-muted-foreground">{preview.asset.creators?.join(" · ") || "作者信息未提供"}</figcaption></figure>}<p className="text-xs text-muted-foreground">{asset.licenses.join(" · ") || "许可信息未提供"}</p><div className="mt-2 flex flex-wrap items-center gap-2"><a href={asset.source_url} target="_blank" rel="noreferrer" className="underline">来源</a><Button size="sm" variant="outline" disabled={busy} onClick={() => void previewAsset(asset.id)}>预览图片</Button><Button size="sm" disabled={busy} onClick={() => void insert(asset.id)}>插入图片</Button></div></article>)}
-  </aside>;
+  </Container>;
 }

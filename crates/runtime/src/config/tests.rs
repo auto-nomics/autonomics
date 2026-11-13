@@ -226,7 +226,7 @@ fn system_prompt_advertises_central_downloads_for_researcher_only() {
 fn system_prompt_advertises_literature_for_researcher_and_curator_only() {
     use agentik_core::AgentKind;
 
-    for kind in [AgentKind::Researcher, AgentKind::Curator] {
+    for kind in [AgentKind::Researcher, AgentKind::Curator, AgentKind::Illustrator] {
         let prompt = build_system_prompt(&kind);
         assert!(
             prompt.contains("### Literature & Evidence"),
@@ -492,4 +492,13 @@ fn bib_http_env_user_agent_override() {
     unsafe {
         std::env::remove_var(ENV_HTTP_USER_AGENT);
     }
+}
+
+#[test]
+fn illustrator_prompt_has_its_own_handoff_and_source_tools() {
+    let prompt = build_system_prompt(&agentik_core::AgentKind::Illustrator);
+    assert!(prompt.contains("### Illustration Collaboration"));
+    assert!(prompt.contains("### Literature & Evidence"));
+    assert!(!prompt.contains("You are the Researcher."));
+    assert!(!prompt.contains("### Plugin Development"));
 }

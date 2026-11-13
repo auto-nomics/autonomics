@@ -1,0 +1,19 @@
+.canvas-native-footer-host {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+}
+.canvas-native-footer-host [data-canvas-action-dock] > button,
+.canvas-native-footer-host [data-canvas-action-dock] > div > div:first-child > button {
+  color: var(--color-on-surface, #1b1b1f);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.canvas-native-footer-host [data-canvas-action-dock] > button:hover,
+.canvas-native-footer-host [data-canvas-action-dock] > button[aria-expanded="true"],
+.canvas-native-footer-host [data-canvas-action-dock] > div > div:first-child > button:hover,
+.canvas-native-footer-host [data-canvas-action-dock] > div > div:first-child > button[aria-expanded="true"] {
+  background: var(--color-surface-low, #ececf4);
+}

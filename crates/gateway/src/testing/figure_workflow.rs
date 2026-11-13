@@ -167,11 +167,10 @@ pub fn scripted_figure_model() -> (Model, Arc<Mutex<FigureTrace>>) {
         let mut input=json!({"project_id":h["project_id"],"figure_id":h["figure_id"]});
         let action=match step {
             0|7|11=>"read",
-            1=>{let read=result(&messages);trace.revision=read["metadata"]["revision"].as_i64().unwrap();input["expected_revision"]=json!(trace.revision);input["planning_version"]=json!(0);input["document"]=json!({"message":"Generic conceptual relationship","audience":"Researcher","questions":[{"id":"structure","question":"Which generic components and explicit relations should be shown?"}]});"save_plan"}
-            2=>{assert_eq!(result(&messages)["status"],"needs_clarification");return Ok(stream(step,None,"Which generic components and explicit relations should be shown?"));}
-            3=>"read_plan",
-            4=>{let saved=result(&messages);input["expected_revision"]=h["observed_revision"].clone();input["planning_version"]=saved["version"].clone();input["document"]=json!({"message":"Generic conceptual relationship","audience":"Researcher","layout":"horizontal","nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"},{"id":"c","label":"C"}],"edges":[{"from":"a","to":"b","label":"explicit relation 1"},{"from":"b","to":"c","label":"explicit relation 2"}],"questions":[{"id":"structure","question":"Which generic components and explicit relations should be shown?","answer":h["request"]}],"assumptions":["Conceptual fixture only; no biological mechanism is asserted."]});"save_plan"}
-            5=>{let saved=result(&messages);assert_eq!(saved["status"],"ready");input["expected_revision"]=h["observed_revision"].clone();input["planning_version"]=saved["version"].clone();input["title"]=json!("Generic pathway draft");"sketch_plan"}
+            1=>{let read=result(&messages);trace.revision=read["metadata"]["revision"].as_i64().unwrap();"read"}
+            2=>{return Ok(stream(step,None,"Which generic components and explicit relations should be shown?"));}
+            3|4=>"read",
+            5=>{input["expected_revision"]=h["observed_revision"].clone();input["document"]=json!({"message":"Generic conceptual relationship","audience":"Researcher","layout":"horizontal","nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"},{"id":"c","label":"C"}],"edges":[{"from":"a","to":"b","label":"explicit relation 1"},{"from":"b","to":"c","label":"explicit relation 2"}],"assumptions":["Conceptual fixture only; no biological mechanism is asserted."]});input["title"]=json!("Generic pathway draft");"sketch"}
             6|10|14=>{assert_eq!(result(&messages)["status"],"pending");return Ok(stream(step,None,"The candidate is ready for review in the figure proposal panel."));}
             8|12=>{let read=result(&messages);trace.revision=read["metadata"]["revision"].as_i64().unwrap();trace.scene=read["scene"]["document"].clone();input["expected_revision"]=json!(trace.revision);if step==8{"read_preview"}else{input["markup_id"]=h["markups"][0]["id"].clone();"read_markup"}}
             9|13=>{

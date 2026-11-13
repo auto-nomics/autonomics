@@ -71,14 +71,6 @@ impl Store {
               document_sha256 TEXT NOT NULL, render_status TEXT NOT NULL,
               data_url TEXT, error TEXT, renderer TEXT, requested_at TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS visualization_proposal_preview_queue ON visualization_proposal_previews(render_status,requested_at,proposal_id);
-            CREATE TABLE IF NOT EXISTS visualization_plans (
-              visualization_id TEXT PRIMARY KEY REFERENCES visualizations(id) ON DELETE CASCADE,
-              version INTEGER NOT NULL, based_on_revision INTEGER NOT NULL, document TEXT NOT NULL,
-              proposal_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS visualization_plan_history (
-              visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
-              version INTEGER NOT NULL, based_on_revision INTEGER NOT NULL, document TEXT NOT NULL, created_at TEXT NOT NULL,
-              PRIMARY KEY(visualization_id,version));
             CREATE TABLE IF NOT EXISTS visualization_annotations (
               id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
               at_revision INTEGER NOT NULL, element_ids TEXT NOT NULL, note TEXT NOT NULL,

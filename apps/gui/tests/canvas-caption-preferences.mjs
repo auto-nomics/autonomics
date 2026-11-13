@@ -26,12 +26,7 @@ try {
  const project=await page.getByRole('combobox',{name:'可视化项目'}).inputValue(),figure=(await call('GET',`/api/v1/visualization/projects/${project}/figures`))[0].id,path=`/api/v1/visualization/projects/${project}/figures/${figure}`;
  const input=JSON.parse(await readFile(source,'utf8')),document=input.scene?.document??input.document??input;
  const anchor=document.elements.find(e=>e.customData?.scientificId==='egfr');assert.ok(anchor);
- if(process.env.VISUALIZATION_PLAN_REVIEW==='1') {
-  for(const element of document.elements) if(element.customData) delete element.customData.planningSource;
-  const label=document.elements.find(e=>e.type==='text'&&(e.containerId===anchor.id||anchor.customData.visualLabelIds?.includes(e.id)));
-  assert.ok(label,'fixture must retain a scientific label');
-  anchor.customData.planningSource={version:7,based_on_revision:0,document:{nodes:[{id:'egfr',label:`${label.originalText??label.text} (confirmed)`}],edges:[]}};
- }
+
  const initial=await call('GET',path);await call('PUT',path,{expected_revision:initial.metadata.revision,title:'Focus figure',document});page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();
  const formal=await call('GET',path),revision=formal.metadata.revision;
  const contexts=[];

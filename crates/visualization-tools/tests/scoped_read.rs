@@ -107,7 +107,6 @@ async fn saved_read_requires_current_revision_and_keeps_review_context() {
         "annotations",
         "markups",
         "markups_pagination",
-        "planning",
     ] {
         assert_eq!(output[key], full["content"][key], "{key}");
     }

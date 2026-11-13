@@ -6,6 +6,7 @@ export type CanvasRecord = { id: string; projectId?: string; revision?: number; 
 type Metadata = { id: string; project_id: string; revision: number; title: string; updated_at: string };
 let summaries: CanvasRecord[] = [];
 let selectedProject: string | undefined;
+let listRequest = 0;
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach(listener => listener());
 const path = (projectId: string) => `/visualization/projects/${encodeURIComponent(projectId)}/figures`;
@@ -23,11 +24,14 @@ export async function readCanvas(id: string, projectId?: string): Promise<Canvas
   return { ...record(response.metadata), scene: JSON.stringify(response.scene.document) };
 }
 export async function refreshCanvases(projectId?: string) {
+  const request = ++listRequest;
+  const projectChanged = selectedProject !== projectId;
   selectedProject = projectId;
+  if (projectChanged) { summaries = []; emit(); }
   try { if (projectId) localStorage.setItem(projectPreference,projectId); else localStorage.removeItem(projectPreference); } catch { /* Storage may be unavailable in embedded views. */ }
   if (!projectId) { summaries = []; emit(); return; }
   const records = await gatewayRequest("GET", path(projectId)) as Metadata[];
-  if (selectedProject === projectId) { summaries = records.map(record); emit(); }
+  if (selectedProject === projectId && request === listRequest) { summaries = records.map(record); emit(); }
 }
 export async function saveCanvas(canvas: CanvasRecord): Promise<number | undefined> {
   if (!canvas.projectId) { await legacy.saveCanvas(canvas); return; }
@@ -38,7 +42,7 @@ export async function saveCanvas(canvas: CanvasRecord): Promise<number | undefin
 }
 export async function createCanvas(projectId: string) {
   const saved = await gatewayRequest("POST", path(projectId), { title: "未命名画布", format: "excalidraw/v2", document: { type: "excalidraw", version: 2, elements: [], files: {}, appState: { currentItemRoughness: 0, currentItemFontFamily: 9, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } } }) as Metadata;
-  if (selectedProject === projectId) { summaries = [record(saved), ...summaries]; emit(); }
+  if (selectedProject === projectId) { ++listRequest; summaries = [record(saved), ...summaries]; emit(); }
   return record(saved);
 }
 export function useCanvases() {

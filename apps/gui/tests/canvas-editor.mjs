@@ -1,3 +1,4 @@
+import {clickCanvasAction} from './helpers/canvas-action.mjs';
 import {checkContextDraftSend} from './helpers/context-draft-send.mjs';
 import {readCanvasPreparedPrompt} from './helpers/canvas-prepared-context.mjs';
 // Canvas editor integration: drawing, images, history, persistence and export.
@@ -46,7 +47,6 @@ try {
       assert.ok(bytes.readUInt32BE(20) > 0 && bytes.readUInt32BE(20) <= 1280);
       previews.set(revision, { revision, dataURL }); return route.fulfill({ json: { revision } });
     }
-    if (path === '/visualization/projects/study/figures/figure/planning') return route.fulfill({ json: null });
     if (path === '/visualization/projects/study/figures/figure/markups') return route.fulfill({ json: new URL(route.request().url()).searchParams.get('page') === 'true' ? { items: [], next_before: null } : [] });
     if (path === '/visualization/projects/study/figures/figure/annotations') {
       if (route.request().method() === 'GET') return route.fulfill({ json: annotations });
@@ -125,7 +125,7 @@ try {
   if (sketch) {
     await waitCount(sketch.elements.length);
     const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: '导出 源文件', exact: true }).click();
+    await clickCanvasAction(page, '导出 源文件');
     const download = await downloadPromise;
     const exported = JSON.parse(readFileSync(await download.path(), 'utf8'));
     assert.equal(exported.elements.filter(element => element.type === 'text').length, 5);
@@ -144,7 +144,7 @@ try {
     await page.mouse.move(centerX, centerY); await page.mouse.down();
     await page.mouse.move(centerX + 60, centerY + 50, { steps: 8 }); await page.mouse.up();
     const movedPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: '导出 源文件', exact: true }).click();
+    await clickCanvasAction(page, '导出 源文件');
     const moved = JSON.parse(readFileSync(await (await movedPromise).path(), 'utf8'));
     assert.ok(moved.elements.find(element => element.id === 'node-0').x > 40, 'generated node can be moved');
     const arrowAfter = moved.elements.find(element => element.id === 'edge-0');
@@ -184,7 +184,7 @@ try {
   await page.getByRole('button', { name: '基础画布测试', exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('[role="tab"][data-dirty="true"]'));
   const sourcePromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: '导出 源文件', exact: true }).click();
+  await clickCanvasAction(page, '导出 源文件');
   const sourceDownload = await sourcePromise;
   const { readFile } = await import('node:fs/promises');
   const source = JSON.parse(await readFile(await sourceDownload.path(), 'utf8'));
@@ -192,11 +192,11 @@ try {
   assert.equal(source.elements.find(element => element.type === 'rectangle').roughness, 0, 'default shapes have straight strokes');
   assert.equal(Object.keys(source.files).length, 1, 'source export includes image bytes');
   const svgPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: '导出 SVG', exact: true }).click();
+  await clickCanvasAction(page, '导出 SVG');
   const svg = await svgPromise;
   assert.ok((await readFile(await svg.path(), 'utf8')).includes('<svg'));
   const pngPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: '导出 PNG', exact: true }).click();
+  await clickCanvasAction(page, '导出 PNG');
   const png = await pngPromise;
   assert.equal((await readFile(await png.path())).subarray(1, 4).toString(), 'PNG');
   await page.reload();
@@ -207,7 +207,7 @@ try {
   await page.getByRole('button', { name: '基础画布测试', exact: true }).click();
   await page.getByRole('textbox', { name: '画布名称' }).waitFor();
   await waitCount(2); assert.equal(await count(), 2, 'sidebar reopens a saved canvas');
-  await page.getByRole('button', { name: 'BioArt 素材', exact: true }).click();
+  await clickCanvasAction(page, 'BioArt 素材');
   await page.getByRole('textbox', { name: 'BioArt 搜索词' }).fill('cell');
   await page.getByRole('button', { name: '搜索', exact: true }).click();
   await page.getByRole('button', { name: '预览图片', exact: true }).click();
@@ -222,14 +222,14 @@ try {
   assert.equal(await page.getByRole('textbox', { name: '画布名称' }).inputValue(), '未保存修改');
   assert.equal(figures.get('figure').metadata.title, '基础画布测试');
   page.once('dialog', dialog => dialog.dismiss());
-  await page.getByRole('button', { name: '重新加载服务端版本' }).click();
+  await clickCanvasAction(page, '重新加载服务端版本');
   assert.equal(await page.getByRole('textbox', { name: '画布名称' }).inputValue(), '未保存修改');
   page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: '重新加载服务端版本' }).click();
+  await clickCanvasAction(page, '重新加载服务端版本');
   await page.waitForFunction(() => document.querySelector('input[aria-label="画布名称"]')?.value === '基础画布测试');
 
   conflict = false;
-  await page.getByRole('button', { name: '查看 Agent 提案', exact: true }).click();
+  await clickCanvasAction(page, '查看 Agent 提案');
   const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
   await preview.getByRole('button', { name: /突出细胞/ }).click();
   await preview.getByRole('region', { name: '修改前画布' }).locator('.excalidraw').waitFor();
@@ -242,7 +242,7 @@ try {
   assert.equal(figures.get('figure').scene.document.elements[0].backgroundColor, '#d3f9d8');
   const headBeforeRestore = figures.get('figure').metadata.revision;
   const historical = structuredClone(revisions.get(2).document);
-  await page.getByRole('button', { name: '历史版本', exact: true }).click();
+  await clickCanvasAction(page, '历史版本');
   const history = page.getByRole('dialog', { name: '画布历史' });
   await history.getByRole('button', { name: /^v2 ·/ }).click();
   await history.getByRole('region', { name: '历史画布' }).locator('.excalidraw').waitFor();
@@ -253,7 +253,7 @@ try {
   assert.deepEqual(revisions.get(2).document, historical, 'restore preserves old revisions');
   await page.locator('[data-canvas-surface] .excalidraw').waitFor();
   await page.getByRole('textbox', { name: '画布名称' }).fill('本地未保存');
-  await page.getByRole('button', { name: '历史版本', exact: true }).click();
+  await clickCanvasAction(page, '历史版本');
   await history.getByRole('button', { name: /^v2 ·/ }).click();
   await history.getByRole('button', { name: '恢复为新版本', exact: true }).click();
   await history.getByRole('alert').filter({ hasText: '未保存修改' }).waitFor();
@@ -261,8 +261,8 @@ try {
   await history.getByRole('button', { name: '关闭历史', exact: true }).click();
   await page.getByRole('textbox', { name: '画布名称' }).fill('基础画布测试');
   await page.locator('[data-canvas-surface] .zoom-in-button').click();
-  await page.getByRole('button', { name: '圈选批注', exact: true }).click();
-  const region = await page.getByRole('application', { name: '圈选批注区域' }).boundingBox();
+  await clickCanvasAction(page, '框选批注');
+  const region = await page.getByRole('application', { name: '框选批注区域' }).boundingBox();
   await page.mouse.move(region.x + 230, region.y + 160); await page.mouse.down();
   await page.mouse.move(region.x + 1000, region.y + 650, { steps: 8 }); await page.mouse.up();
   await page.getByRole('complementary', { name: '画布 Agent' }).waitFor();

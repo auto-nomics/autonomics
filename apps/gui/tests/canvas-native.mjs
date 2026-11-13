@@ -298,104 +298,17 @@ try {
     }
   }
   assert.deepEqual(errors, []);
-  const plannedFigure = await tool({ action: 'create', project_id: project, title: 'Planning study', document: { type: 'excalidraw', version: 2, elements: [], files: {} } });
-  const plannedPath = `/api/v1/visualization/projects/${project}/figures/${plannedFigure.id}`;
-  const initialBrief = { message: 'Explain a conceptual ligand and receptor interaction', audience: 'Biology researchers', layout: 'horizontal', nodes: [{ id: 'ligand', label: 'Ligand' }, { id: 'receptor', label: 'Receptor' }], edges: [{ from: 'ligand', to: 'receptor', label: 'binds' }], assumptions: ['Conceptual example; no specific pathway is asserted.'], questions: [{ id: 'specificity', question: 'Should a specific receptor or a generic receptor be shown?', answer: '' }] };
-  const savedBrief = await tool({ action: 'save_plan', project_id: project, figure_id: plannedFigure.id, expected_revision: 1, planning_version: 0, document: initialBrief });
-  assert.equal(savedBrief.status, 'needs_clarification');
-  await page.getByRole('button', { name: '刷新画布列表', exact: true }).click();
-  await page.getByRole('button', { name: 'Planning study', exact: true }).click();
-  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
-  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
-  const planningDialog = page.getByRole('dialog', { name: '科研绘图计划' });
-  await planningDialog.getByRole('textbox', { name: '问题答案 1', exact: true }).waitFor();
-  assert.equal(await planningDialog.getByRole('button', { name: '生成草图提案', exact: true }).isEnabled(), false);
-  assert.equal(await planningDialog.getByRole('textbox', { name: '澄清问题 1', exact: true }).inputValue(), initialBrief.questions[0].question);
-  const answer = 'Use a generic receptor; do not name a pathway.';
-  await planningDialog.getByRole('textbox', { name: '问题答案 1', exact: true }).fill(answer);
-  page.once('dialog', dialog => dialog.dismiss()); await planningDialog.getByRole('button', { name: '关闭计划', exact: true }).click();
-  assert.equal(await planningDialog.getByRole('textbox', { name: '问题答案 1', exact: true }).inputValue(), answer);
-  await planningDialog.getByRole('button', { name: '保存绘图计划', exact: true }).click();
-  await planningDialog.getByRole('status').filter({ hasText: '可生成草图' }).waitFor();
-  assert.equal((await call('GET', plannedPath)).metadata.revision, 1, 'clarification does not mutate artwork');
-  const readyBrief = await tool({ action: 'read_plan', project_id: project, figure_id: plannedFigure.id });
-  assert.equal(readyBrief.version, 2); assert.equal(readyBrief.document.questions[0].answer, answer);
-  assert.equal((await call('GET', `${plannedPath}/planning/revisions/1`)).document.questions[0].answer, '');
-  await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
-  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
-  await planningDialog.getByRole('textbox', { name: '问题答案 1', exact: true }).waitFor();
-  assert.equal(await planningDialog.getByRole('textbox', { name: '问题答案 1', exact: true }).inputValue(), answer);
-  await page.screenshot({ path: '/tmp/autonomics-planning-ready.png', animations: 'disabled' });
-  await planningDialog.getByRole('button', { name: '生成草图提案', exact: true }).click();
-  const plannedPreview = page.getByRole('dialog', { name: 'Agent 修改预览' });
-  await plannedPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
-  await plannedPreview.getByRole('region', { name: '修改前画布' }).locator('.excalidraw').waitFor();
-  assert.equal((await call('GET', plannedPath)).metadata.revision, 1, 'planned sketch remains a proposal until adopted');
-  await page.screenshot({ path: '/tmp/autonomics-planning-proposal.png' });
-  await plannedPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await plannedPreview.waitFor({ state: 'hidden' });
-  const planned = await call('GET', plannedPath); assert.equal(planned.metadata.revision, 2);
-  assert.equal(planned.scene.document.elements[0].customData.planningSource.document.questions[0].answer, answer);
-  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
-  const plannedSource = await source(); const bindingArrow = plannedSource.elements.find(element => element.type === 'arrow');
-  const bindingLabel = plannedSource.elements.find(element => element.type === 'text' && element.containerId === bindingArrow.id);
-  assert.ok(bindingLabel.width < bindingArrow.width / 2, 'restored short caption leaves a visible arrow body');
-  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
-  await planningDialog.getByText('画布版本已变化。请核对计划与当前图稿，保存后再生成草图。', { exact: true }).waitFor();
-  assert.equal(await planningDialog.getByRole('button', { name: '生成草图提案', exact: true }).isEnabled(), false);
-  await planningDialog.getByRole('button', { name: '关闭计划', exact: true }).click();
-  await page.screenshot({ path: '/tmp/autonomics-planning-canvas.png' });
-  await page.getByRole('button', { name: 'Agent 绘图', exact: true }).click();
-  await page.getByRole('textbox', { name: '绘图需求' }).fill('Continue discussing the saved scientific plan.');
-  await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
-  const plannedComposer = page.getByPlaceholder('输入消息…'); await plannedComposer.waitFor();
-  const plannedDraft = await readCanvasPreparedPrompt(page);
-  const plannedContext = await readCanvasPreparedContext(page);
-  assert.equal(plannedContext.figure_id, plannedFigure.id); assert.equal(plannedContext.planning.version, 2); assert.equal(plannedContext.planning.based_on_revision, 1);
-  assert.ok(plannedDraft.includes('read_plan')); assert.deepEqual(errors, []);
-  const panelFigure = await tool({ action: 'create', project_id: project, title: 'Panel comparison', document: { type: 'excalidraw', version: 2, elements: [], files: {} } });
-  const panelPath = `/api/v1/visualization/projects/${project}/figures/${panelFigure.id}`;
-  await tool({ action: 'save_plan', project_id: project, figure_id: panelFigure.id, expected_revision: 1, planning_version: 0, document: {
+  const panelFigure = await tool({ action: 'sketch', project_id: project, title: 'Panel comparison', document: {
     message: 'Compare two explicitly supplied conceptual conditions', audience: 'Researchers', layout: 'horizontal',
-    nodes: [{ id: 'a', label: 'Control input' }, { id: 'b', label: 'Control output' }, { id: 'c', label: 'Treatment input' }, { id: 'd', label: 'Treatment output' }],
-    edges: [{ from: 'a', to: 'b', label: 'conceptual relation' }, { from: 'c', to: 'd', label: 'explicit comparison' }], assumptions: ['Synthetic comparison; no scientific claim.'],
+    panels: [{ id: 'p1', title: 'A · Control', column: 0, row: 0 }, { id: 'p2', title: 'B · Treatment', column: 1, row: 0 }],
+    nodes: [{ id: 'a', label: 'Control input', panel: 'p1' }, { id: 'b', label: 'Control output', panel: 'p1' }, { id: 'c', label: 'Treatment input', panel: 'p2' }, { id: 'd', label: 'Treatment output', panel: 'p2' }],
+    edges: [{ from: 'a', to: 'b', label: 'conceptual relation' }, { from: 'c', to: 'd', label: 'explicit comparison', direction: 'bidirectional' }, { from: 'b', to: 'c', label: 'explicit association', direction: 'undirected' }], assumptions: ['Synthetic comparison; no scientific claim.'],
   } });
-  await page.getByRole('tab', { name: 'Planning study', exact: true }).click();
+  const panelPath = `/api/v1/visualization/projects/${project}/figures/${panelFigure.id}`;
   await page.getByRole('button', { name: '刷新画布列表', exact: true }).click();
   await page.getByRole('button', { name: 'Panel comparison', exact: true }).click();
   await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
-  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
-  await planningDialog.getByRole('textbox', { name: '核心图意', exact: true }).waitFor();
-  await planningDialog.getByRole('button', { name: '添加面板', exact: true }).click();
-  await planningDialog.getByRole('textbox', { name: '面板标题 1', exact: true }).fill('A · Control');
-  await planningDialog.getByRole('button', { name: '添加面板', exact: true }).click();
-  await planningDialog.getByRole('textbox', { name: '面板标题 2', exact: true }).fill('B · Treatment');
-  await planningDialog.getByRole('combobox', { name: '组件面板 3', exact: true }).selectOption('p2');
-  await planningDialog.getByRole('combobox', { name: '组件面板 4', exact: true }).selectOption('p2');
-  await planningDialog.getByRole('button', { name: '添加关系', exact: true }).click();
-  await planningDialog.getByRole('combobox', { name: '关系来源 3', exact: true }).selectOption('b');
-  await planningDialog.getByRole('combobox', { name: '关系目标 3', exact: true }).selectOption('c');
-  await planningDialog.getByRole('textbox', { name: '关系说明 3', exact: true }).fill('explicit association');
-  await planningDialog.getByRole('combobox',{name:'关系方向 2',exact:true}).selectOption('bidirectional');
-  await planningDialog.getByRole('combobox',{name:'关系方向 3',exact:true}).selectOption('undirected');
-  assert.equal(await planningDialog.getByRole('checkbox',{name:'抑制关系 2',exact:true}).isDisabled(),true);
-  assert.equal(await planningDialog.getByRole('checkbox',{name:'抑制关系 3',exact:true}).isDisabled(),true);
-  await planningDialog.getByRole('button', { name: '保存绘图计划', exact: true }).click();
-  await planningDialog.getByRole('status').filter({ hasText: '计划 v2' }).waitFor();
-  assert.deepEqual((await call('GET', `${panelPath}/planning`)).document.nodes.map(n => n.panel), ['p1', 'p1', 'p2', 'p2']);
-  await planningDialog.getByRole('button', { name: '关闭计划', exact: true }).click();
-  await page.getByRole('button', { name: '绘图计划', exact: true }).click();
-  await planningDialog.getByRole('textbox', { name: '面板标题 2', exact: true }).waitFor();
-  assert.equal(await planningDialog.getByRole('textbox', { name: '面板标题 2', exact: true }).inputValue(), 'B · Treatment');
-  assert.equal(await planningDialog.getByRole('combobox',{name:'关系方向 2',exact:true}).inputValue(),'bidirectional');
-  assert.equal(await planningDialog.getByRole('combobox',{name:'关系方向 3',exact:true}).inputValue(),'undirected');
-  await planningDialog.getByRole('button', { name: '生成草图提案', exact: true }).click();
   const panelPreview = page.getByRole('dialog', { name: 'Agent 修改预览' });
-  await panelPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
-  assert.equal((await call('GET', panelPath)).scene.document.elements.length, 0);
-  await page.screenshot({ path: '/tmp/autonomics-panels-proposal.png' });
-  await panelPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await panelPreview.waitFor({ state: 'hidden' });
-  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
   const panelScene = await source();
   assert.equal(panelScene.elements.filter(e => e.type === 'frame').length, 2);
   assert.equal(panelScene.elements.find(e => e.id === 'node-2').frameId, 'panel-1');
@@ -1589,7 +1502,7 @@ try {
   assert.ok(fontRequests.every(url => new URL(url).origin === origin), 'generated diagrams do not fetch remote font assets');
   assert.ok(/data:font\/woff2;base64,/.test(panelSvg), 'standalone SVG embeds its pinned font');
   assert.deepEqual(errors, []);
-  console.log('canvas-native: real tools, HTTP, SQLite, review markup, local edits, layouts, scientific planning, clarification, panels and review passed');
+  console.log('canvas-native: real tools, HTTP, SQLite, review markup, local edits, layouts, panels and review passed');
 } catch (error) {
   await page?.screenshot({ path: "/tmp/autonomics-canvas-native-failure.png" }).catch(() => {});
   throw error;

@@ -134,7 +134,7 @@ export function SpawnAgentDialog({
   const [spawnName, setSpawnName] = useState("");
   const [spawnParent, setSpawnParent] = useState("/root");
   const [spawnProfile, setSpawnProfile] = useState("researcher");
-  const [profiles, setProfiles] = useState(["researcher", "developer", "browser", "curator"]);
+  const [profiles, setProfiles] = useState(["researcher", "developer", "browser", "curator", "illustrator"]);
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();

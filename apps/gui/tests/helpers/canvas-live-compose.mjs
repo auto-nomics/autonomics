@@ -13,8 +13,8 @@ const intersects=(a,b)=>a.x<b.x+b.width&&a.x+a.width>b.x&&a.y<b.y+b.height&&a.y+
 export async function runLiveComposition({page,call,path,send,persist,directory,turns,until}) {
   const replaceMode=process.env.VISUALIZATION_LIVE_COMPOSE_REPLACE==='1';
   const brief={message:'Conceptual cell culture followed by microscopy; no protocol parameters specified.',audience:'Researchers',layout:'horizontal',nodes:[{id:'culture',label:'Cell culture'},{id:'imaging',label:'Microscopy'}],edges:[{from:'culture',to:'imaging',label:'then',direction:'forward'}],assumptions:['Conceptual workflow; culture conditions and imaging parameters are not specified.']};
-  const empty=await call('GET',path);await call('PUT',path,{expected_revision:empty.metadata.revision,title:'Live figure',document:empty.scene.document});const initial=await call('GET',path);await call('PUT',`${path}/planning`,{expected_revision:initial.metadata.revision,expected_plan_version:0,document:brief});
-  const sketch=await call('POST',`${path}/planning/sketch`,{expected_revision:initial.metadata.revision,expected_plan_version:1,summary:'Declared conceptual imaging workflow'});await call('POST',`${path}/proposals/${sketch.id}/accept`);
+  const empty=await call('GET',path);await call('PUT',path,{expected_revision:empty.metadata.revision,title:'Live figure',document:empty.scene.document});const initial=await call('GET',path);
+  const sketch=await call('POST',`${path}/proposals`,{expected_revision:initial.metadata.revision,summary:'Declared conceptual imaging workflow',operations:[{op:'insert_sketch',plan:brief,id_prefix:'composition-',x:0,y:0}]});await call('POST',`${path}/proposals/${sketch.id}/accept`);
   page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();
   const formal=await call('GET',path),revision=formal.metadata.revision,doc=formal.scene.document;
   assert.equal(doc.elements.filter(e=>e.customData?.scientificId).length,2);assert.equal(doc.elements.filter(e=>e.type==='image').length,0);

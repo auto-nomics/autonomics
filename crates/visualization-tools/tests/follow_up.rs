@@ -1,5 +1,4 @@
 use serde_json::json;
-use visualization::planning::Brief;
 
 #[tokio::test]
 async fn returned_read_inputs_work_verbatim_and_never_replace_scope_or_revision_checks() {
@@ -14,14 +13,8 @@ async fn returned_read_inputs_work_verbatim_and_never_replace_scope_or_revision_
     let figure = store
         .create("project-real", "Figure", "excalidraw/v2", &original)
         .unwrap();
-    let brief: Brief = serde_json::from_value(json!({"message":"Conceptual cell","audience":"Researchers","nodes":[{"id":"cell","label":"Cell"}]})).unwrap();
-    for version in 0..3 {
-        store
-            .save_planning("project-real", &figure.id, 1, version, &brief)
-            .unwrap();
-    }
     let tool = visualization_tools::registrations(path).remove(0);
-    let created = serde_json::to_value(tool.implementation.execute(json!({"action":"sketch_plan","project_id":"project-real","figure_id":figure.id,"expected_revision":1,"planning_version":3,"title":"Confirmed plan"})).await.unwrap()).unwrap();
+    let created = serde_json::to_value(tool.implementation.execute(json!({"action":"sketch","project_id":"project-real","figure_id":figure.id,"expected_revision":1,"title":"Confirmed structure","document":{"message":"Conceptual cell","audience":"Researchers","nodes":[{"id":"cell","label":"Cell"}]}})).await.unwrap()).unwrap();
     let payload = &created["content"];
     let read_input = payload["follow_up_inputs"]["read_proposal"].clone();
     assert_eq!(

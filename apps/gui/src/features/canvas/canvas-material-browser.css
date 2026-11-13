@@ -1,0 +1,40 @@
+/* Match the native canvas theme, including when the surrounding app is dark. */
+.canvas-material-browser .canvas-catalog-panel {
+  --background: var(--color-surface-lowest);
+  --foreground: var(--color-on-surface);
+  --muted: var(--color-surface-mid);
+  --muted-foreground: var(--text-secondary-color, #666);
+  --border: var(--default-border-color);
+  --input: var(--default-border-color);
+  --primary: var(--color-primary);
+  --primary-foreground: var(--color-surface-lowest);
+  --secondary: var(--color-surface-low);
+  --secondary-foreground: var(--color-on-surface);
+  color: var(--foreground);
+}
+.excalidraw .canvas-material-browser .sidebar-tabs-root .sidebar-triggers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.excalidraw .canvas-material-browser .sidebar-triggers > button:nth-of-type(2) {
+  display: none;
+}
+.excalidraw .canvas-material-browser .canvas-material-source-select {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--default-border-color);
+  border-radius: 8px;
+  color: var(--color-on-surface);
+  background: var(--color-surface-lowest);
+  font: inherit;
+}
+/* This Excalidraw version can remount its fallback on responsive changes.
+ * Keep the host extension as the single visible native sidebar. */
+[data-canvas-surface]:has(.canvas-material-browser) .default-sidebar:not(.canvas-material-browser) {
+  display: none;
+}

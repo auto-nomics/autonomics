@@ -64,7 +64,7 @@ export function checkApoptosisPlan(plan,first,records){
 export function checkApoptosisCaptions(text){assert.ok(human(text));assert.match(text,/内源|intrinsic/i);assert.ok(casp3(text));checkCasp9ProcessingQualification(text);}
 export const apoptosisScenario={
  name:'intrinsic-apoptosis',
- initialRequest:'我准备给研究生画线粒体内源性凋亡机制示意图，但还没确定物种和具体起止范围。请轻量检索 Reactome 候选来源，不默认物种，把图意和最多三个必要澄清问题保存到绘图计划，问题保留空答案。本轮不要画图、生成候选或添加素材。',
+ initialRequest:'我准备给研究生画线粒体内源性凋亡机制示意图，但还没确定物种和具体起止范围。请轻量检索 Reactome 候选来源，不默认物种，提出最多三个必要澄清问题。本轮不要画图、生成候选或添加素材。',
  confirmation:'确认：物种为人类。起点为线粒体膜间隙的细胞色素c（CYCS）释放，随后展示胞质中的APAF1/凋亡小体组装、procaspase-9招募与活化，终点为CASP3活化。不展开上游BCL2家族调控、死亡受体、CASP8、CASP7、XIAP/SMAC或下游底物降解。5至8个生物组件，可以合并有明确来源支持的复合物或中间态，保持区室清楚；图是机制抽象而非分子结构。请自行检索并实际读取反应级记录，区分结合、组装、活化和蛋白水解加工，保留来源限定和关键抽象；不能用通路总览证明所有箭头。逐关系保存实际来源URL，保留上一轮问题ID并填写答案，保存就绪计划供我确认。本轮仍不画图或选素材，缺少来源就说明，不猜测。',
  captionPrompt:'图下添加可编辑范围说明，明确人类内源性分支、CYCS释放起点和CASP3活化终点，保留已确认计划中CASP9活化与加工的来源限定和机制抽象，不仅藏在元数据。',
  reviewPlan:reviewApoptosisPlan,checkClarification:checkApoptosisClarification,checkPlan:checkApoptosisPlan,checkCaptions:checkApoptosisCaptions,

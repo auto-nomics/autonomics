@@ -11,13 +11,12 @@ async fn registered_plan_and_candidate_read_preserve_native_relation_styles() {
         .create("p", "Figure", "excalidraw/v2", &original)
         .unwrap();
     let tool = visualization_tools::registrations(path).remove(0);
-    let input = json!({"action":"save_plan","project_id":"p","figure_id":figure.id,"expected_revision":1,"planning_version":0,"planning":{"message":"User-declared diagram and line legend","audience":"Researchers","nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"edges":[{"from":"a","to":"b","line_style":"dashed","label":"Declared relationship","evidence":["user-reviewed source"]}]}});
+    let input = json!({"action":"sketch","project_id":"p","figure_id":figure.id,"expected_revision":1,"title":"Declared style","document":{"message":"User-declared diagram and line legend","audience":"Researchers","nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"}],"edges":[{"from":"a","to":"b","line_style":"dashed","label":"Declared relationship","evidence":["user-reviewed source"]}]}});
     let mut bad = input.clone();
-    bad["planning"]["edges"][0]["line_style"] = json!("optional");
+    bad["document"]["edges"][0]["line_style"] = json!("optional");
     assert!(tool.implementation.execute(bad).await.is_err());
-    assert!(store.planning("p", &figure.id).unwrap().is_none());
-    tool.implementation.execute(input).await.unwrap();
-    let result: Value = serde_json::to_value(tool.implementation.execute(json!({"action":"sketch_plan","project_id":"p","figure_id":figure.id,"expected_revision":1,"planning_version":1,"title":"Declared style"})).await.unwrap()).unwrap();
+    assert!(store.proposals("p", &figure.id).unwrap().is_empty());
+    let result: Value = serde_json::to_value(tool.implementation.execute(input).await.unwrap()).unwrap();
     let id = result["content"]["id"].as_str().unwrap();
     let candidate = store.proposal("p", &figure.id, id).unwrap();
     let response: Value = serde_json::to_value(tool.implementation.execute(json!({"action":"read_proposal","project_id":"p","figure_id":figure.id,"expected_revision":1,"proposal_id":id,"element_ids":["edge-0"]})).await.unwrap()).unwrap();
@@ -34,15 +33,5 @@ async fn registered_plan_and_candidate_read_preserve_native_relation_styles() {
     assert_eq!(
         store.revision("p", &figure.id, 1).unwrap().document,
         original
-    );
-    assert_eq!(
-        store
-            .planning("p", &figure.id)
-            .unwrap()
-            .unwrap()
-            .document
-            .edges[0]
-            .line_style,
-        visualization::sketch::RelationLineStyle::Dashed
     );
 }

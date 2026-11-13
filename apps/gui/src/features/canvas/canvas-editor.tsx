@@ -1,3 +1,7 @@
+import { CanvasMaterialBrowser } from "./canvas-material-browser";
+import { CanvasBottomActions } from "./canvas-bottom-actions";
+import { Download, Sparkles, Wrench } from "lucide-react";
+import { CanvasActionMenu, CanvasActionGroup } from "./canvas-action-menu";
 import { normalizeEmptyNativeFields } from "./canvas-empty-native-fields";
 import { CanvasFrameSwap } from "./canvas-frame-swap";
 import { SvgPathChannel } from "./canvas-svg-path-channel";
@@ -23,14 +27,11 @@ import { CanvasDuplicate } from "./canvas-duplicate";
 import { CanvasRelation } from "./canvas-relation";
 import { CanvasFrameFit } from "./canvas-frame-fit";
 import { CanvasRouting } from "./canvas-routing";
-import { CanvasPlanning } from "./canvas-planning";
 import { CanvasMarkups } from "./canvas-markups";
 import { CanvasHistory } from "./canvas-history";
-import { CanvasCircleSelect } from "./canvas-circle-select";
+import { CanvasRectangleSelect } from "./canvas-rectangle-select";
 import { CanvasProposals } from "./canvas-proposals";
 import { CanvasAgentPanel } from "./canvas-agent-panel";
-import { BioIconsPanel } from "./bioicons-panel";
-import { BioArtPanel } from "./bioart-panel";
 import { preserveSourceFiles } from "./canvas-source-files";
 import { readCanvas, saveCanvas } from "./canvas-store";
 
@@ -48,6 +49,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const projectId = typeof editor.params.projectId === "string" ? editor.params.projectId : undefined;
   const revision = useRef<number | undefined>(undefined);
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
+  const surface = useRef<HTMLDivElement>(null);
   const baseline = useRef<string | null>(null);
   const sourceFiles = useRef<Record<string, unknown>>({});
   const serializeScene = (...args: Parameters<typeof serializeAsJSON>) => preserveSourceFiles(serializeAsJSON(...args), sourceFiles.current);
@@ -61,12 +63,13 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const latestTitle = useRef("未命名画布");
   const [title, setTitle] = useState("未命名画布");
   const [error, setError] = useState("");
-  const [circleSelect, setCircleSelect] = useState(false);
+  const [rectangleSelect, setRectangleSelect] = useState(false);
   const [proposalRequest, setProposalRequest] = useState<{ id: string }>();
-  type Panel = "agent" | "bioart" | "bioicons";
+  type Panel = "agent";
   const [panel,setPanel]=useState<Panel|null>(null);
-  const [visitedPanels,setVisitedPanels]=useState<Record<Panel,boolean>>({agent:false,bioart:false,bioicons:false});
+  const [visitedPanels,setVisitedPanels]=useState<Record<Panel,boolean>>({agent:false});
   function selectPanel(target:Panel,toggle=true) {
+    api.current?.toggleSidebar({ name: "default", force: false });
     setVisitedPanels(current=>({...current,[target]:true}));
     setPanel(current=>toggle&&current===target?null:target);
   }
@@ -187,38 +190,14 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); void save(); }
   }}>
-    <div data-canvas-toolbar role="group" aria-label="画布工具栏" className="flex max-h-[35%] shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b p-2">
-      <input aria-label="画布名称" disabled={busy} className="min-w-48 flex-1 rounded border bg-background px-2 py-1 text-sm" value={title} onChange={event => { latestTitle.current = event.target.value; setTitle(event.target.value); dirty(true); }} />
-      <span className="text-xs text-muted-foreground">{projectId ? "保存在项目中" : "旧版本地画布"}</span>
-      {projectId && <CanvasHistory projectId={projectId} canvasId={id} getRevision={() => revision.current} isDirty={hasUnsavedChanges} onRestored={onReload} />}
-      {projectId && <Button size="sm" variant={circleSelect ? "default" : "outline"} disabled={!loaded || busy} onClick={() => setCircleSelect(value => !value)}>{circleSelect ? "取消圈选" : "圈选批注"}</Button>}
-      {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} capturePreview={capturePreview} isDirty={hasUnsavedChanges} />}
-      {projectId && <CanvasPlanning projectId={projectId} canvasId={id} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasDuplicate projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasEvidenceList projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasFrameFit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasFrameSwap projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
-      {projectId && <Button size="sm" variant={panel === "agent" ? "secondary" : "outline"} aria-expanded={panel === "agent"} onClick={() => selectPanel("agent")}>Agent 绘图</Button>}
-      <Button size="sm" variant={panel === "bioart" ? "secondary" : "outline"} aria-expanded={panel === "bioart"} onClick={() => selectPanel("bioart")}>BioArt 素材</Button>
-      <Button size="sm" variant={panel === "bioicons" ? "secondary" : "outline"} aria-expanded={panel === "bioicons"} onClick={() => selectPanel("bioicons")}>矢量素材</Button>
-      {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
-        const instance = api.current;
-        const changed = instance && (serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
-        if (!changed || window.confirm("重新加载将丢弃未保存修改，继续？")) onReload();
-      }}>重新加载服务端版本</Button>}
+    <div data-canvas-toolbar role="group" aria-label="画布工具栏" className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+      <input aria-label="画布名称" disabled={busy} className="h-8 min-w-0 flex-1 rounded border border-transparent bg-transparent px-2 text-sm font-medium hover:border-border focus:border-ring focus:outline-none" value={title} onChange={event => { latestTitle.current = event.target.value; setTitle(event.target.value); dirty(true); }} />
+      <span className="shrink-0 text-xs text-muted-foreground">{projectId ? "项目画布" : "本地画布"}</span>
       <Button size="sm" disabled={!loaded || busy || !imagesReady} onClick={() => void save()}>{busy ? "保存中…" : !imagesReady ? "图片载入中…" : "保存画布"}</Button>
-      <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
-      {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
     </div>
     {inspectedPath && <div aria-label="SVG 路径上下文" className="flex items-center gap-2 border-b px-2 py-1 text-xs text-muted-foreground"><span>{inspectedPath.panel_visible?"正在查看":"上次查看"}：{inspectedPath.scope==="proposal_candidate"?"候选":"正式图"} SVG 路径 {inspectedPath.part_index}</span><Button size="sm" variant="ghost" onClick={() => publishPath({kind:"clear"})}>清除路径上下文</Button></div>}
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
-    {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" data-canvas-surface>
+    {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" style={{ containerType: "inline-size" }} ref={surface} data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => {
         api.current = instance;pointerSubscription.current?.();
         pointerSubscription.current=instance.onPointerDown((_tool,pointerState,event)=>{
@@ -271,10 +250,48 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
         if (previous?.dirty !== nextDirty || previous?.objectCount !== count || previous?.selectedObjectIds !== selectedObjectIds || previous?.selectedObjects !== selectedObjects || previous?.selectedObjectsTotal !== selection.total || previous?.selectedObjectsTruncated !== selection.truncated || previous?.imageFileCount !== Object.keys(files).length) dirty(nextDirty, count, Object.keys(files).length, selection);
       }}>
         <MainMenu><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
+      <CanvasMaterialBrowser getApi={() => api.current} onOpen={() => setPanel(null)} />
+      <CanvasBottomActions surface={surface}>
+        <div data-canvas-action-dock role="toolbar" aria-label="画布快捷操作" className="relative flex max-w-full flex-wrap items-center justify-center gap-0.5 px-1" onPointerDown={event => event.stopPropagation()}>
+      {projectId && <Button size="sm" variant={panel === "agent" ? "secondary" : "outline"} aria-expanded={panel === "agent"} onClick={() => selectPanel("agent")}><Sparkles />Agent 绘图</Button>}
+          <CanvasActionMenu label="画布工具" icon={Wrench}>
+            <CanvasActionGroup title="审阅与协作">
+      {projectId && <CanvasHistory projectId={projectId} canvasId={id} getRevision={() => revision.current} isDirty={hasUnsavedChanges} onRestored={onReload} />}
+      {projectId && <Button size="sm" variant={rectangleSelect ? "default" : "outline"} disabled={!loaded || busy} onClick={() => setRectangleSelect(value => !value)}>{rectangleSelect ? "取消框选" : "框选批注"}</Button>}
+      {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} capturePreview={capturePreview} isDirty={hasUnsavedChanges} />}
+      {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
+            </CanvasActionGroup>
+            <CanvasActionGroup title="对象编辑">
+      {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasDuplicate projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasEvidenceList projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+            </CanvasActionGroup>
+            <CanvasActionGroup title="分面与连线">
+      {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasFrameFit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasFrameSwap projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+            </CanvasActionGroup>
+            <CanvasActionGroup title="版本操作">
+      {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
+        const instance = api.current;
+        const changed = instance && (serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
+        if (!changed || window.confirm("重新加载将丢弃未保存修改，继续？")) onReload();
+      }}>重新加载服务端版本</Button>}
+            </CanvasActionGroup>
+          </CanvasActionMenu>
+          <CanvasActionMenu label="导出" icon={Download}><CanvasActionGroup title="导出图稿与来源">
+      <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
+      {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
+          </CanvasActionGroup></CanvasActionMenu>
+        </div>
+      </CanvasBottomActions>
       </Excalidraw>
-      {circleSelect && <CanvasCircleSelect getApi={() => api.current} onDone={(count, message) => {
-        setCircleSelect(false); if (message) setError(message); else setError(""); if (count) selectPanel("agent",false);
+      {rectangleSelect && <CanvasRectangleSelect getApi={() => api.current} onDone={(count, message) => {
+        setRectangleSelect(false); if (message) setError(message); else setError(""); if (count) selectPanel("agent",false);
       }} />}
-    </div><div className="contents" data-canvas-panels>{visitedPanels.agent && projectId && <div className={panel === "agent" ? "contents" : "hidden"}><CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} /></div>}{visitedPanels.bioart && <div className={panel === "bioart" ? "contents" : "hidden"}><BioArtPanel getApi={() => api.current} /></div>}{visitedPanels.bioicons && <div className={panel === "bioicons" ? "contents" : "hidden"}><BioIconsPanel getApi={() => api.current} /></div>}</div></div>}
+    </div><div className="contents" data-canvas-panels>{visitedPanels.agent && projectId && <div className={panel === "agent" ? "contents" : "hidden"}><CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} /></div>}</div></div>}
   </section></SvgPathChannel.Provider>;
 }
