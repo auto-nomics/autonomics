@@ -57,7 +57,7 @@ pub fn assemble(markdown: &str, id: &str, created_at: &str, updated_at: &str) ->
 
     let defaults = hm
         .get("defaults")
-        .map(|v| typed_frontmatter(v))
+        .map(typed_frontmatter)
         .unwrap_or_default();
 
     let aspect = hm

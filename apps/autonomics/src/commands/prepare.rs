@@ -190,7 +190,7 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
         .map_err(|error| color_eyre::eyre::eyre!("cannot list local images: {error}"))?;
     let missing: Vec<String> = declared
         .iter()
-        .filter(|reference| !local.contains(*reference))
+        .filter(|reference| !local.contains(reference))
         .cloned()
         .collect();
     if missing.is_empty() {

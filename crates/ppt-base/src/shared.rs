@@ -403,6 +403,12 @@ impl DeckShared {
     }
 }
 
+/// Content revision used for independent CSS file concurrency checks.
+pub fn css_revision(css: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(css.as_bytes()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,10 +464,4 @@ mod tests {
     fn deck_raw(_id: &str) -> String {
         String::new()
     }
-}
-
-/// Content revision used for independent CSS file concurrency checks.
-pub fn css_revision(css: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(css.as_bytes()))
 }

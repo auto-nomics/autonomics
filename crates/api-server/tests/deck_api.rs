@@ -302,7 +302,7 @@ async fn print_data_requires_valid_token() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::ACCEPTED);
     let minted = json_of(res.into_body()).await;
-    let export_id = minted["exportId"].as_str().unwrap().to_string();
+    let _export_id = minted["exportId"].as_str().unwrap().to_string();
     assert_eq!(minted["status"], "queued");
     assert!(minted.get("printToken").is_none(), "token must not leak into the API response");
 

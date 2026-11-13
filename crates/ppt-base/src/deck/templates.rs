@@ -286,7 +286,7 @@ mod tests {
         let md = starter_markdown(Some("meeting"), "x");
         let deck = assemble(&md, "d", "t", "t");
         assert_eq!(deck.slides[0].title.as_deref(), Some("x"));
-        assert!(deck.meta.features.katex || true);
+        assert!(!deck.meta.features.katex, "meeting starter has no math");
         let panel = deck
             .slides
             .iter()

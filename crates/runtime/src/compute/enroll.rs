@@ -147,41 +147,6 @@ async fn validate_worker_package(path: &Path) -> Result<(), String> {
     identity.validate(&sha).map_err(|e| e.to_string())
 }
 
-#[cfg(test)]
-mod repair_tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    #[tokio::test]
-    async fn bundled_worker_identity_must_match_coordinator_and_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("autonomics-worker");
-        for revision in ["old-source", dag_core::source_revision()] {
-            let script = format!(
-                r#"#!/bin/sh
-hash=$(sha256sum -- "$0"); hash=${{hash%% *}}
-printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","executable_sha256":"%s","capabilities":["task-worker"]}}\n' "$hash"
-"#,
-                revision
-            );
-            fs::write(&path, script).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            let result = validate_worker_package(&path).await;
-            if revision == "old-source" {
-                assert!(result.unwrap_err().contains("differs from coordinator"));
-            } else {
-                result.unwrap();
-            }
-        }
-        assert!(
-            validate_worker_package(&dir.path().join("missing"))
-                .await
-                .unwrap_err()
-                .contains("matching worker package unavailable")
-        );
-    }
-}
-
 fn valid_alias(alias: &str) -> bool {
     !alias.is_empty()
         && !alias.starts_with('-')
@@ -525,5 +490,40 @@ impl ComputeRegistry {
         }
         tracing::info!("cluster enrollment finished");
         Ok(state)
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn bundled_worker_identity_must_match_coordinator_and_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("autonomics-worker");
+        for revision in ["old-source", dag_core::source_revision()] {
+            let script = format!(
+                r#"#!/bin/sh
+hash=$(sha256sum -- "$0"); hash=${{hash%% *}}
+printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","executable_sha256":"%s","capabilities":["task-worker"]}}\n' "$hash"
+"#,
+                revision
+            );
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            let result = validate_worker_package(&path).await;
+            if revision == "old-source" {
+                assert!(result.unwrap_err().contains("differs from coordinator"));
+            } else {
+                result.unwrap();
+            }
+        }
+        assert!(
+            validate_worker_package(&dir.path().join("missing"))
+                .await
+                .unwrap_err()
+                .contains("matching worker package unavailable")
+        );
     }
 }

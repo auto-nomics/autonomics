@@ -223,7 +223,7 @@ fn slide_xml(n: usize, cx: u64, cy: u64, has_notes: bool) -> String {
 <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>{notes_close}
 </p:sld>"#,
         notes_close = if has_notes {
-            format!(r#"<p:notes><p:notes relationshipId="rId3"/></p:notes>"#)
+            r#"<p:notes><p:notes relationshipId="rId3"/></p:notes>"#.to_string()
         } else {
             String::new()
         }

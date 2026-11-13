@@ -148,12 +148,12 @@ impl NodeFactory for EchoFactory {
             path: spec["path"].as_str().map(str::to_owned),
             ports: if spec["optional_output"].as_bool().unwrap_or(false) {
                 NodePorts::new()
-                    .add_input_port_of_type(None, ty.clone())
+                    .add_input_port_of_type(None, ty)
                     .add_output_port_of_type(None, ty)
                     .with_optional_output(0)
             } else {
                 NodePorts::new()
-                    .add_input_port_of_type(None, ty.clone())
+                    .add_input_port_of_type(None, ty)
                     .add_output_port_of_type(None, ty)
             },
         }))

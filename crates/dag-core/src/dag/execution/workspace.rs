@@ -23,264 +23,6 @@ pub(super) struct LocalTaskWorkspace {
     workdir: Option<PathBuf>,
 }
 
-#[cfg(test)]
-mod typed_channel_staging_tests {
-    use super::LocalTaskWorkspace;
-    use crate::dag::DagError;
-    use crate::dag::execution::ChannelTransportValue;
-    use crate::value::{FileRef, NodeValue};
-
-    #[cfg(unix)]
-    #[test]
-    fn workdir_receipt_rejects_symlinked_private_directory() {
-        use crate::dag::execution::{TaskResources, TaskSpec, TaskSubmission};
-        let workdir = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink(outside.path(), workdir.path().join(".autonomics")).unwrap();
-        let submission = TaskSubmission {
-            spec: TaskSpec {
-                id: "task".into(),
-                logical_node: None,
-                kind: "test".into(),
-                spec: serde_json::json!({}),
-                item_key: None,
-                item: None,
-                inputs: vec![],
-                outputs: vec![],
-            },
-            inputs: vec![],
-            resources: TaskResources::default(),
-        };
-        assert!(LocalTaskWorkspace::create_in_workdir(workdir.path(), &submission).is_err());
-        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
-    }
-
-    #[tokio::test]
-    async fn structured_task_input_stages_and_worker_loader_restores_it() {
-        use crate::dag::execution::{
-            TaskInputBinding, TaskInputSource, TaskResources, TaskSpec, TaskSubmission,
-        };
-        let temp = tempfile::tempdir().unwrap();
-        let source_path = temp.path().join("reads.fastq");
-        std::fs::write(&source_path, b"reads").unwrap();
-        let source = FileRef::local(&source_path, Some("fastq".into())).unwrap();
-        let value = ChannelTransportValue::Tuple(vec![
-            ChannelTransportValue::Json(serde_json::json!("sample")),
-            ChannelTransportValue::File(source.clone()),
-        ]);
-        let mut submission = TaskSubmission {
-            spec: TaskSpec {
-                id: "structured".into(),
-                logical_node: None,
-                kind: "test".into(),
-                spec: serde_json::json!({}),
-                item_key: None,
-                item: None,
-                inputs: vec![TaskInputBinding {
-                    name: "input".into(),
-                    port: 0,
-                    source: TaskInputSource::UpstreamPort {
-                        from: "source".into(),
-                        from_port: 0,
-                    },
-                    payload: "structured_channel".into(),
-                    path: None,
-                    fingerprint: None,
-                    staged_paths: vec![],
-                }],
-                outputs: vec![],
-            },
-            inputs: vec![crate::dag::NodeInput {
-                port: 0,
-                data: NodeValue::Structured(value),
-            }],
-            resources: TaskResources::default(),
-        };
-        let mut workspace =
-            LocalTaskWorkspace::create(&temp.path().join("tasks"), &submission).unwrap();
-        workspace.stage_inputs(&mut submission, None).await.unwrap();
-        let NodeValue::Structured(staged) = &submission.inputs[0].data else {
-            panic!("structured input expected")
-        };
-        let paths = &submission.spec.inputs[0].staged_paths;
-        assert_eq!(paths.len(), 2);
-        let artifacts = vec![
-            FileRef::local(&paths[0], Some("json".into())).unwrap(),
-            staged.artifacts()[0].clone(),
-        ];
-        let ctx = crate::registry::NodeCtx::new(
-            datafusion::prelude::SessionContext::new().runtime_env(),
-            None,
-        );
-        let loaded = super::super::remote::RemoteTaskExecutor::load_output(
-            &artifacts,
-            "structured_channel",
-            &ctx,
-        )
-        .await
-        .unwrap();
-        assert!(
-            super::super::remote::RemoteTaskExecutor::load_output(
-                &artifacts[..1],
-                "structured_channel",
-                &ctx
-            )
-            .await
-            .is_err()
-        );
-        let NodeValue::Structured(restored) = loaded else {
-            panic!("structured input expected")
-        };
-        let ChannelTransportValue::Tuple(items) = &restored else {
-            panic!("tuple expected")
-        };
-        assert!(
-            matches!(&items[0], ChannelTransportValue::Json(value) if value == &serde_json::json!("sample"))
-        );
-        assert_eq!(restored.artifacts()[0].fingerprint, source.fingerprint);
-        assert_eq!(
-            std::fs::read(&restored.artifacts()[0].path).unwrap(),
-            b"reads"
-        );
-    }
-
-    struct RemoteStore;
-
-    #[async_trait::async_trait]
-    impl crate::TaskArtifactStore for RemoteStore {
-        async fn remote_input(
-            &self,
-            artifact: FileRef,
-            _: Option<&vfs::OpendalFileStorage>,
-        ) -> Result<Option<FileRef>, DagError> {
-            if artifact.path == "vfs:///data/remote.tsv" {
-                Ok(Some(FileRef::new(
-                    "/cluster/data/remote.tsv",
-                    artifact.format,
-                )))
-            } else {
-                Ok(None)
-            }
-        }
-        async fn upload(&self, _: FileRef, _: &str, _: &str) -> Result<FileRef, DagError> {
-            panic!("no upload expected")
-        }
-        async fn download(&self, _: FileRef, _: &str, _: &str) -> Result<FileRef, DagError> {
-            panic!("no download expected")
-        }
-    }
-
-    #[tokio::test]
-    async fn nested_channel_artifacts_are_staged_and_rewritten() {
-        let temp = tempfile::tempdir().unwrap();
-        let input_root = temp.path().join("inputs");
-        std::fs::create_dir(&input_root).unwrap();
-        let first = temp.path().join("a.txt");
-        let second = temp.path().join("table.arrow");
-        std::fs::write(&first, b"file content").unwrap();
-        std::fs::write(&second, b"arrow content").unwrap();
-        let first = FileRef::local(&first, Some("txt".into())).unwrap();
-        let second = FileRef::local(&second, Some("arrow".into())).unwrap();
-        let mut value = ChannelTransportValue::Tuple(vec![
-            ChannelTransportValue::Json(serde_json::json!("sample")),
-            ChannelTransportValue::List(vec![
-                ChannelTransportValue::File(first.clone()),
-                ChannelTransportValue::Arrow(second.clone()),
-            ]),
-        ]);
-        let (staged, remote) = LocalTaskWorkspace::stage_channel_value(
-            &input_root,
-            &mut 0,
-            &mut value,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        assert!(remote.is_empty());
-        assert_eq!(staged.len(), 2);
-        assert_eq!(std::fs::read(&staged[0].path).unwrap(), b"file content");
-        assert_eq!(std::fs::read(&staged[1].path).unwrap(), b"arrow content");
-        assert_eq!(staged[0].fingerprint, first.fingerprint);
-        assert_eq!(
-            value
-                .artifacts()
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>(),
-            staged.iter().map(|f| f.path.as_str()).collect::<Vec<_>>()
-        );
-    }
-
-    #[tokio::test]
-    async fn failed_channel_staging_does_not_rewrite_the_input() {
-        let temp = tempfile::tempdir().unwrap();
-        let input_root = temp.path().join("inputs");
-        std::fs::create_dir(&input_root).unwrap();
-        let first = temp.path().join("a.txt");
-        let missing = temp.path().join("missing.txt");
-        std::fs::write(&first, b"content").unwrap();
-        let mut value = ChannelTransportValue::Tuple(vec![
-            ChannelTransportValue::File(FileRef::local(&first, None).unwrap()),
-            ChannelTransportValue::File(FileRef {
-                domain: crate::value::DomainId::local(),
-                path: missing.to_string_lossy().into_owned(),
-                format: None,
-                fingerprint: None,
-            }),
-        ]);
-        let original: Vec<_> = value.artifacts().iter().map(|f| f.path.clone()).collect();
-        assert!(
-            LocalTaskWorkspace::stage_channel_value(
-                &input_root,
-                &mut 0,
-                &mut value,
-                None,
-                None,
-                None
-            )
-            .await
-            .is_err()
-        );
-        assert_eq!(
-            value
-                .artifacts()
-                .iter()
-                .map(|f| f.path.clone())
-                .collect::<Vec<_>>(),
-            original
-        );
-    }
-
-    #[tokio::test]
-    async fn nested_remote_artifact_is_forwarded_without_local_read() {
-        let temp = tempfile::tempdir().unwrap();
-        let input_root = temp.path().join("inputs");
-        std::fs::create_dir(&input_root).unwrap();
-        let local = temp.path().join("local.txt");
-        std::fs::write(&local, b"local").unwrap();
-        let mut value = ChannelTransportValue::Tuple(vec![
-            ChannelTransportValue::File(FileRef::new("vfs:///data/remote.tsv", Some("tsv".into()))),
-            ChannelTransportValue::File(FileRef::local(&local, None).unwrap()),
-        ]);
-        let (staged, remote) = LocalTaskWorkspace::stage_channel_value(
-            &input_root,
-            &mut 0,
-            &mut value,
-            None,
-            Some(&RemoteStore),
-            None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(remote[&0].path, "/cluster/data/remote.tsv");
-        assert_eq!(staged[0].path, "/cluster/data/remote.tsv");
-        assert_eq!(std::fs::read(&staged[1].path).unwrap(), b"local");
-        assert_eq!(value.artifacts()[0].path, "/cluster/data/remote.tsv");
-    }
-}
-
 /// Ceiling for one materialized evidence artifact (bytes); `0` disables the
 /// cap. Evidence files are never read back as data, so truncation at the cap
 /// loses nothing the engine needs — a sidecar marks the file as truncated.
@@ -992,5 +734,263 @@ impl LocalTaskWorkspace {
                 "cannot write local task attempt receipt"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod typed_channel_staging_tests {
+    use super::LocalTaskWorkspace;
+    use crate::dag::DagError;
+    use crate::dag::execution::ChannelTransportValue;
+    use crate::value::{FileRef, NodeValue};
+
+    #[cfg(unix)]
+    #[test]
+    fn workdir_receipt_rejects_symlinked_private_directory() {
+        use crate::dag::execution::{TaskResources, TaskSpec, TaskSubmission};
+        let workdir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), workdir.path().join(".autonomics")).unwrap();
+        let submission = TaskSubmission {
+            spec: TaskSpec {
+                id: "task".into(),
+                logical_node: None,
+                kind: "test".into(),
+                spec: serde_json::json!({}),
+                item_key: None,
+                item: None,
+                inputs: vec![],
+                outputs: vec![],
+            },
+            inputs: vec![],
+            resources: TaskResources::default(),
+        };
+        assert!(LocalTaskWorkspace::create_in_workdir(workdir.path(), &submission).is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn structured_task_input_stages_and_worker_loader_restores_it() {
+        use crate::dag::execution::{
+            TaskInputBinding, TaskInputSource, TaskResources, TaskSpec, TaskSubmission,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let source_path = temp.path().join("reads.fastq");
+        std::fs::write(&source_path, b"reads").unwrap();
+        let source = FileRef::local(&source_path, Some("fastq".into())).unwrap();
+        let value = ChannelTransportValue::Tuple(vec![
+            ChannelTransportValue::Json(serde_json::json!("sample")),
+            ChannelTransportValue::File(source.clone()),
+        ]);
+        let mut submission = TaskSubmission {
+            spec: TaskSpec {
+                id: "structured".into(),
+                logical_node: None,
+                kind: "test".into(),
+                spec: serde_json::json!({}),
+                item_key: None,
+                item: None,
+                inputs: vec![TaskInputBinding {
+                    name: "input".into(),
+                    port: 0,
+                    source: TaskInputSource::UpstreamPort {
+                        from: "source".into(),
+                        from_port: 0,
+                    },
+                    payload: "structured_channel".into(),
+                    path: None,
+                    fingerprint: None,
+                    staged_paths: vec![],
+                }],
+                outputs: vec![],
+            },
+            inputs: vec![crate::dag::NodeInput {
+                port: 0,
+                data: NodeValue::Structured(value),
+            }],
+            resources: TaskResources::default(),
+        };
+        let mut workspace =
+            LocalTaskWorkspace::create(&temp.path().join("tasks"), &submission).unwrap();
+        workspace.stage_inputs(&mut submission, None).await.unwrap();
+        let NodeValue::Structured(staged) = &submission.inputs[0].data else {
+            panic!("structured input expected")
+        };
+        let paths = &submission.spec.inputs[0].staged_paths;
+        assert_eq!(paths.len(), 2);
+        let artifacts = vec![
+            FileRef::local(&paths[0], Some("json".into())).unwrap(),
+            staged.artifacts()[0].clone(),
+        ];
+        let ctx = crate::registry::NodeCtx::new(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+        );
+        let loaded = super::super::remote::RemoteTaskExecutor::load_output(
+            &artifacts,
+            "structured_channel",
+            &ctx,
+        )
+        .await
+        .unwrap();
+        assert!(
+            super::super::remote::RemoteTaskExecutor::load_output(
+                &artifacts[..1],
+                "structured_channel",
+                &ctx
+            )
+            .await
+            .is_err()
+        );
+        let NodeValue::Structured(restored) = loaded else {
+            panic!("structured input expected")
+        };
+        let ChannelTransportValue::Tuple(items) = &restored else {
+            panic!("tuple expected")
+        };
+        assert!(
+            matches!(&items[0], ChannelTransportValue::Json(value) if value == &serde_json::json!("sample"))
+        );
+        assert_eq!(restored.artifacts()[0].fingerprint, source.fingerprint);
+        assert_eq!(
+            std::fs::read(&restored.artifacts()[0].path).unwrap(),
+            b"reads"
+        );
+    }
+
+    struct RemoteStore;
+
+    #[async_trait::async_trait]
+    impl crate::TaskArtifactStore for RemoteStore {
+        async fn remote_input(
+            &self,
+            artifact: FileRef,
+            _: Option<&vfs::OpendalFileStorage>,
+        ) -> Result<Option<FileRef>, DagError> {
+            if artifact.path == "vfs:///data/remote.tsv" {
+                Ok(Some(FileRef::new(
+                    "/cluster/data/remote.tsv",
+                    artifact.format,
+                )))
+            } else {
+                Ok(None)
+            }
+        }
+        async fn upload(&self, _: FileRef, _: &str, _: &str) -> Result<FileRef, DagError> {
+            panic!("no upload expected")
+        }
+        async fn download(&self, _: FileRef, _: &str, _: &str) -> Result<FileRef, DagError> {
+            panic!("no download expected")
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_channel_artifacts_are_staged_and_rewritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let input_root = temp.path().join("inputs");
+        std::fs::create_dir(&input_root).unwrap();
+        let first = temp.path().join("a.txt");
+        let second = temp.path().join("table.arrow");
+        std::fs::write(&first, b"file content").unwrap();
+        std::fs::write(&second, b"arrow content").unwrap();
+        let first = FileRef::local(&first, Some("txt".into())).unwrap();
+        let second = FileRef::local(&second, Some("arrow".into())).unwrap();
+        let mut value = ChannelTransportValue::Tuple(vec![
+            ChannelTransportValue::Json(serde_json::json!("sample")),
+            ChannelTransportValue::List(vec![
+                ChannelTransportValue::File(first.clone()),
+                ChannelTransportValue::Arrow(second.clone()),
+            ]),
+        ]);
+        let (staged, remote) = LocalTaskWorkspace::stage_channel_value(
+            &input_root,
+            &mut 0,
+            &mut value,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(remote.is_empty());
+        assert_eq!(staged.len(), 2);
+        assert_eq!(std::fs::read(&staged[0].path).unwrap(), b"file content");
+        assert_eq!(std::fs::read(&staged[1].path).unwrap(), b"arrow content");
+        assert_eq!(staged[0].fingerprint, first.fingerprint);
+        assert_eq!(
+            value
+                .artifacts()
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            staged.iter().map(|f| f.path.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_channel_staging_does_not_rewrite_the_input() {
+        let temp = tempfile::tempdir().unwrap();
+        let input_root = temp.path().join("inputs");
+        std::fs::create_dir(&input_root).unwrap();
+        let first = temp.path().join("a.txt");
+        let missing = temp.path().join("missing.txt");
+        std::fs::write(&first, b"content").unwrap();
+        let mut value = ChannelTransportValue::Tuple(vec![
+            ChannelTransportValue::File(FileRef::local(&first, None).unwrap()),
+            ChannelTransportValue::File(FileRef {
+                domain: crate::value::DomainId::local(),
+                path: missing.to_string_lossy().into_owned(),
+                format: None,
+                fingerprint: None,
+            }),
+        ]);
+        let original: Vec<_> = value.artifacts().iter().map(|f| f.path.clone()).collect();
+        assert!(
+            LocalTaskWorkspace::stage_channel_value(
+                &input_root,
+                &mut 0,
+                &mut value,
+                None,
+                None,
+                None
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            value
+                .artifacts()
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+            original
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_remote_artifact_is_forwarded_without_local_read() {
+        let temp = tempfile::tempdir().unwrap();
+        let input_root = temp.path().join("inputs");
+        std::fs::create_dir(&input_root).unwrap();
+        let local = temp.path().join("local.txt");
+        std::fs::write(&local, b"local").unwrap();
+        let mut value = ChannelTransportValue::Tuple(vec![
+            ChannelTransportValue::File(FileRef::new("vfs:///data/remote.tsv", Some("tsv".into()))),
+            ChannelTransportValue::File(FileRef::local(&local, None).unwrap()),
+        ]);
+        let (staged, remote) = LocalTaskWorkspace::stage_channel_value(
+            &input_root,
+            &mut 0,
+            &mut value,
+            None,
+            Some(&RemoteStore),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(remote[&0].path, "/cluster/data/remote.tsv");
+        assert_eq!(staged[0].path, "/cluster/data/remote.tsv");
+        assert_eq!(std::fs::read(&staged[1].path).unwrap(), b"local");
+        assert_eq!(value.artifacts()[0].path, "/cluster/data/remote.tsv");
     }
 }

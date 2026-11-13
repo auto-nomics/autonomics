@@ -1,75 +1,31 @@
-//! End-to-end file-flow tests for `dataframe_to_file -> container_command -> file_to_dataframe`.
+//! End-to-end file-flow tests for `dataframe_to_file -> container_command -> file_to_dataframe`,
+//! chained node-by-node (the node-graph scheduler is gone; flows are the
+//! executable path).
 
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use async_trait::async_trait;
 use container_runtime::{
-    ContainerExecutionInfra, ContainerNetwork, ContainerRunRequest, ContainerRunResult,
-    ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR, PanelCache, PodmanConfig, PodmanConnection,
-    PodmanRuntime, PullPolicy, unique_container_name,
+    ContainerRunRequest, ContainerRunResult, ContainerRuntimeError, DEFAULT_CONTAINER_WORKDIR,
+    PanelCache, PodmanConnection, PullPolicy, unique_container_name,
 };
-use dag_core::dag::graph::PortOutputs;
-use dag_core::dag::runtime::SchedulerConfig;
-use dag_core::node::{DagNode, NodeInput, NodePorts};
-use dag_core::registry::{NodeCtx, NodeRegistry};
-use datafusion::common::HashMap;
+use dag_core::node::{DagNode, NodeInput};
+use dag_core::registry::NodeCtx;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::prelude::SessionContext;
-use flate2::read::GzDecoder;
 
 use nodes_io::container_command::{
     ContainerCommandNode, ContainerCommandOutputSpec, ContainerCommandSpec,
 };
 use nodes_io::dataframe_to_file::{DataFrameToFileNode, WriteFormat};
-use nodes_io::file_reference::FileReferenceNode;
 use nodes_io::file_to_dataframe::FileToDataFrameNode;
-use sha2::{Digest, Sha256};
 use vfs::{
     BackendConfig, BackendDefinition, MountDefinition, MountedObjectStore, OpendalFileStorage,
     VfsManifest,
 };
-
-#[derive(Clone)]
-struct DataFrameSourceNode {
-    ports: NodePorts,
-    batch: RecordBatch,
-}
-
-#[async_trait]
-impl DagNode for DataFrameSourceNode {
-    fn ports(&self) -> &NodePorts {
-        &self.ports
-    }
-
-    fn clone_box(&self) -> Box<dyn DagNode> {
-        Box::new(self.clone())
-    }
-
-    fn kind(&self) -> &'static str {
-        "container_file_flow_test_source"
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    async fn execute(
-        &mut self,
-        ctx: &NodeCtx,
-        _inputs: &[NodeInput],
-        _reporter: &dag_core::dag::node_event::NodeReporter,
-    ) -> Result<PortOutputs, dag_core::dag::DagError> {
-        let dataframe = ctx.session().read_batch(self.batch.clone())?;
-        let mut outputs = PortOutputs::new();
-        outputs.insert(0, dataframe);
-        Ok(outputs)
-    }
-}
 
 #[derive(Default)]
 struct FakeContainerRuntime {
@@ -149,7 +105,7 @@ fn sample_batch() -> RecordBatch {
     .unwrap()
 }
 
-fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
+fn workspace_vfs(workspace_root: &Path) -> NodeCtx {
     let root = workspace_root.to_string_lossy().into_owned();
     let manifest = VfsManifest {
         backend: vec![BackendDefinition {
@@ -187,7 +143,7 @@ fn workspace_vfs(workspace_root: &Path) -> (Arc<MountedObjectStore>, NodeCtx) {
         ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
         mounted.clone(),
     );
-    (mounted, NodeCtx::new(session.runtime_env(), Some(storage)))
+    NodeCtx::new(session.runtime_env(), Some(storage))
 }
 
 fn container_spec(
@@ -228,17 +184,6 @@ fn container_spec(
         shm_size: None,
         gpus: None,
         user: None,
-    }
-}
-
-#[track_caller]
-fn assert_successful_dag(statuses: &HashMap<String, dag_core::dag::RuntimeStatus>) {
-    for id in ["source", "write_input", "container", "read_result"] {
-        assert_eq!(
-            statuses.get(id),
-            Some(&dag_core::dag::RuntimeStatus::Success),
-            "node `{id}` did not succeed"
-        );
     }
 }
 
@@ -285,65 +230,51 @@ async fn assert_container_artifact(
 }
 
 #[tokio::test]
-async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
+async fn dataframe_to_file_output_flows_through_container_command() {
     let workspace = tempfile::tempdir().unwrap();
-    let (_mounted, ctx) = workspace_vfs(workspace.path());
+    let ctx = workspace_vfs(workspace.path());
     let input_path = format!("vfs:///input-{}.csv", unique_container_name());
     let run_root = workspace.path().join("fake-run");
     std::fs::create_dir_all(&run_root).unwrap();
     let runtime = Arc::new(FakeContainerRuntime::new(workspace.path()));
-    let mut spec = container_spec(
+    let spec = container_spec(
         "localhost/container-file-flow-test:not-present",
         &run_root,
         None,
     );
-    spec.pull_policy = PullPolicy::Never;
 
-    let mut dag = dag_core::dag::DAG::default();
-    dag.add_node(
-        "source".into(),
-        Box::new(DataFrameSourceNode {
-            ports: NodePorts::new().add_output_port(None),
-            batch: sample_batch(),
-        }),
-    )
-    .unwrap();
-    dag.add_node(
-        "write_input".into(),
-        Box::new(DataFrameToFileNode::new(
-            input_path,
-            WriteFormat::Csv,
-            nodes_io::dataframe_to_file::SinkMode::Overwrite,
-        )),
-    )
-    .unwrap();
-    dag.add_node(
-        "container".into(),
-        Box::new(
-            ContainerCommandNode::new(
-                "container_command",
-                spec,
-                runtime.clone(),
-                Arc::new(PanelCache::new(workspace.path().join("panels"))),
-            )
-            .unwrap(),
-        ),
-    )
-    .unwrap();
-    dag.add_node(
-        "read_result".into(),
-        Box::new(FileToDataFrameNode::new(None, None)),
-    )
-    .unwrap();
-    dag.add_edge("source", "write_input", 0, 0).unwrap();
-    dag.add_edge("write_input", "container", 0, 0).unwrap();
-    dag.add_edge("container", "read_result", 0, 0).unwrap();
+    let reporter = dag_core::dag::node_event::NodeReporter::noop();
 
-    let report = dag
-        .run(&SchedulerConfig::default(), &ctx, None)
+    // source -> write_input: dataframe lands in the VFS as a CSV FileRef.
+    let mut write_input = DataFrameToFileNode::new(
+        input_path,
+        WriteFormat::Csv,
+        nodes_io::dataframe_to_file::SinkMode::Overwrite,
+    );
+    let dataframe = ctx.session().read_batch(sample_batch()).unwrap();
+    let written = write_input
+        .execute(
+            &ctx,
+            &[NodeInput::new_dataframe(0, dataframe)],
+            &reporter,
+        )
         .await
         .unwrap();
-    assert_successful_dag(&report.statuses);
+    let input_file = written.get(&0).unwrap().as_file().unwrap().clone();
+
+    // write_input -> container: the CSV is staged into the work dir, the
+    // fake runtime copies it to the declared output.
+    let mut container = ContainerCommandNode::new(
+        "container_command",
+        spec,
+        runtime.clone(),
+        Arc::new(PanelCache::new(workspace.path().join("panels"))),
+    )
+    .unwrap();
+    let container_out = container
+        .execute(&ctx, &[NodeInput::file(0, input_file)], &reporter)
+        .await
+        .unwrap();
 
     let request = runtime.requests.lock().unwrap()[0].clone();
     let input = request
@@ -362,18 +293,16 @@ async fn dataframe_to_file_output_flows_through_container_command_in_dag() {
             .contains(&format!("{DEFAULT_CONTAINER_WORKDIR}/copied.csv"))
     );
 
-    let container_output = dag
-        .output("container")
-        .unwrap()
-        .get(&0)
-        .unwrap()
-        .as_file()
-        .unwrap()
-        .clone();
+    let container_output = container_out.get(&0).unwrap().as_file().unwrap().clone();
     assert_container_artifact(&ctx, &container_output, &run_root.join("copied.csv")).await;
 
-    let output = dag.output("read_result").unwrap();
-    let dataframe = output.get(&0).unwrap().as_dataframe().unwrap().clone();
+    // container -> read_result: the work-dir output reads back as a dataframe.
+    let mut read_result = FileToDataFrameNode::new(None, None);
+    let outputs = read_result
+        .execute(&ctx, &[NodeInput::file(0, container_output)], &reporter)
+        .await
+        .unwrap();
+    let dataframe = outputs.get(&0).unwrap().as_dataframe().unwrap().clone();
     let collected = dataframe.collect().await.unwrap();
     assert_eq!(collected.len(), 1);
     assert_eq!(collected[0].num_rows(), 2);

@@ -732,7 +732,7 @@ sys.exit(125)
         let images = parse_local_images(payload);
         assert!(images.contains("docker.io/library/alpine@sha256:aaa"));
         assert!(images.contains("quay.io/biocontainers/samtools@sha256:bbb"));
-        assert!(images.contains("docker.io/library/alpine@sha256:ccc") == false);
+        assert!(!images.contains("docker.io/library/alpine@sha256:ccc"));
     }
 
     /// Podman 3.x reports `RepoDigests` as bare digests and keeps the

@@ -1053,8 +1053,8 @@ impl HpcPanelState {
                 self.dashboard_move_field(true)
             }
             KeyCode::Enter if self.dashboard_editing => {
-                if (!self.dashboard_new && self.dashboard_field == 0)
-                    || (!self.dashboard_new && self.dashboard_field == 2)
+                if !self.dashboard_new
+                    && (self.dashboard_field == 0 || self.dashboard_field == 2)
                 {
                     self.status = Some("ID and backend are fixed for existing targets".into());
                 } else if self.dashboard_new && self.dashboard_field == 2 {

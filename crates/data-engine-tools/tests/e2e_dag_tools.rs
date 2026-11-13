@@ -38,18 +38,6 @@ async fn dag_shell(toolset: &Toolset, id: &str, script: &str) -> serde_json::Val
     result_json(&results[0])
 }
 
-async fn build_source_sink(toolset: &Toolset, id: &str, output: &str) {
-    let script = format!(
-        r#"
-        node("src", "file_to_dataframe", {{"path": "/insurance.csv"}});
-        node("sink", "dataframe_to_file", {{"path": "{output}", "format": "csv", "mode": "overwrite"}});
-        edge("src", 0, "sink", 0);
-        commit();
-        "#,
-    );
-    dag_shell(toolset, id, &script).await;
-}
-
 fn result_json(result: &ToolResult) -> serde_json::Value {
     match &result.content {
         ToolResultContent::Json(value) => value.clone(),
@@ -1140,7 +1128,7 @@ async fn test_dag_export_run_uploads_into_vfs() {
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
     let mut registry = agentik_core::tools::ToolRegistry::new();
     registry.register_all(tools).unwrap();
-    let toolset = Toolset::from_registry(Arc::new(registry), None);
+    let _toolset = Toolset::from_registry(Arc::new(registry), None);
 
     // `latest` + a mounted (agent-visible) out path.
     let export =
@@ -1234,7 +1222,7 @@ async fn test_dag_export_run_prov_carries_specs_edges_and_order() {
     let tools = data_engine_tools::registrations(Arc::new(client.clone()));
     let mut registry = agentik_core::tools::ToolRegistry::new();
     registry.register_all(tools).unwrap();
-    let toolset = Toolset::from_registry(Arc::new(registry), None);
+    let _toolset = Toolset::from_registry(Arc::new(registry), None);
 
     let export = json!({"run_id": "latest", "format": "prov", "out_dir": "/evidence/prov"});
     let summary = serde_json::to_value(

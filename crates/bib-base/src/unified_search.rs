@@ -53,9 +53,7 @@ fn has_pubmed_local(gateway: &Arc<LiteratureGateway>) -> bool {
     #[cfg(feature = "pubmed_local")]
     {
         gateway
-            .source_names()
-            .iter()
-            .any(|name| *name == crate::pubmed_local::UNIFIED_SOURCE)
+            .source_names().contains(&crate::pubmed_local::UNIFIED_SOURCE)
     }
     #[cfg(not(feature = "pubmed_local"))]
     {

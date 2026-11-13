@@ -841,7 +841,7 @@ mod tests {
     async fn stat_and_copy_roundtrip() {
         let (storage, _source) = mounted_storage(false);
         let entry = stat(&storage, "/data/ldsc/panel.parquet").await.unwrap();
-        assert_eq!(entry.is_dir, false);
+        assert!(!entry.is_dir);
         assert_eq!(entry.size, 5);
         copy(&storage, "/data/ldsc/panel.parquet", "/copied.parquet")
             .await

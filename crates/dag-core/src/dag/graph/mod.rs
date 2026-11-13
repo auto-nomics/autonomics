@@ -14,8 +14,6 @@
 
 mod manifest;
 mod mutation;
-#[cfg(test)]
-mod reports;
 mod topology;
 mod validation;
 

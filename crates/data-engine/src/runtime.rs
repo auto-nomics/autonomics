@@ -1970,9 +1970,9 @@ pub fn spawn_with_engine(engine: DataEngine) -> (DataEngineClient, JoinHandle<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dag::graph::PortOutputs;
+    
     use crate::data_engine::DataEngine;
-    use crate::nodes::meta::NodePorts;
+    
 
     struct RendezvousExecutor {
         barrier: Arc<tokio::sync::Barrier>,
@@ -2502,50 +2502,5 @@ mod tests {
             clean_keep_runs: 2,
             storage_max_bytes: 0,
         }
-    }
-
-    fn iris_csv_path() -> String {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-        std::path::Path::new(&manifest_dir)
-            .join("test_datasets/Iris.csv")
-            .to_string_lossy()
-            .into_owned()
-    }
-
-    /// Install a `file_to_dataframe → dataframe_to_file` pipeline in `client`
-    /// writing to `out`. Both node kinds come from the shared registry, so
-    /// every session sees the same fingerprints for identical specs.
-    async fn install_file_pipeline(client: &DataEngineClient, out: &std::path::Path) {
-        client
-            .add_node(
-                "src".to_string(),
-                "file_to_dataframe".to_string(),
-                serde_json::json!({ "path": iris_csv_path() }),
-            )
-            .await
-            .unwrap();
-        client
-            .add_node(
-                "sink".to_string(),
-                "dataframe_to_file".to_string(),
-                serde_json::json!({ "path": out.display().to_string(), "format": "csv" }),
-            )
-            .await
-            .unwrap();
-        client
-            .add_edge("src".to_string(), "sink".to_string())
-            .await
-            .unwrap();
-    }
-
-    fn node_report<'a>(
-        report: &'a crate::dag::RunReport,
-        id: &str,
-    ) -> &'a crate::dag::runtime::NodeReport {
-        report
-            .nodes
-            .iter()
-            .find(|node| node.id == id)
-            .unwrap_or_else(|| panic!("run report must contain `{id}`: {report:?}"))
     }
 }

@@ -28,123 +28,15 @@ use std::sync::Arc;
 
 use arrow_array::Array;
 use arrow_schema::DataType;
-use dag_core::dag::{DagError, NodePorts};
-use dag_core::registry::NodeCtx;
-use dag_core::value::{FileFingerprint, FileRef, PortType};
-use sha2::{Digest, Sha256};
 
 /// Shared node plumbing. Kept `pub(crate)` so each node file stays focused
 /// on its spec, factory, and Arrow schema.
 pub(crate) mod util {
-    use super::*;
+    use dag_core::dag::NodePorts;
 
     /// One DataFrame output port (the layout of every table-emitting kind).
     pub fn df_port() -> NodePorts {
         NodePorts::new().add_output_port(None)
-    }
-
-    /// Normalize an output path to its canonical `vfs://` form: bare
-    /// absolute paths (and legacy `file://`) are re-prefixed so the engine
-    /// and the agent share one mounted object-store namespace. Relative
-    /// paths fall through unchanged so the caller's error stays informative.
-    pub fn to_vfs_uri(path: &str) -> String {
-        if vfs::uri::domain(path).is_some() {
-            return path.to_string();
-        }
-        if let Some(stripped) = vfs::uri::virtual_path(path) {
-            vfs::uri::uri(stripped)
-        } else if let Some(stripped) = path.strip_prefix("file://") {
-            vfs::uri::uri(stripped)
-        } else if std::path::Path::new(path).is_absolute() {
-            vfs::uri::uri(path)
-        } else {
-            path.to_string()
-        }
-    }
-
-    /// Validate a node output path: `vfs://` URI, `file://` URI, or bare
-    /// absolute host path (auto-routed through the mounted VFS).
-    pub fn validate_output_path(path: &str) -> Result<(), DagError> {
-        if vfs::uri::storage_path(path).is_some() || path.starts_with("file://") {
-            return Ok(());
-        }
-        if !std::path::Path::new(path).is_absolute() {
-            return Err(DagError::Schedule(format!(
-                "output path must be a `vfs://` URI or an absolute path (auto-routed \
-                 through the mounted runtime VFS so the agent and engine share one \
-                 object-store namespace); got `{path}`"
-            )));
-        }
-        Ok(())
-    }
-
-    /// Write bytes through the node context. Routing follows the evidence
-    /// channel convention: a bare absolute path routes through the mounted
-    /// VFS when one exists (canonical — content-addressed and immutable),
-    /// and falls back to a host-FS write when the engine runs without a VFS
-    /// (embedded / test engines). An explicit `vfs://` URI requires the
-    /// mounted storage (fail-closed).
-    pub async fn write_through(
-        ctx: &NodeCtx,
-        path: &str,
-        bytes: Vec<u8>,
-        format: &str,
-    ) -> Result<FileRef, DagError> {
-        validate_output_path(path)?;
-        let size = bytes.len() as u64;
-        let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
-
-        if !vfs::uri::storage_path(path).is_some() && ctx.opendal.is_none() {
-            let local = path.strip_prefix("file://").unwrap_or(path);
-            if let Some(parent) = std::path::Path::new(local).parent() {
-                tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                    DagError::Schedule(format!("cannot create `{}`: {error}", parent.display()))
-                })?;
-            }
-            tokio::fs::write(local, &bytes).await.map_err(|error| {
-                DagError::Schedule(format!("cannot write file `{path}`: {error}"))
-            })?;
-            return Ok(FileRef {
-                domain: dag_core::DomainId::local(),
-                path: path.to_string(),
-                format: Some(format.to_string()),
-                fingerprint: Some(FileFingerprint {
-                    size,
-                    mtime_ns: 0,
-                    content_hash: Some(content_hash),
-                    immutable_remote: false,
-                }),
-            });
-        }
-
-        let vfs_uri = to_vfs_uri(path);
-        let virtual_path = vfs_uri;
-        let storage = ctx.opendal.as_ref().ok_or_else(|| {
-            DagError::Schedule(format!(
-                "VFS output `{path}` requires a mounted runtime VFS"
-            ))
-        })?;
-        let canonical = storage
-            .canonical_uri(&virtual_path)
-            .map_err(|e| DagError::Schedule(e.to_string()))?;
-        storage
-            .write_bytes(&virtual_path, bytes)
-            .await
-            .map_err(|error| {
-                DagError::Schedule(format!("cannot write VFS file `{path}`: {error}"))
-            })?;
-
-        Ok(FileRef {
-            domain: dag_core::DomainId::new(vfs::uri::domain(&canonical).unwrap_or("local")),
-            path: canonical,
-            format: Some(format.to_string()),
-            fingerprint: Some(FileFingerprint {
-                size,
-                mtime_ns: 0,
-                content_hash: Some(content_hash),
-                immutable_remote: true,
-            }),
-        })
     }
 }
 

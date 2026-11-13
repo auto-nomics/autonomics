@@ -311,7 +311,7 @@ async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]
     };
     let missing: Vec<Gap> = declared
         .iter()
-        .filter(|reference| !local.contains(*reference))
+        .filter(|reference| !local.contains(reference))
         .map(|reference| Gap::missing(format!("image '{reference}'"), "not in the local store"))
         .collect();
     if missing.is_empty() {

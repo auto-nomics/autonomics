@@ -512,7 +512,7 @@ async fn stream_glob(
                     && tx
                         .send(Ok(serde_json::json!(
                             storage
-                                .canonical_uri(&path)
+                                .canonical_uri(path)
                                 .map_err(|e| Error::Execution(e.to_string()))?
                         )))
                         .await
@@ -567,7 +567,7 @@ async fn stream_glob(
                     && tx
                         .send(Ok(serde_json::json!(
                             storage
-                                .canonical_uri(&path)
+                                .canonical_uri(path)
                                 .map_err(|e| Error::Execution(e.to_string()))?
                         )))
                         .await

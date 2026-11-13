@@ -4,10 +4,6 @@
 
 use serde_json::{Map, Value};
 
-/// `^```[\s\S]+?^```/gm` — complete fenced blocks (column-0 fences only).
-static RE_CODE_BLOCK: std::sync::LazyLock<regex::Regex> =
-    std::sync::LazyLock::new(|| regex::Regex::new(r"(?ms)^```.+?^```").expect("valid regex"));
-
 /// `^#+ (.*)$` multiline.
 static RE_HEADING: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"(?m)^(#+) (.*)$").expect("valid regex"));
@@ -130,7 +126,7 @@ static RE_CSS_URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(
 pub fn extract_images(content: &str, frontmatter: &Map<String, Value>) -> Vec<String> {
     let mut images: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let mut push = |url: &str, images: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+    let push = |url: &str, images: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
         let url = url.trim().to_string();
         if !url.is_empty() && seen.insert(url.clone()) {
             images.push(url);

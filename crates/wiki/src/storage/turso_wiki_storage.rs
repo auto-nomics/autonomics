@@ -1530,6 +1530,48 @@ fn append_suffix(p: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Check live documents, recycle-bin documents and all retained snapshots in the deletion transaction.
+async fn ensure_attachment_unused(
+    conn: &Connection,
+    owner: &str,
+    attachment: &str,
+    excluding: Option<&str>,
+) -> Result<()> {
+    let mut rows = conn
+        .query("SELECT id, title, content FROM entries", ())
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let source = text_col(&row, 0)?;
+        if excluding == Some(source.as_str()) {
+            continue;
+        }
+        if crate::attachments::references(&text_col(&row, 2)?, &source, owner, attachment) {
+            return Err(Error::AttachmentInUse(format!(
+                "词条「{}」({source})",
+                text_col(&row, 1)?
+            )));
+        }
+    }
+    let mut rows = conn
+        .query("SELECT entry_id, version, snapshot FROM entry_versions", ())
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let source = text_col(&row, 0)?;
+        if excluding == Some(source.as_str()) {
+            continue;
+        }
+        let snapshot: KnowledgeEntryData = serde_json::from_str(&text_col(&row, 2)?)?;
+        if crate::attachments::references(&snapshot.content, &source, owner, attachment) {
+            return Err(Error::AttachmentInUse(format!(
+                "词条「{}」({source}) 历史版本 {}",
+                snapshot.title,
+                row.get::<i64>(1)?
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1610,46 +1652,4 @@ mod tests {
     fn like_escape_covers_wildcards() {
         assert_eq!(like_escape("50%_off\\x"), r"50\%\_off\\x");
     }
-}
-
-/// Check live documents, recycle-bin documents and all retained snapshots in the deletion transaction.
-async fn ensure_attachment_unused(
-    conn: &Connection,
-    owner: &str,
-    attachment: &str,
-    excluding: Option<&str>,
-) -> Result<()> {
-    let mut rows = conn
-        .query("SELECT id, title, content FROM entries", ())
-        .await?;
-    while let Some(row) = rows.next().await? {
-        let source = text_col(&row, 0)?;
-        if excluding == Some(source.as_str()) {
-            continue;
-        }
-        if crate::attachments::references(&text_col(&row, 2)?, &source, owner, attachment) {
-            return Err(Error::AttachmentInUse(format!(
-                "词条「{}」({source})",
-                text_col(&row, 1)?
-            )));
-        }
-    }
-    let mut rows = conn
-        .query("SELECT entry_id, version, snapshot FROM entry_versions", ())
-        .await?;
-    while let Some(row) = rows.next().await? {
-        let source = text_col(&row, 0)?;
-        if excluding == Some(source.as_str()) {
-            continue;
-        }
-        let snapshot: KnowledgeEntryData = serde_json::from_str(&text_col(&row, 2)?)?;
-        if crate::attachments::references(&snapshot.content, &source, owner, attachment) {
-            return Err(Error::AttachmentInUse(format!(
-                "词条「{}」({source}) 历史版本 {}",
-                snapshot.title,
-                row.get::<i64>(1)?
-            )));
-        }
-    }
-    Ok(())
 }

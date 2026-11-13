@@ -10,8 +10,6 @@ pub mod manager;
 pub mod manifest;
 pub mod node_definition;
 #[cfg(test)]
-mod private_environment;
-#[cfg(test)]
 mod remote_parameter_smoke;
 pub mod slurm_runtime;
 pub mod sync;

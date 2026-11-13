@@ -262,11 +262,6 @@ fn report_stopped_worker(
     Ok(())
 }
 
-#[cfg(test)]
-fn workspace_files(request: &ContainerRunRequest) -> Result<(Vec<String>, Vec<(Value, PathBuf)>)> {
-    workspace_files_observed(request, &dag_core::dag::node_event::NodeReporter::noop())
-}
-
 fn workspace_files_observed(
     request: &ContainerRunRequest,
     reporter: &dag_core::dag::node_event::NodeReporter,

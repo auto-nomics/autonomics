@@ -253,7 +253,7 @@ impl FlowRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::model::{Process, Source, Wire, WireOp};
+    use crate::workflow::model::{Process, Source, Wire};
 
     fn engine() -> DataEngine {
         DataEngine::builder().build()

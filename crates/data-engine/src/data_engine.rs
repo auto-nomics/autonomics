@@ -2095,13 +2095,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::DataEngine;
-    use crate::dag::graph::PortOutputs;
-    use crate::dag::{
-        ChannelOperator, DagError, DagHistory, LogicalGraph, LogicalNode, RuntimeStatus,
-        SchedulerConfig,
-    };
+    use crate::dag::{DagError, DagHistory, RuntimeStatus};
     use crate::error::Error;
-    use crate::nodes::{DagNode, NodeInput, NodePorts};
     use datafusion::execution::object_store::ObjectStoreUrl;
     use datafusion::prelude::CsvReadOptions;
     use vfs::{MountedObjectStore, OpendalFileStorage, VfsManifest};
@@ -2298,61 +2293,6 @@ mod tests {
             snapshot.status_count(RuntimeStatus::Pending),
             snapshot.nodes.len()
         );
-    }
-
-    /// A node that always fails — for the cascade test. Source-like (no inputs).
-    #[derive(Clone)]
-    struct BoomNode(NodePorts);
-    #[async_trait::async_trait]
-    impl DagNode for BoomNode {
-        fn ports(&self) -> &NodePorts {
-            &self.0
-        }
-        fn clone_box(&self) -> Box<dyn DagNode> {
-            Box::new((*self).clone())
-        }
-        fn kind(&self) -> &'static str {
-            "boom"
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        async fn execute(
-            &mut self,
-            _ctx: &crate::node_registry::registry::NodeCtx,
-            _inputs: &[NodeInput],
-            _reporter: &crate::dag::node_event::NodeReporter,
-        ) -> Result<PortOutputs, DagError> {
-            Err(DagError::Schedule("kaboom".into()))
-        }
-    }
-
-    /// A node that sleeps — for the parallelism test. No inputs, no real output.
-    #[derive(Clone)]
-    struct SleepNode(NodePorts);
-    #[async_trait::async_trait]
-    impl DagNode for SleepNode {
-        fn ports(&self) -> &NodePorts {
-            &self.0
-        }
-        fn clone_box(&self) -> Box<dyn DagNode> {
-            Box::new((*self).clone())
-        }
-        fn kind(&self) -> &'static str {
-            "sleep"
-        }
-        fn as_any(&self) -> &dyn std::any::Any {
-            self
-        }
-        async fn execute(
-            &mut self,
-            _ctx: &crate::node_registry::registry::NodeCtx,
-            _inputs: &[NodeInput],
-            _reporter: &crate::dag::node_event::NodeReporter,
-        ) -> Result<PortOutputs, DagError> {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            Ok(PortOutputs::new())
-        }
     }
 
     // ── Registry-based node creation tests ──────────────────────────

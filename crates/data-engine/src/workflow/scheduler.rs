@@ -1117,8 +1117,8 @@ mod tests {
     /// resume tests can assert that cache hits never reach a node.
     static UNIQUENESS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-    /// Per-thread execution counter: each `#[tokio::test]` runs on its own
-    /// current-thread runtime, so counts stay test-local even in parallel.
+    // Per-thread execution counter: each `#[tokio::test]` runs on its own
+    // current-thread runtime, so counts stay test-local even in parallel.
     thread_local! {
         static EXECUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
@@ -1132,7 +1132,7 @@ mod tests {
 
     thread_local! {
         static FAIL_BUDGETS: std::cell::RefCell<std::collections::BTreeMap<String, usize>> =
-            std::cell::RefCell::new(std::collections::BTreeMap::new());
+            const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
     }
 
     #[derive(Clone)]
@@ -1180,11 +1180,10 @@ mod tests {
             _reporter: &NodeReporter,
         ) -> Result<PortOutputs, DagError> {
             EXECUTIONS.with(|counter| counter.set(counter.get() + 1));
-            if let Some(needle) = &self.fail_on {
-                if *needle == self.tag {
+            if let Some(needle) = &self.fail_on
+                && *needle == self.tag {
                     return Err(DagError::Schedule("echo failed by request".into()));
                 }
-            }
             // Transient failure budget: the first `fail_times` executions of
             // this tag fail, later ones succeed — retry semantics under test.
             if let Some(budget) = self.fail_times {

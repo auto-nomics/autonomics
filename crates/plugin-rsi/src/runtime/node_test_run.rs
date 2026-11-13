@@ -549,8 +549,8 @@ mod tests {
     async fn scaffold_creates_a_runnable_demo_node() {
         let (manager, _fake) = manager();
         let store = manager.store.clone();
-        let mut operator = store.develop("hello-plugin").unwrap().unwrap();
-        let manifest = operator.manifest().clone();
+        let operator = store.develop("hello-plugin").unwrap().unwrap();
+        let manifest = operator.manifest();
         let script_ok = operator.workspace().read_text("scripts/demo.sh").is_ok();
         assert_eq!(manifest.nodes.len(), 1);
         let node = &manifest.nodes[0];

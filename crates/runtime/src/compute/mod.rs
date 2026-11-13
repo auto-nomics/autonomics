@@ -1326,7 +1326,7 @@ impl ComputeRegistry {
                 let mut config = self.config.clone();
                 config.slurm = settings.clone();
                 config.slurm.enabled = true;
-                if !(target.id == "legacy-slurm")
+                if (target.id != "legacy-slurm")
                     && config.slurm.artifact_root.as_os_str().is_empty()
                 {
                     config.slurm.artifact_root =

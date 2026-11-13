@@ -316,11 +316,8 @@ mod credential_injection_tests {
             env.get(std::ffi::OsStr::new(VAULT_ALIAS_ENV)).unwrap(),
             &Some(std::ffi::OsStr::new("hpc-otp"))
         );
-        assert!(
-            env.get(std::ffi::OsStr::new("SSH_ASKPASS_REQUIRE"))
-                .is_some()
-        );
-        assert!(env.get(std::ffi::OsStr::new(VAULT_SOCK_ENV)).is_some());
+        assert!(env.contains_key(std::ffi::OsStr::new("SSH_ASKPASS_REQUIRE")));
+        assert!(env.contains_key(std::ffi::OsStr::new(VAULT_SOCK_ENV)));
         // Reset the process-global state so other tests stay clean.
         *VAULT_SOCKET.write().unwrap() = None;
         unsafe { std::env::remove_var("AUTONOMICS_ASKPASS_BIN") };

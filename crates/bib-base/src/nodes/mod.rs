@@ -87,7 +87,7 @@ pub(crate) fn to_vfs_uri(path: &str) -> String {
 ///    share one object-store namespace — and falls back to a host-FS read
 ///    when the engine runs without a VFS (embedded / test engines).
 pub(crate) async fn read_file_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, DagError> {
-    if !vfs::uri::storage_path(path).is_some() && ctx.opendal.is_none() {
+    if vfs::uri::storage_path(path).is_none() && ctx.opendal.is_none() {
         let local = path.strip_prefix("file://").unwrap_or(path);
         return tokio::fs::read(local)
             .await
@@ -129,7 +129,7 @@ pub(crate) async fn write_artifact(
     let size = bytes.len() as u64;
     let content_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
 
-    if !vfs::uri::storage_path(path).is_some() && ctx.opendal.is_none() {
+    if vfs::uri::storage_path(path).is_none() && ctx.opendal.is_none() {
         // Legacy embedded-engine path: no mounted VFS, write the host FS.
         let local = path.strip_prefix("file://").unwrap_or(path);
         if let Some(parent) = std::path::Path::new(local).parent() {

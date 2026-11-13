@@ -25,7 +25,7 @@ impl DeckExporter for StubBackend {
         Err(ppt_base::Error::Export("not needed in this test".into()))
     }
 
-    async fn diagnose_slides(&self, job: &ExportJob, targets: &[(u32, u32)]) -> ppt_base::Result<Value> {
+    async fn diagnose_slides(&self, _job: &ExportJob, targets: &[(u32, u32)]) -> ppt_base::Result<Value> {
         let mut map = serde_json::Map::new();
         for (no, _) in targets {
             map.insert(
@@ -159,7 +159,7 @@ async fn null_backend_degrades_to_static_tier() {
 
     let deck = shared.create_deck("静态", None).await.unwrap();
     let markdown = "# 标题\n\n---\n\n\n\n---\n\n# 三\n";
-    shared.save_markdown(&deck.meta.id, &markdown, "x").await.unwrap();
+    shared.save_markdown(&deck.meta.id, markdown, "x").await.unwrap();
     let report = ppt_base::diagnostics::run_diagnostics(&shared, &deck.meta.id).await.unwrap();
     assert!(!report.rendered);
     assert!(report.findings.iter().any(|f| f.rule == "empty-slide" && f.slide == 2));

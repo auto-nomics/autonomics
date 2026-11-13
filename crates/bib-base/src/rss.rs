@@ -935,13 +935,11 @@ pub fn article_from_item(item: &FeedItem) -> bib_types::Article {
     }
     article.identifiers = identifiers_from_item(item);
     if let Some(published) = item.published_ms.filter(|ms| *ms > 0) {
-        let date = DateTime::<Utc>::from_timestamp_millis(published)
-            .map(DateTime::<Utc>::from)
-            .map(|dt| dt.date_naive());
+        let date = DateTime::<Utc>::from_timestamp_millis(published).map(|dt| dt.date_naive());
         if let Some(date) = date {
             use chrono::Datelike;
             article.year = Some(i64::from(date.year()).clamp(0, 9999) as u16);
-            article.month = Some(u32::from(date.month()) as u8);
+            article.month = Some(date.month() as u8);
         }
     }
     // The item link is kept as an `Other` identifier so the record stays
