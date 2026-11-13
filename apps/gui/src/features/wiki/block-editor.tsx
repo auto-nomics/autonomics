@@ -45,8 +45,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   joinMarkdownBlocks,
   newMarkdownBlock,
-  renderWikiMarkdown,
   splitMarkdownBlocks,
+  useWikiMarkdown,
   type MarkdownBlock,
 } from "./markdown";
 import { listAttachments, uploadAttachment, type AttachmentMeta } from "./wiki-api";
@@ -70,7 +70,10 @@ const RenderedBlock = memo(function RenderedBlock({
   onActivate: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  useWikiImages(ref, `${entryId}\n${raw}`);
+  const html = useWikiMarkdown(raw, entryId);
+  // Keyed on the rendered HTML (async — Comark) so the attachment pass
+  // re-runs after the markup lands, not before it exists.
+  useWikiImages(ref, html);
   return (
     <div
       ref={ref}
@@ -87,7 +90,7 @@ const RenderedBlock = memo(function RenderedBlock({
         if (event.button !== 0) return;
         onActivate();
       }}
-      dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(raw, entryId) }}
+      dangerouslySetInnerHTML={{ __html: html }}
     />
   );
 });

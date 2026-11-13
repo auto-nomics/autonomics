@@ -1,20 +1,22 @@
 /**
- * The single markdown pipeline for the whole app.
+ * Marked-based markdown factory — the legacy pipeline core.
  *
- * One factory, two instances:
- *  - `renderMarkdown` — agent transcript and prose panes: GFM + KaTeX math
- *    ($…$, $$…$$, \(…\), \[…\]).
- *  - `renderWikiMarkdown` — the wiki adds inert `[[wikilink]]` chips
- *    (click routing stays in React). Math behaves identically.
+ * Rendering itself moved to Comark (`lib/comark-markdown` base; agent and
+ * wiki pipelines live in their features). What remains here:
  *
- * Everything renders through DOMPurify with the html + mathMl profiles.
+ *  - `wikiLexer` — the wiki block editor's lossless block splitter; it
+ *    needs each top-level block's raw source fragment, which Comark's
+ *    compact AST does not preserve.
+ *  - `createMarkdownPipeline` / `escapeHtml` / `SANITIZE` — the deck
+ *    feature builds its slide renderer on the factory, and the Comark
+ *    pipelines reuse `escapeHtml` and the shared DOMPurify profile.
+ *
  * KaTeX runs in MathML output mode: the gateway serves the SPA as three
  * embedded text assets, so there are no font files to host — the browser
  * renders `<math>` natively and the original TeX stays in
  * `<semantics><annotation>` (copyable).
  */
 import { wikiAttachmentRef, wikiAttachmentUrl } from "./wiki-attachment-ref";
-import DOMPurify from "dompurify";
 import katex from "katex";
 import { Marked, type Tokens, type Renderer } from "marked";
 
@@ -248,21 +250,19 @@ const SANITIZE = {
   ADD_TAGS: ["semantics", "annotation"],
 };
 
-/** Agent transcript and prose panes: math yes, wikilinks no. */
-const agentPipeline = createMarkdownPipeline();
-
-export function renderMarkdown(text: string): string {
-  return DOMPurify.sanitize(agentPipeline.parse(text), SANITIZE);
-}
-
-/** Wiki pipeline: identical rendering plus `[[wikilink]]` chips. */
-const wikiPipeline = createMarkdownPipeline({ wikilinks: true });
-
-export function renderWikiMarkdown(text: string, entryId?: string): string {
-  return DOMPurify.sanitize(createMarkdownPipeline({ wikilinks: true, entryId }).parse(text), SANITIZE);
-}
+/**
+ * Rendering moved to Comark (`lib/comark-markdown` base, agent and wiki
+ * pipelines in their features); this module keeps the marked factory for
+ * two remaining consumers:
+ *
+ *  - `wikiLexer` — the block editor's lossless block splitter needs each
+ *    block's raw source fragment; Comark's AST does not preserve it.
+ *  - `createMarkdownPipeline` — the deck feature builds on the factory.
+ */
 
 /** Block-lexer access for the wiki block editor (lossless splitting). */
+const wikiPipeline = createMarkdownPipeline({ wikilinks: true });
+
 export function wikiLexer(content: string): Tokens.Generic[] {
   return wikiPipeline.lexer(content);
 }

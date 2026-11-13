@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { extractWikiTargets, renderWikiMarkdown } from "./markdown";
+import { extractWikiTargets, useWikiMarkdown } from "./markdown";
 import { findEntryByTitle, formatTime, type WikiEntry } from "./wiki-api";
 
 export type WikiMode = "read" | "edit";
@@ -72,7 +72,10 @@ export function ReadingView({
   onMissingLink: (target: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const imagePreview = useWikiImages(containerRef, `${entry.id}\n${entry.content}`, true);
+  // Comark renders async — DOM passes below key on the rendered HTML so
+  // they re-run after the markup lands, not before it exists.
+  const html = useWikiMarkdown(entry.content, entry.id);
+  const imagePreview = useWikiImages(containerRef, html, true);
   const [linkExists, setLinkExists] = useState<Record<string, boolean>>({});
 
   // Resolve every wikilink target once per content revision; the DOM pass
@@ -106,7 +109,7 @@ export function ReadingView({
       node.classList.toggle("md-wikilink--missing", known === false);
       node.classList.toggle("md-wikilink--resolved", known === true);
     });
-  }, [linkExists, entry.content]);
+  }, [linkExists, html]);
 
   // Click routing for rendered content: code copy buttons and wikilinks.
   useEffect(() => {
@@ -189,7 +192,7 @@ export function ReadingView({
         <div
           ref={containerRef}
           className="md wiki-md mx-auto max-w-3xl break-words text-sm"
-          dangerouslySetInnerHTML={{ __html: renderWikiMarkdown(entry.content, entry.id) }}
+          dangerouslySetInnerHTML={{ __html: html }}
         />
         {imagePreview}
         {footer}
