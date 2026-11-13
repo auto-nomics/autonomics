@@ -18,6 +18,8 @@ use super::helpers::{resolve_target, tool_error};
 pub(super) struct PluginInstallInput {
     /// Developed workspace path, such as `local://plugins/dev/hello-world`.
     plugin_path: String,
+    /// Optional optimistic lock from plugin_status.
+    expected_development_fingerprint: Option<String>,
 }
 
 pub(super) struct PluginInstallTool {
@@ -35,6 +37,7 @@ struct InstallOutput {
     node_addresses: Vec<String>,
     commit: Option<String>,
     digest: Option<String>,
+    runtime_status: serde_json::Value,
 }
 
 #[async_trait]
@@ -47,10 +50,15 @@ impl ToolFunction for PluginInstallTool {
             .map_err(tool_error)?;
         let infra = self.state.registry.infra().map_err(tool_error)?;
         let plugin_name = target.plugin_name;
+        let lock = self.state.registry.manifest_lock(&plugin_name);
+        let _guard = lock.lock().await;
         let output = tokio::task::spawn_blocking(
             move || -> std::result::Result<InstallOutput, ToolError> {
                 let activation = infra
-                    .validate_and_activate_local(&plugin_name)
+                    .validate_and_activate_local_expected(
+                        &plugin_name,
+                        input.expected_development_fingerprint.as_deref(),
+                    )
                     .map_err(tool_error)?;
                 let mut commit = None;
                 let mut digest = None;
@@ -81,6 +89,7 @@ impl ToolFunction for PluginInstallTool {
                         .collect(),
                     commit,
                     digest,
+                    runtime_status: infra.plugin_status(&plugin_name).map_err(tool_error)?,
                     plugin_name,
                     report,
                 })
@@ -97,6 +106,9 @@ impl ToolFunction for PluginInstallTool {
             })?;
         Ok(ToolResult::success_json(json!({
             "activated": output.activated,
+            "runtime_status": output.runtime_status,
+            "runtime_state": if output.activated { "active" } else { "needs_fix" },
+            "candidate_digest": output.digest,
             "plugin_name": output.plugin_name,
             "plugin_vfs_path": output.plugin_vfs_path,
             "status": output.status,

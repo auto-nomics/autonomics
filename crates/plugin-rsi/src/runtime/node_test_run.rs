@@ -74,7 +74,21 @@ impl DevSessionManager {
             .store
             .develop(plugin)?
             .ok_or_else(|| Error::Validation(format!("unknown plugin project `{plugin}`")))?;
-        let manifest = operator.manifest();
+        self.test_run_candidate(plugin, operator.workspace().path(), request)
+            .await
+    }
+
+    /// Host-only execution against the exact frozen activation candidate.
+    pub async fn test_run_candidate(
+        &self,
+        plugin: &str,
+        candidate: &Path,
+        request: &TestRunRequest,
+    ) -> Result<TestRunResult> {
+        let workspace = crate::PluginWorkspace::new(candidate);
+        let manifest: container_plugin::manifest::PluginManifest =
+            toml::from_str(&workspace.read_text("manifest.toml")?)
+                .map_err(|e| Error::Validation(format!("invalid candidate: {e}")))?;
         let node = manifest
             .nodes
             .iter()
@@ -95,6 +109,7 @@ impl DevSessionManager {
         // Inline `script_file` exactly like the runtime loader does, so
         // the dev workspace (not the materialized snapshot) is runnable.
         let mut node = node;
+        node.timeout_secs = node.timeout_secs.min(120);
         if let Some(script_file) = node.command.script_file.clone() {
             if node.command.script.is_some() {
                 return Err(Error::Validation(format!(
@@ -102,12 +117,9 @@ impl DevSessionManager {
                     node.kind
                 )));
             }
-            let script = operator
-                .workspace()
-                .read_text(&script_file)
-                .map_err(|error| {
-                    Error::Validation(format!("cannot read script_file `{script_file}`: {error}"))
-                })?;
+            let script = workspace.read_text(&script_file).map_err(|error| {
+                Error::Validation(format!("cannot read script_file `{script_file}`: {error}"))
+            })?;
             node.command.script = Some(script);
             node.command.script_file = None;
         }

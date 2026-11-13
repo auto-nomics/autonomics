@@ -3609,6 +3609,7 @@ dependencies = [
  "data-engine",
  "datafusion",
  "nodes-sql",
+ "plugin-rsi",
  "schemars 1.2.2",
  "serde",
  "serde_json",
