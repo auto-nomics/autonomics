@@ -1,5 +1,4 @@
 import { CanvasPreview } from "./canvas-preview";
-import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
 import { useCanvasAgentHandoff, type ReviewedMarkupScene, type CanvasAgentHandoffProps } from "./use-canvas-agent-handoff";
 import { useEffect, useRef, useState } from "react";
 import { Excalidraw, sceneCoordsToViewportCoords, serializeAsJSON, viewportCoordsToSceneCoords } from "@excalidraw/excalidraw";
@@ -11,9 +10,9 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { markupColor, renderMarkup, type MarkupPage, type MarkupPoint, type MarkupRecord, type MarkupStroke, type MarkupSummary } from "./canvas-markup-render";
 
 type Draft = { key: string; revision: number; serialized: string; document: ExcalidrawInitialDataState };
-export function CanvasMarkups(props: CanvasAgentHandoffProps) {
+export function CanvasMarkups(props: CanvasAgentHandoffProps & { agentPath?: string }) {
   const { projectId, canvasId, getApi, getRevision, ensureSaved } = props;
-  const runtime = useWorkbenchRuntime(), [target, setTarget] = useState(runtime.activeAgent || runtime.agents[0]?.path || "");
+  const target = props.agentPath ?? "";
   const handoff = useCanvasAgentHandoff({ ...props, target });
   const [open, setOpen] = useState(false), [working, setBusy] = useState(false), [error, setError] = useState("");
   const busy = working || handoff.busy;
@@ -106,7 +105,6 @@ export function CanvasMarkups(props: CanvasAgentHandoffProps) {
       {(error || handoff.error) && <p role="alert" className="p-2 text-sm text-destructive">{[error, handoff.error].filter(Boolean).join("；")}</p>}
       <div className="flex min-h-0 flex-1"><aside className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r p-3">
         <Button size="sm" disabled={busy} onClick={() => void start()}>新建标记</Button>
-        <label className="text-sm">修改 Agent<select aria-label="标记修改 Agent" className="mt-1 w-full rounded border bg-background p-1" value={target} disabled={busy} onChange={event => setTarget(event.target.value)}><option value="">选择 Agent</option>{runtime.agents.map(agent => <option key={agent.path} value={agent.path}>{agent.path}</option>)}</select></label>
         <p className="text-xs text-muted-foreground">可保存标记并直接准备修改草稿，检查后再发送给所选 Agent；不会自动采用或完成标记。交接失败后可从已保存记录重试。</p>
         <p className="text-xs text-muted-foreground">笔迹与说明独立保存，不进入正式图稿或导出。可筛选待处理意见并加载更早记录。</p>
         <label className="text-sm">标记状态<select aria-label="标记状态" className="mt-1 w-full rounded border bg-background p-1" value={status} disabled={busy} onChange={async event => {

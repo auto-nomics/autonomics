@@ -6,12 +6,12 @@ import { BioIconsPanel, useBioIconsState } from "./bioicons-panel";
 import "./canvas-material-browser.css";
 
 /** Native library extensions share persistent controllers across tab/viewport changes. */
-export function CanvasMaterialBrowser({ getApi, onOpen }: { getApi: () => ExcalidrawImperativeAPI | null; onOpen: () => void }) {
+export function CanvasMaterialBrowser({ getApi, onOpen }: { getApi: () => ExcalidrawImperativeAPI | null; onOpen?: () => void }) {
   const [tab, setTab] = useState("library");
   const bioart = useBioArtState();
   const bioicons = useBioIconsState();
   return <>
-    <DefaultSidebar className="canvas-material-browser" onStateChange={state => { if (state) { setTab(state.tab ?? "library"); onOpen(); } }}>
+    <DefaultSidebar className="canvas-material-browser" onStateChange={state => { if (state) { setTab(state.tab ?? "library"); onOpen?.(); } }}>
       <DefaultSidebar.TabTriggers>
         <select ref={element => { element?.closest(".canvas-material-browser")?.setAttribute("data-prevent-outside-click", "true"); }} aria-label="素材库来源" className="canvas-material-source-select" value={tab} onChange={event => { const value = event.target.value; setTab(value); getApi()?.toggleSidebar({ name: "default", tab: value, force: true }); }}>
           {tab === "search" && <option value="search" disabled>画布搜索</option>}

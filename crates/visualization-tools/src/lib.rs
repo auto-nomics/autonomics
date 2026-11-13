@@ -397,7 +397,7 @@ fn execute(path: PathBuf, input: FigureInput) -> Result<Value, ToolError> {
                     .store()
                     .preview(&project, &id, metadata.revision)
                     .map_err(|error| match error {
-                        visualization::Error::NotFound => invalid("No preview for the current revision; ask the user to save and hand off from the canvas"),
+                        visualization::Error::NotFound => invalid("No preview for the current revision; ask the user to save the canvas to refresh its preview"),
                         other => failure(other),
                     })?
             ))

@@ -81,6 +81,7 @@ try {
     }
 
     if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }], contexts: { '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 } }, display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false } } });
+    if (path.startsWith('/agents/') && path.endsWith('/context')) return route.fulfill({ json: { agent_id: `id-${path}`, context: null } });
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [] } });
     // Loose bib/wiki/system fixtures: the shell test cares about chrome, not content.
     if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], sources: [], rules: [], items: [], snapshots: [], next: null, next_cursor: null, scheduler: {}, total: 0 } });
@@ -99,6 +100,7 @@ try {
     if (path === '/profiles') return route.fulfill({ json: ['researcher', 'developer', 'browser', 'curator'] });
     if (path === '/gateway/status') return route.fulfill({ json: { running: true } });
     if (path === '/storage/agents') return route.fulfill({ json: [{ id: 'a2', name: '/root/beta', config_json: { kind: 'researcher' }, created_at: 1, last_active: 1 }] });
+    if (path === '/agents' && route.request().method() === 'POST' && route.request().postDataJSON().profile === 'illustrator') { const body = route.request().postDataJSON(); return route.fulfill({ json: { path: `${body.parent_path}/${body.name}` } }); }
     if (path === '/agents' && route.request().method() === 'POST') { spawnedAgent = route.request().postDataJSON(); return route.fulfill({ json: { path: '/root/beta' } }); }
     return route.fulfill({ status: 404, json: { error: 'Not mocked: ' + path } });
   });
@@ -179,7 +181,19 @@ try {
     const store = await import('/src/app/workbench/workbench-store.ts');
     return store.allGroups(store.getWorkbenchState().groups).flatMap(([, group]) => group.editors).find(editor => editor.kind === 'canvas')?.state?.imageFileCount === 1;
   });
-  await page.getByRole('textbox', { name: '画布名称' }).fill('基础画布测试');
+  const rename = async name => {
+    page.once('dialog', dialog => dialog.accept(name));
+    await page.locator('[data-canvas-surface]:visible').getByTestId('main-menu-trigger').click();
+    await page.getByText('重命名', { exact: true }).click();
+  };
+  const readTitle = async () => {
+    let title;
+    page.once('dialog', async dialog => { title = dialog.defaultValue(); await dialog.dismiss(); });
+    await page.locator('[data-canvas-surface]:visible').getByTestId('main-menu-trigger').click();
+    await page.getByText('重命名', { exact: true }).click();
+    return title;
+  };
+  await rename('基础画布测试');
   await page.getByRole('button', { name: '保存画布', exact: true }).click();
   await page.getByRole('button', { name: '基础画布测试', exact: true }).waitFor();
   await page.waitForFunction(() => !document.querySelector('[role="tab"][data-dirty="true"]'));
@@ -199,13 +213,14 @@ try {
   await clickCanvasAction(page, '导出 PNG');
   const png = await pngPromise;
   assert.equal((await readFile(await png.path())).subarray(1, 4).toString(), 'PNG');
+  assert.ok(previews.has(figures.get('figure').metadata.revision), 'saving publishes the current figure preview without the old Agent panel');
   await page.reload();
-  await page.getByRole('textbox', { name: '画布名称' }).waitFor();
-  await page.waitForFunction(() => document.querySelector('input[aria-label="画布名称"]')?.value === '基础画布测试');
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  assert.equal(await readTitle(), '基础画布测试');
   await waitCount(2); assert.equal(await count(), 2, 'saved objects and images restore after reload');
   await page.getByRole('tab', { name: '基础画布测试', exact: true }).getByRole('button', { name: '关闭 基础画布测试' }).click();
   await page.getByRole('button', { name: '基础画布测试', exact: true }).click();
-  await page.getByRole('textbox', { name: '画布名称' }).waitFor();
+  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
   await waitCount(2); assert.equal(await count(), 2, 'sidebar reopens a saved canvas');
   await clickCanvasAction(page, 'BioArt 素材');
   await page.getByRole('textbox', { name: 'BioArt 搜索词' }).fill('cell');
@@ -216,17 +231,17 @@ try {
   await page.getByRole('button', { name: '插入图片', exact: true }).click();
   await waitCount(3);
   conflict = true;
-  await page.getByRole('textbox', { name: '画布名称' }).fill('未保存修改');
+  await rename('未保存修改');
   await page.getByRole('button', { name: '保存画布', exact: true }).click();
   await page.getByRole('alert').filter({ hasText: '保存失败' }).waitFor();
-  assert.equal(await page.getByRole('textbox', { name: '画布名称' }).inputValue(), '未保存修改');
+  assert.equal(await readTitle(), '未保存修改');
   assert.equal(figures.get('figure').metadata.title, '基础画布测试');
   page.once('dialog', dialog => dialog.dismiss());
   await clickCanvasAction(page, '重新加载服务端版本');
-  assert.equal(await page.getByRole('textbox', { name: '画布名称' }).inputValue(), '未保存修改');
+  assert.equal(await readTitle(), '未保存修改');
   page.once('dialog', dialog => dialog.accept());
   await clickCanvasAction(page, '重新加载服务端版本');
-  await page.waitForFunction(() => document.querySelector('input[aria-label="画布名称"]')?.value === '基础画布测试');
+  assert.equal(await readTitle(), '基础画布测试');
 
   conflict = false;
   await clickCanvasAction(page, '查看 Agent 提案');
@@ -252,20 +267,20 @@ try {
   assert.deepEqual(figures.get('figure').scene.document, historical);
   assert.deepEqual(revisions.get(2).document, historical, 'restore preserves old revisions');
   await page.locator('[data-canvas-surface] .excalidraw').waitFor();
-  await page.getByRole('textbox', { name: '画布名称' }).fill('本地未保存');
+  await rename('本地未保存');
   await clickCanvasAction(page, '历史版本');
   await history.getByRole('button', { name: /^v2 ·/ }).click();
   await history.getByRole('button', { name: '恢复为新版本', exact: true }).click();
   await history.getByRole('alert').filter({ hasText: '未保存修改' }).waitFor();
   assert.equal(figures.get('figure').metadata.revision, headBeforeRestore + 1);
   await history.getByRole('button', { name: '关闭历史', exact: true }).click();
-  await page.getByRole('textbox', { name: '画布名称' }).fill('基础画布测试');
+  await rename('基础画布测试');
   await page.locator('[data-canvas-surface] .zoom-in-button').click();
   await clickCanvasAction(page, '框选批注');
   const region = await page.getByRole('application', { name: '框选批注区域' }).boundingBox();
   await page.mouse.move(region.x + 230, region.y + 160); await page.mouse.down();
   await page.mouse.move(region.x + 1000, region.y + 650, { steps: 8 }); await page.mouse.up();
-  await page.getByRole('complementary', { name: '画布 Agent' }).waitFor();
+  await page.getByRole('dialog', { name: '对象批注', exact: true }).waitFor();
   assert.equal(await count(), 2, 'review selection does not add artwork objects');
   await page.getByRole('textbox', { name: '批注意见' }).fill('请放大这个细胞');
   await page.getByRole('button', { name: '批注选中对象', exact: true }).click();
@@ -273,13 +288,11 @@ try {
   assert.equal(annotations.length, 1);
   assert.equal(annotations[0].element_ids.length, 2);
 
-  await page.getByRole('textbox', { name: '绘图受众' }).fill('免疫学研究者');
-  await page.getByRole('textbox', { name: '绘图需求' }).fill('请强调细胞的相互作用');
-  await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
-  const draft = page.getByPlaceholder('输入消息…');
+  await page.getByRole('button', { name: '用此批注准备修改', exact: true }).click();
+  const draft = page.locator('textarea[placeholder="输入消息…"]:visible');
   await draft.waitFor();
-  assert.ok((await draft.inputValue()).includes('请强调细胞的相互作用'));
-  assert.equal(await draft.inputValue(),'请强调细胞的相互作用');const preparedPrompt=await readCanvasPreparedPrompt(page);assert.ok(preparedPrompt.includes('请放大这个细胞'));
+  assert.ok((await draft.inputValue()).includes('请放大这个细胞'));
+  assert.equal(await draft.inputValue(),'请放大这个细胞');const preparedPrompt=await readCanvasPreparedPrompt(page);assert.ok(preparedPrompt.includes('请放大这个细胞'));
   assert.ok(preparedPrompt.includes('selected_objects'));
   assert.ok(preparedPrompt.includes('"preview_available": true'));
   assert.ok(previews.has(figures.get('figure').metadata.revision));

@@ -32,7 +32,6 @@ import { CommandPalette } from "./command-palette";
 import { registerWorkbenchEditorKinds } from "./editor-kinds";
 import { editorKind } from "./editor-registry";
 import { parseContextMessage, serializeContext, type ContextResource } from "@/features/context/context-model";
-import { useAgentContextBinding } from "./agent-context-binding";
 import { useAgentSlot } from "./agent-slot-registry";
 import "./static-commands";
 import { useWorkbenchKeybindings } from "./keybindings";
@@ -40,6 +39,7 @@ import {
   activateEditorById,
   allGroups,
   getGroup,
+  getWorkbenchState,
   agentEditorId,
   bumpUnreadNotices,
   clearUnreadNotices,
@@ -94,7 +94,6 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
   useEffect(() => {
     if (focusedEditor && editorKind(focusedEditor.kind)?.agentContext) setFollowedEditorId(focusedEditor.id);
   }, [focusedEditor]);
-  const binding = useAgentContextBinding();
   const contextId = runtime.activeContexts[path] ?? runtime.contexts[path]?.id ?? null;
   useEffect(() => {
     if (visible && contextId) void runtime.ensureAgentHistory(path, contextId);
@@ -118,7 +117,8 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
       return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
     });
   }, [workbench.groups]);
-  const targetMode = visibleTargets[bindingScope ?? ""] ?? "";
+  const associatedCanvas = candidates.find(editor => editor.kind === "canvas" && (editor.state as { illustratorPath?: string } | null)?.illustratorPath === path);
+  const targetMode = visibleTargets[bindingScope ?? ""] ?? associatedCanvas?.id ?? "";
   const target = candidates.find(editor => editor.id === (targetMode === "$follow" ? followedEditorId : targetMode));
   const targetKind = target ? editorKind(target.kind) : undefined;
   const snapshot = target && targetKind?.agentContext?.(target);
@@ -132,8 +132,16 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
       draft={runtime.drafts[path] ?? ""} busy={runtime.sendingPaths[path] ? "send" : runtime.busy === "send" ? null : runtime.busy}
       onDraftChange={value => runtime.setDraftFor(path, value)} onSendMessage={context => {
         const attached = parseContextMessage(context ?? "")?.resources ?? [];
-        const resource = binding.getResource();
-        return runtime.sendMessageTo(path, resource ? serializeContext([...attached, resource]) : context);
+        const current = getWorkbenchState();
+        const targetId = targetMode === "$follow" ? current.lastContextEditorId : targetMode;
+        const currentEditor = allGroups(current.groups).flatMap(([, group]) => group.editors).find(editor => editor.id === targetId);
+        const kind = currentEditor && editorKind(currentEditor.kind);
+        const snapshot = currentEditor && kind?.agentContext?.(currentEditor);
+        const resource: ContextResource | null = currentEditor && kind && snapshot ? {
+          kind: "editor", id: currentEditor.id, title: kind.title(currentEditor), source: currentEditor.id,
+          scope: "绑定文档的最新状态", revision: String(current.revision), content: JSON.stringify(snapshot, null, 2),
+        } : null;
+        return runtime.sendMessageTo(path, resource ? serializeContext([...attached.filter(item => item.source !== resource.source), resource]) : context);
       }}
       onCancel={() => void gatewayRequest("POST", `/agents/${path}/cancel`).catch(cause => window.alert(String(cause)))}
       onCompact={() => void gatewayRequest("POST", `/agents/${path}/compact`).catch(cause => window.alert(String(cause)))}

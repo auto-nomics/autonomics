@@ -6,10 +6,12 @@ export async function clickCanvasAction(page, label) {
     await source.selectOption(label==='BioArt 素材'?'bioart':'bioicons');
     return;
   }
-  const action=page.getByRole('button',{name:label,exact:true});
+  const action=page.locator('[data-canvas-surface]:visible [data-canvas-action-dock]').getByRole('button',{name:label,exact:true,includeHidden:true});
   if(!await action.isVisible()){
-    const menu=label.startsWith('导出 ' )||label==='导出素材来源'?'导出':'画布工具';
-    await page.getByRole('button',{name:menu,exact:true}).click();
+    const group=action.locator('xpath=ancestor::*[@data-canvas-action-menu][1]');
+    const menu=await group.getAttribute('data-canvas-action-menu');
+    if(!menu)throw new Error(`No canvas action group for ${label}`);
+    await group.getByRole('button',{name:menu,exact:true}).click();
   }
   await action.click();
 }
