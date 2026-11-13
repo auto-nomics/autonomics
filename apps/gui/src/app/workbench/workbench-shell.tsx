@@ -1,3 +1,4 @@
+import { editorContextBindingKey, promoteEditorContextBinding } from "./editor-context-binding";
 import { WorkbenchViewHosts } from "./view-host";
 import { isWorkbenchViewVisible, useViewLayout } from "./view-layout";
 /**
@@ -99,6 +100,14 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
   const refreshEffort = useCallback(() => { if (visible) void runtime.refreshAgentEffort(path); }, [runtime.refreshAgentEffort, path, visible]);
   const select = (target: string) => { runtime.selectAgent(target); openAgentEditor(target); };
   const scope = path && contextId ? JSON.stringify([path, contextId]) : null;
+  const bindingScope = editorContextBindingKey(path,contextId);
+  const previousBinding = useRef({path,contextId});
+  const visibleTargets = previousBinding.current.path===path ? promoteEditorContextBinding(targets,path,previousBinding.current.contextId,contextId) : targets;
+  useEffect(() => {
+    const previous=previousBinding.current;
+    if (previous.path===path) setTargets(current=>promoteEditorContextBinding(current,path,previous.contextId,contextId));
+    previousBinding.current={path,contextId};
+  },[path,contextId]);
   const candidates = allGroups(workbench.groups).flatMap(([, group]) => group.editors).filter(editor => Boolean(editorKind(editor.kind)?.agentContext));
   useEffect(() => {
     const openIds = new Set(allGroups(workbench.groups).flatMap(([, group]) => group.editors).map(editor => editor.id));
@@ -107,13 +116,13 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
       return entries.length === Object.keys(current).length ? current : Object.fromEntries(entries);
     });
   }, [workbench.groups]);
-  const targetMode = targets[scope ?? ""] ?? "";
+  const targetMode = visibleTargets[bindingScope ?? ""] ?? "";
   const target = candidates.find(editor => editor.id === (targetMode === "$follow" ? followedEditorId : targetMode));
   const targetKind = target ? editorKind(target.kind) : undefined;
   const snapshot = target && targetKind?.agentContext?.(target);
   const resource: ContextResource | null = target && snapshot ? { kind: "editor", id: target.id, title: targetKind?.title(target) ?? target.id, scope: targetMode === "$follow" ? "最近活动文档的当前状态" : "固定编辑器的当前状态", source: target.id, revision: String(workbench.revision), content: JSON.stringify(snapshot, null, 2) } : null;
   return <ContextBasketScope scope={scope} label={leafName(path)}>
-    <AgentWorkspace contextTarget={<div className="flex flex-col gap-1 border-b px-3 py-2 text-xs"><label>上下文目标 <select aria-label="Agent 上下文目标" className="ml-2 max-w-full rounded border bg-background p-1" value={targetMode} onChange={event => { if (scope) setTargets(current => ({ ...current, [scope]: event.target.value })); }}><option value="">未绑定</option><option value="$follow">跟随当前文档</option>{candidates.map(editor => <option key={editor.id} value={editor.id}>{editorKind(editor.kind)?.title(editor)}</option>)}</select></label>{resource && <details><summary>查看发送时附加的状态</summary><pre className="max-h-32 overflow-auto whitespace-pre-wrap">{resource.content}</pre></details>}</div>} dockedSlot={slot} agents={runtime.agents.some(agent => agent.path === path) ? runtime.agents : [...runtime.agents, { path, agent_id: null, status: "Idle", ...runtime.agentModels[path] }]} activeAgent={path} statuses={runtime.statuses}
+    <AgentWorkspace contextTarget={<div className="flex flex-col gap-1 border-b px-3 py-2 text-xs"><label>上下文目标 <select aria-label="Agent 上下文目标" className="ml-2 max-w-full rounded border bg-background p-1" value={targetMode} onChange={event => { if (bindingScope) setTargets(current => ({ ...current, [bindingScope]: event.target.value })); }}><option value="">未绑定</option><option value="$follow">跟随当前文档</option>{candidates.map(editor => <option key={editor.id} value={editor.id}>{editorKind(editor.kind)?.title(editor)}</option>)}</select></label>{resource && <details><summary>查看发送时附加的状态</summary><pre className="max-h-32 overflow-auto whitespace-pre-wrap">{resource.content}</pre></details>}</div>} dockedSlot={slot} agents={runtime.agents.some(agent => agent.path === path) ? runtime.agents : [...runtime.agents, { path, agent_id: null, status: "Idle", ...runtime.agentModels[path] }]} activeAgent={path} statuses={runtime.statuses}
       messages={runtime.messages[path] ?? []} historyLoading={runtime.historyLoading[path] ?? false}
       compaction={runtime.compactions[path]}
       streaming={runtime.streaming[path] ?? null} usage={runtime.usage[path] ?? null} display={runtime.display}

@@ -9,6 +9,83 @@ fn bytes(vector: &vector::PreparedSvg) -> Vec<u8> {
         .unwrap()
 }
 const SVG:&[u8]=br##"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><defs><clipPath id="clip"><rect width="110" height="80"/></clipPath></defs><g transform="translate(10 5)" clip-path="url(#clip)"><path id="left" fill="#ff0000" d="M0 0h20v20H0z"/><path id="right" fill="#ff0000" d="M40 0h20v20H40z"/></g></svg>"##;
+
+#[test]
+fn render_contribution_distinguishes_covered_and_exposed_paths_without_mutating_source() {
+    let svg=br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><path fill="#ff0000" d="M0 0h20v20H0z"/><path fill="#0000ff" d="M0 0h20v20H0z"/><path fill="#00ff00" d="M30 0h10v20H30z"/></svg>"##;
+    let vector = vector::normalize(svg).unwrap();
+    let source = bytes(&vector);
+    let read = parts::inspect(&source).unwrap();
+    assert_eq!(read.parts[0].changed_preview_pixels_when_hidden, Some(0));
+    assert_eq!(read.parts[1].changed_preview_pixels_when_hidden, Some(400));
+    assert_eq!(read.parts[2].changed_preview_pixels_when_hidden, Some(200));
+    assert_eq!(read.sha256, vector.sha256);
+    assert_eq!(bytes(&vector::normalize(&source).unwrap()), source);
+    let report = serde_json::to_value(read.render_contribution).unwrap();
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["width"], 40);
+    assert_eq!(report["height"], 20);
+    assert!(
+        report["scope"]
+            .as_str()
+            .unwrap()
+            .contains("not visible area")
+    );
+}
+
+#[test]
+fn identical_paint_can_have_zero_contribution_and_is_not_classified_as_invisible() {
+    let svg=br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path fill="#ff0000" d="M0 0h20v20H0z"/><path fill="#ff0000" d="M0 0h20v20H0z"/></svg>"##;
+    let read = parts::inspect(svg).unwrap();
+    assert!(
+        read.parts
+            .iter()
+            .all(|p| p.changed_preview_pixels_when_hidden == Some(0))
+    );
+    assert!(
+        serde_json::to_value(read.render_contribution).unwrap()["scope"]
+            .as_str()
+            .unwrap()
+            .contains("identical paint")
+    );
+}
+
+#[test]
+fn contributing_paint_need_not_appear_as_its_exact_rgb_in_the_composited_image() {
+    let svg=br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><path fill="#0000ff" d="M0 0h20v20H0z"/><path fill="#ff0000" opacity="0.5" d="M0 0h20v20H0z"/></svg>"##;
+    let read = parts::inspect(svg).unwrap();
+    assert_eq!(read.parts[0].changed_preview_pixels_when_hidden, Some(400));
+    let png = STANDARD
+        .decode(read.preview_data_url.split_once(',').unwrap().1)
+        .unwrap();
+    let image = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
+    assert!(!image.data().chunks_exact(4).any(|p| p == [0, 0, 255, 255]));
+}
+
+#[test]
+fn contribution_work_is_bounded_and_large_documents_report_no_inference() {
+    let mut svg =
+        String::from("<svg xmlns='http://www.w3.org/2000/svg' width='1000' height='1000'>");
+    for n in 0..33 {
+        svg.push_str(&format!("<path fill='#ff0000' d='M{n} 0h1v1h-1z'/>"));
+    }
+    svg.push_str("</svg>");
+    let read = parts::inspect(svg.as_bytes()).unwrap();
+    assert_eq!(read.parts.len(), 33);
+    assert!(
+        read.parts
+            .iter()
+            .all(|p| p.changed_preview_pixels_when_hidden.is_none())
+    );
+    assert_eq!(
+        serde_json::to_value(read.render_contribution).unwrap()["status"],
+        "not_computed"
+    );
+    let read=parts::inspect(b"<svg xmlns='http://www.w3.org/2000/svg' width='1000' height='500'><path d='M0 0h1000v500H0z'/></svg>").unwrap();
+    let report = serde_json::to_value(read.render_contribution).unwrap();
+    assert_eq!(report["width"], 256);
+    assert_eq!(report["height"], 128);
+}
 #[test]
 fn same_colour_paths_are_distinct_and_resources_are_not_components() {
     let original = vector::normalize(SVG).unwrap();
@@ -26,6 +103,7 @@ fn same_colour_paths_are_distinct_and_resources_are_not_components() {
         part_id: read.parts[0].part_id.clone(),
         fill: Some("#00ff00".into()),
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: None,
         points: None,
@@ -50,6 +128,7 @@ fn paint_opacity_validation_and_no_ops_do_not_silently_change_assets() {
         part_id: read.parts[0].part_id.clone(),
         fill: None,
         stroke: None,
+        stroke_width: None,
         opacity: Some(0.4),
         translate: None,
         points: None,
@@ -105,6 +184,7 @@ fn actual_receptor_paths_include_outlined_labels_and_preserve_them_unless_select
         &[Edit {
             part_id: selected.part_id.clone(),
             stroke: Some("#008844".into()),
+            stroke_width: None,
             fill: None,
             opacity: None,
             translate: None,
@@ -138,6 +218,7 @@ fn replacing_one_gradient_keeps_other_users_and_zero_opacity_only_hides_target()
             part_id: read.parts[0].part_id.clone(),
             fill: Some("#334455".into()),
             stroke: None,
+            stroke_width: None,
             opacity: None,
             translate: None,
             points: None,
@@ -155,6 +236,7 @@ fn replacing_one_gradient_keeps_other_users_and_zero_opacity_only_hides_target()
             part_id: read.parts[0].part_id.clone(),
             fill: None,
             stroke: None,
+            stroke_width: None,
             opacity: Some(0.),
             translate: None,
             points: None,
@@ -199,6 +281,7 @@ fn movement_uses_root_coordinates_under_rotation_scaling_and_reflection() {
         part_id: before.parts[0].part_id.clone(),
         fill: None,
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: Some([13., -7.]),
         points: None,
@@ -264,6 +347,7 @@ fn movement_carries_gradient_paint_but_keeps_shared_parent_clips_fixed() {
             part_id: p.part_id.clone(),
             fill: None,
             stroke: None,
+            stroke_width: None,
             opacity: None,
             translate: Some([10., 0.]),
             points: None,

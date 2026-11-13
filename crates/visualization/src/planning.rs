@@ -1,7 +1,9 @@
 //! Versioned scientific figure briefs and explicit clarification before sketching.
 use crate::{Error, Result, Store, proposal::Proposal, sketch};
 mod graph;
+mod layout_review;
 pub use graph::GraphReview;
+pub use layout_review::LayoutReview;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +20,9 @@ pub struct Question {
     pub question: String,
     #[serde(default)]
     pub answer: String,
-    /// False only for optional preferences; missing scientific scope remains blocking.
+    /// Persistent requiredness, not answer status: retain true after answering.
+    /// A required question blocks only while its answer is empty.
+    /// False only for optional preferences.
     #[serde(default = "blocking_by_default")]
     pub blocking: bool,
 }
@@ -64,6 +68,9 @@ pub struct Planning {
     pub issues: Vec<Issue>,
     /// Recomputed from the brief; not stored and does not gate generation.
     pub graph_review: GraphReview,
+    /// Recomputed compiler geometry; not stored and does not gate generation.
+    #[serde(default)]
+    pub layout_review: Option<LayoutReview>,
     pub status: String,
     pub proposal_id: Option<String>,
     pub created_at: String,
@@ -181,6 +188,7 @@ fn latest(connection: &Connection, id: &str) -> Result<Option<Planning>> {
                 version,
                 based_on_revision,
                 graph_review: document.graph_review(),
+                layout_review: Some(document.layout_review()),
                 document,
                 issues,
                 status,

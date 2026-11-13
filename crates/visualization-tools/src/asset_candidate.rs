@@ -111,3 +111,59 @@ mod tests {
         }
     }
 }
+
+/// Keep malformed review links distinct from the valid explicit empty array.
+pub(crate) fn deserialize_markup_ids<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let value = serde_json::Value::deserialize(deserializer)?;
+    serde_json::from_value(value).map_err(|_| serde::de::Error::custom(
+        "input.markup_ids requires a JSON array of review ID strings, e.g. [] or [\"review-id\"], never an object, an empty string, or a quoted array. [] is valid and explicitly drops inherited links; omission keeps the existing review-link validation. No asset was fetched and nothing was saved",
+    ))
+}
+
+#[cfg(test)]
+mod markup_input_tests {
+    #[test]
+    fn asset_inputs_distinguish_empty_arrays_objects_and_omission() {
+        for bioicons in [false, true] {
+            let decode = |value| {
+                if bioicons {
+                    serde_json::from_value::<crate::bioicons::Input>(value)
+                        .map(|input| input.markup_ids)
+                } else {
+                    serde_json::from_value::<crate::bioart::Input>(value)
+                        .map(|input| input.markup_ids)
+                }
+            };
+            assert_eq!(
+                decode(serde_json::json!({"action":"replace"})).unwrap(),
+                None
+            );
+            assert_eq!(
+                decode(serde_json::json!({"action":"replace","markup_ids":[]})).unwrap(),
+                Some(vec![])
+            );
+            assert_eq!(
+                decode(serde_json::json!({"action":"replace","markup_ids":["r1"]})).unwrap(),
+                Some(vec!["r1".to_owned()])
+            );
+            for invalid in [
+                serde_json::json!({}),
+                serde_json::json!([1]),
+                serde_json::json!("[]"),
+                serde_json::json!(""),
+            ] {
+                let error = decode(serde_json::json!({"action":"replace","markup_ids":invalid}))
+                    .unwrap_err()
+                    .to_string();
+                assert!(error.contains("input.markup_ids"));
+                assert!(error.contains("[] is valid"));
+            }
+        }
+    }
+}

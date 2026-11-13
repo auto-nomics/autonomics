@@ -154,7 +154,7 @@ pub(crate) fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
         }
         let b = bounds(elements);
         let width = (b[2] - b[0] + 80.).max(320.);
-        let title = layout::wrap(&panel.title, width - 80., 20.);
+        let title = layout::balanced_heading(&panel.title, width - 80., 20.);
         let title_height = title.lines().count().max(1) as f64 * 25.;
         let height = b[3] - b[1] + title_height + 160.;
         columns
@@ -166,15 +166,48 @@ pub(crate) fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
             .or_insert(height);
         drawings.push((elements.clone(), b, width, height, title, title_height));
     }
+    // Cross-panel captions need actual space between logical panel tracks.
+    // Reserve only the boundaries crossed by an explicit relation.
+    let mut column_gaps = BTreeMap::<_, f64>::new();
+    let mut row_gaps = BTreeMap::<_, f64>::new();
+    let panel_by_id: HashMap<_, _> = plan.panels.iter().map(|p| (p.id.as_str(), p)).collect();
+    for edge in &plan.edges {
+        let from = panel_by_id[nodes[edge.from.as_str()].panel.as_deref().unwrap()];
+        let to = panel_by_id[nodes[edge.to.as_str()].panel.as_deref().unwrap()];
+        if from.id == to.id || edge.label.is_empty() {
+            continue;
+        }
+        let wrapped = layout::wrap(&edge.label, layout::edge_label_width(&edge.label), 16.);
+        let width = layout::text_width(&wrapped, 16.);
+        let height = wrapped.lines().count().max(1) as f64 * 20.;
+        for (&column, _) in columns.range(from.column.min(to.column)..from.column.max(to.column)) {
+            column_gaps
+                .entry(column)
+                .and_modify(|gap| *gap = gap.max(width + 40.))
+                .or_insert((width + 40.).max(100.));
+        }
+        for (&row, _) in rows.range(from.row.min(to.row)..from.row.max(to.row)) {
+            row_gaps
+                .entry(row)
+                .and_modify(|gap| *gap = gap.max(height + 40.))
+                .or_insert((height + 40.).max(100.));
+        }
+    }
     let mut elements = Vec::new();
-    for (index, (panel, (mut children, b, width, height, title, title_height))) in
+    for (index, (panel, (mut children, b, width, _height, title, title_height))) in
         plan.panels.iter().zip(drawings).enumerate()
     {
+        // Each grid row already reserves its tallest panel. Align frame bottoms
+        // without moving children or changing scientific labels.
+        let height = rows[&panel.row];
         let x = columns
             .range(..panel.column)
-            .map(|(_, v)| v + 100.)
+            .map(|(column, v)| v + column_gaps.get(column).copied().unwrap_or(100.))
             .sum::<f64>();
-        let y = rows.range(..panel.row).map(|(_, v)| v + 100.).sum::<f64>();
+        let y = rows
+            .range(..panel.row)
+            .map(|(row, v)| v + row_gaps.get(row).copied().unwrap_or(100.))
+            .sum::<f64>();
         for child in &mut children {
             child["x"] = json!(child["x"].as_f64().unwrap() + x + 40. - b[0]);
             child["y"] = json!(child["y"].as_f64().unwrap() + y + 80. + title_height - b[1]);
@@ -195,7 +228,9 @@ pub(crate) fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
         heading["customData"] = json!({"panelId":panel.id});
         elements.push(heading);
         let mut frame = sketch::base(&id, "frame", x, y, width, height);
-        frame["name"] = Value::Null;
+        // Excalidraw renders a null name as the placeholder "Frame", including
+        // in exports. The editable scientific heading already lives inside it.
+        frame["name"] = json!("");
         frame["customData"] = json!({"panelId":panel.id,"title":panel.title});
         elements.push(frame);
     }

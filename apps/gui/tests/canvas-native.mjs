@@ -1,3 +1,5 @@
+import {parseContextMessage} from '../src/features/context/context-model.ts';
+import {readCanvasPreparedPrompt,readCanvasPreparedContext,readCandidatePreparedContext} from './helpers/canvas-prepared-context.mjs';
 // Real Rust HTTP/SQLite/tools + GUI; only model decisions and unrelated APIs are fixtures.
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
@@ -54,7 +56,7 @@ try {
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [] } });
     if (path.endsWith('/messages') && route.request().method() === 'POST') {
       try {
-        const text = route.request().postDataJSON().text; const request = JSON.parse(text.slice(text.indexOf('{\n')));
+        const text = route.request().postDataJSON().text, envelope=parseContextMessage(text), packet=envelope?.resources.filter(resource=>resource.id.startsWith('canvas-request:')).at(-1)?.content ?? text; const request = JSON.parse(packet.slice(packet.lastIndexOf('\n\n{')+2));request.request=envelope?.text??request.request??request.prepared_request;
         const context = await tool({ action: 'read', project_id: request.project_id, figure_id: request.figure_id });
         const revision = context.metadata.revision;
         if (request.preview_available) { const image = await tool({ action: 'read_preview', project_id: request.project_id, figure_id: request.figure_id, expected_revision: revision }); assert.equal(image[1].type, 'image'); vision.push(image[1].source.media_type); }
@@ -347,8 +349,8 @@ try {
   await page.getByRole('textbox', { name: '绘图需求' }).fill('Continue discussing the saved scientific plan.');
   await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
   const plannedComposer = page.getByPlaceholder('输入消息…'); await plannedComposer.waitFor();
-  const plannedDraft = await plannedComposer.inputValue();
-  const plannedContext = JSON.parse(plannedDraft.slice(plannedDraft.indexOf('{\n')));
+  const plannedDraft = await readCanvasPreparedPrompt(page);
+  const plannedContext = await readCanvasPreparedContext(page);
   assert.equal(plannedContext.figure_id, plannedFigure.id); assert.equal(plannedContext.planning.version, 2); assert.equal(plannedContext.planning.based_on_revision, 1);
   assert.ok(plannedDraft.includes('read_plan')); assert.deepEqual(errors, []);
   const panelFigure = await tool({ action: 'create', project_id: project, title: 'Panel comparison', document: { type: 'excalidraw', version: 2, elements: [], files: {} } });
@@ -429,6 +431,13 @@ try {
   await panelPreview.getByRole('region', { name: '候选画布' }).locator('.excalidraw').waitFor();
   await panelPreview.getByRole('button', { name: '采用提案', exact: true }).click(); await panelPreview.waitFor({ state: 'hidden' });
   await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+  // Generated scientific panels intentionally have empty native names; the
+  // independent title remains in the artwork. A named-frame interaction fixture
+  // explicitly opts into Excalidraw's header handle without restoring "Frame".
+  const interactiveHead=await call('GET',panelPath);
+  assert.equal(interactiveHead.scene.document.elements.find(e=>e.id==='panel-0').name,'');
+  await tool({action:'apply',project_id:project,figure_id:panelFigure.id,expected_revision:interactiveHead.metadata.revision,operations:[{op:'update',id:'panel-0',changes:{name:'Control panel drag handle'}}]});
+  await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();
   const movedSource = await source();
   assert.equal(movedSource.elements.find(e => e.id === 'node-0').x, panelScene.elements.find(e => e.id === 'node-0').x + 30);
   const frameHandle = page.locator('[data-canvas-surface]:visible [id$="-frame-name-panel-0"]');
@@ -452,7 +461,7 @@ try {
       }
       continue;
     }
-    if (before.id === 'edge-label-2') { assert.equal(after.text, before.text); continue; }
+    if (before.id === 'edge-label-2') { for(const key of ['originalText','containerId','fontFamily','fontSize','lineHeight'])assert.deepEqual(after[key],before[key],`interactive connector label preserves ${key}`);assert.equal(after.text.replace(/\s+/g,' ').trim(),before.text.replace(/\s+/g,' ').trim(),'native display reflow preserves the complete wording');continue; }
     const belongs = before.frameId === 'panel-0' || before.id === 'panel-0';
     assert.ok(Math.abs(after.x - before.x - (belongs ? dragX : 0)) < .01);
     assert.ok(Math.abs(after.y - before.y - (belongs ? dragY : 0)) < .01);
@@ -589,7 +598,7 @@ try {
     await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('textarea[placeholder="输入消息…"]')?.value.includes('Review the sources of this figure without editing it.'));
     const sourceDraft = await page.getByPlaceholder('输入消息…').inputValue();
-    const sourceContext = JSON.parse(sourceDraft.slice(sourceDraft.lastIndexOf('{\n  "project_id"')));
+    const sourceContext = await readCanvasPreparedContext(page);
     assert.equal(sourceContext.asset_sources.total, 1); assert.equal(sourceContext.asset_sources.assets[0].actual_sha256, coloredImage.customData.sha256);
     assert.ok(sourceContext.asset_sources.assets[0].authors.includes(vectorImage.customData.asset.author));
     assert.equal(sourceContext.asset_sources.assets[0].mime_type, 'image/svg+xml');
@@ -911,7 +920,7 @@ try {
   assert.equal(liveSelection.dirty,true);assert.equal(liveSelection.selectedObjectIds,stableSelectedIds);
   await page.getByRole('button',{name:'Agent 绘图',exact:true}).click();await page.getByRole('textbox',{name:'绘图需求',exact:true}).fill('Inspect calibrated inset roles without editing the figure.');await page.getByRole('button',{name:'交给 Agent',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('textarea[placeholder="输入消息…"]')?.value.includes('Inspect calibrated inset roles without editing the figure.'));
-  const roleDraft=await page.getByPlaceholder('输入消息…').inputValue(),roleContext=JSON.parse(roleDraft.slice(roleDraft.lastIndexOf('{\n  "project_id"')));
+  const roleDraft=await readCanvasPreparedPrompt(page),roleContext=await readCanvasPreparedContext(page);
   const handedTypography=roleContext.selected_objects.find(e=>e.id===selectedTypography.id);
   for(const key of ['font_family','font_size','line_height','container_id','auto_resize','text_align','vertical_align'])assert.equal(handedTypography[key],selectedTypography[key],'workbench and explicit Agent handoff share text layout metadata');
   assert.equal(roleContext.figure_id,calibration.id);assert.equal(roleContext.selected_objects_total,6);assert.equal(roleContext.selected_objects_truncated,false);
@@ -950,7 +959,7 @@ try {
   await page.getByRole('button', { name: '交给 Agent', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('textarea[placeholder="输入消息…"]')?.value.includes('Review the complete paginated markup history.'));
   const historyDraft = await page.getByPlaceholder('输入消息…').inputValue();
-  const historyContext = JSON.parse(historyDraft.slice(historyDraft.lastIndexOf('{\n  "project_id"')));
+  const historyContext = await readCanvasPreparedContext(page);
   assert.equal(historyContext.markups.length, 50);
   assert.ok(historyContext.markups.every(item => item.status === 'open'));
   assert.equal(historyContext.markups_pagination.status, 'open');
@@ -1140,7 +1149,7 @@ try {
   await candidateFeedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('textarea[placeholder="输入消息…"]')?.value.includes('Preserve this candidate and clarify only the selected label.'));
   const candidateDraft=await page.getByPlaceholder('输入消息…').inputValue();
-  const candidateContext=JSON.parse(candidateDraft.slice(candidateDraft.lastIndexOf('{\n  "project_id"')));
+  const candidateContext=await readCandidatePreparedContext(page);
   assert.equal(candidateContext.figure_id,revisionFigure.id);assert.equal(candidateContext.proposal_id,revisionChild.id);
   assert.equal(candidateContext.document_sha256,childRead.proposal.document_sha256);assert.equal(candidateContext.expected_revision,1);
   assert.equal(candidateContext.focused_object_id,'revision-label');assert.equal(candidateContext.reviewed_object_change.id,'revision-label');
@@ -1404,7 +1413,7 @@ try {
   const overlapTurns=turns.length;
   await overlapFeedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('textarea[placeholder="输入消息…"]')?.value.includes('Resolve this text overlap while preserving both labels.'));
-  const overlapDraft=await page.getByPlaceholder('输入消息…').inputValue(), overlapContext=JSON.parse(overlapDraft.slice(overlapDraft.lastIndexOf('{\n  "project_id"')));
+  const overlapDraft=await page.getByPlaceholder('输入消息…').inputValue(), overlapContext=await readCandidatePreparedContext(page);
   assert.equal(overlapContext.proposal_id,overlapProposal.id);assert.equal(overlapContext.document_sha256,(await call('GET',`${boundHumanPath}/proposals/${overlapProposal.id}`)).document_sha256);
   assert.equal(overlapContext.focused_object_id,'overlap-caption');assert.equal(overlapContext.candidate_text_overlap_check.scope,'candidate_document');assert.equal(overlapContext.candidate_text_overlap_check.method,'unrotated_text_rectangles');
   assert.deepEqual(overlapContext.candidate_text_overlap_check.pairs,[{first:'human-bound',second:'overlap-caption'}]);assert.equal(overlapContext.candidate_text_overlap_check.skipped,0);assert.equal(overlapContext.candidate_text_overlap_check.truncated,false);

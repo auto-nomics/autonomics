@@ -147,6 +147,19 @@ impl Store {
                 return Err(Error::Conflict);
             }
         }
+        if self.linear_candidate_revisions {
+            if let Some((parent_id, _)) = parent {
+                let has_child: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM visualization_proposal_lineage l JOIN visualization_proposals p ON p.id=l.proposal_id WHERE l.parent_id=?1 AND p.status='pending')",
+                    params![parent_id], |row| row.get(0),
+                )?;
+                if has_child {
+                    return Err(Error::Invalid(
+                        "revision parent already has a pending child; use list_proposals and read_proposal to continue the intended leaf with its document_sha256; nothing was saved",
+                    ));
+                }
+            }
+        }
         let snapshot = serde_json::to_string(document)?;
         let mut proposal = Proposal {
             id: uuid::Uuid::new_v4().to_string(),
@@ -185,7 +198,9 @@ impl Store {
                     |row| row.get(0),
                 )
                 .optional()?;
-            if status.ok_or(Error::NotFound)? != "open" {
+            if status.ok_or(Error::Invalid(
+                "markup_ids: no matching sketch markup in this figure; object annotation IDs are a separate channel and cannot be linked here; use IDs from list_markups/read_markup only, or omit markup_ids when no sketch markups are addressed; nothing was saved",
+            ))? != "open" {
                 return Err(Error::Conflict);
             }
             transaction.execute(
@@ -255,21 +270,53 @@ impl Store {
         before: Option<&str>,
         limit: usize,
     ) -> Result<ProposalIndex> {
+        self.pending_candidate_index(project, id, None, before, limit)
+    }
+    /// Pending direct children, scoped to one parent without decoding scenes.
+    pub fn proposal_children_index(
+        &self,
+        project: &str,
+        id: &str,
+        parent: &str,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<ProposalIndex> {
+        self.pending_candidate_index(project, id, Some(parent), before, limit)
+    }
+    fn pending_candidate_index(
+        &self,
+        project: &str,
+        id: &str,
+        parent: Option<&str>,
+        before: Option<&str>,
+        limit: usize,
+    ) -> Result<ProposalIndex> {
         if !(1..=100).contains(&limit) {
             return Err(Error::Invalid("proposal page limit must be 1..100"));
         }
         self.get(project, id)?;
+        if let Some(parent) = parent {
+            self.connection
+                .query_row(
+                    "SELECT 1 FROM visualization_proposals WHERE id=?1 AND visualization_id=?2",
+                    params![parent, id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .ok_or(Error::NotFound)?;
+        }
         let cursor: Option<(String,i64)> = before.map(|cursor| self.connection.query_row(
-            "SELECT created_at,rowid FROM visualization_proposals WHERE id=?1 AND visualization_id=?2", params![cursor,id], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(Error::NotFound)).transpose()?;
+            "SELECT p.created_at,p.rowid FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.id=?1 AND p.visualization_id=?2 AND (?3 IS NULL OR l.parent_id=?3)", params![cursor,id,parent], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(Error::NotFound)).transpose()?;
         let mut statement = self.connection.prepare(
-            "SELECT p.id,substr(p.summary,1,1000),length(p.summary)>1000,p.base_revision,l.parent_id FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.visualization_id=?1 AND p.status='pending' AND (?2 IS NULL OR p.created_at<?2 OR (p.created_at=?2 AND p.rowid<?3)) ORDER BY p.created_at DESC,p.rowid DESC LIMIT ?4")?;
+            "SELECT p.id,substr(p.summary,1,1000),length(p.summary)>1000,p.base_revision,l.parent_id FROM visualization_proposals p LEFT JOIN visualization_proposal_lineage l ON l.proposal_id=p.id WHERE p.visualization_id=?1 AND p.status='pending' AND (?5 IS NULL OR l.parent_id=?5) AND (?2 IS NULL OR p.created_at<?2 OR (p.created_at=?2 AND p.rowid<?3)) ORDER BY p.created_at DESC,p.rowid DESC LIMIT ?4")?;
         let mut items = statement
             .query_map(
                 params![
                     id,
                     cursor.as_ref().map(|v| &v.0),
                     cursor.as_ref().map(|v| v.1),
-                    limit as i64 + 1
+                    limit as i64 + 1,
+                    parent
                 ],
                 |r| {
                     Ok(PendingCandidate {
@@ -411,6 +458,101 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
+    fn child_index_is_parent_scoped_paginated_and_never_decodes_documents() -> Result<()> {
+        let mut store = Store::in_memory()?;
+        store.create_project("p", "Study")?;
+        let scene = json!({"elements":[],"files":{"asset":{"dataURL":"PRIVATE-BYTES"}}});
+        let figure = store.create("p", "Figure", "excalidraw/v2", &scene)?;
+        let other = store.create("p", "Other", "excalidraw/v2", &scene)?;
+        let parent = store.propose("p", &figure.id, 1, "Parent", &scene)?;
+        let sibling = store.propose("p", &figure.id, 1, "Other root", &scene)?;
+        let mut children = Vec::new();
+        for index in 0..25 {
+            children.push(store.propose_revision(
+                "p",
+                &figure.id,
+                1,
+                ProposedRevision {
+                    parent_id: &parent.id,
+                    parent_document_sha256: &parent.document_sha256,
+                    summary: &format!("Child {index}"),
+                    document: &scene,
+                    markup_ids: &[],
+                },
+            )?);
+        }
+        let grandchild = store.propose_revision(
+            "p",
+            &figure.id,
+            1,
+            ProposedRevision {
+                parent_id: &children[0].id,
+                parent_document_sha256: &children[0].document_sha256,
+                summary: "Grandchild",
+                document: &scene,
+                markup_ids: &[],
+            },
+        )?;
+        store.connection.execute("UPDATE visualization_proposals SET created_at='same',document='not-json' WHERE visualization_id=?1", [&figure.id])?;
+        let first = store.proposal_children_index("p", &figure.id, &parent.id, None, 20)?;
+        assert_eq!(first.items.len(), 20);
+        assert_eq!(first.items[0].id, children[24].id);
+        assert_eq!(first.items[19].id, children[5].id);
+        assert!(
+            first
+                .items
+                .iter()
+                .all(|item| item.parent_proposal_id.as_deref() == Some(&parent.id))
+        );
+        let serialized = serde_json::to_string(&first)?;
+        assert!(!serialized.contains("PRIVATE-BYTES") && !serialized.contains("document"));
+        let cursor = first.next_before.unwrap();
+        store.reject_proposal("p", &figure.id, &cursor)?;
+        let second =
+            store.proposal_children_index("p", &figure.id, &parent.id, Some(&cursor), 20)?;
+        assert_eq!(
+            second.items.iter().map(|v| &v.id).collect::<Vec<_>>(),
+            children[..5]
+                .iter()
+                .rev()
+                .map(|v| &v.id)
+                .collect::<Vec<_>>()
+        );
+        assert!(second.next_before.is_none());
+        assert_eq!(
+            store
+                .proposal_children_index("p", &figure.id, &children[0].id, None, 20)?
+                .items[0]
+                .id,
+            grandchild.id
+        );
+        assert!(
+            store
+                .proposal_children_index("p", &figure.id, &sibling.id, None, 20)?
+                .items
+                .is_empty()
+        );
+        for (figure_id, parent_id, before) in [
+            (&other.id, &parent.id, None),
+            (&figure.id, &sibling.id, Some(cursor.as_str())),
+            (&figure.id, &parent.id, Some(sibling.id.as_str())),
+            (&figure.id, &parent.id, Some(grandchild.id.as_str())),
+        ] {
+            assert!(matches!(
+                store.proposal_children_index("p", figure_id, parent_id, before, 20),
+                Err(Error::NotFound)
+            ));
+        }
+        for limit in [0, 101] {
+            assert!(
+                store
+                    .proposal_children_index("p", &figure.id, &parent.id, None, limit)
+                    .is_err()
+            );
+        }
+        Ok(())
+    }
+    #[test]
     fn candidate_index_pages_metadata_with_stable_scoped_cursors() -> Result<()> {
         let mut store = Store::in_memory()?;
         store.create_project("p", "Study")?;
@@ -527,10 +669,10 @@ mod tests {
                     .is_err()
             );
         }
-        assert!(matches!(
-            store.propose_with_markups("p", &other.id, 1, "Foreign", &json!({"elements":[]}), &ids),
-            Err(Error::NotFound)
-        ));
+        let foreign = store.propose_with_markups("p", &other.id, 1, "Foreign", &json!({"elements":[]}), &ids).unwrap_err();
+        assert!(matches!(foreign, Error::Invalid(_)));
+        assert!(foreign.to_string().contains("no matching sketch markup in this figure"));
+        assert!(store.proposals("p", &other.id)?.is_empty());
         assert!(store.proposals("p", &figure.id)?.is_empty());
         let rejected = store.propose_with_markups(
             "p",

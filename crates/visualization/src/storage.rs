@@ -7,6 +7,7 @@ use std::path::Path;
 
 pub struct Store {
     pub(crate) connection: Connection,
+    pub(crate) linear_candidate_revisions: bool,
 }
 fn nonblank(value: &str, field: &'static str) -> Result<()> {
     if value.trim().is_empty() {
@@ -30,6 +31,12 @@ pub(crate) fn metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visualizatio
     })
 }
 impl Store {
+    /// Require pending leaf parents for revisions. Explicit alternative workflows
+    /// can leave this disabled; validation happens inside the write transaction.
+    pub fn with_linear_candidate_revisions(mut self, enabled: bool) -> Self {
+        self.linear_candidate_revisions = enabled;
+        self
+    }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::initialize(Connection::open(path)?)
     }
@@ -90,7 +97,10 @@ impl Store {
               visualization_id TEXT NOT NULL, revision INTEGER NOT NULL, data_url TEXT NOT NULL,
               PRIMARY KEY(visualization_id, revision),
               FOREIGN KEY(visualization_id, revision) REFERENCES visualization_revisions(visualization_id, revision) ON DELETE CASCADE);")?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            linear_candidate_revisions: false,
+        })
     }
     /// Caller supplies a stable project ID, allowing association with the host project system.
     pub fn create_project(&self, id: &str, title: &str) -> Result<Project> {

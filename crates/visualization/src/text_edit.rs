@@ -11,7 +11,13 @@ fn number(element: &Value, key: &str) -> Result<f64, SceneError> {
     element[key]
         .as_f64()
         .filter(|v| v.is_finite() && v.abs() <= 1e6)
-        .ok_or_else(|| fail("invalid text/container geometry"))
+        .ok_or_else(|| {
+            fail(&format!(
+                "{}.{} must be a finite JSON number with absolute value at most 1000000; explicitly repair this field before reflowing text",
+                element["id"].as_str().unwrap_or("<unknown element>"),
+                key
+            ))
+        })
 }
 fn align(value: &str, available: f64, used: f64) -> Result<f64, SceneError> {
     match value {
@@ -80,10 +86,11 @@ pub(crate) fn apply(
     let mut available_height = None;
     let mut arrow_center = None;
     let limit = if let Some(container) = container {
-        if max_width.is_some() {
-            return Err(fail(
-                "bound text uses its native container width; resize the container explicitly",
-            ));
+        if max_width.is_some() && container["type"] != "arrow" {
+            return Err(fail(&format!(
+                "bound text {id} uses its native container width from {}; omit max_width for shape-bound text and retry with text/font_size only. For a different node width, resize the container explicitly before reflowing",
+                container_id.unwrap()
+            )));
         }
         if container["isDeleted"] == true
             || container["locked"] == true
@@ -173,7 +180,10 @@ pub(crate) fn apply(
                     })
                     .collect::<Result<Vec<_>, SceneError>>()?;
                 arrow_center = Some(scene::path_label_center(&points, x, y));
-                (w * 0.7).max(size * 11.)
+                // Arrow route bounds are independent of the caption budget.
+                // Preserve that budget by default; only an explicit max_width
+                // authorizes widening/narrowing the label, never its connector.
+                max_width.unwrap_or(number(original, "width")?)
             }
             _ => return Err(fail("unsupported bound text container")),
         }
@@ -300,5 +310,198 @@ pub(crate) fn add(
         Some(font_size.unwrap_or(16.)),
     )?;
     elements.push(scratch.pop().unwrap());
+    Ok(())
+}
+
+/// Explicitly tighten a current text box without rebuilding text or ownership.
+pub(crate) fn fit_width(elements: &mut [Value], id: &str) -> Result<(), SceneError> {
+    let index = elements
+        .iter()
+        .position(|e| e["id"].as_str() == Some(id))
+        .ok_or_else(|| SceneError::NotFound(id.into()))?;
+    let original = &elements[index];
+    if original["type"] != "text"
+        || original["isDeleted"] == true
+        || original["locked"] == true
+        || original["fontFamily"] != 9
+        || number(original, "angle")? != 0.
+        || !original["containerId"].is_null()
+        || elements.iter().any(|e| {
+            e["isDeleted"] != true
+                && (e["startBinding"]["elementId"] == id || e["endBinding"]["elementId"] == id)
+        })
+        || match &original["boundElements"] {
+            Value::Null => false,
+            Value::Array(items) => !items.is_empty(),
+            _ => true,
+        }
+    {
+        return Err(fail(
+            "fit_text_width requires live unlocked unrotated unbound scientific text without attached connectors",
+        ));
+    }
+    let text = original["text"]
+        .as_str()
+        .ok_or_else(|| fail("text must be a string"))?;
+    let size = number(original, "fontSize")?;
+    let line_height = number(original, "lineHeight")?;
+    if text.trim().is_empty()
+        || text.chars().count() > 2048
+        || !(4. ..=200.).contains(&size)
+        || !(0.5..=3.).contains(&line_height)
+        || text.chars().any(|c| {
+            !matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+                && crate::font_metrics::ADVANCES
+                    .binary_search_by_key(&(c as u32), |(cp, _)| *cp)
+                    .is_err()
+        })
+    {
+        return Err(fail(
+            "fit_text_width requires supported scientific text and valid typography",
+        ));
+    }
+    let width = number(original, "width")?;
+    let height = number(original, "height")?;
+    let y = number(original, "y")?;
+    if !(1. ..=20000.).contains(&width) || height <= 0. {
+        return Err(fail("invalid text box dimensions"));
+    }
+    let measured = layout::text_width(text, size);
+    if measured > width + 1e-6 {
+        return Err(fail(
+            "visible text exceeds its current width; explicitly reflow it first",
+        ));
+    }
+    let next_width = measured.ceil().max(1.).min(width);
+    let alignment = match &original["textAlign"] {
+        Value::Null => "left",
+        Value::String(value) if matches!(value.as_str(), "left" | "center" | "right") => value,
+        _ => return Err(fail("unsupported text alignment")),
+    };
+    let x = number(original, "x")? + align(alignment, width, next_width)?;
+    if !x.is_finite() || x.abs() > 1e6 || x + next_width > 1e6 {
+        return Err(fail("fitted text geometry is out of range"));
+    }
+    if let Some(frame_id) = original["frameId"].as_str() {
+        let frame = elements
+            .iter()
+            .find(|e| {
+                e["id"] == frame_id
+                    && e["type"] == "frame"
+                    && e["isDeleted"] != true
+                    && e["locked"] != true
+            })
+            .ok_or_else(|| fail("text frame is missing or locked"))?;
+        let (fx, fy, fw, fh) = (
+            number(frame, "x")?,
+            number(frame, "y")?,
+            number(frame, "width")?,
+            number(frame, "height")?,
+        );
+        if number(frame, "angle")? != 0.
+            || x < fx
+            || y < fy
+            || x + next_width > fx + fw
+            || y + height > fy + fh
+        {
+            return Err(fail("fitted text would leave its existing frame"));
+        }
+    } else if !original["frameId"].is_null() {
+        return Err(fail("invalid frame identity"));
+    }
+    if next_width == width {
+        return Ok(());
+    }
+    let moved = x != number(original, "x")?;
+    let target = &mut elements[index];
+    target["width"] = json!(next_width);
+    if moved {
+        target["x"] = json!(x);
+    }
+    scene::touch(target);
+    Ok(())
+}
+
+/// Explicit label-only movement; grouping does not expand the edit target.
+pub(crate) fn set_position(
+    elements: &mut [Value],
+    id: &str,
+    x: f64,
+    y: f64,
+) -> Result<(), SceneError> {
+    if ![x, y]
+        .iter()
+        .all(|value| value.is_finite() && value.abs() <= 1e6)
+    {
+        return Err(fail("text position must be finite and within scene limits"));
+    }
+    let index = elements
+        .iter()
+        .position(|element| element["id"] == id)
+        .ok_or_else(|| SceneError::NotFound(id.into()))?;
+    let text = &elements[index];
+    if text["type"] != "text"
+        || text["isDeleted"] == true
+        || text["locked"] == true
+        || !text["containerId"].is_null()
+        || (!text["angle"].is_null() && number(text, "angle")? != 0.)
+    {
+        return Err(fail(
+            "requires live unlocked unbound unrotated text; bound labels move with their container",
+        ));
+    }
+    if text["boundElements"]
+        .as_array()
+        .is_some_and(|entries| entries.iter().any(|entry| entry["type"] == "arrow"))
+        || elements.iter().any(|element| {
+            element["isDeleted"] != true
+                && element["type"] == "arrow"
+                && (element["startBinding"]["elementId"] == id
+                    || element["endBinding"]["elementId"] == id)
+        })
+    {
+        return Err(fail(
+            "text with attached arrows requires native connector editing",
+        ));
+    }
+    let width = number(text, "width")?;
+    let height = number(text, "height")?;
+    if width <= 0. || height <= 0. {
+        return Err(fail("text dimensions must be positive"));
+    }
+    if let Some(frame_id) = text["frameId"].as_str() {
+        let frame = elements
+            .iter()
+            .find(|element| element["id"] == frame_id && element["isDeleted"] != true)
+            .ok_or_else(|| fail("text frame is missing"))?;
+        if frame["locked"] == true
+            || !matches!(frame["type"].as_str(), Some("frame" | "magicframe"))
+            || (!frame["angle"].is_null() && number(frame, "angle")? != 0.)
+        {
+            return Err(fail("requires a live unlocked unrotated text frame"));
+        }
+        let fx = number(frame, "x")?;
+        let fy = number(frame, "y")?;
+        let fw = number(frame, "width")?;
+        let fh = number(frame, "height")?;
+        if fw <= 0.
+            || fh <= 0.
+            || x < fx - 1e-6
+            || y < fy - 1e-6
+            || x + width > fx + fw + 1e-6
+            || y + height > fy + fh + 1e-6
+        {
+            return Err(fail("text movement must stay inside its current frame"));
+        }
+    } else if !text["frameId"].is_null() {
+        return Err(fail("text frame identity is invalid"));
+    }
+    if elements[index]["x"].as_f64() != Some(x) {
+        elements[index]["x"] = json!(x);
+    }
+    if elements[index]["y"].as_f64() != Some(y) {
+        elements[index]["y"] = json!(y);
+    }
+    scene::touch(&mut elements[index]);
     Ok(())
 }

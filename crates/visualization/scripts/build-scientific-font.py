@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[3]
 COMMIT = 'a85815a42757630ce188fdad368c2dfc444d4773'
 SOURCE_URL = f'https://raw.githubusercontent.com/google/fonts/{COMMIT}/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf'
 SOURCE_SHA = 'a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da'
-RANGES = [(0x2e80,0x2fff),(0x3000,0x303f),(0x3100,0x312f),(0x31a0,0x31bf),(0x3400,0x9fff),(0xf900,0xfaff),(0xfe10,0xfe1f),(0xfe30,0xfe4f),(0xff00,0xffef),(0x20000,0x323af)]
+# Enclosed alphanumerics cover common figure labels such as ① and ②.
+RANGES = [(0x2460,0x24ff),(0x2e80,0x2fff),(0x3000,0x303f),(0x3100,0x312f),(0x31a0,0x31bf),(0x3400,0x9fff),(0xf900,0xfaff),(0xfe10,0xfe1f),(0xfe30,0xfe4f),(0xff00,0xffef),(0x20000,0x323af)]
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('source',type=Path)
 parser.add_argument('--output',type=Path,default=ROOT/'apps/gui/public/excalidraw/fonts/Liberation/LiberationSans-Regular.woff2')

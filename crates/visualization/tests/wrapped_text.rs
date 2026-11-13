@@ -24,6 +24,24 @@ fn operation(id: &str, text: &str, max_width: Option<f64>) -> Operation {
     }
 }
 #[test]
+fn malformed_legacy_container_reports_the_exact_field_without_mutation() {
+    let mut original = plan();
+    let shape = original["elements"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"] == "node-0")
+        .unwrap();
+    shape["width"] = json!("240");
+    let snapshot = original.clone();
+    let error = scene::apply(&original, &[operation("label-0", "Updated label", None)])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("node-0.width"), "{error}");
+    assert!(error.contains("finite JSON number"), "{error}");
+    assert_eq!(original, snapshot);
+}
+#[test]
 fn bound_shape_text_wraps_without_changing_geometry_evidence_or_bindings() {
     for kind in ["rectangle", "ellipse", "diamond"] {
         let mut original = plan();
@@ -94,6 +112,11 @@ fn polyline_caption_and_free_text_keep_native_alignment_anchors() {
         60.
     );
     assert_eq!(element(&edited, "edge-0"), element(&original, "edge-0"));
+    assert_eq!(
+        label["width"],
+        element(&original, "edge-label-0")["width"],
+        "text-only arrow reflow preserves its caption budget independently of route width"
+    );
     let free = json!({"elements":[{"id":"text","type":"text","text":"old","originalText":"old","fontFamily":9,"fontSize":20,"lineHeight":1.25,"angle":0,"x":10,"y":20,"width":200,"height":25,"textAlign":"right","verticalAlign":"top","containerId":null,"autoResize":true,"customData":{"private_note":"keep"}}]});
     let changed = scene::apply(
         &free,
@@ -183,4 +206,34 @@ fn explicit_font_size_reflows_atomically_and_preserves_container() {
         "large font must not silently expand container"
     );
     assert_eq!(element(&original, "label-0")["fontSize"], 20.);
+}
+
+#[test]
+fn explicit_arrow_caption_width_changes_only_its_wrapping_and_keeps_native_center() {
+    let original = plan();
+    let source = "磷酸化 MEK 活化环";
+    let narrow = scene::apply(&original, &[operation("edge-label-0", source, Some(70.))]).unwrap();
+    let wide = scene::apply(&narrow, &[operation("edge-label-0", source, Some(180.))]).unwrap();
+    let before = element(&narrow, "edge-label-0");
+    let after = element(&wide, "edge-label-0");
+    assert!(before["text"].as_str().unwrap().contains('\n'));
+    assert_eq!(after["text"], source);
+    assert_eq!(after["originalText"], before["originalText"]);
+    assert_eq!(after["width"], 180.);
+    for axis in [("x", "width"), ("y", "height")] {
+        assert!((after[axis.0].as_f64().unwrap() + after[axis.1].as_f64().unwrap()/2.
+            - before[axis.0].as_f64().unwrap() - before[axis.1].as_f64().unwrap()/2.).abs() < 1e-6);
+    }
+    for field in ["containerId", "fontFamily", "fontSize", "lineHeight", "groupIds", "customData", "strokeColor"] {
+        assert_eq!(after[field], before[field]);
+    }
+    for old in narrow["elements"].as_array().unwrap() {
+        if old["id"] != "edge-label-0" { assert_eq!(element(&wide, old["id"].as_str().unwrap()), old); }
+    }
+    assert_eq!(wide["files"], narrow["files"]);
+    assert_eq!(wide["scientificPlan"], narrow["scientificPlan"]);
+    for invalid in [0., -1., 20001., f64::NAN] {
+        assert!(scene::apply(&narrow, &[operation("edge-label-0", source, Some(invalid))]).is_err());
+    }
+    assert!(scene::apply(&original, &[operation("label-0", source, Some(180.))]).is_err(), "shape-bound text still uses its container");
 }

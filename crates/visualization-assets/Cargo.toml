@@ -9,12 +9,18 @@ description = "Shared figure asset editing and reviewed vector colour changes"
 [dependencies]
 visualization = { path = "../visualization" }
 bioicons = { path = "../bioicons" }
+bioart = { path = "../bioart" }
+serde.workspace = true
+schemars.workspace = true
 serde_json.workspace = true
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp"] }
 thiserror.workspace = true
 base64 = "0.23"
 chrono.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

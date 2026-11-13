@@ -27,6 +27,7 @@ async-trait.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+wiremock = "0.6"
 tempfile = "3"
 
 [lints]

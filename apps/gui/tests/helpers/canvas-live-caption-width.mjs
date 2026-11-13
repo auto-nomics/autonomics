@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {readCandidatePreparedContext} from './canvas-prepared-context.mjs';
+import {checkPortableSceneExport} from './canvas-live-source-review.mjs';
+const omit=(value,keys)=>Object.fromEntries(Object.entries(value).filter(([key])=>!keys.includes(key)));
+export async function runLiveCaptionWidth({page,call,path,send,persist,directory,turns,source}){
+ const input=JSON.parse(await readFile(source,'utf8')),document=input.scene?.document??input.document??input;
+ const target=document.elements.find(e=>e.id==='edge-label-5');assert.equal(target?.type,'text');assert.equal(target.originalText,'磷酸化 MEK 活化环');assert.ok(target.text.includes('\n'));
+ const initial=await call('GET',path);await call('PUT',path,{expected_revision:initial.metadata.revision,title:'Live figure',document});page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'重新加载服务端版本',exact:true}).click();await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
+ const formal=await call('GET',path),revision=formal.metadata.revision,planning=await call('GET',`${path}/planning`),brief=await call('POST',`${path}/proposals`,{expected_revision:revision,summary:'审阅箭头标签换行宽度',operations:[]}),parent=await call('GET',`${path}/proposals/${brief.id}`);await persist('caption-width-parent.json',parent);
+ await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});await dialog.locator(`button[data-proposal-id="${parent.id}"]`).click();await dialog.getByRole('region',{name:'候选画布',exact:true}).locator('.excalidraw').waitFor();
+ await dialog.getByRole('textbox',{name:'搜索候选对象',exact:true}).fill(target.id);await dialog.getByRole('combobox',{name:'候选对象',exact:true}).selectOption(target.id);const feedback=dialog.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();
+ const typed=process.env.VISUALIZATION_LIVE_TYPED_REFLOW==='1';
+ const request=(typed?'请使用 visualization_reflow_text 类型明确的入口完成以下单文字修改。':'')+'只将当前选中的箭头标签换行宽度改为180个画布单位，保持完整原文、字号、字体、原箭头上的中心和绑定关系不变。只重新计算此标签的自动换行；不移动箭头、节点、素材、其他文字或面板，不改文件、来源、科学关系、历史计划，不重建草图。先核对当前候选与 PNG，再修改该文字ID，传完整 originalText 和数值 max_width:180，沿此候选生成一份子候选，读取子候选与 PNG 核对后留待我审阅，不采用。简短中文报告。';
+ await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill(request);await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();await page.getByPlaceholder('输入消息…').waitFor();const context=await readCandidatePreparedContext(page);assert.equal(context.proposal_id,parent.id);assert.equal(context.document_sha256,parent.document_sha256);assert.equal(context.focused_object_id,target.id);if(process.env.VISUALIZATION_LIVE_REQUIRE_HISTORICAL_SCOPE==='1'){
+ for(const key of ['candidate_plan_label_check','candidate_plan_relation_check']){
+  assert.equal(context[key].comparison_basis,'embedded_historical_plan_snapshot');
+  assert.equal(context[key].scientific_correctness_assessed,false);
+  assert.equal(context[key].restoration_authorized,false);
+ }
+ assert.ok(context.candidate_plan_label_check.items.some(item=>item.status==='changed'));
+ }await persist('caption-width-request.json',{request,context});await send(1);
+ const calls=turns[0].calls,successful=calls.filter(c=>!c.is_error),writes=successful.filter(c=>c.name==='visualization_reflow_text'||c.name==='visualization'&&c.input.action==='revise_proposal');assert.equal(writes.length,1);assert.equal(writes[0].input.proposal_id,parent.id);assert.equal(writes[0].input.document_sha256,parent.document_sha256);
+ if(typed)assert.equal(writes[0].name,'visualization_reflow_text');
+ const op=writes[0].name==='visualization_reflow_text'?{...writes[0].input,op:'set_wrapped_text',id:writes[0].input.element_id}:writes[0].input.operations[0];
+ if(writes[0].name==='visualization')assert.equal(writes[0].input.operations.length,1);
+ assert.equal(op.op,'set_wrapped_text');assert.equal(op.id,target.id);assert.equal(op.text,target.originalText);assert.equal(op.max_width,180);if(op.font_size!=null)assert.equal(op.font_size,target.fontSize);
+
+ const all=await call('GET',`${path}/proposals`);assert.equal(all.length,2);const entry=all.find(p=>p.parent_proposal_id===parent.id);assert.ok(entry);const child=await call('GET',`${path}/proposals/${entry.id}`);assert.equal(child.status,'pending');assert.deepEqual(omit(child.document,['elements']),omit(document,['elements']));assert.equal(child.document.elements.length,document.elements.length);
+ for(const old of document.elements){const actual=child.document.elements.find(e=>e.id===old.id);assert.ok(actual);if(old.id!==target.id){assert.deepEqual(actual,old);continue;}assert.deepEqual(omit(actual,['text','originalText','x','y','width','height','autoResize','version','versionNonce','updated']),omit(old,['text','originalText','x','y','width','height','autoResize','version','versionNonce','updated']));assert.equal(actual.originalText,old.originalText);assert.equal(actual.text,old.originalText);assert.equal(actual.width,180);for(const [axis,size] of [['x','width'],['y','height']])assert.ok(Math.abs(actual[axis]+actual[size]/2-old[axis]-old[size]/2)<1e-6);}
+ assert.deepEqual(await call('GET',path),formal);assert.deepEqual(await call('GET',`${path}/planning`),planning);assert.deepEqual(await call('GET',`${path}/proposals/${parent.id}`),parent);
+ for(const id of [parent.id,child.id])assert.ok(successful.some(c=>c.name==='visualization'&&c.input.action==='read_proposal_preview'&&c.input.proposal_id===id));const preview=await call('GET',`${path}/proposals/${child.id}/preview?expected_revision=${revision}`);assert.equal(preview.render_status,'ready');assert.equal(preview.document_sha256,child.document_sha256);await writeFile(join(directory,'caption-width-candidate.png'),Buffer.from(preview.dataURL.split(',')[1],'base64'));
+ await page.getByRole('tab',{name:'Live figure',exact:true}).click();await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();await dialog.locator(`button[data-proposal-id="${child.id}"]`).click();await dialog.getByRole('region',{name:'候选画布',exact:true}).locator('.excalidraw').waitFor();await dialog.getByRole('button',{name:'采用提案',exact:true}).click();await dialog.waitFor({state:'hidden'});const final=await call('GET',path);assert.equal(final.metadata.revision,revision+1);assert.deepEqual(final.scene.document,child.document);
+ const download=page.waitForEvent('download');await page.getByRole('button',{name:'导出 源文件',exact:true}).click();const exported=JSON.parse(await readFile(await(await download).path(),'utf8'));checkPortableSceneExport(exported,child.document);await persist('caption-width-child.json',child);await persist('caption-width-source.json',exported);await persist('final.json',final);
+ return {case:'live_gui_reviewed_arrow_caption_width',scope:'explicit saved EGFR figure; actual scoped GUI request and native arrow caption reflow, same wording/font/center and connector, PNG/adoption/export; no new scientific generation',typed_reflow:typed,selected_edit_tool:writes[0].name,target_id:target.id,before_width:target.width,after_width:180,unrelated_objects_files_and_plans_preserved:true,tool_calls:calls.length,tool_errors:calls.filter(c=>c.is_error).length};
+}

@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {canvasMaterializationProgress,materializationContinuationRequest} from '../src/features/canvas/canvas-selection-context.ts';
+const initial=[{id:'a',type:'rectangle',customData:{scientificId:'receptor'},boundElements:[{id:'t',type:'text'}]},{id:'t',type:'text',containerId:'a',originalText:'Complete receptor label'}];
+let progress=canvasMaterializationProgress(initial);assert.equal(progress.counts.missing,1);assert.equal(progress.components[0].label,'Complete receptor label');assert.ok(materializationContinuationRequest(progress).includes('全部1个组件'));
+const owned=structuredClone(initial);owned[0].customData.visualAssetElementId='i';owned.push({id:'i',type:'image',fileId:'f',customData:{semanticAnchorId:'a'}});assert.equal(canvasMaterializationProgress(owned).counts.needs_fit,1);
+for(const change of [d=>delete d[0].customData.visualAssetElementId,d=>d.push({...d[2],id:'duplicate-primary'}),d=>d.push(structuredClone(d[0])),d=>d[0].customData.visualAssetElementId='absent']){const doc=structuredClone(owned);change(doc);progress=canvasMaterializationProgress(doc);assert.ok(progress.counts.ambiguous>0);assert.equal(materializationContinuationRequest(progress),null);}
+const many=Array.from({length:201},(_,i)=>({id:`n${i}`,type:'rectangle',customData:{scientificId:`s${i}`}}));progress=canvasMaterializationProgress(many);assert.equal(progress.total,201);assert.equal(progress.represented,200);assert.equal(progress.truncated,true);assert.equal(materializationContinuationRequest(progress),null);
+progress=canvasMaterializationProgress(initial);assert.equal(progress.scientific_validity_verified,false);
+assert.equal(materializationContinuationRequest(canvasMaterializationProgress([])),null);
+console.log('materialization checkpoint: missing/needs-fit/ambiguous ownership, bounded inventory and two-component continuation draft passed');
+const batch=canvasMaterializationProgress([...owned,{id:'b',type:'rectangle',customData:{scientificId:'b'}},{id:'c',type:'rectangle',customData:{scientificId:'c'}}]),request=materializationContinuationRequest(batch);assert.ok(request.includes('先推进这2个组件'));assert.ok(request.includes('a（'));assert.ok(request.includes('b（'));assert.ok(!request.includes('c（'));assert.ok(request.includes('尚未完成的1个组件'));
+if(process.env.VISUALIZATION_MATERIALIZATION_CHECKPOINT){const {readFile}=await import('node:fs/promises');const checkpoint=JSON.parse(await readFile(process.env.VISUALIZATION_MATERIALIZATION_CHECKPOINT,'utf8'));const actual=canvasMaterializationProgress(checkpoint.document.elements);assert.equal(actual.counts.missing,7);assert.equal(actual.counts.needs_fit,1);assert.equal(actual.counts.ambiguous,0);assert.equal(actual.total,8);console.log('saved terminal checkpoint: 7 missing primary illustrations + 1 existing illustration needing fit');}
+const independent=[...structuredClone(owned),{id:'standalone',type:'image'},{id:'broken',type:'image',customData:{semanticAnchorId:'absent'}},{id:'badge',type:'image',customData:{semanticBadgeAnchorId:'a'}}];
+independent[0].customData.visualBadgeIds=['badge'];
+progress=canvasMaterializationProgress(independent);assert.equal(progress.unassigned_images.total,2);assert.deepEqual(progress.unassigned_images.items.map(e=>e.image_id),['standalone','broken']);assert.equal(progress.counts.needs_fit,1);assert.ok(materializationContinuationRequest(progress).includes('避免重复插入'));assert.ok(materializationContinuationRequest(progress).includes('独立背景'));
+const bounded=canvasMaterializationProgress([...initial,...Array.from({length:41},(_,i)=>({id:`free-${i}`,type:'image'}))]);assert.equal(bounded.unassigned_images.total,41);assert.equal(bounded.unassigned_images.items.length,40);assert.equal(bounded.unassigned_images.truncated,true);
+
+// Label ownership is independently checked even when primary artwork exists.
+assert.equal(canvasMaterializationProgress(owned).label_ownership_issues.total,0);
+for(const mutate of [d=>d[0].boundElements=[],d=>d[1].containerId='',d=>d[1].frameId='foreign']){const d=structuredClone(owned);mutate(d);assert.equal(canvasMaterializationProgress(d).label_ownership_issues.total,1);}
+const detached=structuredClone(owned);detached[0].boundElements=[];detached[0].customData.visualLabelIds=['t'];detached[0].customData.visualAssetGroupId='g';detached[1].containerId=null;detached[1].groupIds=['g'];
+assert.equal(canvasMaterializationProgress(detached).label_ownership_issues.total,0);
+for(const mutate of [d=>d[1].groupIds=[],d=>d[0].customData.visualLabelIds.push('t'),d=>d[0].customData.visualLabelIds.push('missing'),d=>d[1].isDeleted=true]){const d=structuredClone(detached);mutate(d);assert.equal(canvasMaterializationProgress(d).label_ownership_issues.total,1);}
+console.log('label ownership: reciprocal native and grouped detached labels; lost references, foreign frames and duplicate/deleted labels rejected');

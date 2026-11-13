@@ -1,3 +1,4 @@
+import {readCandidatePreparedPrompt} from './canvas-prepared-context.mjs';
 // Actual model chooses bounds through the candidate feedback UI. The oracle runs afterwards.
 import assert from 'node:assert/strict';
 import {readFile,writeFile} from 'node:fs/promises';
@@ -26,7 +27,7 @@ export async function runLiveIllustrationFit({page,call,path,send,persist,direct
   await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});await dialog.getByRole('button',{name:`${parent.summary} · v${revision}`,exact:true}).click();await dialog.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();
   const feedback=dialog.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();
   await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill('当前候选中的 EGFR 通用受体插图很窄，但输出连线还在原占位框的边缘，视觉上与图形脱节。请检查候选图及当前 SVG 素材信息，自主选择覆盖整个可见受体图形、不过多包含透明留白的范围，使用贴合插图锚点操作改善连接，再重新布线它的跨面板输出关系。不能把图形路径解释为分子域。不要裁剪、移动、重画、换色或替换图片；保留全部科学标签、关系身份/方向、证据、其他对象和图下三条说明，包括父候选新增说明。避免输出线反向叠在配体输入线上；检查最终候选图片后留待我审阅，不采用，不另起正式图提案。');
-  await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const draft=await composer.inputValue();assert.ok(draft.includes(parent.id)&&draft.includes(parent.document_sha256));assert.equal(turns.length,0);assert.deepEqual(await call('GET',path),formal);await persist('fit-feedback.txt',{draft});
+  await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const draft=await readCandidatePreparedPrompt(page);assert.ok(draft.includes(parent.id)&&draft.includes(parent.document_sha256));assert.equal(turns.length,0);assert.deepEqual(await call('GET',path),formal);await persist('fit-feedback.txt',{draft});
   await send(1);const calls=turns[0].calls,edits=calls.filter(c=>c.name==='visualization'&&c.input.action==='revise_proposal');
   const fits=edits.flatMap(c=>c.input.operations??[]).filter(o=>o.op==='fit_illustration_anchor');assert.ok(fits.length,'model chooses an explicit illustration fit');
   assert.ok(edits.some(c=>c.input.operations?.some(o=>o.op==='reroute'&&parent.document.elements.some(e=>e.id===o.id&&e.customData?.crossPanel&&(e.startBinding?.elementId===receptor.id||e.endBinding?.elementId===receptor.id)))),'model reroutes the requested cross-panel relation');

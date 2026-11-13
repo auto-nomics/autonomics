@@ -6,14 +6,20 @@ use serde_json::{Value, json};
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
+    /// Nonblank figure purpose supplied by the user or confirmed brief.
+    #[schemars(length(min = 1))]
     pub message: String,
+    /// Nonblank intended readership. Preserve the confirmed audience; do not use an empty string.
+    #[schemars(length(min = 1))]
     pub audience: String,
     #[serde(default)]
     pub layout: Layout,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub panels: Vec<Panel>,
+    #[schemars(length(min = 1, max = 100))]
     pub nodes: Vec<Node>,
     #[serde(default)]
+    #[schemars(length(max = 200))]
     pub edges: Vec<Edge>,
     #[serde(default)]
     pub assumptions: Vec<String>,
@@ -32,6 +38,10 @@ pub struct Panel {
 #[serde(deny_unknown_fields)]
 pub struct Node {
     pub id: String,
+    /// Visible scientific object label. Include the requested state when it defines
+    /// the figure's meaning (for example activated ERK versus unspecified ERK).
+    /// State written only in message, evidence or assumptions is not a visible node label.
+    #[schemars(length(min = 1, max = 120))]
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel: Option<String>,
@@ -72,6 +82,29 @@ pub enum Direction {
     Bidirectional,
     Undirected,
 }
+/// Graphical stroke only; scientific uncertainty/optionality needs explicit text.
+#[derive(
+    schemars::JsonSchema, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationLineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+}
+impl RelationLineStyle {
+    fn is_solid(&self) -> bool {
+        *self == Self::Solid
+    }
+    pub(crate) fn native(self) -> &'static str {
+        match self {
+            Self::Solid => "solid",
+            Self::Dashed => "dashed",
+            Self::Dotted => "dotted",
+        }
+    }
+}
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Edge {
@@ -83,6 +116,9 @@ pub struct Edge {
     pub inhibitory: bool,
     #[serde(default)]
     pub direction: Direction,
+    /// Visual line style; does not independently establish scientific meaning.
+    #[serde(default, skip_serializing_if = "RelationLineStyle::is_solid")]
+    pub line_style: RelationLineStyle,
     #[serde(default)]
     pub evidence: Vec<String>,
 }
@@ -192,7 +228,7 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
             max_x - min_x,
             max_y - min_y,
         );
-        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-sx,p[1]-sy]).collect::<Vec<_>>(),"startBinding":null,"endBinding":null,"startArrowhead":edge.arrowheads().0,"endArrowhead":edge.arrowheads().1,"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence,"direction":edge.direction,"inhibitory":edge.inhibitory}}).as_object().unwrap().clone());
+        arrow.as_object_mut().unwrap().extend(json!({"points":route.iter().map(|p|[p[0]-sx,p[1]-sy]).collect::<Vec<_>>(),"strokeStyle":edge.line_style.native(),"startBinding":null,"endBinding":null,"startArrowhead":edge.arrowheads().0,"endArrowhead":edge.arrowheads().1,"elbowed":false,"customData":{"from":edge.from,"to":edge.to,"evidence":edge.evidence,"direction":edge.direction,"inhibitory":edge.inhibitory}}).as_object().unwrap().clone());
         let from_index = plan
             .nodes
             .iter()
@@ -231,39 +267,18 @@ pub fn compile(plan: &Plan) -> Result<Value, InvalidPlan> {
                 180.0,
             );
             label["containerId"] = json!(arrow_id);
-            let available = ((ex - sx).hypot(ey - sy) * 0.65).clamp(40.0, 180.0);
-            let mut wrapped = String::new();
-            let mut line_width = 0.0;
-            for character in edge.label.chars() {
-                let char_width = if character.is_ascii() { 8.5 } else { 16.0 };
-                if character == '\n' {
-                    wrapped.push(character);
-                    line_width = 0.0;
-                    continue;
-                }
-                if line_width + char_width > available && line_width > 0.0 {
-                    wrapped.push('\n');
-                    line_width = 0.0;
-                }
-                wrapped.push(character);
-                line_width += char_width;
-            }
-            if plan.layout != Layout::Grid {
-                wrapped = layout::wrap(&edge.label, available, 16.);
-            }
+            let label_limit = layout::edge_label_width(&edge.label);
+            let available = if plan.layout == Layout::Vertical
+                || (plan.layout == Layout::Grid && (ey - sy).abs() > (ex - sx).abs())
+            {
+                label_limit
+            } else {
+                ((ex - sx).hypot(ey - sy) * 0.65 + 1e-6).clamp(40.0, label_limit)
+            };
+            let wrapped = layout::wrap(&edge.label, available, 16.);
             label["fontSize"] = json!(16);
             label["text"] = json!(wrapped);
-            label["width"] = json!(
-                available.min(
-                    edge.label
-                        .chars()
-                        .map(|c| if c.is_ascii() { 8.5 } else { 16.0 })
-                        .sum::<f64>()
-                )
-            );
-            if plan.layout != Layout::Grid {
-                label["width"] = json!(layout::text_width(&wrapped, 16.).min(available).max(1.));
-            }
+            label["width"] = json!(layout::text_width(&wrapped, 16.).min(available).max(1.));
             label["height"] = json!(wrapped.lines().count().max(1) as f64 * 20.0);
             label["x"] = json!(lx - label["width"].as_f64().unwrap() / 2.);
             label["y"] = json!(ly - label["height"].as_f64().unwrap() / 2.);

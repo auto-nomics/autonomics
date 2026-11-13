@@ -1,5 +1,5 @@
 //! Opt-in configured model over isolated RuntimeHost + production HTTP/login/SSE.
-use gateway::testing::start_mock_gateway_with_model;
+use gateway::testing::start_persistent_gateway_with_model;
 use rusqlite::{Connection, OpenFlags};
 use std::{io::Write, path::PathBuf};
 #[tokio::main]
@@ -29,13 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Match the configured production model; test-only caps can truncate reasoning.
     let max_output_tokens = model.model_info.max_output_tokens;
     drop(connection);
-    let server = start_mock_gateway_with_model(model).await;
+    let runtime_directory = directory.join("runtime");
+    let server = start_persistent_gateway_with_model(model, runtime_directory.clone()).await?;
     let agent = server
         .client()
         .spawn_agent("figure", "/root", "researcher", None, None)
         .await?;
     let ready = serde_json::to_vec(
-        &serde_json::json!({"origin":format!("http://{}",server.addr),"token":server.token,"agent":agent,"max_output_tokens":max_output_tokens}),
+        &serde_json::json!({"origin":format!("http://{}",server.addr),"token":server.token,"agent":agent,"max_output_tokens":max_output_tokens,"runtime_directory":runtime_directory}),
     )?;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);

@@ -8,14 +8,21 @@ type Asset = { id: string; name: string; category: string; license: string; lice
 type VectorAsset = { asset: Asset; dataURL: string; previewDataURL: string; width: number; height: number; sha256: string; source_sha256: string; colors: string[]; normalization: string[] };
 export function BioIconsPanel({ getApi }: { getApi: () => ExcalidrawImperativeAPI | null }) {
   const [query, setQuery] = useState(""), [assets, setAssets] = useState<Asset[]>([]), [preview, setPreview] = useState<VectorAsset | null>(null);
+  const [author, setAuthor] = useState("");
+  const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
+  const [appliedAuthor, setAppliedAuthor] = useState<string | null>(null);
+  const [partialOnly, setPartialOnly] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   async function load(asset: Asset) { return await gatewayRequest("GET", `/visualization/bioicons/${encodeURIComponent(asset.id)}/vector`) as VectorAsset; }
-  return <aside aria-label="BioIcons 矢量素材" className="w-72 shrink-0 overflow-auto border-l p-2 text-sm"><form className="flex gap-1" onSubmit={async event => {
+  return <aside aria-label="BioIcons 矢量素材" className="w-72 shrink-0 overflow-auto border-l p-2 text-sm"><form className="flex flex-col gap-2" onSubmit={async event => {
     event.preventDefault(); if (busy || !query.trim()) return; setBusy(true); setError("");
-    try { const result = await gatewayRequest("GET", `/visualization/bioicons/search?q=${encodeURIComponent(query.trim())}`) as { assets: Asset[] }; setAssets(result.assets); setPreview(null); }
+    try { const result = await gatewayRequest("GET", `/visualization/bioicons/search?q=${encodeURIComponent(query.trim())}${author.trim() ? `&author=${encodeURIComponent(author.trim())}` : ""}`) as { assets: Asset[]; author_filter?: string; match_summary?: { exact_name: number; name_tokens: number } }; setAssets(result.assets); setSearchedQuery(query.trim()); setAppliedAuthor(result.author_filter ?? null); setPreview(null); setPartialOnly(Boolean(result.assets.length && result.match_summary && result.match_summary.exact_name + result.match_summary.name_tokens === 0)); }
     catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-  }}><input aria-label="BioIcons 搜索词" placeholder="如 receptor、cell" className="min-w-0 flex-1 rounded border bg-background px-2" value={query} onChange={event => setQuery(event.target.value)} /><Button type="submit" size="sm" disabled={busy || !query.trim()}>搜索</Button></form>
+  }}><div className="flex gap-1"><input aria-label="BioIcons 搜索词" placeholder="如 receptor、cell" className="min-w-0 flex-1 rounded border bg-background px-2" value={query} onChange={event => setQuery(event.target.value)} /><Button type="submit" size="sm" disabled={busy || !query.trim()}>搜索</Button></div><label className="text-xs">限定作者（可选）<input aria-label="BioIcons 作者筛选" placeholder="填写素材卡片中的完整作者名" maxLength={300} className="mt-1 w-full rounded border bg-background px-2 py-1" value={author} onChange={event=>setAuthor(event.target.value)} /></label></form>
     <p className="my-2 text-xs text-muted-foreground">SVG 作为独立矢量图片插入，保留作者、各素材许可与来源。内部路径暂不拆分为画布对象。</p>
+    {appliedAuthor && <p role="status" className="my-2 text-xs text-muted-foreground">当前结果限定作者：{appliedAuthor}。同一作者不保证画风一致或科学含义适用。</p>}
+    {searchedQuery && assets.length === 0 && <p className="my-2 text-xs text-muted-foreground">未找到“{searchedQuery}”在当前{appliedAuthor ? "作者" : "关键词"}范围内的匹配素材。可调整关键词{appliedAuthor ? "或清空作者筛选" : ""}继续查找。</p>}
+    {partialOnly && <p role="status" className="my-2 text-xs text-muted-foreground">未命中完整名称或名称词条，以下为部分匹配。请核对科学含义，勿直接视为目标分子。</p>}
     {error && <p role="alert" className="my-2 text-destructive">{error}</p>}
     {assets.map(asset => <article key={asset.id} className="my-2 rounded border p-2"><p>{asset.name.replaceAll('_', ' ')}</p><p className="text-xs text-muted-foreground">{asset.author} · {asset.license}</p>{preview?.asset.id === asset.id && <img alt={asset.name} src={preview.previewDataURL} className="my-2 max-h-48 w-full rounded bg-white object-contain" />}<div className="mt-2 flex flex-wrap gap-2"><a href={asset.source_url} target="_blank" rel="noreferrer" className="underline">来源</a>{asset.license_url && <a href={asset.license_url} target="_blank" rel="noreferrer" className="underline">许可</a>}<Button size="sm" variant="outline" disabled={busy} onClick={async () => { setBusy(true); setError(""); try { setPreview(await load(asset)); } catch (cause) { setError(String(cause)); } finally { setBusy(false); } }}>预览矢量素材</Button><Button size="sm" disabled={busy} onClick={async () => {
       setBusy(true); setError("");

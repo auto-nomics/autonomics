@@ -1,3 +1,5 @@
+import { mergeDraftContext, restoreFailedContextDraft } from "@/features/context/context-draft";
+import { parseContextMessage } from "@/features/context/context-model";
 // Agent runtime store: gateway connection, login, the per-agent event
 // reducer and every agent/context action. The shell (app-view) consumes this
 // hook and renders; no JSX lives here.
@@ -207,8 +209,8 @@ export function useAgentRuntime() {
   draftsRef.current = drafts;
   const [sendingPaths, setSendingPaths] = useState<Record<string, boolean>>({});
   const sendingRef = useRef(new Set<string>());
-  const setDraftFor = useCallback((path: string, value: string) => {
-    setDrafts(current => ({ ...current, [path]: value }));
+  const setDraftFor = useCallback((path: string, value: string | ((previous: string) => string)) => {
+    setDrafts(current => ({ ...current, [path]: typeof value === "function" ? value(current[path] ?? "") : value }));
   }, []);
   const draft = drafts[activeAgent] ?? "";
   const setDraft = (value: string) => setDraftFor(activeAgent, value);
@@ -403,6 +405,11 @@ export function useAgentRuntime() {
       } else if (event.ThinkingDelta !== undefined) {
         appendStreamDelta("thinking", event.ThinkingDelta);
       } else if (event.ToolCall !== undefined) {
+        // A tool call follows a completed assistant message. Preserve its
+        // text row; the next response must start a distinct stream even
+        // when both responses contain text without intervening thinking.
+        streamingRef.current[agent] = null;
+        setStreaming((current) => ({ ...current, [agent]: null }));
         appendMessage(agent, makeItem("tool", `${event.ToolCall.name}: ${JSON.stringify(event.ToolCall.input)}`, "tool_call"));
       } else if (event.ToolResult !== undefined) {
         appendMessage(agent, makeItem("tool", `${event.ToolResult.ok ? "OK" : "ERR"} ${event.ToolResult.content}`, "tool_result"));
@@ -670,14 +677,14 @@ export function useAgentRuntime() {
 
   const sendMessageTo = async (path: string, context = "") => {
     const text = (draftsRef.current[path] ?? "").trim();
-    if (!text || !path || sendingRef.current.has(path)) return;
+    if (!(parseContextMessage(text)?.text ?? text).trim() || !path || sendingRef.current.has(path)) return;
     sendingRef.current.add(path);
     setSendingPaths(current => ({ ...current, [path]: true }));
     setDraftFor(path, "");
     try {
-      await gatewayRequest("POST", `/agents/${path}/messages`, { text: text + context });
+      await gatewayRequest("POST", `/agents/${path}/messages`, { text: mergeDraftContext(text, context) });
     } catch (cause) {
-      setDrafts(current => ({ ...current, [path]: current[path] || text }));
+      setDrafts(current => ({ ...current, [path]: restoreFailedContextDraft(current[path] ?? "", text) }));
       appendMessage(path, makeItem("error", String(cause)));
     } finally {
       sendingRef.current.delete(path);

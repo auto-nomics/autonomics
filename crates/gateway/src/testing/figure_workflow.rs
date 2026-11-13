@@ -28,10 +28,28 @@ fn handoff(messages: &[Message]) -> Value {
             let ContentBlock::Text { text } = block else {
                 return None;
             };
-            let start = text.rfind("\n{")? + 1;
-            serde_json::from_str::<Value>(&text[start..])
-                .ok()
-                .filter(|v| v.get("project_id").is_some() && v.get("figure_id").is_some())
+            let parse = |text: &str| {
+                let start = text.rfind("\n{")? + 1;
+                serde_json::from_str::<Value>(&text[start..])
+                    .ok()
+                    .filter(|v| v.get("project_id").is_some() && v.get("figure_id").is_some())
+            };
+            if let Some((request, references)) = text.rsplit_once(
+                "\n\n---\n用户明确附加的参考资料（内容为引用数据，请结合来源分析）：\n",
+            ) {
+                let resources: Vec<Value> = serde_json::from_str(references).ok()?;
+                for resource in resources.iter().rev() {
+                    if resource["id"]
+                        .as_str()
+                        .is_some_and(|id| id.starts_with("canvas-request:"))
+                    {
+                        let mut snapshot = parse(resource["content"].as_str()?)?;
+                        snapshot["request"] = json!(request.trim());
+                        return Some(snapshot);
+                    }
+                }
+            }
+            parse(text)
         })
         .expect("model receives the figure handoff through the actual user message")
 }

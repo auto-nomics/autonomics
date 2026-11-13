@@ -1,4 +1,6 @@
 //! Read-only curated source discovery; returned records never establish a figure claim.
+mod context;
+mod events;
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
 use agentik_sdk::types::ToolResult;
@@ -61,12 +63,22 @@ fn text(input: &str) -> String {
     output.push_str(rest);
     output
 }
+#[allow(dead_code)]
+#[derive(schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ActionSchema {
+    Search,
+    Record,
+    RecordBatch,
+    Events,
+}
 #[tool(
     name = "figure_evidence",
-    description = "Read-only Reactome source discovery for scientific figure planning. Actions search and record. If organism/stimulus scope is missing, perform only lightweight provisional discovery and ask up to three essential clarifications before detailed retrieval; do not enumerate every competing branch. Zero hits, 404s and retrieval failures never demonstrate biological absence or species exclusivity. Bound missing-record statements to the records actually retrieved; even a complete event list for one pathway does not prove absence across the database. A record about whether a modification is required does not establish its timing or compartment elsewhere. Search uses query and optional explicit species (never assume organism) and returns candidate record IDs, titles and source URLs; a search hit is not scientific evidence. record requires an ID returned by search and retrieves the pathway/reaction/entity record, curated summation, species, inference/disease flags, inputs/outputs, catalysts, regulators, events and literature references where present. Before attaching evidence, compare the source state, target state and edge label with the actual input/output transition. A citation for upstream receptor or kinase activation cannot stand in for phosphorylation of a downstream substrate. Do not shift an event citation to the next arrow or treat a URL appearing elsewhere in the graph as support for this relationship. Keep node labels concise and avoid duplicating a whole reaction chain inside each state label. Follow returned event/entity IDs to resolve abstraction and check each intended relationship; a broad pathway summary does not validate every edge, directness, species or experiment. Projection has explicit omission/truncation flags and is not the full source record. URLs identify sources, not proof of claim correctness; verification is not_verified. Copy actual relevant record source_url into node/edge evidence only after reading it, preserve scope/uncertainty in assumptions/questions, and ask for missing scientific intent. Retrieval never saves a plan, changes a canvas or adopts a proposal. Network failures are explicit; never invent a source or silently substitute an unrelated record."
+    description = "Read-only Reactome source discovery for scientific figure planning. Actions search, record, record_batch and events. If essential organism/stimulus/endpoint scope is unresolved, default to at most three search calls, save the unanswered scope questions and ask the user before detailed retrieval. Do not batch-read competing branches while waiting for scope answers. Read a single record first only when necessary to identify the ambiguity; explain why. Follow an explicit user request for deeper pre-clarification research. Once scope is clear, for several independent already-discovered records, prefer record_batch with ids:[...], 1..4 distinct IDs. It reads these concurrently with the same provenance/projection/context as record; each result has status ok or error. Cite only successful retrieved records, never a failed ID or a batch success flag. Oversized records are explicitly deferred to individual record reads; partial batches do not establish missing biology. events lists bounded candidate events within a discovered pathway; use it to navigate the matching receptor branch when full-text search misses a specific reaction. List membership is not a record read or scientific validation. If organism/stimulus scope is missing, perform only lightweight provisional discovery and ask up to three essential clarifications before detailed retrieval; do not enumerate every competing branch. Zero hits, 404s and retrieval failures never demonstrate biological absence or species exclusivity. Bound missing-record statements to the records actually retrieved; even a complete event list for one pathway does not prove absence across the database. A record about whether a modification is required does not establish its timing or compartment elsewhere. Search uses query and optional explicit species (never assume organism) and returns candidate record IDs, titles and source URLs; a search hit is not scientific evidence. record requires an ID returned by search and retrieves the pathway/reaction/entity record, curated summation, species, inference/disease flags, inputs/outputs, catalysts, regulators, events and literature references where present. Before attaching evidence, compare the source state, target state and edge label with the actual input/output transition. record includes source_context with prominent catalyst names and bounded event-to-root pathway membership paths, or explicit unavailable context; path metadata does not mean the ancestor records were read. Inspect this context before citing the reaction. Also inspect catalystActivity and its receptor/scaffold context: identical enzyme names or substrate/product states across different pathways do not establish that a reaction belongs to the requested receptor branch. Prefer the matching receptor-specific record when available; otherwise explicitly bound the mechanistic analogy and uncertainty instead of presenting a different receptor complex as direct evidence. A citation for upstream receptor or kinase activation cannot stand in for phosphorylation of a downstream substrate. Distinguish the catalyst from substrates, scaffolds and other complex participants: recruitment or presence in a reaction complex does not mean that participant catalyses the modification. Preserve the actual catalyst attribution in arrow labels; when intermediate steps are merged, label recruitment/activation abstractly and state the separate kinase activity rather than assigning phosphorylation to the upstream recruiter. Do not shift an event citation to the next arrow or treat a URL appearing elsewhere in the graph as support for this relationship. Keep node labels concise and avoid duplicating a whole reaction chain inside each state label. For family/isoform-aggregated nodes, do not attach residue numbers from one member to the whole family: verify species, isoform and numbering for each claimed member, or keep the shared state abstract (for example phosphorylated/active) and put member-specific details with their own sources. A caption caveat does not correct an over-specific node label. Cross-check modification shorthand in displayName against the curated summation and detailed modified entities. A source name can be abbreviated or internally inconsistent; copying it verbatim does not resolve conflicting residue chemistry. If fields disagree, retain a shared abstract state label, explicitly record the discrepancy and uncertainty, and retrieve more specific records before asserting residue types or counts. Follow returned event/entity IDs to resolve abstraction and check each intended relationship; a broad pathway summary does not validate every edge, directness, species or experiment. Projection has explicit omission/truncation flags and is not the full source record. URLs identify sources, not proof of claim correctness; verification is not_verified. A record's literatureReference entries are curator-supplied bibliography, not papers you have read. Cite the read record itself for its curated account; do not copy its bibliography into independent figure evidence as if those papers were read. Retrieve and read relevant primary literature when the user requests it or a scientific evidence gap requires it; preserve abstract-only limits and never count an import/download receipt as reading. Copy actual relevant record source_url into node/edge evidence only after reading it, preserve scope/uncertainty in assumptions/questions, and ask for missing scientific intent. Retrieval never saves a plan, changes a canvas or adopts a proposal. Network failures are explicit; never invent a source or silently substitute an unrelated record."
 )]
 pub struct Input {
-    #[desc = "search | record"]
+    #[desc = "search | record | record_batch | events. events lists candidate events within an already discovered pathway; then read relevant records before citing. Use this when full-text search misses a receptor-specific reaction, rather than treating a generic reaction plus an upstream citation as direct receptor-specific evidence."]
+    #[schemars(with = "ActionSchema")]
     pub action: String,
     #[desc = "Full-text phrase for search, 1..300 characters"]
     pub query: Option<String>,
@@ -74,7 +86,10 @@ pub struct Input {
     pub species: Option<String>,
     #[desc = "Stable Reactome ID or positive dbId obtained from search or a related record; required for record"]
     pub id: Option<String>,
-    #[desc = "Search output limit 1..20, defaults to 10; server results may themselves be a limited window"]
+    #[desc = "For record_batch only: 1..4 distinct already-discovered stable Reactome IDs or positive dbIds as a native JSON array. No query/species/id/limit in this action. Each result retains its requested ID and explicit status; retry failures or budget-deferred items individually when needed."]
+    #[schemars(length(min = 1, max = 4))]
+    pub ids: Option<Vec<String>>,
+    #[desc = "Search output limit 1..20 (default 10); events output limit 1..200 (default 100). Explicit truncation never establishes absence."]
     pub limit: Option<usize>,
 }
 struct EvidenceTool {
@@ -192,16 +207,66 @@ fn project(
         other => other.clone(),
     }
 }
+async fn read_record(client: &reactome::ReactomeClient, id: &str) -> Result<Value, ToolError> {
+    let mut output = json!({"provider":"Reactome","verification":"not_verified"});
+    let record = tokio::time::timeout(Duration::from_secs(30), client.query(id))
+        .await
+        .map_err(|_| error("Reactome record timed out"))?
+        .map_err(error)?;
+    let db_id = record["dbId"]
+        .as_u64()
+        .or_else(|| record["dbId"].as_str().and_then(|v| v.parse().ok()));
+    if !record.is_object() || db_id.is_none_or(|id| id == 0) {
+        return Err(error("Reactome returned an unsupported record shape"));
+    }
+    let canonical = record
+        .get("stId")
+        .and_then(Value::as_str)
+        .filter(|v| valid_id(v))
+        .unwrap_or(id);
+    let hash = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&record).map_err(error)?)
+    );
+    let mut notes = Vec::new();
+    let mut omitted = false;
+    let projected = project(&record, 4, "record", &mut notes, &mut omitted);
+    output["requested_id"] = json!(id);
+    output["source_url"] = if canonical.starts_with("R-") {
+        json!(format!("https://reactome.org/content/detail/{canonical}"))
+    } else {
+        json!(format!(
+            "https://reactome.org/ContentService/data/query/{canonical}"
+        ))
+    };
+    output["retrieval_url"] = json!(format!(
+        "https://reactome.org/ContentService/data/query/{id}"
+    ));
+    output["record_json_sha256"] = json!(hash);
+    output["hash_scope"] = json!("serde_json_serialization_of_retrieved_record_not_http_bytes");
+    output["source_context"] = context::source_context(client, canonical, &record).await;
+    output["record"] = projected;
+    output["projection"] = json!({"complete":false,"omitted_fields":omitted,"truncated_paths":notes,"max_depth":4,"max_list_items":40,"max_text_chars":6000,"truncation_list_complete":notes.len()<100,"instruction":"Follow relevant event/entity IDs for detail; literatureReference lists curator citations, not papers read in this session. Cite this record for its curated account; independently cite papers only after reading them. Source retrieval does not verify a figure claim"});
+    output["retrieved_at"] = json!(chrono::Utc::now().to_rfc3339());
+    Ok(output)
+}
+
 #[async_trait]
 impl ToolFunction for EvidenceTool {
     type Input = Input;
     async fn run(&self, input: Input) -> Result<ToolResult, ToolError> {
+        if input.ids.is_some() && input.action != "record_batch" {
+            return Err(error("ids is only supported for record_batch"));
+        }
         let common = json!({"provider":"Reactome","verification":"not_verified"});
         let mut output = common;
         match input.action.as_str() {
+            "events" => {
+                output = events::list(&self.client, &input).await?;
+            }
             "search" => {
                 if input.id.is_some() {
-                    return Err(error("id is only supported for record"));
+                    return Err(error("id is only supported for record or events"));
                 }
                 let query = input
                     .query
@@ -252,6 +317,66 @@ impl ToolFunction for EvidenceTool {
                 output["complete"] = json!(false);
                 output["results"] = json!(hits);
             }
+            "record_batch" => {
+                if input.id.is_some()
+                    || input.query.is_some()
+                    || input.species.is_some()
+                    || input.limit.is_some()
+                {
+                    return Err(error(
+                        "record_batch accepts only ids; id/query/species/limit are not supported",
+                    ));
+                }
+                let ids = input.ids.as_ref().filter(|ids| (1..=4).contains(&ids.len())
+                    && ids.iter().all(|id| valid_id(id))
+                    && ids.iter().collect::<std::collections::BTreeSet<_>>().len() == ids.len())
+                    .ok_or_else(|| error("ids requires 1..4 distinct retrieved Reactome IDs or positive dbIds; nothing was retrieved"))?;
+                let started = std::time::Instant::now();
+                let mut jobs = tokio::task::JoinSet::new();
+                for (index, id) in ids.iter().cloned().enumerate() {
+                    let client = self.client.clone();
+                    jobs.spawn(async move {
+                        let result = read_record(&client, &id).await;
+                        (index, id, result)
+                    });
+                }
+                let mut completed = Vec::with_capacity(ids.len());
+                while let Some(result) = jobs.join_next().await {
+                    completed.push(result.map_err(|_| {
+                        error("record_batch task failed; batch retrieval is incomplete")
+                    })?);
+                }
+                completed.sort_by_key(|entry| entry.0);
+                let mut bytes = 0usize;
+                let mut successful = 0usize;
+                let mut results = Vec::with_capacity(ids.len());
+                for (_, id, result) in completed {
+                    let mut value = match result {
+                        Ok(record) => record,
+                        Err(cause) => {
+                            results.push(json!({"requested_id":id,"status":"error","error":cause.to_string().chars().take(1000).collect::<String>()}));
+                            continue;
+                        }
+                    };
+                    value["status"] = json!("ok");
+                    let size = serde_json::to_vec(&value).map_err(error)?.len();
+                    if bytes + size > 512 * 1024 {
+                        results.push(json!({"requested_id":id,"status":"error","error":"projected record exceeds the batch payload budget; use record for this ID","retry_individually":true}));
+                        continue;
+                    }
+                    bytes += size;
+                    successful += 1;
+                    results.push(value);
+                }
+                output["results"] = json!(results);
+                output["requested_count"] = json!(ids.len());
+                output["success_count"] = json!(successful);
+                output["failure_count"] = json!(ids.len() - successful);
+                output["all_requested_records_retrieved"] = json!(successful == ids.len());
+                output["record_payload_budget_bytes"] = json!(512 * 1024);
+                output["max_concurrent_record_jobs"] = json!(4);
+                output["elapsed_ms"] = json!(started.elapsed().as_millis());
+            }
             "record" => {
                 if input.query.is_some() || input.species.is_some() || input.limit.is_some() {
                     return Err(error(
@@ -259,48 +384,11 @@ impl ToolFunction for EvidenceTool {
                     ));
                 }
                 let id=input.id.as_deref().filter(|id|valid_id(id)).ok_or_else(||error("id requires a stable Reactome ID or positive numeric dbId from a retrieved record"))?;
-                let record = tokio::time::timeout(Duration::from_secs(30), self.client.query(id))
-                    .await
-                    .map_err(|_| error("Reactome record timed out"))?
-                    .map_err(error)?;
-                let db_id = record["dbId"]
-                    .as_u64()
-                    .or_else(|| record["dbId"].as_str().and_then(|v| v.parse().ok()));
-                if !record.is_object() || db_id.is_none_or(|id| id == 0) {
-                    return Err(error("Reactome returned an unsupported record shape"));
-                }
-                let canonical = record
-                    .get("stId")
-                    .and_then(Value::as_str)
-                    .filter(|v| valid_id(v))
-                    .unwrap_or(id);
-                let hash = format!(
-                    "{:x}",
-                    Sha256::digest(serde_json::to_vec(&record).map_err(error)?)
-                );
-                let mut notes = Vec::new();
-                let mut omitted = false;
-                let projected = project(&record, 4, "record", &mut notes, &mut omitted);
-                output["requested_id"] = json!(id);
-                output["source_url"] = if canonical.starts_with("R-") {
-                    json!(format!("https://reactome.org/content/detail/{canonical}"))
-                } else {
-                    json!(format!(
-                        "https://reactome.org/ContentService/data/query/{canonical}"
-                    ))
-                };
-                output["retrieval_url"] = json!(format!(
-                    "https://reactome.org/ContentService/data/query/{id}"
-                ));
-                output["record_json_sha256"] = json!(hash);
-                output["hash_scope"] =
-                    json!("serde_json_serialization_of_retrieved_record_not_http_bytes");
-                output["record"] = projected;
-                output["projection"] = json!({"complete":false,"omitted_fields":omitted,"truncated_paths":notes,"max_depth":4,"max_list_items":40,"max_text_chars":6000,"truncation_list_complete":notes.len()<100,"instruction":"Follow relevant event/entity IDs for detail; source retrieval does not verify a figure claim"});
+                output = read_record(&self.client, id).await?;
             }
             _ => {
                 return Err(error(
-                    "unknown figure_evidence action; use search or record",
+                    "unknown figure_evidence action; use search, record, record_batch or events",
                 ));
             }
         }
@@ -332,7 +420,7 @@ mod tests {
         let received = count.clone();
         let server_record = record.clone();
         let server = std::thread::spawn(move || {
-            for mut stream in listener.incoming().take(2).map(Result::unwrap) {
+            for mut stream in listener.incoming().take(3).map(Result::unwrap) {
                 let mut request = Vec::new();
                 loop {
                     let mut buf = [0; 1024];
@@ -346,6 +434,8 @@ mod tests {
                 let request = String::from_utf8_lossy(&request);
                 let body = if request.starts_with("GET /search/query?") {
                     search.to_string()
+                } else if request.starts_with("GET /data/event/R-HSA-20/ancestors ") {
+                    json!([[{"dbId":20,"stId":"R-HSA-20","displayName":"Declared reaction","schemaClass":"ReactionLikeEvent"},{"dbId":30,"stId":"R-HSA-30","displayName":"Declared receptor pathway","schemaClass":"Pathway"}]]).to_string()
                 } else {
                     assert!(request.starts_with("GET /data/query/R-HSA-20 "));
                     server_record.to_string()
@@ -381,6 +471,18 @@ mod tests {
         let data = &result["content"];
         assert_eq!(data["verification"], "not_verified");
         assert_eq!(
+            data["source_context"]["pathway_context"]["status"],
+            "available"
+        );
+        assert_eq!(
+            data["source_context"]["pathway_context"]["paths"][0][1]["title"],
+            "Declared receptor pathway"
+        );
+        assert_eq!(
+            data["source_context"]["catalyst_activity_names"][0],
+            "Kinase"
+        );
+        assert_eq!(
             data["source_url"],
             "https://reactome.org/content/detail/R-HSA-20"
         );
@@ -411,8 +513,58 @@ mod tests {
             assert!(tool.implementation.execute(input).await.is_err());
         }
         server.join().unwrap();
-        assert_eq!(count.load(Ordering::SeqCst), 2);
+        assert_eq!(count.load(Ordering::SeqCst), 3);
         assert!(!path.exists());
+    }
+    #[tokio::test]
+    async fn context_failure_keeps_the_read_record_but_never_invents_membership() {
+        for wrong_identity in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                for mut stream in listener.incoming().take(2).map(Result::unwrap) {
+                    let mut request = [0; 2048];
+                    let n = stream.read(&mut request).unwrap();
+                    let path = String::from_utf8_lossy(&request[..n]);
+                    let (status, body) = if path.starts_with("GET /data/query/R-HSA-1 ") {
+                        ("200 OK",json!({"dbId":1,"stId":"R-HSA-1","displayName":"Reaction","schemaClass":"Reaction"}).to_string())
+                    } else {
+                        assert!(path.starts_with("GET /data/event/R-HSA-1/ancestors "));
+                        if wrong_identity {
+                            ("200 OK",json!([[{"dbId":999,"stId":"R-HSA-999","displayName":"Unrelated event","schemaClass":"Reaction"}]]).to_string())
+                        } else {
+                            ("503 Service Unavailable", "{}".into())
+                        }
+                    };
+                    write!(stream,"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                }
+            });
+            let tool = ToolRegistration::from(EvidenceTool {
+                client: Arc::new(
+                    reactome::ReactomeClient::new().with_endpoints(&endpoint, &endpoint),
+                ),
+            });
+            let result = serde_json::to_value(
+                tool.implementation
+                    .execute(json!({"action":"record","id":"R-HSA-1"}))
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            let data = &result["content"];
+            assert_eq!(data["record"]["stId"], "R-HSA-1");
+            assert_eq!(data["verification"], "not_verified");
+            assert_eq!(
+                data["source_context"]["pathway_context"]["status"],
+                "unavailable"
+            );
+            assert!(
+                data["source_context"]["pathway_context"]
+                    .get("paths")
+                    .is_none()
+            );
+            server.join().unwrap();
+        }
     }
     #[test]
     fn projection_is_bounded_and_plain_text_does_not_destroy_mathematical_comparisons() {
@@ -439,3 +591,7 @@ mod tests {
         assert!(!result.to_string().contains("deep"));
     }
 }
+
+#[cfg(test)]
+#[path = "evidence/batch_tests.rs"]
+mod batch_tests;

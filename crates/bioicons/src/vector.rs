@@ -5,13 +5,13 @@ use quick_xml::{Reader, events::Event};
 use resvg::{tiny_skia, usvg};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VectorAsset {
     pub asset: Asset,
     #[serde(flatten)]
     pub vector: PreparedSvg,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PreparedSvg {
     pub source_sha256: String,
     pub sha256: String,

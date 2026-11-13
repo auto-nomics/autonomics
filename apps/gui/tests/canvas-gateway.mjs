@@ -1,3 +1,4 @@
+import {readCanvasPreparedContext} from './helpers/canvas-prepared-context.mjs';
 // Full compiled GUI + production Gateway/RuntimeHost/SSE/tools. Only model decisions are scripted.
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
@@ -50,7 +51,7 @@ try {
     await panel.getByRole('button', { name: '交给 Agent', exact: true }).click();
     const composer = page.getByPlaceholder('输入消息…'); await composer.waitFor();
     await until(async () => (await composer.inputValue()).includes(request), 'new figure handoff reaches the actual composer');
-    const draft = await composer.inputValue(), root = JSON.parse(draft.slice(draft.lastIndexOf('{\n  "project_id"')));
+    const draft = await composer.inputValue(), root = await readCanvasPreparedContext(page);
     assert.equal(root.project_id, project); assert.equal(root.figure_id, figure);
     await page.getByRole('button', { name: '发送', exact: true }).click();
     await until(async () => (await trace()).step === step && (await call('GET', '/state')).agents.some(a => a.path === agent && String(a.status).toUpperCase() === 'IDLE'), 'production agent turn and SSE delivery complete');

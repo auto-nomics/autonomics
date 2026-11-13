@@ -43,6 +43,24 @@ impl Store {
         expected_revision: i64,
         retry_failed: bool,
     ) -> Result<CandidatePreview> {
+        // Polling an existing immutable preview is read-only. In particular, do
+        // not compete with the renderer's writer just to observe its state.
+        match self.proposal_preview(project, id, proposal, expected_revision) {
+            Ok(preview) if !retry_failed || preview.render_status != "failed" => {
+                return Ok(preview);
+            }
+            Ok(_) => {}
+            Err(Error::NotFound) => {
+                // Missing preview and wrong figure scope share NotFound; do not
+                // acquire a writer just to rediscover an invalid project.
+                if self.get(project, id)?.revision != expected_revision {
+                    return Err(Error::Conflict);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        // Recheck under the write lock: another requester may have queued or
+        // completed this preview after the read above.
         let transaction =
             rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         if self.get(project, id)?.revision != expected_revision {
@@ -227,6 +245,82 @@ mod tests {
             )
             .unwrap();
         (store, figure.id, proposal)
+    }
+    #[test]
+    fn cached_preview_poll_does_not_require_the_renderers_write_lock() {
+        let path =
+            std::env::temp_dir().join(format!("preview-lock-{}.sqlite", uuid::Uuid::new_v4()));
+        {
+            let mut reader = Store::open(&path).unwrap();
+            reader.create_project("p", "Study").unwrap();
+            let figure = reader
+                .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
+                .unwrap();
+            let candidate = reader
+                .propose("p", &figure.id, 1, "Candidate", &json!({"elements":[]}))
+                .unwrap();
+            let queued = reader
+                .request_proposal_preview("p", &figure.id, &candidate.id, 1, false)
+                .unwrap();
+            let writer = Store::open(&path).unwrap();
+            reader
+                .connection
+                .busy_timeout(std::time::Duration::ZERO)
+                .unwrap();
+            writer.connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            for retry in [false, true] {
+                let polled = reader
+                    .request_proposal_preview("p", &figure.id, &candidate.id, 1, retry)
+                    .unwrap();
+                assert_eq!(polled.render_status, "requested");
+                assert_eq!(polled.document_sha256, queued.document_sha256);
+            }
+            assert!(matches!(
+                reader.request_proposal_preview("p", &figure.id, &candidate.id, 0, false),
+                Err(Error::Conflict)
+            ));
+            assert!(matches!(
+                reader.request_proposal_preview("other", &figure.id, &candidate.id, 1, false),
+                Err(Error::NotFound)
+            ));
+            writer.connection.execute_batch("ROLLBACK").unwrap();
+            reader
+                .complete_proposal_preview(
+                    "p",
+                    &figure.id,
+                    &candidate.id,
+                    PreviewCompletion {
+                        base_revision: 1,
+                        document_sha256: &queued.document_sha256,
+                        data_url: None,
+                        error: Some("test failure"),
+                        renderer: "test-renderer",
+                    },
+                )
+                .unwrap();
+            writer.connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+            assert_eq!(
+                reader
+                    .request_proposal_preview("p", &figure.id, &candidate.id, 1, false)
+                    .unwrap()
+                    .render_status,
+                "failed"
+            );
+            // Explicit retry really is a write and must respect the other writer.
+            assert!(matches!(
+                reader.request_proposal_preview("p", &figure.id, &candidate.id, 1, true),
+                Err(Error::Database(_))
+            ));
+            writer.connection.execute_batch("ROLLBACK").unwrap();
+            assert_eq!(
+                reader
+                    .request_proposal_preview("p", &figure.id, &candidate.id, 1, true)
+                    .unwrap()
+                    .render_status,
+                "requested"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn workspace_queue_is_requested_only_bounded_and_routes_each_project() {

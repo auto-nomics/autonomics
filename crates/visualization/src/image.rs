@@ -1,5 +1,6 @@
 //! Append an embedded image while preserving all other scene content.
 use serde_json::{Value, json};
+mod labels;
 
 #[derive(Debug, thiserror::Error)]
 #[error("invalid image insertion: {0}")]
@@ -401,8 +402,23 @@ pub fn illustrate(
     }) {
         element["containerId"] = Value::Null;
         element["groupIds"] = json!(groups);
-        element["x"] = json!(x + (width - element["width"].as_f64().unwrap_or(width)) / 2.0);
-        element["y"] = json!(y + height + 12.0);
+        if previous_position.is_none() {
+            element["x"] = json!(x + (width - element["width"].as_f64().unwrap_or(width)) / 2.0);
+            element["y"] = json!(y + height + 12.0);
+        }
+    }
+    if previous_position.is_none() {
+        labels::place_beside(
+            elements,
+            target_id,
+            &visual_id,
+            &label_ids,
+            [x, y, width, height],
+        );
+        labels::keep_in_frame(elements, target_id, &visual_id, &label_ids);
+        if !labels::contained_in_frames(elements, &label_ids) {
+            return Err(InvalidImage("illustration label cannot fit inside its frame; explicitly enlarge the frame or revise the component layout before replacement; nothing changed"));
+        }
     }
     Ok((result, visual_id))
 }

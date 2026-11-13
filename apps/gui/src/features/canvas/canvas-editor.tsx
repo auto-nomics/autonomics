@@ -1,12 +1,17 @@
+import { normalizeEmptyNativeFields } from "./canvas-empty-native-fields";
+import { CanvasFrameSwap } from "./canvas-frame-swap";
+import { SvgPathChannel } from "./canvas-svg-path-channel";
+import { emptySvgPathState, svgPathTransition, type SvgPathEvent, type SvgPathContext } from "./canvas-svg-path-context";
+import { embedLocalSvgFonts } from "./canvas-svg-fonts";
 import { hasProtectedCopyTarget, prepareNativePaste, repairNativeDuplicate, stampNativeIdentities } from "./canvas-native-duplicate";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Excalidraw, MainMenu, exportToBlob, exportToSvg, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
 import "@excalidraw/excalidraw/index.css";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
-import { patchEditorState } from "@/app/workbench/workbench-store";
+import { findEditor, patchEditorState } from "@/app/workbench/workbench-store";
 import type { EditorContext } from "@/app/workbench/editor-registry";
 import { canvasSelectionContext } from "./canvas-selection-context";
 import { createSourceManifest, embedSvgSources, embedPngSources } from "./canvas-source-manifest";
@@ -16,6 +21,7 @@ import { CanvasTextEdit } from "./canvas-text-edit";
 import { CanvasEvidenceList } from "./canvas-evidence-list";
 import { CanvasDuplicate } from "./canvas-duplicate";
 import { CanvasRelation } from "./canvas-relation";
+import { CanvasFrameFit } from "./canvas-frame-fit";
 import { CanvasRouting } from "./canvas-routing";
 import { CanvasPlanning } from "./canvas-planning";
 import { CanvasMarkups } from "./canvas-markups";
@@ -68,15 +74,28 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const pathState = useRef(emptySvgPathState);
+  const pathDirty = useRef(false);
+  const [inspectedPath, setInspectedPath] = useState<SvgPathContext | null>(null);
+  const priorSelection = useRef<string | undefined>(undefined);
+  const publishPath = useCallback((event: SvgPathEvent) => {
+    if (event.kind === "inspect" && (event.snapshot.project_id !== projectId || event.snapshot.figure_id !== id || pathDirty.current || event.snapshot.expected_revision !== revision.current)) event = {kind:"clear"};
+    const next = svgPathTransition(pathState.current,event);
+    if (next === pathState.current) return;
+    pathState.current = next; setInspectedPath(next.snapshot);
+    const latest=findEditor(editor.id)?.state;
+    patchEditorState(editor.id,{...(latest && typeof latest === "object" ? latest : {}),inspectedSvgPath:next.snapshot?JSON.stringify(next.snapshot):null});
+  },[editor.id,id,projectId]);
   useEffect(() => {
     let cancelled = false;
-    patchEditorState(editor.id, { selectedObjectIds: "[]", selectedObjects: "[]", selectedObjectsTotal: 0, selectedObjectsTruncated: false, selectionReady: false });
+    pathDirty.current=false; priorSelection.current=undefined; publishPath({kind:"clear"});
+    patchEditorState(editor.id, { selectedObjectIds: "[]", selectedObjects: "[]", selectedObjectsTotal: 0, selectedObjectsTruncated: false, selectionReady: false, inspectedSvgPath: null });
     void readCanvas(id, projectId).then(record => {
       if (cancelled) return;
       revision.current = record.revision;
       titleRef.current = record.title; latestTitle.current = record.title; setTitle(record.title);
       sourceFiles.current = record.scene ? JSON.parse(record.scene).files ?? {} : {};
-      setInitial(record.scene ? { ...JSON.parse(record.scene), scrollToContent: true } : { appState: { currentItemRoughness: 0, currentItemFontFamily: 9, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } });
+      setInitial(normalizeEmptyNativeFields(record.scene ? { ...JSON.parse(record.scene), scrollToContent: true } : { appState: { currentItemRoughness: 0, currentItemFontFamily: 9, currentItemRoundness: "sharp", viewBackgroundColor: "#ffffff" } }));
       setLoaded(true);
     }).catch(cause => { if (!cancelled) setError(String(cause)); });
     return () => { cancelled = true; setDocumentDirty(`canvas:${id}`, false); };
@@ -84,7 +103,11 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const dirty = (value: boolean, count?: number, fileCount?: number, providedSelection?: ReturnType<typeof canvasSelectionContext>) => {
     setDocumentDirty(`canvas:${id}`, value);
     const selection = providedSelection ?? canvasSelectionContext(api.current?.getSceneElements() ?? [], api.current?.getAppState().selectedElementIds ?? {});
-    patchEditorState(editor.id, { title: latestTitle.current, dirty: value, saving: saving.current, imageFileCount: fileCount ?? Object.keys(api.current?.getFiles() ?? {}).length, revision: revision.current ?? 0, selectedObjectIds: JSON.stringify(selection.ids), selectedObjects: JSON.stringify(selection.objects), selectedObjectsTotal: selection.total, selectedObjectsTruncated: selection.truncated, selectionReady: Boolean(api.current), objectCount: count ?? api.current?.getSceneElements().length ?? 0 });
+    pathDirty.current=value;
+    const selectionKey=JSON.stringify(selection.ids);
+    publishPath({kind:"scene",revision:revision.current,dirty:value,selectionChanged:priorSelection.current!==undefined&&priorSelection.current!==selectionKey,selectedIds:selection.ids});
+    priorSelection.current=selectionKey;
+    patchEditorState(editor.id, { inspectedSvgPath: pathState.current.snapshot ? JSON.stringify(pathState.current.snapshot) : null, title: latestTitle.current, dirty: value, saving: saving.current, imageFileCount: fileCount ?? Object.keys(api.current?.getFiles() ?? {}).length, revision: revision.current ?? 0, selectedObjectIds: JSON.stringify(selection.ids), selectedObjects: JSON.stringify(selection.objects), selectedObjectsTotal: selection.total, selectedObjectsTruncated: selection.truncated, selectionReady: Boolean(api.current), objectCount: count ?? api.current?.getSceneElements().length ?? 0 });
   };
   async function save() {
     const instance = api.current;
@@ -135,7 +158,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       if (format === "excalidraw") { download(new Blob([scene], { type: "application/json" }), `${exportTitle}.excalidraw`); return; }
       const manifest = await createSourceManifest({ scene, title: exportTitle, project_id: projectId, figure_id: id, based_on_revision: revision.current, unsaved_changes: scene !== baseline.current || exportTitle !== titleRef.current });
       if (format === "sources") download(new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }), `${exportTitle}.sources.json`);
-      else if (format === "svg") { const svg = await exportToSvg({ elements, appState: { ...appState, exportWithDarkMode: false }, files }); embedSvgSources(svg, manifest); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${exportTitle}.svg`); }
+      else if (format === "svg") { const svg = await exportToSvg({ elements, appState: { ...appState, exportWithDarkMode: false }, files }); await embedLocalSvgFonts(svg); embedSvgSources(svg, manifest); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${exportTitle}.svg`); }
       else { const png = await exportToBlob({ elements, appState: { ...appState, exportWithDarkMode: false }, files, mimeType: "image/png" }); download(await embedPngSources(png, manifest), `${exportTitle}.png`); }
     } catch (cause) { setError(`导出失败：${String(cause)}`); }
   }
@@ -149,7 +172,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     if (!await save()) return false;
     return !hasUnsavedChanges();
   }
-  return <section aria-label="画布编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDownCapture={event => {
+  return <SvgPathChannel.Provider value={publishPath}><section aria-label="画布编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDownCapture={event => {
     if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) return;
     const key=event.key.toLowerCase(), target=event.target;
     const history=(event.ctrlKey||event.metaKey)&&!event.altKey&&(key==="z"||(key==="y"&&!event.shiftKey));
@@ -169,15 +192,17 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       <span className="text-xs text-muted-foreground">{projectId ? "保存在项目中" : "旧版本地画布"}</span>
       {projectId && <CanvasHistory projectId={projectId} canvasId={id} getRevision={() => revision.current} isDirty={hasUnsavedChanges} onRestored={onReload} />}
       {projectId && <Button size="sm" variant={circleSelect ? "default" : "outline"} disabled={!loaded || busy} onClick={() => setCircleSelect(value => !value)}>{circleSelect ? "取消圈选" : "圈选批注"}</Button>}
-      {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} />}
+      {projectId && <CanvasMarkups projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} capturePreview={capturePreview} isDirty={hasUnsavedChanges} />}
       {projectId && <CanvasPlanning projectId={projectId} canvasId={id} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasPalette projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasDuplicate projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasEvidenceList projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasFrameFit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasFrameSwap projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
       {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
       {projectId && <Button size="sm" variant={panel === "agent" ? "secondary" : "outline"} aria-expanded={panel === "agent"} onClick={() => selectPanel("agent")}>Agent 绘图</Button>}
       <Button size="sm" variant={panel === "bioart" ? "secondary" : "outline"} aria-expanded={panel === "bioart"} onClick={() => selectPanel("bioart")}>BioArt 素材</Button>
@@ -191,6 +216,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
       {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
     </div>
+    {inspectedPath && <div aria-label="SVG 路径上下文" className="flex items-center gap-2 border-b px-2 py-1 text-xs text-muted-foreground"><span>{inspectedPath.panel_visible?"正在查看":"上次查看"}：{inspectedPath.scope==="proposal_candidate"?"候选":"正式图"} SVG 路径 {inspectedPath.part_index}</span><Button size="sm" variant="ghost" onClick={() => publishPath({kind:"clear"})}>清除路径上下文</Button></div>}
     {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
     {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => {
@@ -250,5 +276,5 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
         setCircleSelect(false); if (message) setError(message); else setError(""); if (count) selectPanel("agent",false);
       }} />}
     </div><div className="contents" data-canvas-panels>{visitedPanels.agent && projectId && <div className={panel === "agent" ? "contents" : "hidden"}><CanvasAgentPanel projectId={projectId} canvasId={id} getRevision={() => revision.current} getApi={() => api.current} capturePreview={capturePreview} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} /></div>}{visitedPanels.bioart && <div className={panel === "bioart" ? "contents" : "hidden"}><BioArtPanel getApi={() => api.current} /></div>}{visitedPanels.bioicons && <div className={panel === "bioicons" ? "contents" : "hidden"}><BioIconsPanel getApi={() => api.current} /></div>}</div></div>}
-  </section>;
+  </section></SvgPathChannel.Provider>;
 }

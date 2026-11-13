@@ -20,20 +20,21 @@ fn error(error: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
 #[derive(Deserialize)]
 pub(crate) struct Search {
     q: String,
+    author: Option<String>,
     #[serde(default)]
     start: usize,
 }
 pub(crate) async fn search(Query(input): Query<Search>) -> Response {
-    if input.q.trim().is_empty() || input.q.len() > 300 {
+    if input.q.trim().is_empty() || input.q.len() > 300 || input.author.as_deref().is_some_and(|a| a.trim().is_empty() || a.len() > 300) {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error":"search requires 1..300 bytes"})),
+            Json(json!({"error":"search requires 1..300 query bytes and an optional nonblank author of at most 300 bytes"})),
         ));
     }
     let client = CLIENT.as_ref().map_err(error)?;
     Ok(Json(json!(
         client
-            .search(&input.q, input.start, 12)
+            .search_with_author(&input.q, input.start, 12, input.author.as_deref())
             .await
             .map_err(error)?
     )))

@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {editorContextBindingKey as key,promoteEditorContextBinding as promote} from '../src/app/workbench/editor-context-binding.ts';
+assert.equal(key('',null),null);assert.notEqual(key('/root/a',null),key('/root/b',null));
+const before={[key('/root/a',null)]:'$follow',[key('/root/b',null)]:'other-document'};
+const first=promote(before,'/root/a',null,'session-1');assert.equal(first[key('/root/a','session-1')],'$follow');assert.equal(first[key('/root/a',null)],undefined);assert.equal(first[key('/root/b',null)],'other-document');assert.equal(before[key('/root/a',null)],'$follow');
+assert.equal(promote(first,'/root/a','session-1','session-2'),first,'never carry a known session binding into a different session');
+assert.equal(first[key('/root/a','session-2')],undefined);assert.equal(promote(first,'/root/a',null,'session-2'),first,'consumed pending binding cannot leak into later sessions');
+const explicitAgain={...first,[key('/root/a',null)]:'new-document'};
+assert.equal(promote(explicitAgain,'/root/a',null,'session-2')[key('/root/a','session-2')],'new-document');
+assert.equal(promote(before,'/root/a',null,null),before);
+const cleared=promote({[key('/root/a',null)]:'',[key('/root/a','session-1')]:'old-document'},'/root/a',null,'session-1');
+assert.equal(cleared[key('/root/a','session-1')],'','an explicit unbind must not fall back to an older session target');
+assert.equal(cleared[key('/root/a',null)],undefined);
+console.log('editor context binding: cold start promotion, agent/session isolation and explicit rebind passed');

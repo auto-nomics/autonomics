@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {checkReferenceNodeResize} from './helpers/canvas-live-reference.mjs';
+const node=(id,x,labels)=>({id,type:'rectangle',x,y:200,width:220,height:100,angle:0,opacity:100,boundElements:labels,customData:{scientificId:id,evidence:['retained source']}});
+const label=(id,owner,text,x)=>({id,type:'text',containerId:owner,text,originalText:text,x,y:237.5,width:210,height:25,fontFamily:9,fontSize:20,lineHeight:1.25,textAlign:'center',autoResize:false});
+const arrow=(id,from,to,x)=>({id,type:'arrow',x,y:250,width:100,height:0,points:[[0,0],[100,0]],startBinding:{elementId:from,focus:0,gap:10},endBinding:{elementId:to,focus:0,gap:10},startArrowhead:null,endArrowhead:'arrow',customData:{evidence:['relationship']}});
+const previous={elements:[{id:'reference',type:'image',x:0,y:0,width:840,height:180,fileId:'r'},node('a',0,[{id:'la',type:'text'},{id:'ab',type:'arrow'}]),label('la','a','Collect',5),node('b',340,[{id:'lb',type:'text'},{id:'ab',type:'arrow'},{id:'bc',type:'arrow'}]),label('lb','b','Image',345),node('c',680,[{id:'lc',type:'text'},{id:'bc',type:'arrow'}]),label('lc','c','Review',685),arrow('ab','a','b',230),arrow('bc','b','c',570)],files:{r:{dataURL:'reference bytes'}},scientificPlan:{message:'History'}};
+const next=structuredClone(previous),bounds=[10,205,250,120];Object.assign(next.elements.find(e=>e.id==='a'),{x:10,y:205,width:250,height:120});Object.assign(next.elements.find(e=>e.id==='la'),{x:15,y:252.5,width:240,height:25});Object.assign(next.elements.find(e=>e.id==='ab'),{x:270,y:265,width:60,height:15,points:[[0,0],[30,0],[30,-15],[60,-15]]});
+checkReferenceNodeResize(previous,next,'a',bounds);
+for(const mutate of [d=>d.elements.find(e=>e.id==='a').width++,d=>d.elements.find(e=>e.id==='b').x++,d=>d.elements.find(e=>e.id==='la').text='Other',d=>d.elements.find(e=>e.id==='la').fontSize=18,d=>d.elements.find(e=>e.id==='ab').points[3][0]++,d=>d.elements.find(e=>e.id==='ab').x++,d=>d.elements.find(e=>e.id==='ab').points=[[0,0]],d=>d.elements.find(e=>e.id==='a').customData.evidence=[],d=>d.files.r.dataURL='changed']){
+ const bad=structuredClone(next);mutate(bad);assert.throws(()=>checkReferenceNodeResize(previous,bad,'a',bounds));
+}
+console.log('node geometry: exact intended bounds, complete text/font, centered ports, fixed far endpoint, canonical path dimensions, unrelated nodes/files/evidence and degenerate-path rejection verified');

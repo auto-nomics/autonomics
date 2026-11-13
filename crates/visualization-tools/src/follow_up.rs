@@ -10,10 +10,22 @@ pub(crate) fn proposal_result(
     element: Option<&str>,
 ) -> Value {
     let mut result = json!({"proposal_id":proposal.id,"figure_id":proposal.visualization_id,"visualization_id":proposal.visualization_id,"base_revision":proposal.base_revision,"summary":proposal.summary,"status":proposal.status,"document_sha256":proposal.document_sha256,"parent_proposal_id":proposal.parent_proposal_id,"parent_document_sha256":proposal.parent_document_sha256});
+    result["scene_geometry_review"] =
+        json!(visualization::geometry_review::review(&proposal.document));
     if let Some(element) = element {
         result["element_id"] = json!(element);
     }
     attach(&mut result, Some(project), Some(&proposal.visualization_id));
+    if let Some(element) = element
+        && proposal.status == "pending"
+        && visualization::image::element(&proposal.document, element).is_ok()
+    {
+        result["follow_up_inputs"]["image_info"] = json!({
+            "action":"image_info","project_id":project,"figure_id":proposal.visualization_id,
+            "expected_revision":proposal.base_revision,"proposal_id":proposal.id,
+            "document_sha256":proposal.document_sha256,"element_id":element
+        });
+    }
     result
 }
 

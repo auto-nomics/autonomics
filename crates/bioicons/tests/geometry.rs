@@ -14,6 +14,7 @@ fn edit(id: &str, points: Vec<PointEdit>) -> Edit {
         part_id: id.into(),
         fill: None,
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: None,
         points: Some(points),

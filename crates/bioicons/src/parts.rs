@@ -11,6 +11,8 @@ use quick_xml::{
 use resvg::usvg;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod contribution;
+pub use contribution::RenderContribution;
 pub(super) fn invalid(message: impl Into<String>) -> Error {
     Error::Invalid(message.into())
 }
@@ -21,11 +23,16 @@ pub struct Part {
     pub svg_id: Option<String>,
     pub fill: String,
     pub stroke: String,
+    /// Width in normalized SVG local units; zero means the parsed path has no stroke definition.
+    pub stroke_width: f64,
     pub opacity: f64,
     pub bounds: [f64; 4],
     pub translation_supported: bool,
     pub point_count: usize,
     pub geometry_supported: bool,
+    /// Differential render diagnostic; zero is not proof of geometric invisibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_preview_pixels_when_hidden: Option<u32>,
 }
 #[derive(Debug, Serialize)]
 pub struct Inspection {
@@ -35,6 +42,7 @@ pub struct Inspection {
     pub width: u32,
     pub height: u32,
     pub parts: Vec<Part>,
+    pub render_contribution: RenderContribution,
     #[serde(rename = "previewDataURL")]
     pub preview_data_url: String,
     #[serde(rename = "annotatedDataURL")]
@@ -47,6 +55,8 @@ pub struct Edit {
     /// #RRGGBB or none; omitted means unchanged. Gradient replacement is explicit.
     pub fill: Option<String>,
     pub stroke: Option<String>,
+    /// Absolute local SVG stroke width, finite and strictly positive, at most 1000.
+    pub stroke_width: Option<f64>,
     /// Local path opacity, multiplied by any ancestor group opacity.
     pub opacity: Option<f64>,
     /// Relative [dx,dy] in the normalized SVG root coordinate system, not canvas pixels.
@@ -148,6 +158,7 @@ pub(super) fn path_tree(canonical: &[u8], hash: &str) -> Result<(usvg::Tree, Vec
             svg_id: attrs.get("id").cloned(),
             fill: attrs.get("fill").cloned().unwrap_or("#000000".into()),
             stroke: attrs.get("stroke").cloned().unwrap_or("none".into()),
+            stroke_width: 0.,
             opacity: attrs
                 .get("opacity")
                 .and_then(|v| v.parse().ok())
@@ -156,6 +167,7 @@ pub(super) fn path_tree(canonical: &[u8], hash: &str) -> Result<(usvg::Tree, Vec
             translation_supported: !attrs.contains_key("transform"),
             point_count: 0,
             geometry_supported: false,
+            changed_preview_pixels_when_hidden: None,
         });
         attrs.insert("id".into(), part_id);
         Ok(element(attrs))
@@ -171,6 +183,7 @@ pub(super) fn path_tree(canonical: &[u8], hash: &str) -> Result<(usvg::Tree, Vec
             .ok_or_else(|| invalid("rendered path cannot be located"))?;
         part.translation_supported &= node.abs_transform().invert().is_some();
         if let usvg::Node::Path(path) = node {
+            part.stroke_width = path.stroke().map(|s| f64::from(s.width().get())).unwrap_or(0.);
             part.point_count = path
                 .data()
                 .segments()
@@ -197,7 +210,8 @@ pub(super) fn path_tree(canonical: &[u8], hash: &str) -> Result<(usvg::Tree, Vec
 pub fn inspect(bytes: &[u8]) -> Result<Inspection> {
     let (vector, canonical) = source(bytes)?;
     let hash = vector.source_sha256.clone();
-    let (_, parts) = path_tree(&canonical, &hash)?;
+    let (tree, mut parts) = path_tree(&canonical, &hash)?;
+    let render_contribution = contribution::analyze(&canonical, &tree, &mut parts)?;
     // This numbered visual is review material only; never store it as artwork.
     let mut annotated = String::from_utf8(canonical).map_err(|e| invalid(e.to_string()))?;
     let end = annotated
@@ -213,11 +227,12 @@ pub fn inspect(bytes: &[u8]) -> Result<Inspection> {
     let annotated = vector::normalize(annotated.as_bytes())?;
     Ok(Inspection {
         bounds_kind: "svg_root_stroke_aabb",
-        bounds_note: "Includes path strokes and ancestor transforms in normalized SVG root coordinates; not biological domains or an exact clipped-pixel mask.",
+        bounds_note: "Includes path strokes and ancestor transforms in normalized SVG root coordinates; not biological domains or an exact clipped-pixel mask. A path can be fully covered by later paths; a listed paint or bounding box does not prove visible pixels. Inspect the resulting PNG before judging a color edit.",
         sha256: hash,
         width: vector.width,
         height: vector.height,
         parts,
+        render_contribution,
         preview_data_url: vector.preview_data_url,
         annotated_data_url: annotated.preview_data_url,
     })
@@ -248,11 +263,15 @@ pub fn edit(bytes: &[u8], expected_sha256: &str, edits: &[Edit]) -> Result<Prepa
     for edit in edits {
         if edit.fill.is_none()
             && edit.stroke.is_none()
+            && edit.stroke_width.is_none()
             && edit.opacity.is_none()
             && edit.translate.is_none()
             && edit.points.is_none()
         {
             return Err(invalid("path edit has no changes"));
+        }
+        if edit.stroke_width.is_some_and(|v| !v.is_finite() || v <= 0. || v > 1000.) {
+            return Err(invalid("path stroke width must be finite and within (0,1000] local SVG units"));
         }
         if edit
             .opacity
@@ -356,6 +375,9 @@ pub fn edit(bytes: &[u8], expected_sha256: &str, edits: &[Edit]) -> Result<Prepa
         }
         if let Some(stroke) = &edit.stroke {
             attrs.insert("stroke".into(), paint(stroke)?);
+        }
+        if let Some(width) = edit.stroke_width {
+            attrs.insert("stroke-width".into(), width.to_string());
         }
         if let Some(opacity) = edit.opacity {
             attrs.insert("opacity".into(), opacity.to_string());

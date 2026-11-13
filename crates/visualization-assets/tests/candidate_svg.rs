@@ -38,6 +38,8 @@ fn fixture() -> (Store, String, visualization::proposal::Proposal, String) {
     let parent = store
         .propose("p", &figure.id, 1, "Unadopted illustration", &doc)
         .unwrap();
+    // Compare descendants against the actual stored snapshot, including JSON numeric round-trip.
+    let parent = store.proposal("p", &figure.id, &parent.id).unwrap();
     (store, figure.id, parent, other)
 }
 #[test]
@@ -111,6 +113,7 @@ fn unadopted_svg_can_be_inspected_recolored_translated_and_edited_without_formal
         part_id: parts["parts"][0]["part_id"].as_str().unwrap().into(),
         fill: None,
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: Some([3., 0.]),
         points: None,
@@ -163,6 +166,7 @@ fn unadopted_svg_can_be_inspected_recolored_translated_and_edited_without_formal
         part_id: geometry["part_id"].as_str().unwrap().into(),
         fill: None,
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: None,
         points: Some(vec![point]),

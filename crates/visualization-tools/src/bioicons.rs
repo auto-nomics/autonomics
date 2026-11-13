@@ -14,12 +14,16 @@ fn error(e: impl std::fmt::Display) -> ToolError {
 }
 #[tool(
     name = "bioicons",
-    description = "Search BioIcons SVG illustrations. Actions search, preview, insert, replace, palette, recolor, parts, geometry, edit_parts. parts inspects rendered SVG paths and returns snapshot-scoped IDs, bounds and a numbered PNG; numbers identify graphical paths, never biological identities. Each bounds [x,y,width,height] already includes the path stroke and ancestor transforms in normalized SVG root coordinates; do not retrieve raw SVG merely to add stroke width. Bounds are geometric boxes, not exact clipped visible-pixel masks. edit_parts proposes fill/stroke (#RRGGBB or none) local opacity (0..1) and translate [dx,dy] edits in normalized SVG root coordinates on specified paths, using sha256 and edits from parts. Shared masks, clips and pattern resources are not editable paths. Omitted attributes remain unchanged. Translation compensates ancestor scaling, rotation and reflection; paint follows the path, parent clipping and the SVG viewport stay fixed. Use preview and review the result; geometry returns numbered endpoint/control handles and command topology for one part_id and sha256 from parts. Use edit_parts points:[{index,position:[x,y]}] for sparse absolute root-coordinate control/anchor edits from geometry; at most 64 edited points on paths with at most 512 points. Keep topology and other points unchanged. Do not combine points and translate for the same path; make separate reviewed proposals. Shape edits keep paint coordinates and parent clips fixed. Read parts again after every SVG edit or replacement, including candidate edits, because IDs belong to the exact old file snapshot. palette reads a saved SVG image (or its semantic anchor) and returns actual #RRGGBB paints with a PNG preview. recolor uses colors mapping old_hex to new_hex to propose simultaneous exact paint replacements; preserves text glyphs, geometry, original author/license/source hash and unrelated image instances. Both require project_id, figure_id, expected_revision and element_id; neither requires network access. Read palette first, do not invent source colours. SVG text must already be outlined so recoloring cannot silently substitute its font. insert appends a standalone image at x/y; use replace to preserve an existing node identity. To move/resize the new image, use visualization revise_proposal with {op:set_image_geometry,id,x,y,width,height}, all JSON numbers. Native scale is only flip signs ±1, not fractional size; dimensions are width/height. Never use align-center on two images that belong under different stages. Search then inspect a PNG preview and per-icon author/license before selecting; do not infer scientific specificity from generic art. insert and replace create reviewable proposals on the exact current figure revision; they never commit directly. SVG remains a scalable vector image with provenance and source/normalized hashes; internal paths are not individual canvas objects. Unsupported raster/active SVG or unsupported text is rejected rather than silently dropped. Use visualization read/read_image to inspect saved objects and current revision. Preserve unrelated elements, scientific labels and arrow anchors. User must save local edits before agent modification. For insert, replace, palette, parts, geometry, recolor or edit_parts on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. Inspection returns scope/proposal/hash/file identity plus a PNG from that exact candidate, without adopting it. Changes create a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. On changes, explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Omit markup_ids on read-only inspection. Recolor and part edits require no catalog/network access. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Successful changes include candidate_context and follow_up_inputs with complete read_proposal/read_proposal_preview arguments; copy these instead of reconstructing IDs or confusing plan and figure versions. Do not infer protein-specific structure or additional mechanism from generic artwork."
+    description = "Search BioIcons SVG illustrations. Actions search, search_batch, preview, insert, replace, palette, recolor, parts, geometry, edit_parts. parts inspects rendered SVG paths and returns snapshot-scoped IDs, bounds and a numbered PNG; numbers identify graphical paths, never biological identities. Each bounds [x,y,width,height] already includes the path stroke and ancestor transforms in normalized SVG root coordinates; do not retrieve raw SVG merely to add stroke width. Bounds are geometric boxes, not exact clipped visible-pixel masks. Later paths may fully cover earlier paths; palette presence does not prove visible color. parts includes render_contribution status and, when completed, changed_preview_pixels_when_hidden per path: a bounded leave-one-path-out RGBA comparison on a transparent SVG root preview, excluding canvas crop/background and other objects, not path area or a visibility mask. Zero can also mean identical paint, clipping, or subpixel detail; prefer a path with actual render contribution for a visible edit, then inspect PNG. Limits return not_computed without inferring visibility. Inspect the final PNG and report occlusion or visually unmet requests rather than claiming success from palette values alone. parts also reports stroke_width in normalized SVG local units (0 means no parsed stroke definition). edit_parts stroke_width sets an absolute finite width in (0,1000], not canvas pixels; omitted preserves width, and a path without stroke also needs an explicit stroke color. Width changes keep path commands and transforms, but may enlarge painted bounds or be clipped by the original viewport/clips; inspect PNG and recheck fit/spacing before adoption. edit_parts proposes fill/stroke (#RRGGBB or none) local opacity (0..1) and translate [dx,dy] edits in normalized SVG root coordinates on specified paths, using sha256 and edits from parts. Shared masks, clips and pattern resources are not editable paths. Omitted attributes remain unchanged. Translation compensates ancestor scaling, rotation and reflection; paint follows the path, parent clipping and the SVG viewport stay fixed. Use preview and review the result; geometry returns numbered endpoint/control handles and command topology for one part_id and sha256 from parts. Use edit_parts points:[{index,position:[x,y]}] for sparse absolute root-coordinate control/anchor edits from geometry; at most 64 edited points on paths with at most 512 points. Keep topology and other points unchanged. Do not combine points and translate for the same path; make separate reviewed proposals. Shape edits keep paint coordinates and parent clips fixed. Read parts again after every SVG edit or replacement, including candidate edits, because IDs belong to the exact old file snapshot. palette reads a saved SVG image (or its semantic anchor) and returns actual #RRGGBB paints with a PNG preview. recolor uses colors mapping old_hex to new_hex to propose simultaneous exact paint replacements; preserves text glyphs, geometry, original author/license/source hash and unrelated image instances. Both require project_id, figure_id, expected_revision and element_id; neither requires network access. Read palette first, do not invent source colours. SVG text must already be outlined so recoloring cannot silently substitute its font. insert appends a standalone image at x/y; use replace to preserve an existing node identity. To move/resize the new image, use visualization revise_proposal with {op:set_image_geometry,id,x,y,width,height}, all JSON numbers. Native scale is only flip signs ±1, not fractional size; dimensions are width/height. Never use align-center on two images that belong under different stages. For multiple independent concepts use search_batch with queries:1..8 distinct nonblank strings (each at most 256 UTF-8 bytes); omit query. It returns four ranked hits per query with independent lexical match counts and search scope, or an explicit error. A shared catalogue failure stops the batch; remaining queries are not_attempted, never zero-hit results. Refine with search for more results and preview chosen assets; batching does not verify biological suitability. Search ranks exact names and whole name tokens before prefix/substring matches. match_summary counts all lexical tiers before pagination, not scientific identity. search_scope echoes the actual query and explicitly reports that scientific suitability and catalogue-wide absence have not been established. If exact_name and name_tokens are zero, partial matches such as raster for RAS may be irrelevant; refine the query or report that no suitable icon was confirmed among the queried results rather than inserting a superficially matching name. Keyword queries do not enumerate the entire catalogue: never turn zero hits or rejected lexical matches into a catalogue-wide absence claim. A later coverage caveat does not repair an earlier absolute statement. Search then inspect a PNG preview and per-icon author/license before selecting; do not infer scientific specificity from generic art. insert and replace create reviewable proposals on the exact current figure revision; they never commit directly. SVG remains a scalable vector image with provenance and source/normalized hashes; internal paths are not individual canvas objects. Unsupported raster/active SVG or unsupported text is rejected rather than silently dropped. Use visualization read/read_image to inspect saved objects and current revision. Preserve unrelated elements, scientific labels and arrow anchors. User must save local edits before agent modification. For insert, replace, palette, parts, geometry, recolor or edit_parts on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. Inspection returns scope/proposal/hash/file identity plus a PNG from that exact candidate, without adopting it. Changes create a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. On changes, explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Omit markup_ids on read-only inspection. Recolor and part edits require no catalog/network access. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Successful changes include candidate_context and follow_up_inputs with complete read_proposal/read_proposal_preview arguments; copy these instead of reconstructing IDs or confusing plan and figure versions. Organelle/context artwork may be inserted independently with a visible qualification; never replace a molecular node with an organelle or assign a false semanticAnchorId. Do not infer protein-specific structure or additional mechanism from generic artwork. Fresh illustration labels must remain visible within their native frame. The initial scientific-font caption may be placed above/below the artwork if its default position would clip; when no clear in-frame position can be measured, replacement fails without saving. Explicitly enlarge the frame or revise the component layout before retrying, never drop or shrink the scientific label to bypass this protection. Later replacement preserves user-positioned existing captions."
 )]
 pub struct Input {
-    #[desc = "search | preview | insert | replace | palette | recolor | parts | geometry | edit_parts"]
+    #[desc = "search | search_batch | preview | insert | replace | palette | recolor | parts | geometry | edit_parts"]
     pub action: String,
     pub query: Option<String>,
+    #[desc = "Only search/search_batch: exact author name from catalogue attribution, ignoring case/outer whitespace. Restricts every query; omit to search all authors. Same author does not guarantee matching style or scientific suitability."]
+    pub author: Option<String>,
+    #[desc = "Only for search_batch: 1..8 distinct nonblank query strings, each at most 256 UTF-8 bytes. Omit query; each result retains its own retrieval scope and lexical counts."]
+    pub queries: Option<Vec<String>>,
     pub asset_id: Option<String>,
     pub project_id: Option<String>,
     pub figure_id: Option<String>,
@@ -30,6 +34,7 @@ pub struct Input {
     #[desc = "Exact candidate document_sha256; use with proposal_id, distinct from the SVG file sha256"]
     pub document_sha256: Option<String>,
     #[desc = "Explicit review IDs to retain/address; [] explicitly drops links; omission rejects a candidate with open linked reviews"]
+    #[serde(default, deserialize_with = "crate::asset_candidate::deserialize_markup_ids")]
     pub markup_ids: Option<Vec<String>>,
     pub x: Option<f64>,
     pub y: Option<f64>,
@@ -49,6 +54,14 @@ struct BioIconsTool {
 impl ToolFunction for BioIconsTool {
     type Input = Input;
     async fn run(&self, input: Input) -> Result<ToolResult, ToolError> {
+        if let Some(author) = &input.author {
+            if !matches!(input.action.as_str(), "search" | "search_batch") || author.trim().is_empty() || author.len() > 300 {
+                return Err(error("author is only supported for search/search_batch and must be a nonblank name of at most 300 UTF-8 bytes"));
+            }
+        }
+        if input.queries.is_some() && input.action != "search_batch" {
+            return Err(error("queries is supported only for search_batch; use query for search"));
+        }
         crate::asset_candidate::validate_vector(
             &input.action,
             input.proposal_id.as_deref(),
@@ -76,20 +89,21 @@ impl ToolFunction for BioIconsTool {
                 "insert creates a new image at x/y; omit element_id or use replace for an existing object",
             ));
         }
+        if input.action == "search_batch" {
+            if input.query.is_some() {
+                return Err(error("search_batch requires queries; omit singular query"));
+            }
+            let queries=input.queries.as_deref().ok_or_else(||error("search_batch requires queries"))?;
+            crate::bioicons_batch::validate(queries).map_err(error)?;
+            let client=CLIENT.as_ref().map_err(error)?;
+            return Ok(ToolResult::success_json(crate::bioicons_batch::search_with_author(client,queries,input.author.as_deref()).await));
+        }
         let client = CLIENT.as_ref().map_err(error)?;
         if input.action == "search" {
-            return Ok(ToolResult::success_json(json!(
-                client
-                    .search(
-                        input
-                            .query
-                            .as_deref()
-                            .ok_or_else(|| error("query required"))?,
-                        0,
-                        12
-                    )
-                    .await
-                    .map_err(error)?
+            let query = input.query.as_deref().ok_or_else(|| error("query required"))?;
+            let page = client.search_with_author(query, 0, 12, input.author.as_deref()).await.map_err(error)?;
+            return Ok(ToolResult::success_json(crate::catalog_search::with_scope(
+                "BioIcons", query, json!(page),
             )));
         }
         if !matches!(input.action.as_str(), "preview" | "insert" | "replace") {
@@ -142,7 +156,8 @@ fn local_svg(path: PathBuf, input: Input) -> Result<ToolResult, ToolError> {
         input.document_sha256.as_deref(),
     )
     .map_err(error)?;
-    let store = visualization::Store::open(path).map_err(error)?;
+    let store = visualization::Store::open(path).map_err(error)?
+        .with_linear_candidate_revisions(true);
     if matches!(input.action.as_str(), "palette" | "parts" | "geometry") {
         let kind = match input.action.as_str() {
             "palette" => Inspection::Palette,
@@ -231,7 +246,8 @@ fn persist(
     let revision = input
         .expected_revision
         .ok_or_else(|| error("expected_revision required"))?;
-    let store = visualization::Store::open(path).map_err(error)?;
+    let store = visualization::Store::open(path).map_err(error)?
+        .with_linear_candidate_revisions(true);
     if store.get(&project, &figure).map_err(error)?.revision != revision {
         return Err(error(visualization::Error::Conflict));
     }
@@ -363,7 +379,9 @@ mod tests {
             path.clone(),
             Input {
                 action: "replace".into(),
+                author: None,
                 query: None,
+                queries: None,
                 asset_id: Some("fixture".into()),
                 project_id: Some("p".into()),
                 figure_id: Some(figure.id.clone()),

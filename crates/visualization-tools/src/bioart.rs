@@ -19,11 +19,13 @@ fn missing(field: &str) -> ToolError {
 }
 #[tool(
     name = "bioart",
-    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. insert and replace create reviewable proposals while preserving layout, labels and arrow anchors; they do not commit directly. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. Images remain movable/resizable; internal paths are not editable. Never infer a license when absent. Unsaved GUI edits are not available; save first and review the proposal before adoption. insert appends a standalone image at x/y; use replace for an existing semantic node. For insert or replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Successful changes include candidate_context and follow_up_inputs with complete read_proposal/read_proposal_preview arguments; copy these instead of reconstructing IDs or confusing plan and figure versions. Do not infer protein-specific structure or additional mechanism from generic artwork."
+    description = "Search NIH BioArt scientific illustration assets, insert an image, or replace a sketch placeholder. insert and replace create reviewable proposals while preserving layout, labels and arrow anchors; they do not commit directly. Search only covers the submitted keywords and available index. The result search_scope echoes the actual query and explicitly reports that scientific suitability and catalogue-wide absence have not been established. Report that no suitable asset was confirmed in those queried results when appropriate; do not claim that an asset or biological family is absent from the entire catalogue based on zero keyword hits. A later coverage caveat does not repair an earlier absolute absence statement. Search first, use preview to inspect the image and its provenance before choosing a scientifically appropriate asset, then insert using the current revision from visualization read. Retains source, creators, license and SHA-256. PNG remains a movable/resizable raster image. Set format:svg on preview/insert/replace for a normalized vector representation; missing/unsupported SVG errors explicitly without PNG fallback. After insertion, use bioicons palette/parts/geometry/recolor/edit_parts on that saved SVG regardless of catalogue origin. Internal paths remain inside one vector image, not separate canvas objects. Never infer a license when absent. Unsaved GUI edits are not available; save first and review the proposal before adoption. insert appends a standalone image at x/y; use replace for an existing semantic node. For insert or replace on a pending candidate, first use visualization read_proposal, then supply proposal_id, its exact document_sha256 and expected_revision. This creates a child candidate that preserves all previous edits and leaves the parent/formal figure untouched. Explicitly provide markup_ids to retain or drop open review links; [] intentionally drops them. Inspect the new child with visualization read_proposal_preview before adoption. Standalone image replacement keeps its image ID, viewport, rotation, flip signs, user notes and bindings. Existing crop fractions map to the new source dimensions; this is a graphical crop, not the same biological region. The new source/license and prior-source history are recorded. Inspect the candidate crop before adoption. Successful changes include candidate_context and follow_up_inputs with complete read_proposal/read_proposal_preview arguments; copy these instead of reconstructing IDs or confusing plan and figure versions. Organelle/context artwork may be inserted independently with a visible qualification; never replace a molecular node with an organelle or assign a false semanticAnchorId. Do not infer protein-specific structure or additional mechanism from generic artwork. Fresh illustration labels must remain visible within their native frame. The initial scientific-font caption may be placed above/below the artwork if its default position would clip; when no clear in-frame position can be measured, replacement fails without saving. Explicitly enlarge the frame or revise the component layout before retrying, never drop or shrink the scientific label to bypass this protection. Later replacement preserves user-positioned existing captions."
 )]
 pub struct Input {
     #[desc = "search | preview | insert | replace"]
     pub action: String,
+    #[desc = "For preview/insert/replace only: png (default) or svg. SVG must exist and pass vector normalization; no silent PNG fallback. For saved SVG palette/path edits use bioicons palette/parts/geometry/recolor/edit_parts, regardless of catalogue origin."]
+    pub format: Option<visualization_assets::bioart::Format>,
     #[desc = "Search terms; required for search"]
     pub query: Option<String>,
     #[desc = "Numeric asset ID returned by search; required for insert"]
@@ -39,6 +41,10 @@ pub struct Input {
     #[desc = "Exact parent candidate document_sha256; use only with proposal_id on insert/replace"]
     pub document_sha256: Option<String>,
     #[desc = "Explicit review IDs to retain/address; [] explicitly drops links; omission rejects a candidate with open linked reviews"]
+    #[serde(
+        default,
+        deserialize_with = "crate::asset_candidate::deserialize_markup_ids"
+    )]
     pub markup_ids: Option<Vec<String>>,
     #[desc = "Current figure revision from visualization read; required for insert"]
     pub expected_revision: Option<i64>,
@@ -71,21 +77,32 @@ impl ToolFunction for BioArtTool {
                 "insert creates a new image at x/y; omit element_id or use replace for an existing object",
             ));
         }
+        if input.format.is_some()
+            && !matches!(input.action.as_str(), "preview" | "insert" | "replace")
+        {
+            return Err(missing(
+                "format is only supported for preview, insert or replace",
+            ));
+        }
         let client = bioart::BioArtClient::new().map_err(error)?;
         if input.action == "search" {
             let query = input.query.ok_or_else(|| missing("query required"))?;
             if query.trim().is_empty() || query.len() > 300 {
                 return Err(missing("query must contain 1..300 characters"));
             }
-            return Ok(ToolResult::success_json(json!(
-                client.search(query.trim(), 0, 12).await.map_err(error)?
+            let page = client.search(query.trim(), 0, 12).await.map_err(error)?;
+            return Ok(ToolResult::success_json(crate::catalog_search::with_scope(
+                "NIH BioArt", query.trim(), json!(page),
             )));
         }
         if input.action == "preview" {
-            let asset = client
-                .canvas_image(input.asset_id.ok_or_else(|| missing("asset_id required"))?)
-                .await
-                .map_err(error)?;
+            let asset = visualization_assets::bioart::prepare(
+                &client,
+                input.asset_id.ok_or_else(|| missing("asset_id required"))?,
+                input.format.unwrap_or_default(),
+            )
+            .await
+            .map_err(error)?;
             return asset_preview(asset);
         }
         if !matches!(input.action.as_str(), "insert" | "replace") {
@@ -104,10 +121,13 @@ impl ToolFunction for BioArtTool {
         let revision = input
             .expected_revision
             .ok_or_else(|| missing("expected_revision required"))?;
-        let asset = client
-            .canvas_image(input.asset_id.ok_or_else(|| missing("asset_id required"))?)
-            .await
-            .map_err(error)?;
+        let asset = visualization_assets::bioart::prepare(
+            &client,
+            input.asset_id.ok_or_else(|| missing("asset_id required"))?,
+            input.format.unwrap_or_default(),
+        )
+        .await
+        .map_err(error)?;
         let path = self.path.clone();
         let placement = Placement {
             project,
@@ -131,9 +151,12 @@ pub fn registrations(path: PathBuf) -> Vec<ToolRegistration> {
     vec![ToolRegistration::from(BioArtTool { path })]
 }
 
-fn asset_preview(asset: bioart::CanvasImage) -> Result<ToolResult, ToolError> {
+fn asset_preview(
+    asset: impl Into<visualization_assets::bioart::PreparedAsset>,
+) -> Result<ToolResult, ToolError> {
+    let asset = asset.into();
     let data = asset
-        .data_url
+        .preview_url()
         .strip_prefix("data:image/png;base64,")
         .ok_or_else(|| missing("PNG preview unavailable"))?;
     if data.len() > 6 * 1024 * 1024 {
@@ -141,12 +164,12 @@ fn asset_preview(asset: bioart::CanvasImage) -> Result<ToolResult, ToolError> {
             "asset exceeds vision transfer limit; choose a smaller asset representation",
         ));
     }
-    let caption = json!({"asset":asset.asset,"file":asset.file,"sha256":asset.sha256,"width":asset.width,"height":asset.height});
     Ok(ToolResult::with_blocks(vec![
-        ToolResultBlock::text(caption.to_string()),
+        ToolResultBlock::text(asset.metadata().to_string()),
         ToolResultBlock::image_base64("image/png", data),
     ]))
 }
+
 struct Placement {
     project: String,
     figure: String,
@@ -162,8 +185,9 @@ struct Placement {
 fn persist_asset(
     path: PathBuf,
     placement: Placement,
-    asset: bioart::CanvasImage,
+    asset: impl Into<visualization_assets::bioart::PreparedAsset>,
 ) -> Result<serde_json::Value, ToolError> {
+    let asset = asset.into();
     let Placement {
         project,
         figure,
@@ -177,7 +201,9 @@ fn persist_asset(
         y,
     } = placement;
 
-    let store = visualization::Store::open(path).map_err(error)?;
+    let store = visualization::Store::open(path)
+        .map_err(error)?
+        .with_linear_candidate_revisions(true);
     let metadata = store.get(&project, &figure).map_err(error)?;
     if metadata.revision != revision {
         return Err(error(visualization::Error::Conflict));
@@ -197,7 +223,7 @@ fn persist_asset(
         data_url: &asset.data_url,
         width: asset.width,
         height: asset.height,
-        provenance: json!({"source":"NIH BioArt","asset":asset.asset,"file":asset.file,"sha256":asset.sha256}),
+        provenance: asset.provenance(),
     };
     if let (Some(parent_id), Some(hash)) = (&proposal_id, &document_sha256) {
         let (proposal, element_id) = if !replacement {
@@ -237,9 +263,11 @@ fn persist_asset(
             )
         }
         .map_err(error)?;
-        return Ok(
-            crate::follow_up::proposal_result(&project, &proposal, Some(&element_id)),
-        );
+        return Ok(crate::follow_up::proposal_result(
+            &project,
+            &proposal,
+            Some(&element_id),
+        ));
     }
     let current = store.revision(&project, &figure, revision).map_err(error)?;
     if replacement {
@@ -259,9 +287,11 @@ fn persist_asset(
                 markup_ids.as_deref().unwrap_or(&[]),
             )
             .map_err(error)?;
-        return Ok(
-            crate::follow_up::proposal_result(&project, &proposal, Some(&element_id)),
-        );
+        return Ok(crate::follow_up::proposal_result(
+            &project,
+            &proposal,
+            Some(&element_id),
+        ));
     }
     let (document, element_id) =
         visualization::image::insert(&current.document, image, x, y).map_err(error)?;
@@ -275,9 +305,11 @@ fn persist_asset(
             markup_ids.as_deref().unwrap_or(&[]),
         )
         .map_err(error)?;
-    Ok(
-        crate::follow_up::proposal_result(&project, &proposal, Some(&element_id)),
-    )
+    Ok(crate::follow_up::proposal_result(
+        &project,
+        &proposal,
+        Some(&element_id),
+    ))
 }
 #[cfg(test)]
 mod tests {
@@ -316,9 +348,20 @@ mod tests {
             y: 0.0,
         };
         let result = persist_asset(path.clone(), placement(), asset.clone()).unwrap();
-        let follow=serde_json::to_value(crate::registrations(path.clone()).remove(0).implementation.execute(result["follow_up_inputs"]["read_proposal"].clone()).await.unwrap()).unwrap();
+        let follow = serde_json::to_value(
+            crate::registrations(path.clone())
+                .remove(0)
+                .implementation
+                .execute(result["follow_up_inputs"]["read_proposal"].clone())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(follow["content"]["proposal"]["id"], result["proposal_id"]);
-        assert_eq!(follow["content"]["proposal"]["document_sha256"], result["document_sha256"]);
+        assert_eq!(
+            follow["content"]["proposal"]["document_sha256"],
+            result["document_sha256"]
+        );
         assert!(!result.to_string().contains("data:image"));
         assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
         let proposal = store.proposals("p", &figure.id).unwrap().remove(0);

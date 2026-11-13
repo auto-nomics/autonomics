@@ -1,4 +1,4 @@
-//! NIH catalogue access; only bounded PNG files enter the editable canvas.
+//! NIH catalogue access; bounded PNG or normalized standalone SVG.
 use axum::{
     Json,
     extract::{Path, Query},
@@ -34,8 +34,23 @@ pub(crate) async fn search(Query(query): Query<Search>) -> Response {
         .map_err(upstream)?;
     Ok(Json(json!(page)))
 }
-pub(crate) async fn image(Path(id): Path<u64>) -> Response {
+#[derive(Deserialize)]
+pub(crate) struct ImageQuery {
+    #[serde(default)]
+    format: visualization_assets::bioart::Format,
+}
+pub(crate) async fn image(Path(id): Path<u64>, Query(query): Query<ImageQuery>) -> Response {
     let client = bioart::BioArtClient::new().map_err(upstream)?;
-    let image = client.canvas_image(id).await.map_err(upstream)?;
-    Ok(Json(json!(image)))
+    let image = visualization_assets::bioart::prepare(&client, id, query.format)
+        .await
+        .map_err(|error| match error {
+            visualization_assets::Error::Invalid(_) | visualization_assets::Error::Vector(_) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error":error.to_string()})),
+            ),
+            other => upstream(other),
+        })?;
+    let mut value = json!(&image);
+    value["provenance"] = image.provenance();
+    Ok(Json(value))
 }

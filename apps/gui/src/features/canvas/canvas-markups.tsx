@@ -1,3 +1,6 @@
+import { CanvasPreview } from "./canvas-preview";
+import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
+import { useCanvasAgentHandoff, type ReviewedMarkupScene, type CanvasAgentHandoffProps } from "./use-canvas-agent-handoff";
 import { useEffect, useRef, useState } from "react";
 import { Excalidraw, sceneCoordsToViewportCoords, serializeAsJSON, viewportCoordsToSceneCoords } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
@@ -8,12 +11,15 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { markupColor, renderMarkup, type MarkupPage, type MarkupPoint, type MarkupRecord, type MarkupStroke, type MarkupSummary } from "./canvas-markup-render";
 
 type Draft = { key: string; revision: number; serialized: string; document: ExcalidrawInitialDataState };
-export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensureSaved }: {
-  projectId: string; canvasId: string; getApi: () => ExcalidrawImperativeAPI | null;
-  getRevision: () => number | undefined; ensureSaved: () => Promise<boolean>;
-}) {
-  const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+export function CanvasMarkups(props: CanvasAgentHandoffProps) {
+  const { projectId, canvasId, getApi, getRevision, ensureSaved } = props;
+  const runtime = useWorkbenchRuntime(), [target, setTarget] = useState(runtime.activeAgent || runtime.agents[0]?.path || "");
+  const handoff = useCanvasAgentHandoff({ ...props, target });
+  const [open, setOpen] = useState(false), [working, setBusy] = useState(false), [error, setError] = useState("");
+  const busy = working || handoff.busy;
   const [items, setItems] = useState<MarkupSummary[]>([]), [selected, setSelected] = useState<MarkupRecord | null>(null);
+  const [currentReview, setCurrentReview] = useState<(ReviewedMarkupScene & { markupId: string; key: string; document: ExcalidrawInitialDataState }) | null>(null);
+  const [showCurrent, setShowCurrent] = useState(false), [historyConfirmed, setHistoryConfirmed] = useState(false);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [status, setStatus] = useState("all");
   const [draft, setDraft] = useState<Draft | null>(null), [note, setNote] = useState("");
@@ -41,11 +47,12 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
   };
   async function start() {
     if (!discard()) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); handoff.clearError();
     try {
       if (!await ensureSaved()) throw new Error("请先解决画布保存错误。");
       const api = getApi(), revision = getRevision(); if (!api || revision === undefined) throw new Error("画布尚未就绪");
       const serialized = serializeAsJSON(api.getSceneElements(), api.getAppState(), api.getFiles(), "local");
+      setCurrentReview(null); setHistoryConfirmed(false); setShowCurrent(false);
       reviewApi.current = null; fitted.current = false; setReady(false); ink.current = null; setActive(null); setNavigating(false); setStrokes([]); setNote(""); setSelected(null);
       setDraft({ key: crypto.randomUUID(), revision, serialized, document: { ...JSON.parse(serialized), scrollToContent: true } });
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
@@ -68,25 +75,9 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
     if (stroke.kind === "cross") return <path key={index} {...style} d={`M${a.join(",")}L${b.join(",")}M${a[0]},${b[1]}L${b[0]},${a[1]}`} />;
     return <polyline key={index} {...style} strokeLinejoin="round" strokeLinecap="round" points={points.map(point => point.join(",")).join(" ")} />;
   }
-  return <Dialog open={open} onOpenChange={value => { if (!busy && (!value ? discard() : true)) { setOpen(value); if (!value) { setDraft(null); setSelected(null); ink.current = null; setActive(null); } } }}>
-    <Button size="sm" variant="outline" disabled={busy || getRevision() === undefined} onClick={async () => { setOpen(true); try { await load(); } catch (cause) { setError(String(cause)); } }}>草图标记</Button>
-    <DialogContent showCloseButton={false} className="flex h-[90vh] w-[95vw] max-w-none flex-col gap-0 overflow-hidden border bg-background p-0 sm:max-w-none">
-      <div className="flex items-center justify-between border-b p-3"><DialogTitle>草图标记与审阅</DialogTitle><Button size="sm" variant="outline" disabled={busy} onClick={() => { if (discard()) { setOpen(false); setDraft(null); ink.current = null; } }}>关闭标记</Button></div>
-      {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
-      <div className="flex min-h-0 flex-1"><aside className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r p-3">
-        <Button size="sm" disabled={busy} onClick={() => void start()}>新建标记</Button>
-        <p className="text-xs text-muted-foreground">笔迹与说明独立保存，不进入正式图稿或导出。可筛选待处理意见并加载更早记录。</p>
-        <label className="text-sm">标记状态<select aria-label="标记状态" className="mt-1 w-full rounded border bg-background p-1" value={status} disabled={busy} onChange={async event => {
-          const filter = event.target.value; setBusy(true); setError("");
-          try { await load(undefined, filter); setStatus(filter); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-        }}><option value="all">全部标记</option><option value="open">待处理</option><option value="resolved">已处理</option></select></label>
-        {draft && <><p className="text-xs">正在审阅 v{draft.revision}</p><div className="flex flex-wrap gap-1">{([['draw', '补画'], ['cross', '划除'], ['emphasis', '强调']] as const).map(([kind, label]) => <Button key={kind} size="sm" variant={!navigating && mode === kind ? "default" : "outline"} disabled={busy} onClick={() => { setMode(kind); setNavigating(false); }}>{label}</Button>)}</div>
-          <Button size="sm" variant={navigating ? "default" : "outline"} disabled={busy} onClick={() => setNavigating(value => !value)}>浏览与缩放</Button>
-          <Button size="sm" variant="outline" disabled={busy || !strokes.length} onClick={() => setStrokes(items => items.slice(0, -1))}>撤销笔迹</Button>
-          <label className="text-sm">修改说明<textarea aria-label="标记修改说明" maxLength={4000} value={note} onChange={event => setNote(event.target.value)} className="mt-1 min-h-24 w-full rounded border bg-background p-2" /></label>
-          <Button size="sm" disabled={busy || !ready || !note.trim() || !strokes.length} onClick={async () => {
+  async function save(prepareAfter: boolean) {
             const api = reviewApi.current, source = getApi(); if (!draft || !api || !source || busy) return;
-            setBusy(true); setError("");
+            setBusy(true); setError(""); handoff.clearError();
             try {
               const unchanged = () => getRevision() === draft.revision && serializeAsJSON(source.getSceneElements(), source.getAppState(), source.getFiles(), "local") === draft.serialized;
               if (!unchanged()) throw new Error("正式画布已发生变化，请重新建立标记。");
@@ -95,16 +86,47 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
               const saved = await gatewayRequest("POST", path, { expected_revision: draft.revision, note: note.trim(), strokes, dataURL }) as MarkupSummary;
               setDraft(null); setStrokes([]); setActive(null); ink.current = null;
               setSelected({ ...saved, strokes, dataURL }); await load();
+              if (prepareAfter) {
+                if (await handoff.prepare(saved.note, undefined, saved)) setOpen(false);
+                else setError("标记已保存，Agent 草稿未准备成功；请从已保存记录重试。");
+              }
             } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-          }}>{busy ? "保存中…" : "保存草图标记"}</Button></>}
-        {items.map(item => <article key={item.id} className="rounded border p-2"><p className="whitespace-pre-wrap text-sm">{item.note}</p><p className="my-1 text-xs text-muted-foreground">v{item.at_revision} · {item.stroke_count} 处标记 · {item.status === "resolved" ? "已处理" : "待处理"}</p><div className="flex gap-1"><Button size="sm" variant="outline" disabled={busy} onClick={async () => {
-          if (!discard()) return; setBusy(true); setError("");
-          try { const record = await gatewayRequest("GET", `${path}/${encodeURIComponent(item.id)}`) as MarkupRecord; setDraft(null); setSelected(record); setStrokes([]); ink.current = null; setActive(null); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-        }}>查看标记</Button>{item.status !== "resolved" && <Button size="sm" variant="outline" disabled={busy} onClick={async () => {
-          setBusy(true); setError(""); try { await gatewayRequest("POST", `${path}/${encodeURIComponent(item.id)}/resolve`); await load(); setSelected(current => current?.id === item.id ? { ...current, status: "resolved" } : current); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+  }
+  async function prepareSaved(item: MarkupSummary) {
+    if (!discard()) return;
+    setBusy(true); setError(""); handoff.clearError();
+    try {
+      if (await handoff.prepare(item.note, undefined, item, historyConfirmed && currentReview?.markupId === item.id ? currentReview : undefined)) { setDraft(null); setStrokes([]); setActive(null); ink.current = null; setOpen(false); }
+    } finally { setBusy(false); }
+  }
+  return <Dialog open={open} onOpenChange={value => { if (!busy && (!value ? discard() : true)) { setOpen(value); if (!value) { setDraft(null); setSelected(null); ink.current = null; setActive(null); } } }}>
+    <Button size="sm" variant="outline" disabled={busy || getRevision() === undefined} onClick={async () => { setOpen(true); try { await load(); } catch (cause) { setError(String(cause)); } }}>草图标记</Button>
+    <DialogContent showCloseButton={false} className="flex h-[90vh] w-[95vw] max-w-none flex-col gap-0 overflow-hidden border bg-background p-0 sm:max-w-none">
+      <div className="flex items-center justify-between border-b p-3"><DialogTitle>草图标记与审阅</DialogTitle><Button size="sm" variant="outline" disabled={busy} onClick={() => { if (discard()) { setOpen(false); setDraft(null); ink.current = null; } }}>关闭标记</Button></div>
+      {(error || handoff.error) && <p role="alert" className="p-2 text-sm text-destructive">{[error, handoff.error].filter(Boolean).join("；")}</p>}
+      <div className="flex min-h-0 flex-1"><aside className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r p-3">
+        <Button size="sm" disabled={busy} onClick={() => void start()}>新建标记</Button>
+        <label className="text-sm">修改 Agent<select aria-label="标记修改 Agent" className="mt-1 w-full rounded border bg-background p-1" value={target} disabled={busy} onChange={event => setTarget(event.target.value)}><option value="">选择 Agent</option>{runtime.agents.map(agent => <option key={agent.path} value={agent.path}>{agent.path}</option>)}</select></label>
+        <p className="text-xs text-muted-foreground">可保存标记并直接准备修改草稿，检查后再发送给所选 Agent；不会自动采用或完成标记。交接失败后可从已保存记录重试。</p>
+        <p className="text-xs text-muted-foreground">笔迹与说明独立保存，不进入正式图稿或导出。可筛选待处理意见并加载更早记录。</p>
+        <label className="text-sm">标记状态<select aria-label="标记状态" className="mt-1 w-full rounded border bg-background p-1" value={status} disabled={busy} onChange={async event => {
+          const filter = event.target.value; setBusy(true); setError(""); handoff.clearError();
+          try { await load(undefined, filter); setStatus(filter); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+        }}><option value="all">全部标记</option><option value="open">待处理</option><option value="resolved">已处理</option></select></label>
+        {draft && <><p className="text-xs">正在审阅 v{draft.revision}</p><div className="flex flex-wrap gap-1">{([['draw', '补画'], ['cross', '划除'], ['emphasis', '强调']] as const).map(([kind, label]) => <Button key={kind} size="sm" variant={!navigating && mode === kind ? "default" : "outline"} disabled={busy} onClick={() => { setMode(kind); setNavigating(false); }}>{label}</Button>)}</div>
+          <Button size="sm" variant={navigating ? "default" : "outline"} disabled={busy} onClick={() => setNavigating(value => !value)}>浏览与缩放</Button>
+          <Button size="sm" variant="outline" disabled={busy || !strokes.length} onClick={() => setStrokes(items => items.slice(0, -1))}>撤销笔迹</Button>
+          <label className="text-sm">修改说明<textarea aria-label="标记修改说明" disabled={busy} maxLength={4000} value={note} onChange={event => setNote(event.target.value)} className="mt-1 min-h-24 w-full rounded border bg-background p-2" /></label>
+          <Button size="sm" disabled={busy || !ready || !note.trim() || !strokes.length} onClick={() => void save(false)}>{busy ? "保存中…" : "保存草图标记"}</Button>
+          <Button size="sm" disabled={busy || !handoff.targetAvailable || !ready || !note.trim() || !strokes.length} onClick={() => void save(true)}>保存标记并准备 Agent 修改</Button></>}
+        {items.map(item => <article key={item.id} className="rounded border p-2"><p className="whitespace-pre-wrap text-sm">{item.note}</p><p className="my-1 text-xs text-muted-foreground">v{item.at_revision} · {item.stroke_count} 处标记 · {item.status === "resolved" ? "已处理" : "待处理"}</p><div className="flex flex-wrap gap-1"><Button size="sm" variant="outline" disabled={busy} onClick={async () => {
+          if (!discard()) return; setBusy(true); setError(""); handoff.clearError();
+          try { const record = await gatewayRequest("GET", `${path}/${encodeURIComponent(item.id)}`) as MarkupRecord; setDraft(null); setSelected(record); setCurrentReview(null); setHistoryConfirmed(false); setShowCurrent(false); setStrokes([]); ink.current = null; setActive(null); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+        }}>查看标记</Button>{item.status === "open" && <Button size="sm" variant="outline" disabled={busy || !handoff.targetAvailable || item.at_revision !== getRevision() && !(selected?.id === item.id && historyConfirmed && currentReview?.markupId === item.id && currentReview.revision === getRevision())} onClick={() => void prepareSaved(item)}>用此标记准备修改</Button>}{item.status !== "resolved" && <Button size="sm" variant="outline" disabled={busy} onClick={async () => {
+          setBusy(true); setError(""); handoff.clearError(); try { await gatewayRequest("POST", `${path}/${encodeURIComponent(item.id)}/resolve`); await load(); setSelected(current => current?.id === item.id ? { ...current, status: "resolved" } : current); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
         }}>完成标记</Button>}</div></article>)}
         {nextBefore && <Button size="sm" variant="outline" disabled={busy} onClick={async () => {
-          setBusy(true); setError(""); try { await load(nextBefore); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+          setBusy(true); setError(""); handoff.clearError(); try { await load(nextBefore); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
         }}>加载更早标记</Button>}
       </aside><section aria-label="草图标记预览" className="relative min-h-0 min-w-0 flex-1 bg-white">
         {draft ? <><Excalidraw key={draft.key} initialData={draft.document} excalidrawAPI={api => { reviewApi.current = api; }} viewModeEnabled zenModeEnabled handleKeyboardGlobally={false} langCode="zh-CN" onChange={(elements, state, files) => {
@@ -128,7 +150,16 @@ export function CanvasMarkups({ projectId, canvasId, getApi, getRevision, ensure
             if (!stroke.points.some(point => Math.hypot(point[0] - first[0], point[1] - first[1]) > 2) || stroke.kind !== "draw" && (Math.abs(first[0] - last[0]) < 2 || Math.abs(first[1] - last[1]) < 2)) return;
             if (strokes.reduce((sum, item) => sum + item.points.length, 0) + stroke.points.length > 10000) { setError("笔迹过多，请先保存现有标记。"); return; }
             setStrokes(items => [...items, stroke]);
-          }}><rect width="100%" height="100%" fill="transparent" />{[...strokes, ...(active ? [active] : [])].map(renderStroke)}</svg></> : selected ? <div className="flex h-full flex-col"><p className="border-b bg-background p-2 text-sm">v{selected.at_revision} 的标记预览{selected.at_revision !== getRevision() ? " · 历史版本，请与当前画布核对" : ""}</p><img alt="已保存的草图标记" src={selected.dataURL} className="min-h-0 w-full flex-1 object-contain" /></div> : <p className="p-4 text-sm text-slate-600">新建一组标记，或查看已保存的审阅记录。</p>}
+          }}><rect width="100%" height="100%" fill="transparent" />{[...strokes, ...(active ? [active] : [])].map(renderStroke)}</svg></> : selected ? <div className="flex h-full flex-col"><div className="shrink-0 space-y-2 border-b bg-background p-2 text-sm"><p>{showCurrent && currentReview?.markupId === selected.id ? `当前图稿核对快照 v${currentReview.revision} · 标记来自 v${selected.at_revision}` : `v${selected.at_revision} 的标记预览${selected.at_revision !== getRevision() ? " · 历史版本，请与当前画布核对" : ""}`}</p>{showCurrent && currentReview && currentReview.revision !== getRevision() && <p role="status">核对快照已过期，请重新对照当前图稿。</p>}{selected.at_revision !== getRevision() && <><div className="flex flex-wrap gap-2"><Button size="sm" variant={showCurrent ? "outline" : "secondary"} aria-pressed={!showCurrent} disabled={busy} onClick={() => setShowCurrent(false)}>查看历史标记</Button><Button size="sm" variant={showCurrent ? "secondary" : "outline"} aria-pressed={showCurrent} disabled={busy} onClick={async () => {
+              setBusy(true); setError(""); handoff.clearError(); setHistoryConfirmed(false);
+              try {
+                if (!await ensureSaved()) throw new Error("请先解决画布保存错误。");
+                const api = getApi(), revision = getRevision(); if (!api || revision === undefined) throw new Error("画布尚未就绪");
+                const serialized = serializeAsJSON(api.getSceneElements(), api.getAppState(), api.getFiles(), "local");
+                setCurrentReview({ markupId: selected.id, key: crypto.randomUUID(), revision, serialized, document: { ...JSON.parse(serialized), scrollToContent: true } }); setShowCurrent(true);
+              } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
+            }}>对照当前图稿</Button></div><p className="text-xs text-muted-foreground">先查看历史标记，再对照当前图稿确认本轮意图；旧笔迹不代表当前对象位置。图稿更新后需要重新核对。</p>{currentReview?.markupId === selected.id && currentReview.revision === getRevision() && <label className="flex items-center gap-2"><input type="checkbox" aria-label="已核对历史标记与当前图稿" disabled={busy} checked={historyConfirmed} onChange={event => setHistoryConfirmed(event.target.checked)} />我已核对这条历史标记与当前 v{currentReview.revision} 图稿</label>}</>}</div>
+            {showCurrent && currentReview?.markupId === selected.id ? <div className="min-h-0 flex-1" role="region" aria-label="当前图稿核对快照"><CanvasPreview key={currentReview.key} document={currentReview.document} viewportZoomFactor={0.9} /></div> : <img alt="已保存的草图标记" src={selected.dataURL} className="min-h-0 w-full flex-1 object-contain" />}</div> : <p className="p-4 text-sm text-slate-600">新建一组标记，或查看已保存的审阅记录。</p>}
       </section></div>
     </DialogContent>
   </Dialog>;

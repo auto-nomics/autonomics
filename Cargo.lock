@@ -11888,6 +11888,7 @@ dependencies = [
  "async-trait",
  "dag-core",
  "datafusion",
+ "httpdate",
  "reqwest 0.13.5",
  "schemars 1.2.2",
  "serde",
@@ -16164,12 +16165,16 @@ name = "visualization-assets"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "bioart",
  "bioicons",
  "chrono",
  "image",
+ "schemars 1.2.2",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
+ "tokio",
  "visualization",
 ]
 
@@ -16195,6 +16200,7 @@ dependencies = [
  "tokio",
  "visualization",
  "visualization-assets",
+ "wiremock",
 ]
 
 [[package]]

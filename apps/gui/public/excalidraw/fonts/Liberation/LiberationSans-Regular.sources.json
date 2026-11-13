@@ -10,6 +10,10 @@
   "cjk_weight": 400,
   "cjk_ranges": [
     [
+      "0x2460",
+      "0x24ff"
+    ],
+    [
       "0x2e80",
       "0x2fff"
     ],
@@ -51,7 +55,7 @@
     ]
   ],
   "latin_codepoints": 2327,
-  "added_cjk_codepoints": 28642,
-  "glyphs": 30853,
-  "sha256": "02b768546998e43f538442bbc1209c5154c3e9988255dbf2dad72a9396411261"
+  "added_cjk_codepoints": 28802,
+  "glyphs": 31013,
+  "sha256": "9f643d5ffba0e0b4b0c6fdd1ab391a3ba014009717c04ebdd070dc3cc7441c30"
 }

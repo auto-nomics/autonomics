@@ -44,6 +44,7 @@ fn cumulative_materialization_preserves_parent_edits_graph_files_and_formal_revi
             x: 0.,
             y: 800.,
             max_width: 600.,
+            fit_width: false,
             font_size: Some(16.),
             frame_id: None,
         }],

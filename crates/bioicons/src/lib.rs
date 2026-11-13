@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use tokio::sync::OnceCell;
 use url::Url;
 pub mod vector;
+mod vector_cache;
 pub mod parts;
 pub mod geometry;
 pub const DEFAULT_ENDPOINT: &str = "https://bioicons.com/";
@@ -36,7 +37,36 @@ pub struct SearchPage {
     pub total: usize,
     pub start: usize,
     pub assets: Vec<Asset>,
+    pub match_summary: SearchMatchSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_filter: Option<String>,
 }
+/// Counts cover all lexical matches before pagination, not biological identity.
+#[derive(Debug, Default, Serialize)]
+pub struct SearchMatchSummary {
+    pub exact_name: usize,
+    pub name_tokens: usize,
+    pub name_prefix: usize,
+    pub name_substring: usize,
+    pub metadata_tokens: usize,
+    pub metadata_substring: usize,
+}
+// Lexical relevance only. Exact names and complete name tokens precede
+// prefixes/substrings; matching an icon does not establish scientific identity.
+fn search_rank(asset: &Asset, terms: &[String]) -> u8 {
+    let name = asset.name.to_lowercase().replace('_', " ");
+    let words = |text: &str| text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty()).map(str::to_owned).collect::<Vec<_>>();
+    let tokens = words(&name);
+    if name.trim() == terms.join(" ") { return 0; }
+    if terms.iter().all(|term| tokens.contains(term)) { return 1; }
+    if terms.iter().all(|term| tokens.iter().any(|word| word.starts_with(term))) { return 2; }
+    if terms.iter().all(|term| name.contains(term)) { return 3; }
+    let hay = format!("{} {} {}", name, asset.category, asset.author).to_lowercase();
+    let tokens = words(&hay);
+    if terms.iter().all(|term| tokens.contains(term)) { 4 } else { 5 }
+}
+
 #[derive(Deserialize)]
 struct Row {
     name: String,
@@ -49,6 +79,7 @@ pub struct BioIconsClient {
     http: reqwest::Client,
     endpoint: Url,
     catalog: Arc<OnceCell<Vec<Asset>>>,
+    vectors: Arc<tokio::sync::Mutex<vector_cache::VectorCache>>,
 }
 impl BioIconsClient {
     pub fn new() -> Result<Self> {
@@ -74,6 +105,7 @@ impl BioIconsClient {
                 .build()?,
             endpoint,
             catalog: Arc::new(OnceCell::new()),
+            vectors: Arc::new(tokio::sync::Mutex::new(vector_cache::VectorCache::default())),
         })
     }
     async fn bytes(&self, url: Url, limit: usize) -> Result<Vec<u8>> {
@@ -181,6 +213,15 @@ impl BioIconsClient {
         })
     }
     pub async fn search(&self, query: &str, start: usize, limit: usize) -> Result<SearchPage> {
+        self.search_with_author(query, start, limit, None).await
+    }
+    /// Exact author-name filter, ignoring case and surrounding whitespace.
+    /// This restricts attribution, not scientific identity or visual style.
+    pub async fn search_with_author(&self, query: &str, start: usize, limit: usize, author: Option<&str>) -> Result<SearchPage> {
+        if author.is_some_and(|a| a.trim().is_empty() || a.len() > 300) {
+            return Err(Error::Invalid("author must be a nonblank name of at most 300 UTF-8 bytes".into()));
+        }
+        let author = author.map(str::trim);
         if query.trim().is_empty() || query.len() > 300 || limit == 0 || limit > 100 {
             return Err(Error::Invalid(
                 "requires a query of 1..300 bytes and limit 1..100".into(),
@@ -191,10 +232,11 @@ impl BioIconsClient {
             .split_whitespace()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let matches = self
+        let mut matches = self
             .catalogue()
             .await?
             .iter()
+            .filter(|a| author.is_none_or(|name| a.author.to_lowercase() == name.to_lowercase()))
             .filter(|a| {
                 let hay = format!("{} {} {}", a.name, a.category, a.author)
                     .to_lowercase()
@@ -202,7 +244,24 @@ impl BioIconsClient {
                 terms.iter().all(|t| hay.contains(t))
             })
             .collect::<Vec<_>>();
+        // Stable sort preserves catalogue order for equal relevance and keeps
+        // pagination deterministic for a fixed catalogue snapshot.
+        matches.sort_by_key(|asset| search_rank(asset, &terms));
+        let mut match_summary = SearchMatchSummary::default();
+        for asset in &matches {
+            let count = match search_rank(asset, &terms) {
+                0 => &mut match_summary.exact_name,
+                1 => &mut match_summary.name_tokens,
+                2 => &mut match_summary.name_prefix,
+                3 => &mut match_summary.name_substring,
+                4 => &mut match_summary.metadata_tokens,
+                _ => &mut match_summary.metadata_substring,
+            };
+            *count += 1;
+        }
         Ok(SearchPage {
+            author_filter: author.map(str::to_owned),
+            match_summary,
             total: matches.len(),
             start,
             assets: matches
@@ -214,6 +273,7 @@ impl BioIconsClient {
         })
     }
     pub async fn vector(&self, id: &str) -> Result<vector::VectorAsset> {
+        if let Some(asset) = self.vectors.lock().await.get(id) { return Ok(asset); }
         let asset = self
             .catalogue()
             .await?
@@ -227,8 +287,10 @@ impl BioIconsClient {
                 4 * 1024 * 1024,
             )
             .await?;
-        tokio::task::spawn_blocking(move || vector::prepare(asset, &bytes))
+        let prepared = tokio::task::spawn_blocking(move || vector::prepare(asset, &bytes))
             .await
-            .map_err(|e| Error::Invalid(e.to_string()))?
+            .map_err(|e| Error::Invalid(e.to_string()))??;
+        self.vectors.lock().await.insert(id.to_owned(), prepared.clone());
+        Ok(prepared)
     }
 }

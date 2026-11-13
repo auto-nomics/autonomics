@@ -1,5 +1,7 @@
 //! Shared API/agent operations over current SVG files, independent of web UI.
 pub mod candidate;
+mod rendered_bounds;
+pub mod bioart;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -7,6 +9,8 @@ use std::collections::BTreeMap;
 use visualization::{Store, image};
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    BioArt(#[from] ::bioart::Error),
     #[error(transparent)]
     Store(#[from] visualization::Error),
     #[error(transparent)]
@@ -221,7 +225,13 @@ pub fn image_info(
     target: &str,
 ) -> Result<Value> {
     let document = current(store, project, figure, revision)?;
-    let source = image::element(&document, target)?;
+    let mut info = image_info_document(&document, target)?;
+    info["revision"] = json!(revision);
+    Ok(info)
+}
+/// Inspect exactly the supplied image snapshot; the caller must validate its scope.
+pub fn image_info_document(document: &Value, target: &str) -> Result<Value> {
+    let source = image::element(document, target)?;
     let file = source["fileId"]
         .as_str()
         .ok_or(Error::Invalid("image has no file"))?;
@@ -237,23 +247,28 @@ pub fn image_info(
     let bytes = STANDARD
         .decode(data)
         .map_err(|_| Error::Invalid("invalid image encoding"))?;
-    let (width, height) = if header == "data:image/svg+xml;base64" {
+    let (width, height, svg_alpha_bounds) = if header == "data:image/svg+xml;base64" {
         let v = bioicons::vector::normalize(&bytes)?;
-        (v.width, v.height)
+        let bounds = rendered_bounds::preview_alpha_bounds(&v.preview_data_url)?;
+        (v.width, v.height, Some(bounds))
     } else {
-        ::image::ImageReader::new(std::io::Cursor::new(&bytes))
+        let (width,height) = ::image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()
             .map_err(|_| Error::Invalid("invalid image header"))?
             .into_dimensions()
-            .map_err(|_| Error::Invalid("unsupported image dimensions"))?
+            .map_err(|_| Error::Invalid("unsupported image dimensions"))?;
+        (width,height,None)
     };
     if width == 0 || height == 0 || width > 100000 || height > 100000 {
         return Err(Error::Invalid("invalid natural image size"));
     }
     let crop = visualization::inset::crop(source, width, height)?;
-    Ok(
-        json!({"element_id":source["id"],"revision":revision,"natural_width":width,"natural_height":height,"visible_crop":crop,"scale":source["scale"],"angle":source["angle"],"sha256":format!("{:x}",Sha256::digest(&bytes)),"dataURL":url,"provenance":source["customData"]}),
-    )
+    let mut info=json!({"file_id":file,"element_id":source["id"],"natural_width":width,"natural_height":height,"visible_crop":crop,"scale":source["scale"],"angle":source["angle"],"sha256":format!("{:x}",Sha256::digest(&bytes)),"dataURL":url,"provenance":source["customData"]});
+    if let Some(mut bounds)=svg_alpha_bounds {
+        bounds["file_sha256"]=info["sha256"].clone();
+        info["svg_preview_alpha_bounds"]=bounds;
+    }
+    Ok(info)
 }
 pub fn inset(
     store: &Store,

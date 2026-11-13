@@ -21,8 +21,9 @@ for (const secret of ['PRIVATE-NOTE', 'PRIVATE-MODIFICATION-NOTE', 'PRIVATE-SHAP
 const nih = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'nih', type: 'image', customData: { source: 'NIH BioArt', asset: { title: 'Cell', creators: ['NIH Artist'], licenses: ['Public Domain'], source_url: 'https://bioart.niaid.nih.gov/bioart/82' } } }] }), title: '', unsaved_changes: false });
 assert.deepEqual(nih.assets[0].licenses, ['Public Domain']); assert.deepEqual(nih.assets[0].license_urls, [], 'do not infer a CC0 licence from Public Domain');
 assert.ok(nih.credits[0].includes('NIH Artist'));
-const local = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'local', type: 'image', customData: { modifications: [{ kind: 'path_edit', edits: [{ part_id: 'snapshot-part-1', translate: [12, -8], points: [{ index: 2, position: [3, 4], private_note: 'PRIVATE-PATH-NOTE' }], stroke: '#224466', opacity: 0.4, private_note: 'PRIVATE-PATH-NOTE' }] }] } }] }), title: '', unsaved_changes: false });
+const local = await createSourceManifest({ scene: JSON.stringify({ elements: [{ id: 'local', type: 'image', customData: { modifications: [{ kind: 'path_edit', edits: [{ part_id: 'snapshot-part-1', translate: [12, -8], points: [{ index: 2, position: [3, 4], private_note: 'PRIVATE-PATH-NOTE' }], stroke: '#224466', stroke_width: 2.5, opacity: 0.4, private_note: 'PRIVATE-PATH-NOTE' }] }] } }] }), title: '', unsaved_changes: false });
 assert.equal(local.assets[0].modifications[0].edits[0].stroke, '#224466');
+assert.equal(local.assets[0].modifications[0].edits[0].stroke_width, 2.5);
 assert.equal(local.assets[0].modifications[0].edits[0].opacity, 0.4);
 assert.deepEqual(local.assets[0].modifications[0].edits[0].translate, [12, -8]);
 assert.deepEqual(local.assets[0].modifications[0].edits[0].points, [{ index: 2, position: [3, 4] }]);
@@ -90,4 +91,9 @@ const nullCollision=structuredClone(historyScene);nullCollision.elements.push({i
 const historyPng=Buffer.from(await(await embedPngSources(new Blob([png]),historical)).arrayBuffer());assert.deepEqual(JSON.parse(chunks(historyPng).find(chunk=>chunk.type==='iTXt').body.subarray('autonomics.asset-sources'.length+5).toString()),historical);
 console.log('canvas-sources: historical/current attribution separation, archived hash/missing/tamper status, bounded recent history, invalid records, private field exclusion and PNG transport passed');
 
+}
+
+for(const stroke_width of [0,-1,1001,'2','PRIVATE-WIDTH']){
+ const manifest=await createSourceManifest({scene:JSON.stringify({elements:[{id:'local',type:'image',customData:{modifications:[{kind:'path_edit',edits:[{part_id:'p',stroke_width}]}]}}]}),title:'',unsaved_changes:false});
+ assert.equal(manifest.assets[0].modifications[0].edits[0].stroke_width,null);
 }

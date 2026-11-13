@@ -1,5 +1,46 @@
+import {finalizeFreshFigure} from './helpers/canvas-live-full-finalize.mjs';
+import {runLiveApoptosisMaterialize} from './helpers/canvas-live-apoptosis-materialize.mjs';
+import {runLiveCropRepair} from './helpers/canvas-live-crop-repair.mjs';
+import {runLiveStyleAuthor} from './helpers/canvas-live-style-author.mjs';
+import {runLiveFramePack} from './helpers/canvas-live-frame-pack.mjs';
+import {runLiveCheckpointResume} from './helpers/canvas-live-checkpoint-resume.mjs';
+import {runLiveSvgRefit} from './helpers/canvas-live-svg-refit.mjs';
+import {runLiveStrokeWidth} from './helpers/canvas-live-stroke-width.mjs';
+import {runLiveCaptionPosition} from './helpers/canvas-live-caption-position.mjs';
+import {runLiveBatchSearch} from './helpers/canvas-live-batch-search.mjs';
+import {runLiveFramePosition} from './helpers/canvas-live-frame-position.mjs';
+import {runLivePaintedReview} from './helpers/canvas-live-painted-review.mjs';
+import {runLiveMaterializationRoleRepair} from './helpers/canvas-live-materialization-role-repair.mjs';
+import {runLiveWholeMaterialization} from './helpers/canvas-live-whole-materialization.mjs';
+import {tgfbScenario} from './helpers/canvas-tgfb-evidence.mjs';
+import {runLiveCircleAnnotation} from './helpers/canvas-live-circle-annotation.mjs';
+import {runLiveGenericProtein} from './helpers/canvas-live-generic-protein.mjs';
+import {runLiveRasSearch} from './helpers/canvas-live-ras-search.mjs';
+import {runLiveCaptionColumn} from './helpers/canvas-live-caption-column.mjs';
+import {runLiveFrameSwap} from './helpers/canvas-live-frame-swap.mjs';
+import {runLiveCaptionWidth} from './helpers/canvas-live-caption-width.mjs';
+import {runLiveFrameFit} from './helpers/canvas-live-frame-fit.mjs';
+import {runLiveResidueReview} from './helpers/canvas-live-residue-review.mjs';
+import {runLiveCandidatePosition} from './helpers/canvas-live-candidate-position.mjs';
+import {readCanvasPreparedContext} from './helpers/canvas-prepared-context.mjs';
+import {runLiveMarkupPosition} from './helpers/canvas-live-markup-position.mjs';
+import {runLiveRelationReview} from './helpers/canvas-live-relation-review.mjs';
+import {runLivePlanReview} from "./helpers/canvas-live-plan-review.mjs";
+import { runLiveContextArtwork } from './helpers/canvas-live-context-artwork.mjs';
+import { apoptosisScenario } from './helpers/canvas-apoptosis-evidence.mjs';
+import { egfrScenario } from './helpers/canvas-egfr-evidence.mjs';
+import { runLiveFormalSourceReview } from './helpers/canvas-live-formal-source-review.mjs';
+import { summarizeLiveTiming } from './helpers/canvas-live-timing.mjs';
+import { evaluationConfig } from './helpers/canvas-live-config.mjs';
+import { runLiveRouteReview } from "./helpers/canvas-live-route-review.mjs";
+import { runLiveReference } from "./helpers/canvas-live-reference.mjs";
+import { installLiveProgress, readLiveProgress } from './helpers/canvas-live-progress.mjs';
+import { runLiveReviewedRepair } from "./helpers/canvas-live-reviewed-repair.mjs";
+import { runLiveEvidenceWorkflow } from "./helpers/canvas-live-evidence-workflow.mjs";
+import { retainAgentEvidence, retainFigureEvidence } from './helpers/live-agent-evidence.mjs';
+import { observeLiveAgent } from './helpers/live-agent-observer.mjs';
 import { runLiveIfngArt } from "./helpers/canvas-live-ifng-art.mjs";
-import { runLiveSourceReview } from "./helpers/canvas-live-source-review.mjs";
+import { runLiveSourceReview, retrievalScopeReview } from "./helpers/canvas-live-source-review.mjs";
 import { runLiveEvidencePlanning } from './helpers/canvas-live-evidence.mjs';
 import { runLiveComposition } from './helpers/canvas-live-compose.mjs';
 // Opt-in real Agent + configured provider + tools + SQLite + GUI integration.
@@ -7,7 +48,8 @@ import { runLiveComposition } from './helpers/canvas-live-compose.mjs';
 // Model responses are never scripted.
 import { chromium } from 'playwright';
 import { runCandidateRevision } from './helpers/canvas-live-candidate.mjs';
-import { runLiveSvgRefinement } from './helpers/canvas-live-svg.mjs';
+import { runLiveSvgVisibleRepair } from './helpers/canvas-live-svg-visible.mjs';
+import { runLiveSvgRefinement, runLiveBioartSvgAcquisition } from './helpers/canvas-live-svg.mjs';
 import { runLiveIllustrationFit } from './helpers/canvas-live-fit.mjs';
 import { runCandidateMaterialization } from './helpers/canvas-live-materialize.mjs';
 import { runScientificCase } from './helpers/canvas-live-scientific.mjs';
@@ -18,11 +60,50 @@ import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+const evaluationSettings=evaluationConfig(process.env);
+const planReviewSource=process.env.VISUALIZATION_LIVE_PLAN_REVIEW_SOURCE;
+assert.ok(process.env.VISUALIZATION_LIVE_PLAN_REVIEW_BATCH!=='1'||(process.env.VISUALIZATION_LIVE_PLAN_REVIEW_TYPED==='1'&&process.env.VISUALIZATION_LIVE_PLAN_REVIEW_FOCUS==='1'&&process.env.VISUALIZATION_LIVE_PLAN_REVIEW==='1'&&planReviewSource),'batch plan review requires typed focused plan-review mode and saved source');
+assert.ok(process.env.VISUALIZATION_LIVE_PLAN_REVIEW_TYPED!=='1'||(process.env.VISUALIZATION_LIVE_PLAN_REVIEW_FOCUS==='1'&&process.env.VISUALIZATION_LIVE_PLAN_REVIEW==='1'&&planReviewSource),'typed plan review requires focused plan-review mode and saved source');
+assert.ok(process.env.VISUALIZATION_LIVE_PLAN_REVIEW_FOCUS!=='1'||(process.env.VISUALIZATION_LIVE_PLAN_REVIEW==='1'&&planReviewSource),'focused plan review requires explicit plan-review mode and saved source');
+assert.ok(process.env.VISUALIZATION_LIVE_PLAN_REVIEW!=='1'||planReviewSource,'plan review requires VISUALIZATION_LIVE_PLAN_REVIEW_SOURCE pointing to an explicit saved plan');
+assert.ok(process.env.VISUALIZATION_LIVE_PLAN_REVIEW_EDIT_READONLY!=='1'||(planReviewSource&&process.env.VISUALIZATION_LIVE_PLAN_REVIEW==='1'),'edited read-only plan evaluation requires an explicit saved plan review');
 const ifngArtSource=process.env.VISUALIZATION_LIVE_IFNG_ART_SCENE;
 const sourceReviewSource=process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE;
-const liveEvidence=process.env.VISUALIZATION_LIVE_EVIDENCE==='1';
+assert.ok(process.env.VISUALIZATION_LIVE_MARKUP_HISTORY!=='1'||(sourceReviewSource&&process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='markup-position'),'historical markup live evaluation requires saved-source markup-position mode');
+assert.ok(process.env.VISUALIZATION_LIVE_MARKUP_EDIT_DRAFT!=='1'||(sourceReviewSource&&process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='markup-position'),'editing the prepared markup draft requires saved-source markup-position mode');
+const sourceReviewSpecPath=process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_SPEC;
+assert.ok(!sourceReviewSpecPath||(sourceReviewSource&&!process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE),'explicit review spec requires a saved scene and the generic source-review mode');
+const sourceReviewSpec=sourceReviewSpecPath?JSON.parse(await readFile(sourceReviewSpecPath,'utf8')):null;
+if(sourceReviewSpec){
+ for(const flag of ['scopedRead','guiScoped'])if(flag in sourceReviewSpec)assert.equal(typeof sourceReviewSpec[flag],'boolean');
+ assert.ok(!sourceReviewSpec.guiScoped||sourceReviewSpec.scopedRead,'GUI focus review requires scoped-read verification');
+ assert.equal(typeof sourceReviewSpec.elementId,'string');assert.ok(sourceReviewSpec.elementId.trim());
+ assert.ok(Array.isArray(sourceReviewSpec.corrections)&&sourceReviewSpec.corrections.length>0&&sourceReviewSpec.corrections.length<=20);
+ for(const pair of sourceReviewSpec.corrections){assert.ok(Array.isArray(pair)&&pair.length===2&&pair.every(value=>typeof value==='string'));assert.ok(pair[0].length>0&&pair[0]!==pair[1]);}
+}
+
+assert.ok(!['apoptosis-materialize','crop-repair','style-author','frame-pack','checkpoint-resume','svg-refit','stroke-width','caption-position','batch-search','frame-position','painted-review','materialization-role-repair','whole-materialization','circle-annotation','generic-protein','ras-search','caption-column','frame-swap','caption-width','frame-fit','egfr-residue-labels','candidate-position','markup-position','relation-readonly','retrieval-scope','scoped-retrieval-scope','gui-scoped-retrieval-scope','formal-scoped-retrieval-scope','apoptosis-context-art'].includes(process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE)||sourceReviewSource,'selected source-review case requires VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE');
+assert.ok(process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE!=='whole-materialization'||process.env.VISUALIZATION_LIVE_WHOLE_EVIDENCE_RECORDS,'whole-materialization requires explicit read evidence records for source export verification');
+assert.ok(process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE!=='connector-routing'||sourceReviewSource,'connector-routing requires VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE pointing to the explicit saved EGFR crossing case');
+assert.ok(process.env.VISUALIZATION_LIVE_CONTEXT_ART_IMAGE_INFO!=='1'||(sourceReviewSource&&process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-context-art'),'candidate image info evaluation requires explicit source and contextual artwork mode');
+assert.ok(process.env.VISUALIZATION_LIVE_CONTEXT_ART_COMPACT!=='1'||(sourceReviewSource&&process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-context-art'),'aspect-aware artwork requires an explicit saved source and contextual artwork mode');
+const liveEvidenceWorkflow=process.env.VISUALIZATION_LIVE_EVIDENCE_WORKFLOW==='1';
+const liveEvidence=process.env.VISUALIZATION_LIVE_EVIDENCE==='1'||liveEvidenceWorkflow;
+const evidenceCase=process.env.VISUALIZATION_LIVE_EVIDENCE_CASE??'ifng';
+if(liveEvidence)assert.ok(['ifng','egfr-mapk','intrinsic-apoptosis','tgfb-smad'].includes(evidenceCase),'unsupported evidence case');
+assert.ok(!(liveEvidenceWorkflow&&['intrinsic-apoptosis','tgfb-smad'].includes(evidenceCase)),'apoptosis currently uses the source-to-sketch evaluation, not the receptor-materialization workflow');
 const liveCompose=process.env.VISUALIZATION_LIVE_COMPOSE==='1';
+const liveReference=process.env.VISUALIZATION_LIVE_REFERENCE==='1';
+assert.ok(process.env.VISUALIZATION_LIVE_REFERENCE_NODE_GEOMETRY!=='1'||liveReference,'reference node geometry requires the separate reference-image evaluation');
 const liveSvg=process.env.VISUALIZATION_LIVE_SVG==='1';
+const bioartSvg=process.env.VISUALIZATION_LIVE_SVG_BIOART==='1';
+const onlineSvg=process.env.VISUALIZATION_LIVE_SVG_ONLINE==='1';
+const visibleSvg=process.env.VISUALIZATION_LIVE_SVG_VISIBLE==='1';
+const pathHandoff=evaluationSettings.svg_settings.path_handoff;
+const candidatePathHandoff=evaluationSettings.svg_settings.candidate_path_handoff;
+const sharedPathContext=evaluationSettings.svg_settings.shared_path_context;
+assert.ok(!onlineSvg||(liveSvg&&bioartSvg&&!process.env.VISUALIZATION_LIVE_FIT_SCENE),'online BioArt SVG requires SVG/BioArt mode and no imported scene');
+assert.ok(!bioartSvg||(liveSvg&&(onlineSvg||process.env.VISUALIZATION_LIVE_FIT_SCENE)),'BioArt SVG refinement requires SVG mode and an explicit saved scene or online acquisition');
 const liveFit=process.env.VISUALIZATION_LIVE_FIT==='1';
 const fitSource=process.env.VISUALIZATION_LIVE_FIT_SCENE||fileURLToPath(new URL('./fixtures/scientific-egfr-mapk-illustrated.json',import.meta.url));
 const materializationSource=process.env.VISUALIZATION_LIVE_MATERIALIZE_SCENE;
@@ -31,6 +112,7 @@ const scientificCase=process.env.VISUALIZATION_LIVE_SCIENTIFIC;
 const candidateMode=process.env.VISUALIZATION_LIVE_CANDIDATE==='1';
 const gatewayMode=process.env.VISUALIZATION_LIVE_GATEWAY==='1';
 const reviewSource=process.env.VISUALIZATION_LIVE_REVIEW_SCENE, prepareOnly=process.env.VISUALIZATION_LIVE_PREPARE_ONLY==='1';
+assert.ok(!liveReference || (gatewayMode&&!ifngArtSource&&!sourceReviewSource&&!liveEvidence&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'reference image requires a separate Gateway evaluation');
 assert.ok(!ifngArtSource || (gatewayMode&&!sourceReviewSource&&!liveEvidence&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'IFNG art requires an explicit reviewed scene and a separate Gateway evaluation');
 assert.ok(!sourceReviewSource || (gatewayMode&&!liveEvidence&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'source review requires an explicit saved scene and a separate Gateway evaluation');
 assert.ok(!liveEvidence || (gatewayMode&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'live evidence requires a separate Gateway evaluation');
@@ -42,8 +124,9 @@ assert.ok(!scientificCase || (gatewayMode&&!reviewSource&&!candidateMode&&!prepa
 assert.ok(!candidateMode || (gatewayMode&&reviewSource&&!prepareOnly),'candidate case requires Gateway mode and an explicit saved illustrated scene');
 assert.ok(!gatewayMode || !prepareOnly, 'gateway mode uses a real configured model');
 assert.ok(!prepareOnly || reviewSource, 'prepare-only requires an explicit saved review scene');
+assert.ok(!planReviewSource||(gatewayMode&&!liveReference&&!ifngArtSource&&!sourceReviewSource&&!liveEvidence&&!liveCompose&&!liveSvg&&!liveFit&&!materializationSource&&!scientificCase&&!reviewSource&&!candidateMode&&!prepareOnly),'plan review requires a separate Gateway evaluation');
 const provider = process.env.VISUALIZATION_LIVE_PROVIDER, model = process.env.VISUALIZATION_LIVE_MODEL;
-const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||((liveFit||liveSvg||liveCompose||liveEvidence||sourceReviewSource||ifngArtSource)?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
+const turnTimeout=Number(process.env.VISUALIZATION_LIVE_TURN_TIMEOUT_MS||((planReviewSource||liveReference||liveFit||liveSvg||liveCompose||liveEvidence||sourceReviewSource||ifngArtSource)?'900000':'250000'));assert.ok(Number.isSafeInteger(turnTimeout)&&turnTimeout>=1000,'turn observation duration must be a positive integer >=1000 ms');
 assert.ok(prepareOnly || (provider && model), 'set VISUALIZATION_LIVE_PROVIDER and VISUALIZATION_LIVE_MODEL to an existing configured vision model');
 const config = process.env.VISUALIZATION_LIVE_CONFIG || join(homedir(), '.autonomics/config.db');
 const binary = gatewayMode ? (process.env.VISUALIZATION_LIVE_GATEWAY_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_gateway_live',import.meta.url))) : prepareOnly ? (process.env.VISUALIZATION_NATIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_native', import.meta.url))) : process.env.VISUALIZATION_LIVE_BIN || fileURLToPath(new URL('../../../target/debug/examples/visualization_live', import.meta.url));
@@ -54,13 +137,13 @@ assert.ok(!existsSync(join(directory,"figures.sqlite")), "use a fresh output dir
 const native = spawn(binary, gatewayMode ? [directory,config,provider,model] : prepareOnly ? [join(directory,'figures.sqlite')] : [config, provider, model, join(directory, 'figures.sqlite'), join(directory, 'trace.jsonl')], { stdio: ['ignore', 'pipe', 'pipe'] });
 const port = Number(process.env.VISUALIZATION_LIVE_PORT || '1449');
 assert.ok(Number.isInteger(port) && port > 1024 && port < 65536, 'choose an unprivileged live test port');
-let origin = `http://127.0.0.1:${port}`, gatewayReady;let sseResponses=0;const seenGatewayTools=new Set();
+let origin = `http://127.0.0.1:${port}`, gatewayReady, figureEvidencePath;let sseResponses=0;const seenGatewayTools=new Set();
 const vite = gatewayMode ? null : spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'] });
 let output = '', viteOutput = '', browser, page; const turns = [], errors = [], checkpoints = [];
 native.stdout.on('data', chunk => { output += chunk; process.stdout.write(chunk); }); native.stderr.on('data', chunk => output += chunk);
 vite?.stdout.on('data', chunk => viteOutput += chunk); vite?.stderr.on('data', chunk => viteOutput += chunk);
 const until = async (predicate, message, duration = 60000) => { const deadline = Date.now() + duration; while (!await predicate()) { if (Date.now() > deadline) throw new Error(message); await new Promise(resolve => setTimeout(resolve, 100)); } };
-const persist = async (name, value) => writeFile(join(directory, name), JSON.stringify(value, null, 2), { mode: 0o600 });
+const persist = async (name, value) => writeFile(join(directory, name), JSON.stringify(name==='result.json'?{...value,evaluation_profile:evaluationSettings.profile,evaluation_settings:evaluationSettings.settings}:value, null, 2), { mode: 0o600 });
 try {
   if(gatewayMode){
     await until(async()=>{if(native.exitCode!==null||native.signalCode!==null)throw new Error('gateway host stopped');try{gatewayReady=JSON.parse(await readFile(join(directory,'ready.json'),'utf8'));return true;}catch{return false;}},'production gateway readiness');origin=gatewayReady.origin;
@@ -68,6 +151,7 @@ try {
     await until(() => { if (native.exitCode !== null || native.signalCode !== null) throw new Error(output); return /VISUALIZATION_(?:LIVE|NATIVE)_ADDR=/.test(output); }, 'live host readiness');
     await until(() => { if (vite.exitCode !== null || vite.signalCode !== null) throw new Error(viteOutput); return viteOutput.includes(origin); }, 'Vite readiness');
   }
+  await persist('evaluation-config.json',evaluationSettings);
   const backend = gatewayMode ? origin : `http://${output.match(/VISUALIZATION_(?:LIVE|NATIVE)_ADDR=([^\s]+)/)[1]}`;
   const call = async (method, path, body, timeout = 30000) => {
     if(gatewayMode){const response=await page.context().request.fetch(`${backend}${path}`,{method,...(body===undefined?{}:{data:body}),timeout});const value=await response.json();assert.ok(response.ok(),`HTTP ${response.status()} ${path}`);return value;}
@@ -102,28 +186,40 @@ try {
     assert.ok((await page.context().cookies()).some(cookie=>cookie.name==='autonomics_session'&&cookie.httpOnly));
     page.on('response',response=>{if(new URL(response.url()).pathname==='/api/v1/events'&&response.status()===200)sseResponses++;});
   }
+  // Playwright filechooser automates native <input type=file>, not the OS-level
+  // File System Access picker. Exercise Excalidraw's real browser fallback.
+  if(liveReference)await page.addInitScript(()=>{delete window.showOpenFilePicker;});
   await page.goto(origin, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  if(gatewayMode)await installLiveProgress(page,gatewayReady.agent);
   await page.getByRole('navigation', { name: '工作台活动栏' }).getByRole('button', { name: '画布', exact: true }).click();
   await page.getByRole('textbox', { name: '新项目名称' }).fill('Live figure evaluation'); await page.getByRole('button', { name: '创建项目', exact: true }).click();
   await page.getByRole('button', { name: '新建画布', exact: true }).click(); await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
   await page.getByRole('textbox', { name: '画布名称' }).fill('Live figure');
   const project = await page.getByRole('combobox', { name: '可视化项目' }).inputValue(); const figure = (await call('GET', `/api/v1/visualization/projects/${project}/figures`))[0].id;
-  const path = `/api/v1/visualization/projects/${project}/figures/${figure}`;
+  const path = `/api/v1/visualization/projects/${project}/figures/${figure}`;figureEvidencePath=path;
+  let reasoningConfigured=false;
   const send = async (number, message) => {
+    if(process.env.VISUALIZATION_LIVE_REASONING_EFFORT==='low'&&!reasoningConfigured){
+      await page.getByRole('button',{name:'推理力度',exact:true}).click();await page.locator('[data-composer-popover]').getByRole('button').filter({has:page.getByText('低',{exact:true})}).click();
+      await until(async()=>{const model=await call('GET',`/api/v1/agents/${encodeURIComponent(gatewayReady.agent)}/model`);return model.reasoning_effort==='low';},'isolated evaluation reasoning setting');reasoningConfigured=true;await persist('reasoning-setting.json',{reasoning_effort:'low',scope:'isolated evaluation agent through GUI',global_model_config_changed:false,output_limit_changed:false});
+    }
     if (message !== undefined) await page.getByPlaceholder('输入消息…').fill(message);
     let oldIds,oldToolIds;
     const history=async()=>{const state=await call('GET','/api/v1/state'),actor=state.agents.find(a=>a.path===gatewayReady.agent);assert.ok(actor);const session=state.contexts[gatewayReady.agent]?.id;const messages=session?await call('GET',`/api/v1/agents/${actor.agent_id}/sessions/${session}/history`):[];for(const block of messages.flatMap(message=>message.content)){if(block.type==='tool_use'&&!seenGatewayTools.has(block.id)){seenGatewayTools.add(block.id);console.log(`LIVE_GATEWAY_TOOL_CALL=${block.name} action=${block.input?.action??''}`);}}return {actor,messages};};
     if(gatewayMode){const before=await history();oldIds=new Set(before.messages.map(m=>m.id));oldToolIds=new Set(before.messages.flatMap(m=>m.content).filter(b=>b.type==='tool_use').map(b=>b.id));}
+    const timingSequence=gatewayMode?(await readLiveProgress(page))?.last_seq??0:0;
+    const sentAt=Date.now();
+    if(gatewayMode) await persist(`turn-${number}-started.json`,{sent_at:new Date(sentAt).toISOString(),provider,model,agent:gatewayReady.agent,host_pid:native.pid,observer_pid:process.pid});
     await page.getByRole('button', { name: '发送', exact: true }).click();
-    if(gatewayMode){let finished;await until(async()=>{const current=await history();const status=String(current.actor.status).toUpperCase();if(['ERROR','CANCELLED'].includes(status)) {await persist('session-history.json',JSON.parse(JSON.stringify(current.messages,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value)));await persist(`turn-${number}-failure.json`,{status,terminal_stop_reason:current.messages.filter(m=>m.role==='assistant').at(-1)?.stop_reason??null});throw new Error(`production agent turn ${number} ended with ${status}; terminal history retained`);}if(status!=='IDLE'||!current.messages.some(m=>!oldIds.has(m.id)&&m.role==='assistant'&&m.content.some(b=>b.type==='text'&&b.text.trim())))return false;finished=current.messages;return true;},`production agent turn ${number}`,turnTimeout);
+    if(gatewayMode){let finished,observedBusy=false,lastProgressAt=0;await observeLiveAgent({poll:async()=>{if(Date.now()-lastProgressAt>=30000){await persist(`turn-${number}-live-progress.json`,{elapsed_ms:Date.now()-sentAt,terminal:false,stream_progress:await readLiveProgress(page)});lastProgressAt=Date.now();}const current=await history();const status=String(current.actor.status).toUpperCase();if(['ERROR','CANCELLED'].includes(status)) {await persist('session-history.json',JSON.parse(JSON.stringify(current.messages,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value)));await persist(`turn-${number}-failure.json`,{status,terminal_stop_reason:current.messages.filter(m=>m.role==='assistant').at(-1)?.stop_reason??null,visible_api_errors:await page.getByText(/^ApiClient request error:/).evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length>0).map(n=>(n.textContent??'').slice(0,4000)))});throw new Error(`production agent turn ${number} ended with ${status}; terminal history retained`);}if(status!=='IDLE'){observedBusy=true;return false;}if(!observedBusy&&!current.messages.some(m=>!oldIds.has(m.id)&&m.role==='assistant'))return false;finished=current.messages;return true;},isAlive:()=>native.exitCode===null&&native.signalCode===null,windowMs:turnTimeout,intervalMs:1000,onWindow:async evidence=>{console.log(`LIVE_OBSERVATION_RENEWED turn=${number} elapsed_ms=${evidence.elapsed_ms}`);await persist(`turn-${number}-observation.json`,{...evidence,terminal:false,stream_progress:await readLiveProgress(page)});},onRetry:async evidence=>{await persist(`turn-${number}-transport-retry.json`,evidence);}});
       // Preserve terminal evidence even when the model returns no final text.
       const redactedHistory=JSON.parse(JSON.stringify(finished,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value));
       await persist('session-history.json',redactedHistory);
-      const finalAssistant=finished.filter(m=>!oldIds.has(m.id)&&m.role==='assistant').at(-1),expectedReply=finalAssistant.content.filter(b=>b.type==='text').map(b=>b.text).join('\n');
-      assert.ok(expectedReply.trim(),`production agent ended without final text; stop_reason=${finalAssistant.stop_reason??'missing'}; terminal blocks: ${finalAssistant.content.map(b=>b.type).join(',')}`);
+      const finalAssistant=finished.filter(m=>!oldIds.has(m.id)&&m.role==='assistant').at(-1),expectedReply=(finalAssistant?.content??[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
+      assert.ok(expectedReply.trim(),`production agent ended without final text; stop_reason=${finalAssistant?.stop_reason??'missing'}; terminal blocks: ${(finalAssistant?.content??[]).map(b=>b.type).join(',')}`);
       const displayed=page.locator('[data-agent-workspace]:visible').getByRole('button',{name:'复制助手回复',exact:true}).last();
       await until(async()=>{if(!await displayed.count())return false;await displayed.click();return await page.evaluate(()=>navigator.clipboard.readText())===expectedReply;},'actual final assistant reply matches session history through production SSE');
-      const toolErrors=new Map(finished.flatMap(m=>m.content).filter(b=>b.type==='tool_result').map(b=>[b.tool_use_id,Boolean(b.is_error)]));const calls=finished.flatMap(m=>m.content).filter(b=>b.type==='tool_use'&&!oldToolIds.has(b.id)).map(b=>({name:b.name,input:b.input,is_error:toolErrors.get(b.id)??false}));assert.ok(calls.length,'actual session records registered tool calls');turns.push({calls});await persist(`turn-${number}.json`,{calls,transport:'production_gateway'});
+      const toolErrors=new Map(finished.flatMap(m=>m.content).filter(b=>b.type==='tool_result').map(b=>[b.tool_use_id,Boolean(b.is_error)]));const calls=finished.flatMap(m=>m.content).filter(b=>b.type==='tool_use'&&!oldToolIds.has(b.id)).map(b=>({name:b.name,input:b.input,is_error:toolErrors.get(b.id)??false}));assert.ok(calls.length,'actual session records registered tool calls');const timing={sent_at:new Date(sentAt).toISOString(),completed_at:new Date().toISOString(),elapsed_ms:Date.now()-sentAt};const progress=await readLiveProgress(page);await persist(`turn-${number}-stream-progress.json`,progress);await persist(`turn-${number}-timing.json`,summarizeLiveTiming(progress,{afterSequence:timingSequence}));turns.push({calls,...timing});await persist(`turn-${number}.json`,{calls,...timing,transport:'production_gateway'});
       const redacted=JSON.parse(JSON.stringify(finished,(key,value)=>key==='data'&&typeof value==='string'?'[IMAGE BYTES OMITTED]':value));await persist('session-history.json',redacted);
     }
     await until(() => turns.length >= number || errors.length, `live turn ${number} completion`, turnTimeout); assert.deepEqual(errors, []);
@@ -131,31 +227,52 @@ try {
   };
   const handoff = async request => {
     await page.getByRole('button', { name: 'Agent 绘图', exact: true }).click();
-    await page.getByRole('textbox', { name: '绘图需求' }).fill(request);
+    if(process.env.VISUALIZATION_LIVE_LAYOUT_PREFERENCE){const preference=process.env.VISUALIZATION_LIVE_LAYOUT_PREFERENCE;assert.ok(['auto','compact','horizontal','vertical'].includes(preference));await page.getByRole('combobox',{name:'构图偏好',exact:true}).selectOption(preference);}
+    const compositionRequest=process.env.VISUALIZATION_LIVE_LAYOUT_PREFERENCE==='compact'?`${request} 本次紧凑构图目标：使用明确的视觉分面，整图宽高比在 0.5 到 2.5 之间，文字字号至少 16，不通过删改科学标签、关系或来源来压缩。科学范围明确后再完成布局计划。`:request;
+    await page.getByRole('textbox', { name: '绘图需求' }).fill(compositionRequest);
     await page.getByRole('button', { name: '交给 Agent', exact: true }).click(); await page.getByPlaceholder('输入消息…').waitFor();
+    if(process.env.VISUALIZATION_LIVE_LAYOUT_PREFERENCE){const draft=await page.getByPlaceholder('输入消息…').inputValue();const context=await readCanvasPreparedContext(page);assert.equal(context.composition_preferences.layout_preference,process.env.VISUALIZATION_LIVE_LAYOUT_PREFERENCE);await persist('layout-handoff.json',{requested:process.env.VISUALIZATION_LIVE_LAYOUT_PREFERENCE,draft});}
   };
   const normalized = text => text.replace(/\s/g, '');
   const preview = page.getByRole('dialog', { name: 'Agent 修改预览' });
-  if(ifngArtSource){
+  if(planReviewSource){
+    const evidence=await runLivePlanReview({page,call,path,send,persist,directory,turns,until,source:planReviewSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_plan_label_review',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: plan label review passed; artifacts=${directory}`);
+  }else if(liveReference){
+    const evidence=await runLiveReference({page,call,path,handoff,send,persist,directory,turns,until});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    await persist('result.json',{passed:true,case:'live_reference_reconstruction',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: reference reconstruction passed; artifacts=${directory}`);
+  }else if(ifngArtSource){
     const evidence=await runLiveIfngArt({page,call,path,send,persist,directory,turns,until,source:ifngArtSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
     await persist('result.json',{passed:true,case:'live_ifng_art',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent IFNG illustration passed; artifacts=${directory}`);
   }else if(sourceReviewSource){
-    const evidence=await runLiveSourceReview({page,call,path,send,persist,directory,turns,until,source:sourceReviewSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    const evidence=await (process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-materialize'?runLiveApoptosisMaterialize:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='crop-repair'?runLiveCropRepair:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='style-author'?runLiveStyleAuthor:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-pack'?runLiveFramePack:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='checkpoint-resume'?runLiveCheckpointResume:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='svg-refit'?runLiveSvgRefit:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='stroke-width'?runLiveStrokeWidth:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='caption-position'?runLiveCaptionPosition:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='batch-search'?runLiveBatchSearch:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-position'?runLiveFramePosition:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='painted-review'?runLivePaintedReview:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='materialization-role-repair'?runLiveMaterializationRoleRepair:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='whole-materialization'?runLiveWholeMaterialization:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='circle-annotation'?runLiveCircleAnnotation:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='caption-width'?runLiveCaptionWidth:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='generic-protein'?runLiveGenericProtein:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='ras-search'?runLiveRasSearch:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='caption-column'?runLiveCaptionColumn:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-swap'?runLiveFrameSwap:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-fit'?runLiveFrameFit:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='egfr-residue-labels'?runLiveResidueReview:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='candidate-position'?runLiveCandidatePosition:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='markup-position'?runLiveMarkupPosition:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='relation-readonly'?runLiveRelationReview:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-context-art'?runLiveContextArtwork:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='formal-scoped-retrieval-scope'?runLiveFormalSourceReview:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='connector-routing'?runLiveRouteReview:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='egfr-conflict'?runLiveReviewedRepair:runLiveSourceReview)({page,call,path,send,persist,directory,turns,until,source:sourceReviewSource,handoff,...(sourceReviewSpec?{reviewSpec:sourceReviewSpec}:{}),...(['retrieval-scope','scoped-retrieval-scope','gui-scoped-retrieval-scope'].includes(process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE)?{reviewSpec:{...retrievalScopeReview,scopedRead:['scoped-retrieval-scope','gui-scoped-retrieval-scope'].includes(process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE),guiScoped:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='gui-scoped-retrieval-scope'}}:{})});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
-    await persist('result.json',{passed:true,case:'live_source_caption_review',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent source-caption review passed; artifacts=${directory}`);
+    await persist('result.json',{passed:true,case:process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='egfr-residue-labels'?'live_reviewed_residue_labels':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='candidate-position'?'live_gui_candidate_attachment_position':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='markup-position'?'live_gui_markup_position':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='relation-readonly'?'live_historical_relation_readonly_review':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='connector-routing'?'live_connector_route_review':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-context-art'?'live_context_artwork':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='formal-scoped-retrieval-scope'?'live_formal_scoped_caption_review':'live_source_caption_review',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent ${process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='circle-annotation'?'GUI circle object annotation':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='generic-protein'?'explicit generic protein concept':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='ras-search'?'read-only RAS catalogue search':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='caption-column'?'compact caption column':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-swap'?'reviewed frame swap':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='caption-width'?'reviewed arrow caption width':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-fit'?'reviewed frame fit':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='egfr-residue-labels'?'reviewed residue labels':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='candidate-position'?'GUI candidate attachment position':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='markup-position'?'GUI markup position':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='connector-routing'?'connector-route review':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-context-art'?'contextual artwork':'source-caption review'} passed; artifacts=${directory}`);
   }else if(liveEvidence){
-    const evidence=await runLiveEvidencePlanning({page,call,path,handoff,send,persist,directory,turns,until});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    const evidence=await (liveEvidenceWorkflow?runLiveEvidenceWorkflow:runLiveEvidencePlanning)({page,call,path,handoff,send,persist,directory,turns,until,...(!liveEvidenceWorkflow?{scenario:evidenceCase==='tgfb-smad'?tgfbScenario:evidenceCase==='intrinsic-apoptosis'?apoptosisScenario:evidenceCase==='egfr-mapk'?egfrScenario:undefined}:{})});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
-    await persist('result.json',{passed:true,case:'live_evidence_planning',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent source planning passed; artifacts=${directory}`);
+    let contextualArtwork;
+    if(process.env.VISUALIZATION_LIVE_CONTEXT_ART==='1'){await persist('fresh-evidence-stage.json',evidence);contextualArtwork=await runLiveContextArtwork({page,call,path,send,persist,directory,turns,until,source:null});assert.deepEqual(errors,[]);}
+    let fullFigure;
+    if(process.env.VISUALIZATION_LIVE_FULL_MATERIALIZATION==='1'){
+      await persist('fresh-evidence-stage.json',evidence);
+      const materialization=await runLiveApoptosisMaterialize({page,call,path,send,persist,directory,turns,until,source:null,current:true});assert.equal(materialization.external_scene_imported,false);await persist('fresh-materialization-stage.json',materialization);
+      const review=await finalizeFreshFigure({page,call,path,send,persist,directory,turns,materialization});assert.deepEqual(errors,[]);fullFigure={external_scene_imported:false,materialization,review};
+      await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
+    }
+    await persist('result.json',{passed:true,case:fullFigure?'live_fresh_apoptosis_full_figure':contextualArtwork?'live_fresh_apoptosis_context_art':liveEvidenceWorkflow?'live_evidence_workflow':'live_evidence_planning',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence,...(contextualArtwork?{contextual_artwork:contextualArtwork}:{} ),...(fullFigure?{fresh_full_figure:fullFigure}:{})});console.log(`canvas-live: Agent ${liveEvidenceWorkflow ? "continuous evidence workflow" : "source planning"} passed; artifacts=${directory}`);
   }else if(liveCompose){
     const evidence=await runLiveComposition({page,call,path,send,persist,directory,turns,until});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
     await persist('result.json',{passed:true,case:'live_composition',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent composition passed; artifacts=${directory}`);
   }else if(liveSvg){
-    const evidence=await runLiveSvgRefinement({page,call,path,send,persist,directory,turns,until,source:fitSource});assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
+    const options={page,call,path,send,persist,directory,turns,until,source:fitSource,bioart:bioartSvg,pathHandoff,candidateHandoff:candidatePathHandoff,sharedContext:sharedPathContext};
+    const evidence=visibleSvg?await runLiveSvgVisibleRepair(options):onlineSvg?await runLiveBioartSvgAcquisition(options):await runLiveSvgRefinement(options);assert.deepEqual(errors,[]);assert.ok(sseResponses>0);
     await persist('gateway-transport.json',{authenticated:true,sse_responses:sseResponses,turns:turns.length,model_responses_scripted:false,api_routes_mocked:false});
-    await persist('result.json',{passed:true,case:'live_svg_refinement',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent SVG refinement passed; artifacts=${directory}`);
+    await persist('result.json',{passed:true,case:visibleSvg?(pathHandoff?(candidatePathHandoff?(sharedPathContext?'live_shared_svg_path_context':'live_candidate_svg_path_handoff'):'live_svg_path_handoff'):'live_svg_visible_repair'):onlineSvg?'live_bioart_svg_online':'live_svg_refinement',transport:'production_gateway',provider,model,project,figure,turns:turns.length,...evidence});console.log(`canvas-live: Agent SVG refinement passed; artifacts=${directory}`);
   }else if(liveFit){
     assert.ok(Number.isSafeInteger(gatewayReady.max_output_tokens)&&gatewayReady.max_output_tokens>0,'rebuild the configured-model host; output-limit metadata is required');
     await persist('fit-model-settings.json',{provider,model,max_output_tokens:gatewayReady.max_output_tokens});
@@ -345,8 +462,23 @@ try {
   }
   }
 } catch (error) {
+  // Browser failure must not erase the authoritative Agent state/history.
+  if(gatewayMode&&gatewayReady&&native.exitCode===null&&native.signalCode===null){
+    try{
+      await observeLiveAgent({
+        poll:async()=>{const status=await retainAgentEvidence({origin,token:gatewayReady.token,agent:gatewayReady.agent,persist});return ['IDLE','ERROR','CANCELLED'].includes(String(status).toUpperCase());},
+        isAlive:()=>native.exitCode===null&&native.signalCode===null,
+        windowMs:turnTimeout,intervalMs:5000,
+        onWindow:async evidence=>{await persist('failure-agent-observation.json',{...evidence,terminal:false});console.log(`LIVE_FAILURE_OBSERVATION_RENEWED elapsed_ms=${evidence.elapsed_ms}`);},
+      });
+    }catch{await persist('failure-evidence-unavailable.json',{checked_at:new Date().toISOString(),reason:'independent Gateway evidence retrieval failed'});}
+  }
+  if(gatewayMode&&gatewayReady&&figureEvidencePath&&native.exitCode===null&&native.signalCode===null){
+    try{await retainFigureEvidence({origin,token:gatewayReady.token,figurePath:figureEvidencePath,persist});}
+    catch{await persist('failure-figure-evidence-unavailable.json',{checked_at:new Date().toISOString(),reason:'independent figure snapshot retrieval failed'});}
+  }
   await page?.screenshot({ path: join(directory, 'failure.png'), animations: 'disabled' }).catch(() => {});
-  await persist('result.json', { passed: false, case:ifngArtSource?'live_ifng_art':sourceReviewSource?'live_source_caption_review':liveEvidence?'live_evidence_planning':liveCompose?'live_composition':liveSvg?'live_svg_refinement':liveFit?'live_illustration_fit':materializationSource?'candidate_materialization':scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
+  await persist('result.json', { passed: false, case:process.env.VISUALIZATION_LIVE_FULL_MATERIALIZATION==='1'?'live_fresh_apoptosis_full_figure':planReviewSource?'live_plan_label_review':liveReference?'live_reference_reconstruction':ifngArtSource?'live_ifng_art':sourceReviewSource?(process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-materialize'?'live_apoptosis_materialization':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='crop-repair'?'live_crop_repair':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='style-author'?'live_style_author':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='frame-pack'?'live_frame_pack':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='candidate-position'?'live_gui_candidate_attachment_position':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='markup-position'?'live_gui_markup_position':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='connector-routing'?'live_connector_route_review':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='apoptosis-context-art'?'live_context_artwork':process.env.VISUALIZATION_LIVE_SOURCE_REVIEW_CASE==='formal-scoped-retrieval-scope'?'live_formal_scoped_caption_review':'live_source_caption_review'):liveEvidenceWorkflow?'live_evidence_workflow':liveEvidence?'live_evidence_planning':liveCompose?'live_composition':liveSvg?(visibleSvg?(pathHandoff?(candidatePathHandoff?(sharedPathContext?'live_shared_svg_path_context':'live_candidate_svg_path_handoff'):'live_svg_path_handoff'):'live_svg_visible_repair'):onlineSvg?'live_bioart_svg_online':'live_svg_refinement'):liveFit?'live_illustration_fit':materializationSource?'candidate_materialization':scientificCase?'scientific_case':candidateMode?'candidate_revision':reviewSource?'isolated_markup':'full_workflow', provider, model, checkpoints, error: String(error), errors });
   console.error(`canvas-live: failed; artifacts=${directory}`); throw error;
 } finally {
   await writeFile(join(directory, 'host.log'), output, { mode: 0o600 }); await page?.unrouteAll({behavior:'ignoreErrors'}).catch(()=>{}); await browser?.close(); if(gatewayMode&&native.exitCode===null&&native.signalCode===null)await writeFile(join(directory,'stop'),'stop');else native.kill(); vite?.kill();

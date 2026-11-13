@@ -1,3 +1,5 @@
+import {checkContextDraftSend} from './helpers/context-draft-send.mjs';
+import {readCanvasPreparedPrompt} from './helpers/canvas-prepared-context.mjs';
 // Canvas editor integration: drawing, images, history, persistence and export.
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
@@ -277,14 +279,15 @@ try {
   const draft = page.getByPlaceholder('输入消息…');
   await draft.waitFor();
   assert.ok((await draft.inputValue()).includes('请强调细胞的相互作用'));
-  assert.ok((await draft.inputValue()).includes('请放大这个细胞'));
-  assert.ok((await draft.inputValue()).includes('selected_objects'));
-  assert.ok((await draft.inputValue()).includes('"preview_available": true'));
+  assert.equal(await draft.inputValue(),'请强调细胞的相互作用');const preparedPrompt=await readCanvasPreparedPrompt(page);assert.ok(preparedPrompt.includes('请放大这个细胞'));
+  assert.ok(preparedPrompt.includes('selected_objects'));
+  assert.ok(preparedPrompt.includes('"preview_available": true'));
   assert.ok(previews.has(figures.get('figure').metadata.revision));
-  assert.ok((await draft.inputValue()).includes('"project_id": "study"'));
-  assert.ok((await draft.inputValue()).includes('"observed_revision":'));
+  assert.ok(preparedPrompt.includes('"project_id": "study"'));
+  assert.ok(preparedPrompt.includes('"observed_revision":'));
   assert.deepEqual(await page.locator('.editor-body-occluded').evaluateAll(bodies => bodies.flatMap(body => [...body.querySelectorAll('*')].filter(element => getComputedStyle(element).visibility === 'visible' && element.getClientRects().length).map(element => element.tagName))), [], 'inactive canvas descendants must remain visually hidden');
   await page.screenshot({ path: '/tmp/autonomics-canvas-editor.png' });
+  if(process.env.VISUALIZATION_DRAFT_CONTEXT_SEND==='1')await checkContextDraftSend({page,canvasTitle:'基础画布测试'});
   }
   assert.deepEqual(errors, []);
   console.log('canvas-editor: all assertions passed');

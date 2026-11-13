@@ -1069,6 +1069,17 @@ impl Context {
             builder = builder.with_extra_section(extra);
         }
 
+        let memory_enabled = self
+            .core
+            .memory
+            .as_ref()
+            .is_some_and(|memory| memory.effective_memory_config().use_memory);
+        builder = builder.with_extra_section(if memory_enabled {
+            "## Memory tool availability\n\nPersistent memory is enabled for this agent. Generic memory guidance applies; use the configured memory tools when relevant."
+        } else {
+            "## Memory tool availability\n\nPersistent memory is disabled for this agent. Generic profile or skill references to memory tools apply only when memory is enabled. Do not call memory_search, memory_read, memory_list or memory_note while disabled. Continue using the current conversation and explicitly requested project artifacts; this does not enable memory or authorize additional writes."
+        });
+
         // Inject cross-session memory. with_extra_section appends, so the
         // memory summary supplements the agent's profile section above
         // instead of replacing it.
@@ -1458,7 +1469,7 @@ mod tests {
         let mut mock = MockApiClient::new();
         let cap = Arc::clone(&captured);
         mock.expect_request_stream_with_system()
-            .times(1)
+            .times(2)
             .returning(move |_, _, _, system| {
                 cap.lock().unwrap().push(system);
                 Ok(MessageStream::from_events(
@@ -1498,7 +1509,7 @@ mod tests {
             context_provider: None,
             system_prompt_section: Some("## Profile\nYou are the orchestrator agent.".into()),
             system_prompt_identity: None,
-            memory: Some(memory),
+            memory: Some(memory.clone()),
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),
@@ -1515,6 +1526,7 @@ mod tests {
         let calls = std::mem::take(&mut *captured.lock().unwrap());
         assert_eq!(calls.len(), 1, "exactly 1 model call expected");
         let system = calls[0].as_deref().expect("system prompt must be sent");
+        assert!(system.contains("Persistent memory is enabled for this agent."));
         let profile_at = system
             .find("## Profile\nYou are the orchestrator agent.")
             .expect("profile section must survive memory injection");
@@ -1529,6 +1541,18 @@ mod tests {
             profile_at < memory_at,
             "profile section must render before the memory section"
         );
+        let mut config = memory.runtime_config();
+        config.use_memory = false;
+        memory.set_runtime_config(config);
+        session
+            .remember(Message::user("Continue without persistent memory"))
+            .unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+        let calls = std::mem::take(&mut *captured.lock().unwrap());
+        let disabled = calls[0].as_deref().unwrap();
+        assert!(disabled.contains("Persistent memory is disabled for this agent."));
+        assert!(!disabled.contains("### MEMORY_SUMMARY"));
+        assert!(disabled.contains("## Profile\nYou are the orchestrator agent."));
     }
 
     /// Skill 指导随 system 一起到达模型边界:静态行为文本进 system
@@ -1583,6 +1607,10 @@ mod tests {
 
         let system = captured.lock().unwrap().clone().expect("system captured");
         assert!(system.contains("## Skill library"), "{system}");
+        assert!(
+            system.contains("Persistent memory is disabled for this agent."),
+            "{system}"
+        );
         for tool in ["skill_search", "skill_get", "memory_note", "memory_search"] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }

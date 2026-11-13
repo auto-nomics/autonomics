@@ -74,6 +74,15 @@ pub struct Pathway {
     pub release_date: Option<String>,
 }
 
+/// Contained-event responses may use a numeric identity reference in place of
+/// an event object. Such a reference must be queried separately for metadata.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EventReference {
+    Event(Box<Pathway>),
+    Id(u64),
+}
+
 /// Ancestor node in the event hierarchy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventAncestor {

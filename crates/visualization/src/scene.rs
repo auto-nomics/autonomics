@@ -4,9 +4,159 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
 
+/// Native numeric fields must retain their JSON types in shallow updates.
+pub const NUMERIC_UPDATE_FIELDS: [&str; 11] = [
+    "x",
+    "y",
+    "width",
+    "height",
+    "angle",
+    "fontSize",
+    "fontFamily",
+    "lineHeight",
+    "strokeWidth",
+    "roughness",
+    "opacity",
+];
+
+// Crop uses native source-pixel units, not normalized SVG bounds. Validate
+// only incoming writes so older documents can still be read and repaired.
+fn validate_image_fields(fields: &serde_json::Map<String, Value>, id: &str) -> Result<(), SceneError> {
+    if let Some(crop) = fields.get("crop").filter(|v| !v.is_null()) {
+        let invalid = || SceneError::InvalidUpdate(format!("{id}.crop requires a complete native object with finite JSON numbers x/y/width/height/naturalWidth/naturalHeight in source pixels, not quoted numbers or normalized fractions without source dimensions; use null to clear crop"));
+        let read = |key: &str| crop.get(key).and_then(Value::as_f64)
+            .filter(|n| n.is_finite() && n.abs() <= 1e6).ok_or_else(invalid);
+        let (x,y,w,h,nw,nh) = (read("x")?,read("y")?,read("width")?,read("height")?,read("naturalWidth")?,read("naturalHeight")?);
+        if x<0. || y<0. || w<=0. || h<=0. || nw<=0. || nh<=0. || x+w>nw+1e-6 || y+h>nh+1e-6 {
+            return Err(invalid());
+        }
+    }
+    if let Some(scale) = fields.get("scale")
+        && !scale.as_array().is_some_and(|a| a.len()==2 && a.iter().all(|v| matches!(v.as_f64(),Some(1.0)|Some(-1.0)))) {
+        return Err(SceneError::InvalidUpdate(format!("{id}.scale requires two native numeric flips [1,1], [-1,1], [1,-1] or [-1,-1], not display size factors or quoted values")));
+    }
+    Ok(())
+}
+
+// Native linear dimensions describe the point bounds. Excalidraw recomputes
+// them on restore, so an independent width edit cannot resize a connector.
+fn update_path_dimensions(
+    element: &mut Value,
+    changes: &serde_json::Map<String, Value>,
+) -> Result<(), SceneError> {
+    if !matches!(
+        element["type"].as_str(),
+        Some("arrow" | "line" | "freedraw")
+    ) || !["points", "width", "height"]
+        .iter()
+        .any(|key| changes.contains_key(*key))
+    {
+        return Ok(());
+    }
+    let id = element["id"].as_str().unwrap_or("unknown");
+    let minimum = if element["type"] == "freedraw" { 1 } else { 2 };
+    let invalid = || {
+        SceneError::InvalidUpdate(format!(
+            "{id}.points requires at least {minimum} finite numeric [x,y] pairs within ±1000000"
+        ))
+    };
+    let points = element["points"]
+        .as_array()
+        .filter(|p| p.len() >= minimum)
+        .ok_or_else(invalid)?;
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for point in points {
+        let pair = point
+            .as_array()
+            .filter(|p| p.len() == 2)
+            .ok_or_else(invalid)?;
+        for axis in 0..2 {
+            let value = pair[axis]
+                .as_f64()
+                .filter(|v| v.is_finite() && v.abs() <= 1e6)
+                .ok_or_else(invalid)?;
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
+        }
+    }
+    let dimensions = [max[0] - min[0], max[1] - min[1]];
+    for (field, dimension) in ["width", "height"].into_iter().zip(dimensions) {
+        if dimension > 1e6
+            || changes
+                .get(field)
+                .is_some_and(|value| value.as_f64().is_none_or(|n| (n - dimension).abs() > 1e-6))
+        {
+            return Err(SceneError::InvalidUpdate(format!(
+                "{id}.{field} is derived from the connector/stroke points (expected {dimension}); change the actual points to reroute/resize it, or reflow its label separately. Do not inflate path dimensions to widen a label: the GUI would reset them on restore"
+            )));
+        }
+    }
+    element["width"] = serde_json::json!(dimensions[0]);
+    element["height"] = serde_json::json!(dimensions[1]);
+    Ok(())
+}
+
+fn update_changes_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let properties = NUMERIC_UPDATE_FIELDS
+        .into_iter()
+        .map(|field| {
+            (
+                field.to_owned(),
+                serde_json::json!({"type":"number","minimum":-1000000,"maximum":1000000}),
+            )
+        })
+        .collect();
+    let mut object = serde_json::Map::new();
+    object.insert("type".into(), serde_json::json!("object"));
+    object.insert("properties".into(), Value::Object(properties));
+    object.insert("additionalProperties".into(), Value::Bool(true));
+    object.insert("description".into(),serde_json::json!("Shallow native edits. Numeric geometry and style fields require JSON numbers, never quoted numbers or null. Other native fields such as text and strokeColor remain available. IDs are immutable. Native reference collections boundElements/groupIds require JSON arrays (use [] for none), while containerId/frameId require null or nonempty IDs. customData illustration ownership, group, label, badge and fit fields must remain identical; use dedicated asset/illustration operations to change them, never generic update. Use set_wrapped_text for complete scientific text reflow."));
+    object.into()
+}
+
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IllustrationMember {
+    pub id: String,
+    /// Explicit user/agent description, not an inferred biological identity.
+    pub meaning: String,
+}
+
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IllustrationSample {
+    pub id: String,
+    pub file_id: String,
+    pub normalized_bounds: [f64; 4],
+}
+
+#[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectorPort { Left, Right, Top, Bottom }
+impl ConnectorPort { pub(crate) fn index(&self)->usize {match self {Self::Left=>0,Self::Right=>1,Self::Top=>2,Self::Bottom=>3}} }
+
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Operation {
+    /// Move/resize one native node with bound text reflow and coherent centered
+    /// sharp connectors. Preserves frame, IDs, fonts, evidence and other nodes.
+    SetNodeGeometry {
+        id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    },
+    /// Append an explicit native graph at its top-left x/y, preserving existing
+    /// objects/files/settings. Use a fresh prefix for collision-free identities.
+    /// This does not replace the scene or confirm a saved scientific plan.
+    InsertSketch {
+        plan: crate::sketch::Plan,
+        id_prefix: String,
+        x: f64,
+        y: f64,
+    },
     /// Place/resize a standalone image without altering pixels, crop, flips or provenance.
     SetImageGeometry {
         id: String,
@@ -14,6 +164,22 @@ pub enum Operation {
         y: f64,
         width: f64,
         height: f64,
+    },
+    /// Uniformly resize around the image center, reusing its current reviewed fit.
+    ScaleIllustration {
+        id: String,
+        file_id: String,
+        factor: f64,
+    },
+    /// Resize/reposition artwork with explicit source bounds; labels keep their geometry.
+    SetIllustrationGeometry {
+        id: String,
+        file_id: String,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        normalized_bounds: [f64; 4],
     },
     /// Fit a semantic anchor to explicitly reviewed bounds inside its illustration.
     FitIllustrationAnchor {
@@ -28,6 +194,10 @@ pub enum Operation {
         x: f64,
         y: f64,
         max_width: f64,
+        /// Shrink a new left-aligned text box to its measured wrapped lines.
+        /// Defaults false; preserves the requested width when omitted.
+        #[serde(default)]
+        fit_width: bool,
         #[serde(default)]
         font_size: Option<f64>,
         #[serde(default)]
@@ -37,12 +207,40 @@ pub enum Operation {
     SyncInsetRegion {
         id: String,
     },
+    /// Reposition one bound caption by fractional length along the existing path.
+    PositionArrowCaption { id: String, position: f64 },
+    /// Fit a component to the union of exact current samples for every primary/accessory image.
+    FitIllustrationGroup { anchor_id: String, samples: Vec<IllustrationSample> },
+    /// Bind already placed images and detached labels to one component, preserving
+    /// geometry/files. Explicit members use accessory ownership and meanings;
+    /// old fit metadata is removed and the primary must be reviewed/refitted.
+    BindIllustration {
+        anchor_id: String,
+        primary_id: String,
+        label_ids: Vec<String>,
+        #[serde(default)]
+        members: Vec<IllustrationMember>,
+    },
+    /// Attach one explicitly selected text label to an existing illustration group.
+    AttachIllustrationLabel { id: String, anchor_id: String },
+    /// Crop an image in source fractions without stretching or moving retained pixels.
+    /// Read actual natural dimensions from image_info; invalidates its owner's fit snapshot.
+    CropImage { id: String, file_id: String, natural_width: f64, natural_height: f64, normalized_crop: [f64;4] },
+    /// Link an existing standalone accessory image to an illustrated component.
+    AttachIllustrationBadge { id: String, anchor_id: String, meaning: String },
+    /// Remove accessory ownership without changing geometry, file or recorded meaning.
+    DetachIllustrationBadge { id: String, anchor_id: String },
     /// Translate complete existing components rigidly, preserving IDs and metadata.
     Translate {
         element_ids: Vec<String>,
         dx: f64,
         dy: f64,
     },
+    /// Atomically exchange two top-level frames and reroute generated sharp cross-panel arrows.
+    SwapFrames { first_id: String, second_id: String },
+    /// Pack selected top-level frames in existing spatial order with an explicit 8..512 gap.
+    /// Move complete contents and reroute supported cross-panel connectors; no scientific reordering.
+    PackFrames { element_ids: Vec<String>, vertical: bool, gap: f64 },
     /// Duplicate complete native components with new IDs and rigid offsets.
     Duplicate {
         element_ids: Vec<String>,
@@ -50,15 +248,31 @@ pub enum Operation {
         dx: f64,
         dy: f64,
     },
+    /// Shrink a top-level frame around its live direct children without moving any content.
+    /// Keep the frame origin; padding 8..128 is added only where the old size permits.
+    FitFrame { id: String, padding: f64 },
+    /// Shrink existing unbound scientific text to its current wrapped lines.
+    /// Preserve wording, line breaks and visible alignment; never reflow or grow.
+    FitTextWidth {
+        id: String,
+    },
     /// Wrap text using pinned font metrics while keeping containers and bindings.
     SetWrappedText {
         id: String,
         text: String,
+        /// Optional width for unbound text or an explicit arrow-caption reflow.
+        /// Omit for node labels: their width comes from the shape container.
         #[serde(default)]
         max_width: Option<f64>,
         /// Optional explicit scientific font size (4..200); otherwise preserve it.
         #[serde(default)]
         font_size: Option<f64>,
+    },
+    /// Move one free text label without expanding its illustration/group.
+    SetTextPosition {
+        id: String,
+        x: f64,
+        y: f64,
     },
     /// Replace only recorded relation evidence after reading its exact existing value.
     SetRelationEvidence {
@@ -74,8 +288,13 @@ pub enum Operation {
         /// Explicit state, never inferred from the requested direction.
         inhibitory: bool,
     },
-    /// Recompute an existing generated cross-panel connector from current geometry.
+    /// Reroute a generated cross-panel connector, or a sharp local connector within its frame.
+    /// Local routes preserve endpoint coordinates and caption geometry.
     /// Preserves IDs, scientific metadata, text, styling and unrelated objects.
+    /// Explicitly choose centered ports and rebuild a sharp local path, retaining
+    /// bindings, gaps, direction, caption geometry and scientific metadata.
+    RebindConnectorPorts { id: String, start_side: ConnectorPort, end_side: ConnectorPort },
+    /// Recompute the path without changing scientific endpoint identities.
     Reroute {
         id: String,
     },
@@ -84,6 +303,7 @@ pub enum Operation {
     },
     Update {
         id: String,
+        #[schemars(schema_with = "update_changes_schema")]
         changes: serde_json::Map<String, Value>,
     },
     /// Remove one object. Illustrated anchors cascade to owned images/labels.
@@ -97,6 +317,10 @@ pub enum Operation {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum SceneError {
+    #[error("cannot set native node geometry: {0}")]
+    InvalidNodeGeometry(String),
+    #[error("cannot insert native sketch: {0}")]
+    InvalidSketch(String),
     #[error("scene must contain an elements array of objects with unique nonempty ids")]
     InvalidScene,
     #[error("element already exists: {0}")]
@@ -152,7 +376,8 @@ pub(crate) fn owned_elements(elements: &[Value], id: &str) -> HashSet<String> {
                         })
                     });
             let frame_child = parent["type"] == "frame" && element["frameId"].as_str() == Some(id);
-            native_label || visual || detached_label || frame_child
+            let badge=element["type"]=="image"&&element["customData"]["semanticBadgeAnchorId"].as_str()==Some(id)&&parent["customData"]["visualBadgeIds"].as_array().is_some_and(|ids|ids.contains(&element["id"]));
+            native_label || visual || badge || detached_label || frame_child
         })
         .filter_map(|element| element["id"].as_str().map(str::to_owned))
         .collect()
@@ -298,6 +523,49 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
     }
     for operation in operations {
         match operation {
+            Operation::SetNodeGeometry {
+                id,
+                x,
+                y,
+                width,
+                height,
+            } => {
+                crate::node_geometry::apply(elements, id, [*x, *y, *width, *height])?;
+            }
+            Operation::InsertSketch {
+                plan,
+                id_prefix,
+                x,
+                y,
+            } => {
+                ids.extend(crate::insert_sketch::apply(
+                    elements, plan, id_prefix, *x, *y,
+                )?);
+            }
+            Operation::ScaleIllustration {
+                id,
+                file_id,
+                factor,
+            } => {
+                crate::illustration_fit::scale(elements, id, file_id, *factor)?;
+            }
+            Operation::SetIllustrationGeometry {
+                id,
+                file_id,
+                x,
+                y,
+                width,
+                height,
+                normalized_bounds,
+            } => {
+                crate::illustration_fit::set_geometry(
+                    elements,
+                    id,
+                    file_id,
+                    [*x, *y, *width, *height],
+                    *normalized_bounds,
+                )?;
+            }
             Operation::FitIllustrationAnchor {
                 id,
                 file_id,
@@ -311,6 +579,7 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 x,
                 y,
                 max_width,
+                fit_width,
                 font_size,
                 frame_id,
             } => {
@@ -326,11 +595,20 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                     *font_size,
                     frame_id.as_deref(),
                 )?;
+                if *fit_width {
+                    crate::text_edit::fit_width(elements, id)?;
+                }
                 ids.insert(id.clone());
             }
             Operation::SyncInsetRegion { id } => {
                 crate::inset_sync::apply(elements, &document["files"], id)?
             }
+            Operation::PositionArrowCaption { id, position } => crate::connector_path::position_caption(elements,id,*position)?,
+            Operation::FitIllustrationGroup { anchor_id, samples } => crate::illustration_fit::apply_group(elements, anchor_id, samples)?,
+            Operation::BindIllustration { anchor_id, primary_id, label_ids, members } => crate::illustration_binding::bind(elements, anchor_id, primary_id, label_ids, members)?,
+            Operation::AttachIllustrationLabel { id, anchor_id } => crate::illustration_badge::attach_label(elements,id,anchor_id)?,
+            Operation::AttachIllustrationBadge { id, anchor_id, meaning } => crate::illustration_badge::attach(elements,id,anchor_id,meaning)?,
+            Operation::DetachIllustrationBadge { id, anchor_id } => crate::illustration_badge::detach(elements,id,anchor_id)?,
             Operation::Translate {
                 element_ids,
                 dx,
@@ -341,6 +619,20 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 let translated = crate::arrange::translate(&snapshot, element_ids, *dx, *dy)
                     .map_err(|error| SceneError::InvalidTranslation(error.to_string()))?;
                 *elements = translated["elements"].as_array().unwrap().clone();
+            }
+            Operation::PackFrames { element_ids, vertical, gap } => {
+                let mut snapshot = document.clone();
+                snapshot["elements"] = Value::Array(elements.clone());
+                let packed = crate::arrange::pack_frames(&snapshot, element_ids, *vertical, *gap)
+                    .map_err(|error| SceneError::InvalidTranslation(error.to_string()))?;
+                *elements = packed["elements"].as_array().unwrap().clone();
+            }
+            Operation::SwapFrames { first_id, second_id } => {
+                let mut snapshot = document.clone();
+                snapshot["elements"] = Value::Array(elements.clone());
+                let swapped = crate::arrange::swap_frames(&snapshot, first_id, second_id)
+                    .map_err(|error| SceneError::InvalidTranslation(error.to_string()))?;
+                *elements = swapped["elements"].as_array().unwrap().clone();
             }
             Operation::Duplicate {
                 element_ids,
@@ -357,12 +649,16 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                     *dy,
                 )?);
             }
+            Operation::FitTextWidth { id } => crate::text_edit::fit_width(elements, id)?,
             Operation::SetWrappedText {
                 id,
                 text,
                 max_width,
                 font_size,
             } => crate::text_edit::apply(elements, id, text, *max_width, *font_size)?,
+            Operation::SetTextPosition { id, x, y } => {
+                crate::text_edit::set_position(elements, id, *x, *y)?
+            }
             Operation::SetRelationEvidence {
                 id,
                 expected_evidence,
@@ -407,12 +703,19 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 element["customData"]["inhibitory"] = serde_json::json!(inhibitory);
                 touch(element);
             }
+            Operation::FitFrame { id, padding } => {
+                crate::frame_fit::fit(elements, id, *padding)?;
+            }
+            Operation::RebindConnectorPorts { id, start_side, end_side } => crate::panel_routes::rebind_local_ports(elements,id,[start_side.index(),end_side.index()]).map_err(|e|SceneError::InvalidRoute(e.0))?,
             Operation::Reroute { id } => {
                 if !ids.contains(id) {
                     return Err(SceneError::NotFound(id.clone()));
                 }
                 crate::panel_routes::reroute(elements, id)
                     .map_err(|error| SceneError::InvalidRoute(error.0))?;
+            }
+            Operation::CropImage { id,file_id,natural_width,natural_height,normalized_crop } => {
+                crate::image_crop::apply(elements,id,file_id,[*natural_width,*natural_height],*normalized_crop)?;
             }
             Operation::Add { element } => {
                 let id = element
@@ -423,6 +726,13 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 if !element.is_object() {
                     return Err(SceneError::InvalidScene);
                 }
+                let fields = element.as_object().unwrap();
+                for field in NUMERIC_UPDATE_FIELDS {
+                    if fields.get(field).is_some_and(|v| !v.as_f64().is_some_and(|n| n.is_finite() && n.abs()<=1e6)) {
+                        return Err(SceneError::InvalidUpdate(format!("{id}.{field} requires a finite JSON number within ±1000000 when adding native objects; quoted numbers, null and containers are invalid")));
+                    }
+                }
+                validate_image_fields(fields,id)?;
                 if !ids.insert(id.to_owned()) {
                     return Err(SceneError::Duplicate(id.into()));
                 }
@@ -487,22 +797,70 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 if changes.contains_key("id") {
                     return Err(SceneError::ImmutableId);
                 }
-                for field in ["x", "y"] {
+                for field in ["boundElements", "groupIds"] {
+                    if let Some(value) = changes.get(field).filter(|v| !v.is_null()) {
+                        let Some(items) = value.as_array() else {
+                            return Err(SceneError::InvalidUpdate(format!(
+                                "{id}.{field} requires a JSON array; use [] for no references, never an empty string"
+                            )));
+                        };
+                        let mut seen = std::collections::HashSet::new();
+                        for item in items {
+                            let identity = if field == "groupIds" {
+                                item.as_str()
+                            } else {
+                                if !matches!(item["type"].as_str(), Some("arrow" | "text")) {
+                                    return Err(SceneError::InvalidUpdate(
+                                        "boundElements entries require native {id,type:arrow|text} objects"
+                                            .into(),
+                                    ));
+                                }
+                                item["id"].as_str()
+                            };
+                            if !identity.is_some_and(|id| !id.is_empty() && seen.insert(id)) {
+                                return Err(SceneError::InvalidUpdate(format!(
+                                    "{id}.{field} requires nonempty, distinct reference IDs"
+                                )));
+                            }
+                        }
+                    }
+                }
+                for field in ["containerId", "frameId"] {
+                    if changes
+                        .get(field)
+                        .is_some_and(|v| !v.is_null() && v.as_str().is_none_or(|s| s.is_empty()))
+                    {
+                        return Err(SceneError::InvalidUpdate(format!(
+                            "{id}.{field} requires null or a nonempty native object ID, never an empty string"
+                        )));
+                    }
+                }
+                for field in NUMERIC_UPDATE_FIELDS {
                     if changes.get(field).is_some_and(|value| {
                         !value
                             .as_f64()
                             .is_some_and(|number| number.is_finite() && number.abs() <= 1e6)
                     }) {
                         return Err(SceneError::InvalidUpdate(format!(
-                            "{id}.{field} requires a finite JSON number within ±1000000, not a quoted string; use set_image_geometry for standalone image placement"
+                            "{id}.{field} requires a finite JSON number within ±1000000, not a quoted string, null or container; read the native fields and retry without changing unrelated objects"
                         )));
                     }
                 }
+                validate_image_fields(changes,id)?;
                 let owned = owned_elements(elements, id);
                 let element = elements
                     .iter_mut()
                     .find(|element| element["id"].as_str() == Some(id))
                     .ok_or_else(|| SceneError::NotFound(id.clone()))?;
+                if let Some(metadata) = changes.get("customData") {
+                    for key in ["visualAssetElementId", "semanticAnchorId", "visualAssetGroupId", "visualLabelIds", "visualBadgeIds", "semanticBadgeAnchorId", "visualBadgeGroupId", "badgeMeaning", "visualAnchorFit", "visualAssetSlot"] {
+                        if metadata[key] != element["customData"][key] {
+                            return Err(SceneError::InvalidUpdate(format!(
+                                "{id}.customData.{key} is maintained by illustration operations; use asset replace for a primary illustration, attach_illustration_badge/detach_illustration_badge for accessories, or the dedicated fit/geometry operations. Generic update cannot create or erase ownership and fit records"
+                            )));
+                        }
+                    }
+                }
                 let old_x = element["x"].as_f64().unwrap_or(0.0);
                 let old_y = element["y"].as_f64().unwrap_or(0.0);
                 let version = element
@@ -514,6 +872,7 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                     .as_object_mut()
                     .ok_or(SceneError::InvalidScene)?
                     .extend(changes.clone());
+                update_path_dimensions(element, changes)?;
                 if element["type"] == "text" {
                     if let Some(text) = changes.get("text") {
                         if !text.is_string() {
@@ -559,6 +918,7 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 }
                 // Remove stale Excalidraw links while leaving scene geometry intact.
                 for element in elements.iter_mut() {
+                    if let Some(badges)=element.get_mut("customData").and_then(|d|d.get_mut("visualBadgeIds")).and_then(Value::as_array_mut){badges.retain(|v|!v.as_str().is_some_and(|id|removed.contains(id)));}
                     if let Some(bindings) = element
                         .get_mut("boundElements")
                         .and_then(Value::as_array_mut)

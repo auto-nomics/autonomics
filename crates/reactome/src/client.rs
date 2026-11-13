@@ -32,6 +32,29 @@ fn require_id(id: &str) -> Result<&str> {
     Ok(id)
 }
 
+const MAX_RATE_LIMIT_RETRIES: usize = 2;
+const MAX_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
+fn retry_delay(
+    header: Option<&reqwest::header::HeaderValue>,
+    attempt: usize,
+    now: std::time::SystemTime,
+) -> Option<std::time::Duration> {
+    let delay = if let Some(header) = header {
+        let value = header.to_str().ok()?.trim();
+        if let Ok(seconds) = value.parse::<u64>() {
+            std::time::Duration::from_secs(seconds)
+        } else {
+            httpdate::parse_http_date(value)
+                .ok()?
+                .duration_since(now)
+                .unwrap_or_default()
+        }
+    } else {
+        std::time::Duration::from_secs((attempt + 1) as u64)
+    };
+    (delay <= MAX_RETRY_DELAY).then_some(delay)
+}
+
 // ===========================================================================
 // Client
 // ===========================================================================
@@ -115,6 +138,42 @@ impl ReactomeClient {
         &self.http
     }
 
+    // Only idempotent Content Service reads use this policy. A requested wait
+    // beyond our bounded budget, or an invalid header, returns the original 429
+    // instead of retrying earlier than the server permits.
+    async fn content_response(
+        &self,
+        path: &str,
+        query: &[(&str, String)],
+        accept: Option<&str>,
+    ) -> Result<reqwest::Response> {
+        for attempt in 0..=MAX_RATE_LIMIT_RETRIES {
+            let mut request = self
+                .http
+                .get(format!("{}{}", self.content_base, path))
+                .query(query);
+            if let Some(accept) = accept {
+                request = request.header("Accept", accept);
+            }
+            let response = request.send().await?;
+            if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS
+                || attempt == MAX_RATE_LIMIT_RETRIES
+            {
+                return Ok(response);
+            }
+            let Some(delay) = retry_delay(
+                response.headers().get(reqwest::header::RETRY_AFTER),
+                attempt,
+                std::time::SystemTime::now(),
+            ) else {
+                return Ok(response);
+            };
+            drop(response);
+            tokio::time::sleep(delay).await;
+        }
+        unreachable!("bounded loop always returns on its last attempt")
+    }
+
     /// GET a Content Service path as typed JSON.
     ///
     /// `path` starts with `/`; query pairs are URL-encoded by reqwest.
@@ -124,11 +183,7 @@ impl ReactomeClient {
         query: &[(&str, String)],
     ) -> Result<T> {
         let response = self
-            .http
-            .get(format!("{}{}", self.content_base, path))
-            .query(query)
-            .header("Accept", "application/json")
-            .send()
+            .content_response(path, query, Some("application/json"))
             .await?;
         let status = response.status().as_u16();
         let body = response.text().await?;
@@ -151,12 +206,7 @@ impl ReactomeClient {
 
     /// Raw Content Service text endpoint (escape hatch for `/data/...`).
     pub async fn get_text(&self, path: &str) -> Result<String> {
-        let response = self
-            .http
-            .get(format!("{}{}", self.content_base, path))
-            .header("Accept", "text/plain")
-            .send()
-            .await?;
+        let response = self.content_response(path, &[], Some("text/plain")).await?;
         let status = response.status().as_u16();
         let body = response.text().await?;
         if !(200..300).contains(&status) {
@@ -197,8 +247,8 @@ impl ReactomeClient {
         self.get(&path, &[]).await
     }
 
-    /// Ancestor chain from the root to a specific event.
-    pub async fn event_ancestors(&self, id: &str) -> Result<Vec<EventAncestor>> {
+    /// All paths from the requested event toward its top-level pathways.
+    pub async fn event_ancestors(&self, id: &str) -> Result<Vec<Vec<EventAncestor>>> {
         let id = require_id(id)?;
         self.get(&format!("/data/event/{id}/ancestors"), &[]).await
     }
@@ -213,6 +263,13 @@ impl ReactomeClient {
     /// All events contained within a pathway.
     pub async fn contained_events(&self, id: &str) -> Result<Vec<Pathway>> {
         let id = require_id(id)?;
+        self.get(&format!("/data/pathway/{id}/containedEvents"), &[])
+            .await
+    }
+
+    /// Contained events including numeric identity references emitted by the
+    /// service. References carry no title, species or reaction evidence.
+    pub async fn contained_event_references(&self, id: &str) -> Result<Vec<EventReference>> {
         self.get(&format!("/data/pathway/{id}/containedEvents"), &[])
             .await
     }
@@ -336,11 +393,7 @@ impl ReactomeClient {
 
     /// GET a Content Service path as raw bytes.
     pub async fn get_binary(&self, path: &str) -> Result<Vec<u8>> {
-        let response = self
-            .http
-            .get(format!("{}{}", self.content_base, path))
-            .send()
-            .await?;
+        let response = self.content_response(path, &[], None).await?;
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {
             let body = response.text().await.unwrap_or_default();

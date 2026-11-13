@@ -1,3 +1,4 @@
+import {readCandidatePreparedPrompt} from './canvas-prepared-context.mjs';
 // Real Gateway candidate feedback; no scripted model responses or preview substitutes.
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -33,7 +34,7 @@ export async function runCandidateRevision({page,call,path,send,persist,director
     const feedback=dialog.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();
     await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill(request);
     const count=turns.length;await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();
-    const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const draft=await composer.inputValue();
+    const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const draft=await readCandidatePreparedPrompt(page);
     assert.ok(draft.includes(candidate.id)&&draft.includes(candidate.document_sha256),'actual feedback draft carries exact candidate identity');
     assert.equal(turns.length,count,'preparing feedback never sends it');assert.deepEqual(await call('GET',path),formal);
     await send(number);

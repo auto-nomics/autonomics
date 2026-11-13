@@ -1,4 +1,5 @@
 //! Explicit visual bounds for an illustration's semantic anchor and local connectors.
+use crate::connector_path::preserve_center;
 use crate::scene::{self, SceneError};
 use serde_json::{Value, json};
 fn fail(message: &str) -> SceneError {
@@ -58,6 +59,75 @@ pub(crate) fn layout_slot(anchor: &Value) -> Result<[f64; 4], SceneError> {
     Ok(slot)
 }
 
+/// Map source-root fractions through the saved crop, flips and center rotation.
+/// The semantic anchor remains an axis-aligned box around the selected artwork.
+pub(crate) fn artwork_bounds(visual: &Value, bounds: [f64; 4]) -> Result<[f64; 4], SceneError> {
+    let [x, y, width, height] = rect(visual)?;
+    let angle = number(visual, "angle")?;
+    let scale = visual["scale"]
+        .as_array()
+        .filter(|s| s.len() == 2)
+        .ok_or_else(|| fail("image scale must contain two flips"))?;
+    let flips = [scale[0].as_f64(), scale[1].as_f64()];
+    if flips.iter().any(|v| !matches!(v, Some(1.0) | Some(-1.0))) {
+        return Err(fail("image scale must contain only 1 or -1"));
+    }
+    let crop = if visual["crop"].is_null() {
+        [0., 0., 1., 1.]
+    } else {
+        let c = &visual["crop"];
+        let nw = number(c, "naturalWidth")?;
+        let nh = number(c, "naturalHeight")?;
+        if nw <= 0. || nh <= 0. {
+            return Err(fail("invalid crop source dimensions"));
+        }
+        [
+            number(c, "x")? / nw,
+            number(c, "y")? / nh,
+            number(c, "width")? / nw,
+            number(c, "height")? / nh,
+        ]
+    };
+    if crop[0] < 0.
+        || crop[1] < 0.
+        || crop[2] <= 0.
+        || crop[3] <= 0.
+        || crop[0] + crop[2] > 1. + 1e-9
+        || crop[1] + crop[3] > 1. + 1e-9
+    {
+        return Err(fail("saved crop is outside the source image"));
+    }
+    if bounds[0] < crop[0] - 1e-9
+        || bounds[1] < crop[1] - 1e-9
+        || bounds[0] + bounds[2] > crop[0] + crop[2] + 1e-9
+        || bounds[1] + bounds[3] > crop[1] + crop[3] + 1e-9
+    {
+        return Err(fail(
+            "selected artwork bounds must lie inside the visible source crop",
+        ));
+    }
+    let (sin, cos) = angle.sin_cos();
+    let mut low = [f64::INFINITY; 2];
+    let mut high = [f64::NEG_INFINITY; 2];
+    for u in [bounds[0], bounds[0] + bounds[2]] {
+        for v in [bounds[1], bounds[1] + bounds[3]] {
+            let local = [
+                ((u - crop[0]) / crop[2] - 0.5) * width * flips[0].unwrap(),
+                ((v - crop[1]) / crop[3] - 0.5) * height * flips[1].unwrap(),
+            ];
+            let point = [
+                x + width / 2. + cos * local[0] - sin * local[1],
+                y + height / 2. + sin * local[0] + cos * local[1],
+            ];
+            for axis in 0..2 {
+                low[axis] = low[axis].min(point[axis]);
+                high[axis] = high[axis].max(point[axis]);
+            }
+        }
+    }
+    Ok([low[0], low[1], high[0] - low[0], high[1] - low[1]])
+}
+
 fn frame(elements: &[Value], e: &Value, bounds: [f64; 4]) -> Result<(), SceneError> {
     if let Some(id) = e["frameId"].as_str() {
         let f = elements
@@ -104,47 +174,159 @@ fn bridge(port: [f64; 2], next: [f64; 2], side: usize) -> Vec<[f64; 2]> {
     route
 }
 
-// Native arrow labels use the middle vertex/segment. Balance harmless collinear
-// vertices around a retained label center, rather than moving clear existing text.
-fn preserve_center(route: &mut Vec<[f64; 2]>, center: [f64; 2]) {
-    let index = if let Some(i) = route.iter().position(|p| close(*p, center)) {
-        i
+/// Uniform center-fixed scaling reuses a current, explicitly reviewed fit.
+pub(crate) fn scale(
+    elements: &mut [Value],
+    id: &str,
+    file_id: &str,
+    factor: f64,
+) -> Result<(), SceneError> {
+    if !factor.is_finite() || factor <= 0. {
+        return Err(fail(
+            "scale factor must be a finite positive number; 1.1 means enlarge by 10%",
+        ));
+    }
+    let selected = elements
+        .iter()
+        .find(|e| e["id"] == id)
+        .ok_or_else(|| SceneError::NotFound(id.into()))?;
+    let (anchor, image) = if selected["type"] == "image" {
+        let owner = selected["customData"]["semanticAnchorId"]
+            .as_str()
+            .ok_or_else(|| fail("requires an owned illustration"))?;
+        (
+            elements
+                .iter()
+                .find(|e| e["id"] == owner)
+                .ok_or_else(|| fail("missing semantic anchor"))?,
+            selected,
+        )
     } else {
-        let Some(i) = route.windows(2).position(|p| {
-            let [a, b] = [p[0], p[1]];
-            ((a[0] - b[0]).abs() < 1e-6
-                && (center[0] - a[0]).abs() < 1e-6
-                && center[1] >= a[1].min(b[1]) - 1e-6
-                && center[1] <= a[1].max(b[1]) + 1e-6)
-                || ((a[1] - b[1]).abs() < 1e-6
-                    && (center[1] - a[1]).abs() < 1e-6
-                    && center[0] >= a[0].min(b[0]) - 1e-6
-                    && center[0] <= a[0].max(b[0]) + 1e-6)
-        }) else {
-            return;
-        };
-        route.insert(i + 1, center);
-        i + 1
+        let visual = selected["customData"]["visualAssetElementId"]
+            .as_str()
+            .ok_or_else(|| fail("anchor has no illustration"))?;
+        (
+            selected,
+            elements
+                .iter()
+                .find(|e| e["id"] == visual && e["type"] == "image")
+                .ok_or_else(|| fail("missing illustration"))?,
+        )
     };
-    if index == 0 || index + 1 == route.len() {
-        return;
+    let fit = &anchor["customData"]["visualAnchorFit"];
+    if anchor["customData"]["visualAssetElementId"] != image["id"]
+        || image["customData"]["semanticAnchorId"] != anchor["id"]
+        || fit["fileId"] != file_id
+        || image["fileId"] != file_id
+    {
+        return Err(fail(
+            "requires the exact reciprocal illustration and its reviewed file fit",
+        ));
     }
-    let left = index;
-    let right = route.len() - index - 1;
-    let extra = left.abs_diff(right);
-    if extra == 0 {
-        return;
+    if fit["scope"]=="illustration_group" {
+        let anchor_id=anchor["id"].as_str().ok_or_else(||fail("missing group identity"))?.to_owned();
+        return scale_group(elements,&anchor_id,factor);
     }
-    let segment = if left < right { 0 } else { route.len() - 2 };
-    let a = route[segment];
-    let b = route[segment + 1];
-    for n in 1..=extra {
-        let t = n as f64 / (extra + 1) as f64;
-        route.insert(
-            segment + n,
-            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t],
-        );
+    let normalized: [f64; 4] = serde_json::from_value(fit["normalizedBounds"].clone())
+        .map_err(|_| fail("review source bounds with fit_illustration_anchor before scaling"))?;
+    let expected = artwork_bounds(image, normalized)?;
+    if rect(anchor)?
+        .iter()
+        .zip(expected)
+        .any(|(actual, expected)| (actual - expected).abs() > 1e-6)
+    {
+        return Err(fail(
+            "stored illustration fit is stale; review and refit before scaling",
+        ));
     }
+    let [x, y, width, height] = rect(image)?;
+    let w = width * factor;
+    let h = height * factor;
+    set_geometry(
+        elements,
+        id,
+        file_id,
+        [x + (width - w) / 2., y + (height - h) / 2., w, h],
+        normalized,
+    )
+}
+
+/// The outer scene edit is atomic: reject unsupported connectors after geometry validation.
+pub(crate) fn set_geometry(
+    elements: &mut [Value],
+    id: &str,
+    file_id: &str,
+    bounds: [f64; 4],
+    normalized: [f64; 4],
+) -> Result<(), SceneError> {
+    if bounds.iter().any(|n| !n.is_finite() || n.abs() > 1e6) || bounds[2] <= 0. || bounds[3] <= 0.
+    {
+        return Err(fail(
+            "illustration geometry requires finite x/y and positive width/height within 1000000",
+        ));
+    }
+    let selected = elements
+        .iter()
+        .find(|e| e["id"] == id)
+        .ok_or_else(|| SceneError::NotFound(id.into()))?;
+    let visual_id = if selected["type"] == "image" {
+        id.to_owned()
+    } else {
+        selected["customData"]["visualAssetElementId"]
+            .as_str()
+            .ok_or_else(|| fail("anchor has no illustration"))?
+            .to_owned()
+    };
+    let index = elements
+        .iter()
+        .position(|e| e["id"] == visual_id && e["type"] == "image")
+        .ok_or_else(|| fail("missing illustration"))?;
+    let visual = &elements[index];
+    if visual["isDeleted"] == true
+        || visual["locked"] == true
+        || visual["fileId"] != file_id
+        || !visual["customData"]["semanticAnchorId"].is_string()
+        || visual["customData"]["inset"].is_object()
+    {
+        return Err(fail(
+            "requires the exact live unlocked owned illustration, excluding insets",
+        ));
+    }
+    if elements.iter().any(|e| {
+        e["isDeleted"] != true
+            && (e["containerId"] == visual_id
+                || e["startBinding"]["elementId"] == visual_id
+                || e["endBinding"]["elementId"] == visual_id)
+    }) {
+        return Err(fail(
+            "illustration has directly bound objects; use native editing",
+        ));
+    }
+    let mut next = visual.clone();
+    for (key, value) in ["x", "y", "width", "height"].into_iter().zip(bounds) {
+        next[key] = json!(value);
+    }
+    // Check the complete displayed image, including rotation, against its frame.
+    let crop = &next["crop"];
+    let visible = if crop.is_null() {
+        [0., 0., 1., 1.]
+    } else {
+        let nw = number(crop, "naturalWidth")?;
+        let nh = number(crop, "naturalHeight")?;
+        if nw <= 0. || nh <= 0. {
+            return Err(fail("invalid crop source dimensions"));
+        }
+        [
+            number(crop, "x")? / nw,
+            number(crop, "y")? / nh,
+            number(crop, "width")? / nw,
+            number(crop, "height")? / nh,
+        ]
+    };
+    frame(elements, &next, artwork_bounds(&next, visible)?)?;
+    scene::touch(&mut next);
+    elements[index] = next;
+    apply(elements, id, file_id, normalized)
 }
 
 pub(crate) fn apply(
@@ -196,23 +378,23 @@ pub(crate) fn apply(
         .iter()
         .find(|e| e["id"] == visual_id && e["type"] == "image")
         .ok_or_else(|| fail("missing illustration"))?;
-    editable(visual)?;
+    if visual["isDeleted"] == true || visual["locked"] == true {
+        return Err(fail("requires a live unlocked illustration"));
+    }
     if visual["customData"]["semanticAnchorId"] != anchor_id
         || visual["fileId"] != file_id
-        || !visual["crop"].is_null()
-        || !visual["scale"]
-            .as_array()
-            .is_some_and(|scale| scale.len() == 2 && scale.iter().all(|n| n.as_f64() == Some(1.)))
         || visual["frameId"] != anchor["frameId"]
     {
         return Err(fail(
-            "requires the exact uncropped unflipped owned image file and matching frame",
+            "requires the exact owned image file and matching frame",
         ));
     }
     let old = rect(anchor)?;
     let slot = layout_slot(anchor)?;
     let [ix, iy, iw, ih] = rect(visual)?;
-    let fitted = [ix + u * iw, iy + v * ih, w * iw, h * ih];
+    let fitted = artwork_bounds(visual, normalized)?;
+    let image_transform =
+        json!({"angle":visual["angle"],"scale":visual["scale"],"crop":visual["crop"]});
     if fitted[2] < 1. || fitted[3] < 1. || fitted.iter().any(|v| !v.is_finite() || v.abs() > 1e6) {
         return Err(fail(
             "fitted bounds must be at least one scene unit and remain in range",
@@ -220,6 +402,38 @@ pub(crate) fn apply(
     }
     frame(elements, anchor, fitted)?;
     let anchor_id = anchor_id.to_owned();
+    adjust_connected(elements, &anchor_id, old, fitted)?;
+    let anchor = &mut elements[index];
+    for (key, value) in ["x", "y", "width", "height"].into_iter().zip(fitted) {
+        anchor[key] = json!(value);
+    }
+    anchor["customData"]["visualAssetSlot"] = json!([
+        (slot[0] - fitted[0]) / fitted[2],
+        (slot[1] - fitted[1]) / fitted[3],
+        slot[2] / fitted[2],
+        slot[3] / fitted[3]
+    ]);
+    anchor["customData"]["visualAnchorFit"] = json!({"fileId":file_id,"normalizedBounds":normalized,"imageBounds":[ix,iy,iw,ih],"imageTransform":image_transform});
+    scene::touch(anchor);
+    Ok(())
+}
+fn rect_line(e: &Value) -> Result<[f64; 4], SceneError> {
+    Ok([
+        number(e, "x")?,
+        number(e, "y")?,
+        number(e, "width")?,
+        number(e, "height")?,
+    ])
+}
+
+/// Rebind a native component's centered sharp connectors to new bounds.
+/// Callers operate on a scene clone, so unsupported geometry remains atomic.
+pub(crate) fn adjust_connected(
+    elements: &mut [Value],
+    anchor_id: &str,
+    old: [f64; 4],
+    fitted: [f64; 4],
+) -> Result<(), SceneError> {
     let connected = elements
         .iter()
         .enumerate()
@@ -297,7 +511,13 @@ pub(crate) fn apply(
         };
         let side = ports(old, gap)
             .iter()
-            .position(|port| close(*port, endpoint))
+            .position(|port| {
+                // Saved/native coordinates may be rounded to hundredths. Accept
+                // only sub-hundredth drift at the existing centered port; the
+                // new endpoint still uses the exact fitted port and same binding.
+                (port[0] - endpoint[0]).abs() <= 0.01
+                    && (port[1] - endpoint[1]).abs() <= 0.01
+            })
             .ok_or_else(|| fail("connector endpoint does not match the existing anchor port"))?;
         let port = ports(fitted, gap)[side];
         if close(port, endpoint) {
@@ -404,9 +624,280 @@ pub(crate) fn apply(
         );
         scene::touch(arrow);
     }
-    let anchor = &mut elements[index];
-    for (key, value) in ["x", "y", "width", "height"].into_iter().zip(fitted) {
-        anchor[key] = json!(value);
+    Ok(())
+}
+
+fn scale_group(elements: &mut [Value], anchor_id: &str, factor: f64) -> Result<(), SceneError> {
+    let anchor = elements
+        .iter()
+        .find(|e| e["id"] == anchor_id)
+        .ok_or_else(|| fail("missing group anchor"))?;
+    editable(anchor)?;
+    let old = rect(anchor)?;
+    let fit = &anchor["customData"]["visualAnchorFit"];
+    let recorded: [f64; 4] = serde_json::from_value(fit["anchorBounds"].clone())
+        .map_err(|_| fail("invalid group bounds snapshot"))?;
+    if old
+        .iter()
+        .zip(recorded)
+        .any(|(a, b)| !b.is_finite() || (a - b).abs() > 1e-6)
+    {
+        return Err(fail("group fit is stale; review and refit before scaling"));
+    }
+    let members = fit["members"]
+        .as_array()
+        .filter(|m| !m.is_empty() && m.len() <= 33)
+        .ok_or_else(|| fail("missing complete group fit"))?;
+    let mut samples = Vec::new();
+    let mut changes = Vec::new();
+    let mut union = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    let center = [old[0] + old[2] / 2., old[1] + old[3] / 2.];
+    for member in members {
+        let id = member["elementId"]
+            .as_str()
+            .ok_or_else(|| fail("invalid group member identity"))?;
+        let matching = elements
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e["id"] == id && e["isDeleted"] != true)
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(fail("missing or ambiguous group image"));
+        }
+        let (i, image) = matching[0];
+        editable(image)?;
+        let bounds = rect(image)?;
+        let recorded: [f64; 4] = serde_json::from_value(member["imageBounds"].clone())
+            .map_err(|_| fail("invalid member viewport snapshot"))?;
+        let file = member["fileId"]
+            .as_str()
+            .ok_or_else(|| fail("missing member file"))?;
+        if image["fileId"] != file
+            || bounds
+                .iter()
+                .zip(recorded)
+                .any(|(a, b)| !b.is_finite() || (a - b).abs() > 1e-6)
+            || member["imageTransform"]["angle"] != image["angle"]
+            || member["imageTransform"]["scale"] != image["scale"]
+            || member["imageTransform"]["crop"] != image["crop"]
+        {
+            return Err(fail(
+                "group member fit is stale; review and refit before scaling",
+            ));
+        }
+        let normalized: [f64; 4] = serde_json::from_value(member["normalizedBounds"].clone())
+            .map_err(|_| fail("invalid sampled member bounds"))?;
+        let b = artwork_bounds(image, normalized)?;
+        union[0] = union[0].min(b[0]);
+        union[1] = union[1].min(b[1]);
+        union[2] = union[2].max(b[0] + b[2]);
+        union[3] = union[3].max(b[1] + b[3]);
+        samples.push(crate::scene::IllustrationSample {
+            id: id.into(),
+            file_id: file.into(),
+            normalized_bounds: normalized,
+        });
+        let next = [
+            center[0] + (bounds[0] - center[0]) * factor,
+            center[1] + (bounds[1] - center[1]) * factor,
+            bounds[2] * factor,
+            bounds[3] * factor,
+        ];
+        if next.iter().any(|v| !v.is_finite() || v.abs() > 1e6) || next[2] <= 0. || next[3] <= 0. {
+            return Err(fail("scaled group geometry is outside canvas range"));
+        }
+        changes.push((i, next));
+    }
+    let union = [union[0], union[1], union[2] - union[0], union[3] - union[1]];
+    if old
+        .iter()
+        .zip(union)
+        .any(|(a, b)| !b.is_finite() || (a - b).abs() > 1e-6)
+    {
+        return Err(fail(
+            "sampled group footprint is stale; refit before scaling",
+        ));
+    }
+    for (i, bounds) in changes {
+        let image = &mut elements[i];
+        for (k, v) in ["x", "y", "width", "height"].into_iter().zip(bounds) {
+            image[k] = json!(v);
+        }
+        scene::touch(image);
+    }
+    apply_group(elements, anchor_id, &samples)
+}
+
+pub(crate) fn translate_group_record(record: &mut Value, dx: f64, dy: f64) {
+    fn shift(value: &mut Value, dx: f64, dy: f64) {
+        if let Some(b) = value
+            .as_array_mut()
+            .filter(|b| b.len() == 4 && b.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)))
+        {
+            b[0] = json!(b[0].as_f64().unwrap() + dx);
+            b[1] = json!(b[1].as_f64().unwrap() + dy);
+        }
+    }
+    if record["scope"] != "illustration_group" {
+        return;
+    }
+    shift(&mut record["anchorBounds"], dx, dy);
+    if let Some(members) = record["members"].as_array_mut() {
+        for m in members {
+            shift(&mut m["imageBounds"], dx, dy);
+        }
+    }
+}
+
+/// Fit a component to the union of explicitly sampled primary and accessory images.
+pub(crate) fn apply_group(
+    elements: &mut [Value],
+    anchor_id: &str,
+    samples: &[crate::scene::IllustrationSample],
+) -> Result<(), SceneError> {
+    use std::collections::HashSet;
+    let ai = elements
+        .iter()
+        .position(|e| e["id"] == anchor_id && e["isDeleted"] != true)
+        .ok_or_else(|| fail("missing group anchor"))?;
+    let anchor = &elements[ai];
+    editable(anchor)?;
+    if anchor["type"] != "rectangle"
+        || !anchor["customData"]["inset"].is_null()
+        || !anchor["customData"]["annotationKind"].is_null()
+    {
+        return Err(fail("requires an illustrated rectangular group anchor"));
+    }
+    let primary = anchor["customData"]["visualAssetElementId"]
+        .as_str()
+        .ok_or_else(|| fail("missing group primary"))?;
+    let group = anchor["customData"]["visualAssetGroupId"]
+        .as_str()
+        .ok_or_else(|| fail("missing illustration group"))?;
+    if group.is_empty()
+        || !anchor["groupIds"]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&json!(group)))
+        || (!anchor["customData"]["visualBadgeIds"].is_null()
+            && !anchor["customData"]["visualBadgeIds"].is_array())
+    {
+        return Err(fail("invalid group ownership record"));
+    }
+    let mut expected = HashSet::from([primary]);
+    if let Some(ids) = anchor["customData"]["visualBadgeIds"].as_array() {
+        for id in ids {
+            if !expected.insert(
+                id.as_str()
+                    .ok_or_else(|| fail("invalid accessory identity"))?,
+            ) {
+                return Err(fail("duplicate group image"));
+            }
+        }
+    }
+    if expected.len() > 33 || samples.len() != expected.len() {
+        return Err(fail(
+            "samples must cover the complete primary/accessory group (at most 33 images)",
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut records = Vec::new();
+    let mut union = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for sample in samples {
+        if !expected.contains(sample.id.as_str()) || !seen.insert(sample.id.as_str()) {
+            return Err(fail(
+                "sample identities must exactly match group membership",
+            ));
+        }
+        let matches = elements
+            .iter()
+            .filter(|e| e["id"] == sample.id && e["isDeleted"] != true)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            return Err(fail("ambiguous group image"));
+        }
+        let image = matches[0];
+        editable(image)?;
+        let data = &image["customData"];
+        let owned = if sample.id == primary {
+            data["semanticAnchorId"] == anchor_id
+        } else {
+            data["semanticBadgeAnchorId"] == anchor_id
+                && data["visualBadgeGroupId"] == group
+                && data["badgeMeaning"]
+                    .as_str()
+                    .is_some_and(|s| !s.trim().is_empty())
+        };
+        if image["type"] != "image"
+            || !owned
+            || image["fileId"] != sample.file_id
+            || image["frameId"] != anchor["frameId"]
+            || !image["groupIds"]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&json!(group)))
+            || image["opacity"].as_f64().unwrap_or(100.) != 100.
+        {
+            return Err(fail(
+                "requires exact current, opaque, reciprocally owned group images in the same frame",
+            ));
+        }
+        let [x, y, w, h] = sample.normalized_bounds;
+        if !sample.normalized_bounds.iter().all(|v| v.is_finite())
+            || x < 0.
+            || y < 0.
+            || w <= 0.
+            || h <= 0.
+            || x + w > 1. + 1e-9
+            || y + h > 1. + 1e-9
+        {
+            return Err(fail(
+                "each normalized sample must be nonempty and inside [0,1]",
+            ));
+        }
+        let b = artwork_bounds(image, sample.normalized_bounds)?;
+        union[0] = union[0].min(b[0]);
+        union[1] = union[1].min(b[1]);
+        union[2] = union[2].max(b[0] + b[2]);
+        union[3] = union[3].max(b[1] + b[3]);
+        records.push(json!({"elementId":sample.id,"fileId":sample.file_id,"normalizedBounds":sample.normalized_bounds,"imageBounds":rect(image)?,"imageTransform":{"angle":image["angle"],"scale":image["scale"],"crop":image["crop"]}}));
+    }
+    if elements.iter().any(|e| {
+        e["isDeleted"] != true
+            && e["type"] == "image"
+            && (e["customData"]["semanticAnchorId"] == anchor_id
+                || e["customData"]["semanticBadgeAnchorId"] == anchor_id)
+            && !expected.contains(e["id"].as_str().unwrap_or(""))
+    }) {
+        return Err(fail("unlisted image claims group ownership"));
+    }
+    let fitted = [union[0], union[1], union[2] - union[0], union[3] - union[1]];
+    if fitted[2] < 1. || fitted[3] < 1. || fitted.iter().any(|v| !v.is_finite() || v.abs() > 1e6) {
+        return Err(fail("invalid combined visible bounds"));
+    }
+    let old = rect(anchor)?;
+    let slot = layout_slot(anchor)?;
+    frame(elements, anchor, fitted)?;
+    let mut record = records
+        .iter()
+        .find(|r| r["elementId"] == primary)
+        .unwrap()
+        .clone();
+    record["scope"] = json!("illustration_group");
+    record["anchorBounds"] = json!(fitted);
+    record["members"] = json!(records);
+    adjust_connected(elements, anchor_id, old, fitted)?;
+    let anchor = &mut elements[ai];
+    for (k, v) in ["x", "y", "width", "height"].into_iter().zip(fitted) {
+        anchor[k] = json!(v);
     }
     anchor["customData"]["visualAssetSlot"] = json!([
         (slot[0] - fitted[0]) / fitted[2],
@@ -414,16 +905,101 @@ pub(crate) fn apply(
         slot[2] / fitted[2],
         slot[3] / fitted[3]
     ]);
-    anchor["customData"]["visualAnchorFit"] =
-        json!({"fileId":file_id,"normalizedBounds":normalized,"imageBounds":[ix,iy,iw,ih]});
+    anchor["customData"]["visualAnchorFit"] = record;
     scene::touch(anchor);
     Ok(())
 }
-fn rect_line(e: &Value) -> Result<[f64; 4], SceneError> {
-    Ok([
-        number(e, "x")?,
-        number(e, "y")?,
-        number(e, "width")?,
-        number(e, "height")?,
-    ])
+
+#[cfg(test)]
+mod label_center_arrowheads {
+    use super::*;
+    fn length(points: &[[f64; 2]]) -> f64 {
+        points
+            .windows(2)
+            .map(|p| (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1]))
+            .sum()
+    }
+    #[test]
+    fn balancing_only_terminal_leg_retains_most_of_its_length_and_does_not_erase_backtracking() {
+        for (mut route, center, minimum) in [
+            (
+                vec![
+                    [0., 0.],
+                    [0., 100.],
+                    [100., 100.],
+                    [100., 0.],
+                    [200., 0.],
+                    [226., 0.],
+                ],
+                [200., 0.],
+                23.4,
+            ),
+            (
+                vec![
+                    [0., 0.],
+                    [20., 0.],
+                    [10., 0.],
+                    [10., 20.],
+                    [100., 20.],
+                    [100., 50.],
+                ],
+                [10., 20.],
+                30.,
+            ),
+        ] {
+            let total = length(&route);
+            let first = route[0];
+            let last = *route.last().unwrap();
+            preserve_center(&mut route, center);
+            let n = route.len();
+            assert!(
+                (route[n - 1][0] - route[n - 2][0]).hypot(route[n - 1][1] - route[n - 2][1])
+                    >= minimum - 1e-6
+            );
+            assert_eq!(route[0], first);
+            assert_eq!(*route.last().unwrap(), last);
+            assert!((length(&route) - total).abs() < 1e-6);
+            assert!(close(scene::path_label_center(&route, 0., 0.), center));
+        }
+    }
+    #[test]
+    fn preserving_caption_center_does_not_shrink_terminal_arrowhead_segments() {
+        let mut route = vec![
+            [0., 0.],
+            [20., 0.],
+            [20., 0.5],
+            [40., 0.5],
+            [40., 100.],
+            [40., 200.],
+            [-500., 200.],
+            [-500., 226.],
+        ];
+        let original = route.clone();
+        let total = length(&route);
+        let center = [40., 100.];
+        for _ in 0..8 {
+            let a = route[0];
+            let b = route[1];
+            route.insert(1, [a[0] + (b[0] - a[0]) / 3., a[1] + (b[1] - a[1]) / 3.]);
+            route.insert(
+                2,
+                [
+                    a[0] + 2. * (b[0] - a[0]) / 3.,
+                    a[1] + 2. * (b[1] - a[1]) / 3.,
+                ],
+            );
+            preserve_center(&mut route, center);
+            let n = route.len();
+            let terminal =
+                (route[n - 1][0] - route[n - 2][0]).hypot(route[n - 1][1] - route[n - 2][1]);
+            assert!(
+                terminal >= 24.,
+                "terminal segment shrank to {terminal}; Excalidraw limits arrowhead size to half this segment"
+            );
+            assert_eq!(route.first(), original.first());
+            assert_eq!(route.last(), original.last());
+            assert!(close(scene::path_label_center(&route, 0., 0.), center));
+            assert!((length(&route) - total).abs() < 1e-6);
+        }
+    }
 }

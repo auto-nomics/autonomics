@@ -63,6 +63,22 @@ pub fn router(store: Store) -> Router {
             get(read_proposal),
         )
         .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/children",
+            get(proposal_children_index),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/image-bounds",
+            get(proposal_image_bounds),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/geometry-review",
+            get(proposal_geometry_review),
+        )
+        .route(
+            "/projects/{project}/figures/{id}/proposals/{proposal}/restore-parent",
+            post(restore_candidate_parent),
+        )
+        .route(
             "/projects/{project}/figures/{id}/proposals/{proposal}/revisions",
             post(revise_proposal),
         )
@@ -178,7 +194,9 @@ pub fn router(store: Store) -> Router {
             post(reject),
         )
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-        .with_state(Arc::new(Mutex::new(VisualizationService::new(store))))
+        .with_state(Arc::new(Mutex::new(VisualizationService::new(
+            store.with_linear_candidate_revisions(true),
+        ))))
 }
 #[derive(Deserialize)]
 struct ProjectInput {
@@ -325,6 +343,32 @@ mod tests {
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (status, serde_json::from_slice(&bytes).unwrap())
     }
+    #[tokio::test]
+    async fn candidate_geometry_review_is_scoped_read_only_and_does_not_expose_files() {
+        let mut store = Store::in_memory().unwrap();
+        store.create_project("p", "Study").unwrap();
+        store.create_project("other", "Other").unwrap();
+        let formal = json!({"elements":[]});
+        let figure = store.create("p", "Figure", "excalidraw/v2", &formal).unwrap();
+        let doc = json!({"elements":[{"id":"a","type":"arrow","x":0,"y":0,"points":[[0,0],[200,0]],"boundElements":[{"id":"t","type":"text"}]},{"id":"t","type":"text","containerId":"a","x":10,"y":-10,"width":180,"height":20,"fontSize":16}],"files":{"secret":{"dataURL":"private-image-bytes"}}});
+        let parent = store.propose("p", &figure.id, 1, "Parent", &doc).unwrap();
+        let app = router(store);
+        let path = format!("/projects/p/figures/{}/proposals/{}/geometry-review", figure.id, parent.id);
+        let (status, result) = request(app.clone(), "GET", &path, Value::Null).await;
+        assert_eq!(status, 200);
+        assert_eq!(result["proposal_id"],parent.id);
+        assert_eq!(result["document_sha256"],parent.document_sha256);
+        assert_eq!(result["scene_geometry_review"]["caption_path_overlap"]["warnings"][0]["arrow_id"],"a");
+        assert!(!result.to_string().contains("private-image-bytes"));
+        assert_eq!(request(app.clone(),"GET",&path.replace("/projects/p/","/projects/other/"),Value::Null).await.0,404);
+        assert_eq!(request(app.clone(),"GET",&path.replace(&parent.id,"missing"),Value::Null).await.0,404);
+        let (_,current)=request(app.clone(),"GET",&format!("/projects/p/figures/{}",figure.id),Value::Null).await;
+        assert_eq!(current["metadata"]["revision"],1);
+        assert_eq!(current["scene"]["document"],formal);
+        let (_,saved)=request(app,"GET",&format!("/projects/p/figures/{}/proposals/{}",figure.id,parent.id),Value::Null).await;
+        assert_eq!(saved["document"],doc);
+    }
+
     #[tokio::test]
     async fn svg_http_refines_exact_pending_candidate_without_adoption() {
         let mut store = Store::in_memory().unwrap();
@@ -1184,6 +1228,17 @@ async fn proposal_index(
     })
     .await
 }
+async fn proposal_children_index(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Query(query): Query<ProposalIndexQuery>,
+) -> Response {
+    work(s, move |service| {
+        Ok(json!(service.store().proposal_children_index(
+            &project, &id, &proposal, query.before.as_deref(), query.limit.unwrap_or(20),
+        )?))
+    }).await
+}
 async fn proposal_summary(
     State(s): State<Shared>,
     Path((project, id)): Path<(String, String)>,
@@ -1600,6 +1655,56 @@ struct ReviseProposalInput {
     arrangement: Option<visualization::arrange::Spec>,
     markup_ids: Option<Vec<String>>,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CandidateBoundsQuery {
+    expected_revision: i64,
+    document_sha256: String,
+}
+async fn proposal_image_bounds(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Query(query): Query<CandidateBoundsQuery>,
+) -> Response {
+    work(s, move |service| {
+        let candidate = service.store().proposal(&project, &id, &proposal)?;
+        if candidate.status != "pending" || candidate.base_revision != query.expected_revision
+            || candidate.document_sha256 != query.document_sha256
+            || service.store().get(&project, &id)?.revision != query.expected_revision {
+            return Err(visualization::Error::Conflict.into());
+        }
+        let mut infos = Vec::new();
+        let mut unsupported = Vec::new();
+        if let Some(elements) = candidate.document["elements"].as_array() {
+            for element in elements.iter().filter(|e| e["type"] == "image" && e["isDeleted"] != true) {
+                let Some(element_id) = element["id"].as_str() else { continue };
+                if infos.len() + unsupported.len() >= 20 {
+                    unsupported.push(element_id.to_owned());
+                    continue;
+                }
+                match visualization_assets::image_info_document(&candidate.document, element_id) {
+                    Ok(mut info) => {
+                        info.as_object_mut().unwrap().remove("dataURL");
+                        infos.push(info);
+                    }
+                    Err(_) => unsupported.push(element_id.to_owned()),
+                }
+            }
+        }
+        Ok(json!({"proposal_id":candidate.id,"document_sha256":candidate.document_sha256,
+            "infos":infos,"unsupported_images":unsupported}))
+    }).await
+}
+async fn proposal_geometry_review(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+) -> Response {
+    work(s, move |service| {
+        let candidate = service.store().proposal(&project, &id, &proposal)?;
+        Ok(json!({"proposal_id":candidate.id,"document_sha256":candidate.document_sha256,
+            "scene_geometry_review":visualization::geometry_review::review(&candidate.document)}))
+    }).await
+}
 async fn read_proposal(
     State(s): State<Shared>,
     Path((project, id, proposal)): Path<(String, String, String)>,
@@ -1608,6 +1713,23 @@ async fn read_proposal(
         Ok(json!(service.store().proposal(&project, &id, &proposal)?))
     })
     .await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestoreCandidateParentInput {
+    expected_revision: i64,
+    document_sha256: String,
+    source_document_sha256: String,
+}
+async fn restore_candidate_parent(
+    State(s): State<Shared>,
+    Path((project, id, proposal)): Path<(String, String, String)>,
+    Json(input): Json<RestoreCandidateParentInput>,
+) -> Response {
+    work(s, move |service| Ok(json!(service.restore_candidate_parent(
+        &project, &id, input.expected_revision, &proposal,
+        &input.document_sha256, &input.source_document_sha256,
+    )?))).await
 }
 async fn revise_proposal(
     State(s): State<Shared>,

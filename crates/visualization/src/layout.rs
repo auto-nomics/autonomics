@@ -57,8 +57,40 @@ pub(crate) fn text_width(label: &str, font_size: f64) -> f64 {
         })
         .fold(0., f64::max)
 }
+/// Keep short relations readable on one line; longer captions retain a bounded
+/// three-line width budget. Explicit newlines remain under the author's control.
+pub(crate) fn edge_label_width(label: &str) -> f64 {
+    let natural = text_width(label, 16.);
+    if natural <= 180. {
+        natural.max(40.)
+    } else {
+        (natural / 3.).clamp(104., 240.).min(natural.max(40.))
+    }
+}
+/// Keep fitting Latin/Greek identifier runs intact at UAX hyphen opportunities.
+/// CJK remains breakable; overlong runs retain the existing overflow fallback.
+fn fitting_identifiers(text: &str, width: f64, font_size: f64) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+    for (position, c) in text
+        .char_indices()
+        .chain(std::iter::once((text.len(), ' ')))
+    {
+        if c.is_ascii_alphanumeric()
+            || matches!(c, '\u{0370}'..='\u{03ff}' | '\u{1f00}'..='\u{1fff}' | '-' | '_')
+        {
+            start.get_or_insert(position);
+        } else if let Some(begin) = start.take()
+            && text_width(&text[begin..position], font_size) <= width
+        {
+            ranges.push((begin, position));
+        }
+    }
+    ranges
+}
 /// UAX #14 opportunities keep CJK punctuation and ordinary words together.
-/// A single overlong token still breaks by characters to fit the canvas.
+/// Overlong complex/unit tokens first break at separators or before opening
+/// parentheses, then by characters.
 pub(crate) fn wrap(label: &str, width: f64, font_size: f64) -> String {
     let mut lines = Vec::new();
     let normalized = label
@@ -70,9 +102,18 @@ pub(crate) fn wrap(label: &str, width: f64, font_size: f64) -> String {
             lines.push(String::new());
             continue;
         }
+        let protected = fitting_identifiers(remaining, width, font_size);
+        let paragraph_length = remaining.len();
         while !remaining.is_empty() {
+            let offset = paragraph_length - remaining.len();
             let mut end = 0;
             for (position, opportunity) in unicode_linebreak::linebreaks(remaining) {
+                if protected
+                    .iter()
+                    .any(|(a, b)| *a < offset + position && offset + position < *b)
+                {
+                    continue;
+                }
                 if text_width(remaining[..position].trim_end_matches(' '), font_size) <= width {
                     end = position;
                     if opportunity == unicode_linebreak::BreakOpportunity::Mandatory {
@@ -80,6 +121,39 @@ pub(crate) fn wrap(label: &str, width: f64, font_size: f64) -> String {
                     }
                 } else {
                     break;
+                }
+            }
+            // Preserve identifiers in overlong complex/unit strings before
+            // resorting to character breaks. Ordinary UAX word opportunities
+            // retain priority, so a compound that fits a fresh line stays whole.
+            if end == 0 {
+                let mut previous: Option<char> = None;
+                let mut chars = remaining.char_indices().peekable();
+                while let Some((index, c)) = chars.next() {
+                    // UAX #14 can glue an identifier to a parenthetical formula.
+                    // Move the opening bracket with its contents to a fresh line
+                    // before splitting a fitting formula such as ADP→ATP.
+                    if matches!(c, '(' | '（' | '[' | '［' | '{' | '｛')
+                        && index > 0
+                        && previous.is_some_and(char::is_alphanumeric)
+                        && chars.peek().is_some_and(|(_, next)| next.is_alphanumeric())
+                    {
+                        if text_width(&remaining[..index], font_size) > width {
+                            break;
+                        }
+                        end = index;
+                    }
+                    if matches!(c, ':' | '/')
+                        && previous.is_some_and(char::is_alphanumeric)
+                        && chars.peek().is_some_and(|(_, next)| next.is_alphanumeric())
+                    {
+                        let next = index + c.len_utf8();
+                        if text_width(&remaining[..next], font_size) > width {
+                            break;
+                        }
+                        end = next;
+                    }
+                    previous = Some(c);
                 }
             }
             if end == 0 {
@@ -96,6 +170,86 @@ pub(crate) fn wrap(label: &str, width: f64, font_size: f64) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Balance automatically wrapped headings within the existing line count and box.
+/// Keep explicit user line breaks and identifiers that fit in the original wrap.
+pub(crate) fn balanced_heading(label: &str, width: f64, font_size: f64) -> String {
+    let baseline = wrap(label, width, font_size);
+    let lines = baseline.lines().count();
+    if lines < 2 || label.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return baseline;
+    }
+    // Protect complete fitting identifier/word runs, including Chinese runs
+    // separated by spaces or punctuation. Do not invent biological word breaks.
+    let mut protected = Vec::new();
+    let mut start = None;
+    for (position, c) in label
+        .char_indices()
+        .chain(std::iter::once((label.len(), ' ')))
+    {
+        if c.is_alphanumeric() || c == '-' || c == '_' {
+            start.get_or_insert(position);
+        } else if let Some(begin) = start.take()
+            && text_width(&label[begin..position], font_size) <= width
+        {
+            protected.push((begin, position));
+        }
+    }
+    let mut cuts = vec![0];
+    cuts.extend(
+        unicode_linebreak::linebreaks(label)
+            .map(|(position, _)| position)
+            .filter(|position| !protected.iter().any(|(a, b)| a < position && position < b)),
+    );
+    if cuts.last() != Some(&label.len()) {
+        cuts.push(label.len());
+    }
+    let target = text_width(label, font_size) / lines as f64;
+    let baseline_score = baseline
+        .lines()
+        .map(|line| (text_width(line, font_size) - target).powi(2))
+        .sum::<f64>();
+    // At most 120 source characters for panel titles; fixed line count and
+    // existing box width bound this search. Store predecessors, not text copies.
+    let mut best = vec![vec![None::<(f64, usize)>; cuts.len()]; lines + 1];
+    best[0][0] = Some((0., 0));
+    for line in 1..=lines {
+        for end in 1..cuts.len() {
+            for begin in 0..end {
+                let Some((score, _)) = best[line - 1][begin] else {
+                    continue;
+                };
+                let text = label[cuts[begin]..cuts[end]].trim_matches(' ');
+                if text.is_empty() {
+                    continue;
+                }
+                let measured = text_width(text, font_size);
+                if measured > width {
+                    continue;
+                }
+                let candidate = score + (measured - target).powi(2);
+                if best[line][end].is_none_or(|(previous, _)| candidate < previous) {
+                    best[line][end] = Some((candidate, begin));
+                }
+            }
+        }
+    }
+    let Some((score, _)) = best[lines][cuts.len() - 1] else {
+        return baseline;
+    };
+    if score + 1e-6 >= baseline_score {
+        return baseline;
+    }
+    let mut end = cuts.len() - 1;
+    let mut result = Vec::new();
+    for line in (1..=lines).rev() {
+        let begin = best[line][end].expect("reachable predecessor").1;
+        result.push(label[cuts[begin]..cuts[end]].trim_matches(' '));
+        end = begin;
+    }
+    result.reverse();
+    result.join("\n")
 }
 
 fn ranks(plan: &Plan, indices: &HashMap<&str, usize>) -> Vec<usize> {
@@ -273,15 +427,9 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
             } else {
                 200.
             };
-            let label = if plan.layout == Layout::Grid {
-                node.label.clone()
-            } else {
-                wrap(&node.label, label_width, 20.)
-            };
+            let label = wrap(&node.label, label_width, 20.);
             let label_height = label.lines().count().max(1) as f64 * 25.;
-            let height = if plan.layout == Layout::Grid {
-                100.
-            } else if matches!(node.shape, Shape::Ellipse) {
+            let height = if matches!(node.shape, Shape::Ellipse) {
                 ((label_height + 20.) * std::f64::consts::SQRT_2)
                     .ceil()
                     .max(100.)
@@ -294,16 +442,8 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
                 width,
                 height,
                 label,
-                label_width: if plan.layout == Layout::Grid {
-                    200.
-                } else {
-                    label_width
-                },
-                label_height: if plan.layout == Layout::Grid {
-                    50.
-                } else {
-                    label_height
-                },
+                label_width,
+                label_height,
             }
         })
         .collect();
@@ -313,9 +453,30 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
         ranks(plan, &indices)
     };
     if plan.layout == Layout::Grid {
+        let caption_height = plan
+            .edges
+            .iter()
+            .map(|edge| {
+                wrap(&edge.label, edge_label_width(&edge.label), 16.)
+                    .lines()
+                    .count()
+                    .max(1) as f64
+                    * 20.
+            })
+            .fold(0., f64::max);
+        let row_step =
+            boxes.iter().map(|b| b.height).fold(100., f64::max) + (caption_height + 40.).max(100.);
+        let column_step = (220.
+            + plan
+                .edges
+                .iter()
+                .map(|edge| edge_label_width(&edge.label))
+                .fold(0., f64::max)
+            + 40.)
+            .max(400.);
         for (node, rect) in plan.nodes.iter().zip(&mut boxes) {
-            rect.x = f64::from(node.column.unwrap()) * 400.;
-            rect.y = f64::from(node.row.unwrap()) * 200.;
+            rect.x = f64::from(node.column.unwrap()) * column_step;
+            rect.y = f64::from(node.row.unwrap()) * row_step;
         }
     } else {
         let layers = order_layers(plan, &ranks, &indices);
@@ -323,7 +484,13 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
         let edge_height = plan
             .edges
             .iter()
-            .map(|edge| wrap(&edge.label, 140., 16.).lines().count().max(1) as f64 * 20.)
+            .map(|edge| {
+                wrap(&edge.label, edge_label_width(&edge.label), 16.)
+                    .lines()
+                    .count()
+                    .max(1) as f64
+                    * 20.
+            })
             .fold(20., f64::max);
         let cross_step = if plan.layout == Layout::Horizontal {
             (max_height + 100.).max(edge_height * 2. + 80.)
@@ -335,18 +502,35 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
         } else {
             max_height + edge_height.max(80.) + 100.
         };
+        let mut main_positions = vec![0.; layers.len()];
+        for rank in 1..layers.len() {
+            let gap = if plan.layout == Layout::Horizontal {
+                let width = plan
+                    .edges
+                    .iter()
+                    .filter(|edge| {
+                        ranks[indices[edge.from.as_str()]] == rank - 1
+                            && ranks[indices[edge.to.as_str()]] == rank
+                    })
+                    .map(|edge| edge_label_width(&edge.label))
+                    .fold(0., f64::max);
+                main_step.max(240. + width / 0.65)
+            } else {
+                main_step
+            };
+            main_positions[rank] = main_positions[rank - 1] + gap;
+        }
         let largest = layers.iter().map(Vec::len).max().unwrap_or(1);
         for (rank, layer) in layers.iter().enumerate() {
             let offset = (largest - layer.len()) as f64 * cross_step / 2.;
             for (slot, &node) in layer.iter().enumerate() {
                 let cross = offset + slot as f64 * cross_step;
                 if plan.layout == Layout::Horizontal {
-                    boxes[node].x = rank as f64 * main_step;
+                    boxes[node].x = main_positions[rank];
                     boxes[node].y = cross + (max_height - boxes[node].height) / 2.;
                 } else {
                     boxes[node].x = cross;
-                    boxes[node].y =
-                        rank as f64 * main_step + (max_height - boxes[node].height) / 2.;
+                    boxes[node].y = main_positions[rank] + (max_height - boxes[node].height) / 2.;
                 }
             }
         }
@@ -369,14 +553,14 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
                 let (sx, sy, ex, ey) = if (source.x - target.x).abs() >= (source.y - target.y).abs()
                 {
                     if target.x > source.x {
-                        (source.x + 230., cy1, target.x - 10., cy2)
+                        (source.x + source.width + 10., cy1, target.x - 10., cy2)
                     } else {
-                        (source.x - 10., cy1, target.x + 230., cy2)
+                        (source.x - 10., cy1, target.x + target.width + 10., cy2)
                     }
                 } else if target.y > source.y {
-                    (cx1, source.y + 110., cx2, target.y - 10.)
+                    (cx1, source.y + source.height + 10., cx2, target.y - 10.)
                 } else {
-                    (cx1, source.y - 10., cx2, target.y + 110.)
+                    (cx1, source.y - 10., cx2, target.y + target.height + 10.)
                 };
                 return vec![[sx, sy], [ex, ey]];
             }
@@ -389,7 +573,11 @@ pub(crate) fn arrange(plan: &Plan) -> Result<Drawing, InvalidPlan> {
                 if ranks[b] == ranks[a] + 1 && routed.insert((a, b)) {
                     return vec![start, end];
                 }
-                let label_height = wrap(&edge.label, 160., 16.).lines().count().max(1) as f64 * 20.;
+                let label_height = wrap(&edge.label, edge_label_width(&edge.label), 16.)
+                    .lines()
+                    .count()
+                    .max(1) as f64
+                    * 20.;
                 let outside = top - 80. - lane as f64 * 200. - label_height / 2.;
                 lane += 1;
                 let (exit, entry) = (start[0] + 50., end[0] - 50.);
@@ -450,6 +638,70 @@ mod tests {
             "Dose 10\u{a0}μM\nresponse"
         );
     }
+    #[test]
+    fn fitting_hyphenated_identifiers_move_whole_to_the_next_line() {
+        for token in ["p-IFNGR1", "IFN-γ", "p-STAT1", "IL-6", "procaspase-9"] {
+            let width = text_width(token, 20.) + 2.;
+            let source = format!("前缀 {token} 后续");
+            let wrapped = wrap(&source, width, 20.);
+            assert!(wrapped.contains(token), "split {token}: {wrapped}");
+            assert!(wrapped.lines().all(|line| text_width(line, 20.) <= width));
+            assert_eq!(wrapped.replace(['\n', ' '], ""), source.replace(' ', ""));
+        }
+        assert_eq!(
+            wrap("IFN-\nγ", 200., 20.),
+            "IFN-\nγ",
+            "explicit line break retained"
+        );
+        let source = "p-IFNGR1-p-STAT1-superlong";
+        let wrapped = wrap(source, 70., 20.);
+        assert_eq!(wrapped.replace('\n', ""), source);
+        assert!(wrapped.lines().all(|line| text_width(line, 20.) <= 70.));
+    }
+    #[test]
+    fn scientific_parenthetical_keeps_fitting_identifiers_intact() {
+        let label = "结合 APAF1（ADP→ATP 交换，组装七聚体凋亡小体）";
+        let wrapped = wrap(label, 125.0703125, 16.);
+        for token in ["APAF1", "ADP", "ATP"] {
+            assert!(wrapped.contains(token), "{token} was split: {wrapped}");
+        }
+        assert_eq!(wrapped.replace(['\n', ' '], ""), label.replace(' ', ""));
+        assert!(
+            wrapped
+                .lines()
+                .all(|line| text_width(line, 16.) <= 125.0703125)
+        );
+        assert_eq!(wrap("APAF1（ATP）", 300., 16.), "APAF1（ATP）");
+    }
+    #[test]
+    fn overlong_complex_labels_break_between_identifiers_without_losing_content() {
+        let label = "IFNGR1:JAK1:IFNGR2:JAK2";
+        assert!(text_width(label, 20.) > 200.);
+        let wrapped = wrap(label, 200., 20.);
+        for id in ["IFNGR1", "JAK1", "IFNGR2", "JAK2"] {
+            assert!(wrapped.contains(id), "{id}: {wrapped}");
+        }
+        assert_eq!(wrapped.replace('\n', ""), label);
+        assert!(wrapped.lines().all(|line| text_width(line, 20.) <= 200.));
+        let relation = "IFNGR1:IFNGR2–JAK1/JAK2";
+        let wrapped = wrap(relation, 110., 16.);
+        for id in ["IFNGR1", "IFNGR2", "JAK1", "JAK2"] {
+            assert!(wrapped.contains(id), "{id}: {wrapped}");
+        }
+        assert_eq!(wrapped.replace('\n', ""), relation);
+        assert!(wrapped.lines().all(|line| text_width(line, 16.) <= 110.));
+        assert!(text_width("IFNGR1:JAK1", 20.) <= 150.);
+        assert!(text_width("Binding IFNGR1:JAK1", 20.) > 150.);
+        assert_eq!(
+            wrap("Binding IFNGR1:JAK1", 150., 20.),
+            "Binding\nIFNGR1:JAK1"
+        );
+        assert_eq!(
+            wrap("https://example.org", 300., 20.),
+            "https://example.org"
+        );
+    }
+
     fn plan(layout: &str) -> Plan {
         serde_json::from_value(json!({"message":"Explicit conceptual relations","audience":"researchers","layout":layout,
             "nodes":[{"id":"a","label":"Ligand"},{"id":"b","label":"Receptor complex and its intracellular signaling components","shape":"ellipse"},{"id":"c","label":"Parallel response"},{"id":"d","label":"Outcome"},{"id":"e","label":"Independent control"}],
@@ -570,5 +822,26 @@ mod tests {
                 .contains('\n')
         );
         assert_eq!(scene["elements"][4]["startBinding"]["elementId"], "node-0");
+    }
+}
+
+#[cfg(test)]
+mod relation_caption_tests {
+    use super::*;
+    #[test]
+    fn short_scientific_relations_keep_their_wording_on_one_line() {
+        let label = "磷酸化 MEK 活化环";
+        let natural = text_width(label, 16.);
+        assert!(natural > 104. && natural <= 180.);
+        let wrapped = wrap(label, edge_label_width(label), 16.);
+        assert_eq!(wrapped, label);
+        assert!(edge_label_width(label) <= 180.);
+    }
+    #[test]
+    fn long_relations_retain_bounded_width_and_explicit_newlines() {
+        let label = "A long source-qualified relation label that must retain its full scientific wording and wrap inside a bounded caption";
+        assert!(edge_label_width(label) <= 240.);
+        assert_eq!(wrap(label, edge_label_width(label), 16.).split_whitespace().collect::<Vec<_>>(), label.split_whitespace().collect::<Vec<_>>());
+        assert_eq!(wrap("激活\nMEK", edge_label_width("激活\nMEK"), 16.), "激活\nMEK");
     }
 }

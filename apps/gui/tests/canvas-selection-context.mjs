@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {canvasSelectionContext} from '../src/features/canvas/canvas-selection-context.ts';
+import {canvasReadInput,canvasSelectionContext} from '../src/features/canvas/canvas-selection-context.ts';
 const reference={kind:'image_inset_snapshot',anchor_id:'panel',image_id:'detail',region_id:'region',callout_id:'leader',source_element_id:'source',source_revision:3,region:{x:.1,y:.2,width:.4,height:.5},private_note:'PRIVATE-REFERENCE'};
 const elements=[
  {id:'source',type:'image',x:1,y:2,width:200,height:100,angle:.7,scale:[-1,-1],crop:{x:100,y:20,width:200,height:80,naturalWidth:400,naturalHeight:200},fileId:'source-file',customData:{user_note:'PRIVATE-NOTE',dataURL:'PRIVATE-BYTES'}},
@@ -61,3 +61,11 @@ const malformedTypography=canvasSelectionContext([{id:'bad-label',type:'text',fo
 for(const key of ['font_size','font_family','line_height','container_id','auto_resize','text_align','vertical_align'])assert.equal(malformedTypography[key],null);
 
 const opaqueAlignment=canvasSelectionContext([{id:'opaque-label',type:'text',textAlign:{toString:'not-callable',valueOf:'not-callable'},verticalAlign:{}}],{'opaque-label':true}).objects[0];assert.equal(opaqueAlignment.text_align,null);assert.equal(opaqueAlignment.vertical_align,null);
+
+const baseRead={action:'read',project_id:'p',figure_id:'f',expected_revision:7};
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext(elements,{source:true})),{...baseRead,element_ids:['source']});
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext(elements,{})),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,large),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,oversized),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext(elements,{deleted:true})),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext([...elements,elements[0]],{source:true})),baseRead);

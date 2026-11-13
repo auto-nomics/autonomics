@@ -230,6 +230,9 @@ impl Ownership {
                     link(parent, id, true);
                 }
             }
+            if e["type"]=="image" {
+                if let Some(parent)=e["customData"]["semanticBadgeAnchorId"].as_str().filter(|id|index.get(id).is_some_and(|p|p["customData"]["visualBadgeIds"].as_array().is_some_and(|ids|ids.contains(&e["id"])))) {link(parent,id,true);}
+            }
             if let Some(labels) = e["customData"]["visualLabelIds"].as_array() {
                 for label in labels.iter().filter_map(Value::as_str) {
                     if index.get(label).is_some_and(|child| {
@@ -312,16 +315,43 @@ fn moved(e: &Value, d: [f64; 2]) -> Result<Value> {
     let mut result = e.clone();
     result["x"] = json!(x);
     result["y"] = json!(y);
+    // This is derived canvas geometry, unlike the scientific metadata retained above.
+    if let Some(bounds) = result.get_mut("customData").and_then(|v| v.get_mut("visualAnchorFit")).and_then(|v| v.get_mut("imageBounds")).and_then(Value::as_array_mut) {
+        if bounds.len() == 4 && bounds.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)) {
+            bounds[0] = json!(bounds[0].as_f64().unwrap() + d[0]);
+            bounds[1] = json!(bounds[1].as_f64().unwrap() + d[1]);
+        }
+    }
+    if let Some(fit)=result.get_mut("customData").and_then(|d|d.get_mut("visualAnchorFit")){crate::illustration_fit::translate_group_record(fit,d[0],d[1]);}
     scene::touch(&mut result);
     Ok(result)
 }
 #[derive(Clone, Copy)]
 enum Transform {
     Arrange(Mode),
+    PackFrames { axis: usize, gap: f64 },
     Translate([f64; 2]),
+    SwapFrames([[f64; 2]; 2]),
 }
 pub fn compile(document: &Value, spec: &Spec) -> Result<Value> {
     compile_transform(document, &spec.element_ids, Transform::Arrange(spec.mode))
+}
+/// Pack explicitly selected top-level frames in their current spatial order.
+/// The first frame stays fixed; the orthogonal coordinate is preserved.
+pub fn pack_frames(document: &Value, ids: &[String], vertical: bool, gap: f64) -> Result<Value> {
+    if !gap.is_finite() || !(8. ..=512.).contains(&gap) {
+        return Err(InvalidArrangement("frame gap must be finite within 8..512"));
+    }
+    let elements = document["elements"].as_array().ok_or(InvalidArrangement("invalid scene"))?;
+    for id in ids {
+        let frame = elements.iter().find(|e| e["id"] == *id && e["isDeleted"] != true)
+            .ok_or(InvalidArrangement("selected frame is missing"))?;
+        if frame["type"] != "frame" || frame["locked"] == true
+            || frame["angle"].as_f64().unwrap_or(0.) != 0. || !frame["frameId"].is_null() {
+            return Err(InvalidArrangement("packing requires unlocked unrotated top-level frames"));
+        }
+    }
+    compile_transform(document, ids, Transform::PackFrames { axis: usize::from(vertical), gap })
 }
 /// Move existing complete components once, without copying or changing IDs.
 pub fn translate(document: &Value, element_ids: &[String], dx: f64, dy: f64) -> Result<Value> {
@@ -331,6 +361,25 @@ pub fn translate(document: &Value, element_ids: &[String], dx: f64, dy: f64) -> 
         ));
     }
     compile_transform(document, element_ids, Transform::Translate([dx, dy]))
+}
+/// Atomically exchange two top-level frames and rigidly move their contents.
+/// Generated sharp cross-panel connectors are rerouted after both moves.
+pub fn swap_frames(document: &Value, first: &str, second: &str) -> Result<Value> {
+    if first == second {
+        return Err(InvalidArrangement("select two distinct frames"));
+    }
+    let elements = document["elements"].as_array().ok_or(InvalidArrangement("invalid scene"))?;
+    let mut origins = [[0.; 2]; 2];
+    for (position, id) in [first, second].into_iter().enumerate() {
+        let frame = elements.iter().find(|e| e["id"] == id && e["isDeleted"] != true)
+            .ok_or(InvalidArrangement("selected frame is missing"))?;
+        if frame["type"] != "frame" || frame["locked"] == true
+            || frame["angle"].as_f64().unwrap_or(0.) != 0. || !frame["frameId"].is_null() {
+            return Err(InvalidArrangement("swap_frames requires unlocked unrotated top-level frames"));
+        }
+        origins[position] = [number(frame, "x")?, number(frame, "y")?];
+    }
+    compile_transform(document, &[first.into(), second.into()], Transform::SwapFrames(origins))
 }
 fn compile_transform(
     document: &Value,
@@ -415,7 +464,7 @@ fn compile_transform(
             }) {
                 continue;
             }
-            let b = if matches!(transform, Transform::Translate(_)) {
+            let b = if matches!(transform, Transform::Translate(_) | Transform::SwapFrames(_) | Transform::PackFrames { .. }) {
                 // Rigid motion needs no linear connector bounds or arrow-label
                 // midpoint reflow. Preserve rough/curved native point geometry.
                 if matches!(e["type"].as_str(), Some("arrow" | "line" | "freedraw")) {
@@ -439,6 +488,27 @@ fn compile_transform(
     let offsets = match transform {
         Transform::Translate(offset) => vec![offset; units.len()],
         Transform::Arrange(mode) => arrangement_offsets(&boxes, mode)?,
+        Transform::PackFrames { axis, gap } => {
+            if units.len() != element_ids.len() {
+                return Err(InvalidArrangement("frames must be independent rigid components"));
+            }
+            let mut order = (0..boxes.len()).collect::<Vec<_>>();
+            order.sort_by(|a,b| boxes[*a][axis].total_cmp(&boxes[*b][axis]).then(a.cmp(b)));
+            let mut offsets = vec![[0.;2]; boxes.len()];
+            let mut cursor = boxes[order[0]][axis];
+            for i in order {
+                offsets[i][axis] = cursor - boxes[i][axis];
+                cursor += boxes[i][axis+2] - boxes[i][axis] + gap;
+            }
+            offsets
+        }
+        Transform::SwapFrames(origins) => {
+            if units.len() != 2 {
+                return Err(InvalidArrangement("frames must be independent rigid components"));
+            }
+            let d = [origins[1][0] - origins[0][0], origins[1][1] - origins[0][1]];
+            vec![d, [-d[0], -d[1]]]
+        }
     };
     let mut moves = HashMap::new();
     for (unit, d) in units.iter().zip(offsets) {
@@ -470,6 +540,7 @@ fn compile_transform(
             replacements.insert(e["id"].as_str().unwrap().to_owned(), moved(e, d)?);
         }
     }
+    let mut reroutes = Vec::new();
     for arrow in elements.iter().filter(|e| e["type"] == "arrow") {
         let own = delta(&moves, arrow["id"].as_str());
         let start = arrow["startBinding"]["elementId"]
@@ -496,6 +567,42 @@ fn compile_transform(
             })
             .filter(|p| p.len() >= 2 && p.iter().flatten().all(|n| n.is_finite() && n.abs() <= 1e6))
             .ok_or(InvalidArrangement("invalid connected arrow points"))?;
+        if matches!(transform, Transform::SwapFrames(_) | Transform::Arrange(_) | Transform::Translate(_) | Transform::PackFrames { .. }) && start != end
+            && arrow["customData"]["crossPanel"] == true
+            && number(arrow, "angle")? == 0. && arrow["elbowed"] != true
+            && arrow["roundness"].is_null() && arrow["roughness"].as_f64() == Some(0.)
+        {
+            if elements.iter().any(|e| e["type"] == "text" && e["containerId"] == arrow["id"] && e["locked"] == true) {
+                return Err(InvalidArrangement("a locked connector label would need to move"));
+            }
+            reroutes.push(arrow["id"].as_str().unwrap().to_owned());
+            continue;
+        }
+        // Fitting an illustration can turn a two-point arrow into a sharp
+        // orthogonal route with short endpoint stubs. Reuse the same guarded
+        // port rebinding when just one component (or two different deltas) moves.
+        if own == [0., 0.] && start != end && points.len() > 2
+            && arrow["customData"]["crossPanel"] != true
+            && number(arrow, "angle")? == 0. && arrow["elbowed"] != true
+            && arrow["roundness"].is_null() && arrow["roughness"].as_f64() == Some(0.)
+            && points.windows(2).all(|p| (p[0][0]-p[1][0]).abs() <= 1e-6 || (p[0][1]-p[1][1]).abs() <= 1e-6)
+        {
+            let mut connected = elements.iter().filter(|e| e["id"] == arrow["id"] || e["type"] == "frame" || (e["type"] == "text" && e["containerId"] == arrow["id"])).cloned().collect::<Vec<_>>();
+            for (field, movement) in [("startBinding", start), ("endBinding", end)] {
+                if movement == [0., 0.] { continue; }
+                let anchor_id=arrow[field]["elementId"].as_str().ok_or(InvalidArrangement("missing moved connector anchor"))?;
+                let anchor=elements.iter().find(|e| e["id"] == anchor_id).ok_or(InvalidArrangement("missing moved connector anchor"))?;
+                let old=[number(anchor,"x")?,number(anchor,"y")?,number(anchor,"width")?,number(anchor,"height")?];
+                let next=[old[0]+movement[0],old[1]+movement[1],old[2],old[3]];
+                crate::illustration_fit::adjust_connected(&mut connected,anchor_id,old,next).map_err(|_|InvalidArrangement("sharp orthogonal connector cannot follow these moves; check centered ports, endpoint gaps, locks and frame bounds"))?;
+            }
+            for changed in connected.into_iter().filter(|e|e["type"]!="frame") {
+                let id=changed["id"].as_str().ok_or(InvalidArrangement("missing connector member identity"))?.to_owned();
+                let original=elements.iter().find(|e|e["id"]==id).unwrap();
+                if &changed==original {replacements.remove(&id);} else {replacements.insert(id,changed);}
+            }
+            continue;
+        }
         let complex = number(arrow, "angle")? != 0.
             || arrow["elbowed"] == true
             || !arrow["roundness"].is_null()
@@ -570,6 +677,28 @@ fn compile_transform(
         if let Some(value) = replacements.remove(e["id"].as_str().unwrap()) {
             *e = value;
         }
+    }
+    if !reroutes.is_empty() {
+        // Port occupancy is order-dependent. Compare two bounded deterministic
+        // orders on independent clones, retaining only a fully valid result.
+        let mut best = None;
+        let mut best_cost = f64::INFINITY;
+        for reverse in [false, true] {
+            let mut candidate = next.clone();
+            let mut order = reroutes.clone();
+            if reverse { order.reverse(); }
+            if order.iter().any(|id| crate::panel_routes::reroute(candidate["elements"].as_array_mut().unwrap(), id).is_err()) {
+                continue;
+            }
+            let cost: f64 = candidate["elements"].as_array().unwrap().iter()
+                .filter(|e| reroutes.iter().any(|id| e["id"] == *id))
+                .map(|e| e["points"].as_array().unwrap().windows(2).map(|p| {
+                    (p[1][0].as_f64().unwrap()-p[0][0].as_f64().unwrap()).abs()
+                        + (p[1][1].as_f64().unwrap()-p[0][1].as_f64().unwrap()).abs()
+                }).sum::<f64>()).sum();
+            if cost < best_cost { best_cost = cost; best = Some(candidate); }
+        }
+        return best.ok_or(InvalidArrangement("cannot reroute cross-panel connectors after layout; nothing changed"));
     }
     Ok(next)
 }

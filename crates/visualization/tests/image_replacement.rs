@@ -151,3 +151,32 @@ fn invalid_crops_locked_images_opaque_history_and_ambiguous_ownership_reject_ato
         .push(json!({"id":"owner","type":"rectangle","customData":{"visualAssetElementId":id}}));
     assert!(image::illustrate(&doc, &id, asset("replacement", 400, 300)).is_err());
 }
+
+fn compact_protein_frame() -> Value {
+    json!({"elements":[
+        {"id":"frame","type":"frame","x":0.,"y":0.,"width":304.,"height":254.,"angle":0.},
+        {"id":"heading","type":"text","x":40.,"y":30.,"width":224.,"height":50.,"angle":0.,"frameId":"frame","text":"C · RAS family"},
+        {"id":"node","type":"rectangle","x":40.,"y":130.,"width":220.,"height":100.,"angle":0.,"frameId":"frame","boundElements":[{"id":"caption","type":"text"}],"customData":{"scientificId":"ras"}},
+        {"id":"caption","type":"text","x":50.,"y":155.,"width":200.,"height":50.,"angle":0.,"frameId":"frame","containerId":"node","fontFamily":9,"fontSize":20.,"lineHeight":1.25,"text":"RAS-GTP（p21 RAS 家族）","originalText":"RAS-GTP（p21 RAS 家族）"}
+    ],"files":{},"scientificPlan":{"message":"Concept only"}})
+}
+#[test]
+fn fresh_compact_frame_artwork_keeps_its_complete_label_visible_above_when_below_would_clip() {
+    let old=compact_protein_frame();
+    let (new,image_id)=image::illustrate(&old,"node",asset("replacement",100,220)).unwrap();
+    let get=|id:&str|new["elements"].as_array().unwrap().iter().find(|e|e["id"]==id).unwrap();
+    let label=get("caption");let artwork=get(&image_id);
+    assert_eq!(label["originalText"],old["elements"][3]["originalText"]);
+    assert_eq!(label["fontFamily"],9);assert_eq!(label["fontSize"],20.);
+    assert!(label["x"].as_f64().unwrap()>=0.);
+    assert!(label["x"].as_f64().unwrap()+label["width"].as_f64().unwrap()<=304.);
+    assert!(label["y"].as_f64().unwrap()+label["height"].as_f64().unwrap()<=artwork["y"].as_f64().unwrap()-8.);
+    assert_eq!(get("frame"),&old["elements"][0]);assert_eq!(get("heading"),&old["elements"][1]);
+    assert_eq!(new["scientificPlan"],old["scientificPlan"]);
+}
+#[test]
+fn fresh_artwork_with_no_visible_caption_space_rejects_without_modifying_the_source() {
+    let mut old=compact_protein_frame();old["elements"].as_array_mut().unwrap().push(json!({"id":"blocker","type":"rectangle","x":0.,"y":0.,"width":304.,"height":130.,"angle":0.,"frameId":"frame"}));let before=old.clone();
+    let error=image::illustrate(&old,"node",asset("replacement",100,220)).unwrap_err();
+    assert!(error.0.contains("label cannot fit"));assert_eq!(old,before);
+}

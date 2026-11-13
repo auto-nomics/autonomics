@@ -101,3 +101,42 @@ fn optional_is_explicit_and_does_not_allow_malformed_questions() {
             .any(|issue| issue.field == "question:q")
     );
 }
+
+#[test]
+fn clearing_a_required_answer_blocks_again_without_changing_requiredness() {
+    let mut store = Store::in_memory().unwrap();
+    store.create_project("p", "Study").unwrap();
+    let figure = store
+        .create("p", "Figure", "excalidraw/v2", &json!({"elements":[]}))
+        .unwrap();
+    let mut brief: Brief = serde_json::from_value(json!({"message":"Supplied concept","audience":"Researchers","nodes":[{"id":"cell","label":"Cell"}],"questions":[{"id":"species","question":"Which species?","answer":"Human","blocking":true}]})).unwrap();
+    let answered = store.save_planning("p", &figure.id, 1, 0, &brief).unwrap();
+    assert_eq!(answered.status, "ready");
+    assert!(answered.document.questions[0].blocking);
+    brief.questions[0].answer.clear();
+    let cleared = store
+        .save_planning("p", &figure.id, 1, answered.version, &brief)
+        .unwrap();
+    assert_eq!(cleared.status, "needs_clarification");
+    assert!(cleared.document.questions[0].blocking);
+    assert!(
+        store
+            .planned_proposal(
+                "p",
+                &figure.id,
+                1,
+                cleared.version,
+                "Unanswered required scope"
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .planning_revision("p", &figure.id, answered.version)
+            .unwrap()
+            .document
+            .questions[0]
+            .answer,
+        "Human"
+    );
+}

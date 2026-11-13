@@ -1,3 +1,4 @@
+import {readCandidatePreparedPrompt} from './canvas-prepared-context.mjs';
 // Real catalog/model refinement of an existing scientific candidate, without early adoption.
 import assert from 'node:assert/strict';
 import {readFile, writeFile} from 'node:fs/promises';
@@ -27,7 +28,7 @@ export async function runCandidateMaterialization({page,call,path,send,persist,d
   const feedback=review.locator('details[aria-label="候选修订反馈"]');await feedback.locator('summary').click();
   await feedback.getByRole('textbox',{name:'候选修订要求',exact:true}).fill(`请继续加工当前待审候选，而不是正式图。先 read_proposal 核对界面提供的候选上下文。只把 EGFR 节点（对象 ID=${receptor.id}）的占位外观升级为一份 BioIcons 或 NIH BioArt 通用膜受体插图。先检索、预览同一素材并核对作者/许可与图意；通用图不代表 EGFR 特异分子结构，保留候选已有的“${note}”说明，不补写机制。使用素材工具 replace，并传下方候选上下文的 proposal_id 与 document_sha256，markup_ids:[]，创建其子候选；不要在正式图另起根提案，也不要先采用父候选。保留所有科学标签、节点身份、证据 URL、关系、其他对象及图下说明。读取最终子候选 PNG，检查插图和标签可读后留待用户采用。如果找不到合适素材，明确说明并保留原图，不捏造来源。`);
   await feedback.getByRole('button',{name:'准备候选修订草稿',exact:true}).click();
-  const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const prepared=await composer.inputValue();
+  const composer=page.getByPlaceholder('输入消息…');await composer.waitFor();const prepared=await readCandidatePreparedPrompt(page);
   assert.ok(prepared.includes(parent.id)&&prepared.includes(parent.document_sha256)&&prepared.includes('bioicons replace'),'actual candidate feedback includes exact identity and materialization guidance');
   assert.equal(turns.length,0,'preparing feedback never sends');assert.deepEqual(await call('GET',path),before);
   await send(1);

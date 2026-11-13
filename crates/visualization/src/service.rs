@@ -121,6 +121,55 @@ impl VisualizationService {
             },
         )?)
     }
+    /// Copy the reviewed immediate predecessor into a new revision of the current
+    /// candidate. Both immutable snapshots remain intact; no opinion links carry.
+    pub fn restore_candidate_parent(
+        &self,
+        project: &str,
+        id: &str,
+        expected_revision: i64,
+        proposal_id: &str,
+        document_sha256: &str,
+        source_document_sha256: &str,
+    ) -> Result<crate::proposal::Proposal, ServiceError> {
+        if self.store.get(project, id)?.revision != expected_revision {
+            return Err(crate::Error::Conflict.into());
+        }
+        let current = self.store.proposal(project, id, proposal_id)?;
+        if current.status != "pending"
+            || current.base_revision != expected_revision
+            || current.document_sha256 != document_sha256
+        {
+            return Err(crate::Error::Conflict.into());
+        }
+        let source_id = current
+            .parent_proposal_id
+            .as_deref()
+            .ok_or(crate::Error::Invalid(
+                "candidate has no previous candidate to restore",
+            ))?;
+        if current.parent_document_sha256.as_deref() != Some(source_document_sha256) {
+            return Err(crate::Error::Conflict.into());
+        }
+        let source = self.store.proposal(project, id, source_id)?;
+        if source.base_revision != expected_revision
+            || source.document_sha256 != source_document_sha256
+        {
+            return Err(crate::Error::Conflict.into());
+        }
+        Ok(self.store.propose_revision(
+            project,
+            id,
+            expected_revision,
+            crate::proposal::ProposedRevision {
+                parent_id: &current.id,
+                parent_document_sha256: &current.document_sha256,
+                summary: "以上一版候选内容创建修订",
+                document: &source.document,
+                markup_ids: &[],
+            },
+        )?)
+    }
     /// Apply a batch against the exact scene revision observed by the caller.
     pub fn apply(
         &mut self,

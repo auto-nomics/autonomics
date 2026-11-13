@@ -110,6 +110,7 @@ fn path_style_proposals_preserve_shared_instances_and_source_history() {
         part_id: read["parts"][0]["part_id"].as_str().unwrap().into(),
         fill: Some("#7744aa".into()),
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: Some([5., -4.]),
         points: None,
@@ -203,6 +204,7 @@ fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
         part_id: part.into(),
         fill: None,
         stroke: None,
+        stroke_width: None,
         opacity: None,
         translate: None,
         points: Some(vec![bioicons::geometry::PointEdit {
@@ -267,4 +269,22 @@ fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
     }
     assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
     assert!(visualization_assets::geometry(&store, "p", &figure, 2, &target, sha, part).is_err());
+}
+
+#[test]
+fn stroke_width_edit_creates_reviewable_child_and_preserves_shared_file_and_source() {
+    let (store,figure,target,other)=fixture();
+    let original=store.revision("p",&figure,1).unwrap().document;
+    let read=visualization_assets::parts(&store,"p",&figure,1,"node-0").unwrap();
+    let edit:bioicons::parts::Edit=serde_json::from_value(serde_json::json!({"part_id":read["parts"][0]["part_id"],"stroke":"#000000","stroke_width":3.})).unwrap();
+    let proposal=visualization_assets::edit_parts(&store,"p",&figure,1,"node-0",read["sha256"].as_str().unwrap(),&[edit]).unwrap();
+    assert_eq!(store.revision("p",&figure,1).unwrap().document,original);
+    assert_eq!(element(&proposal.document,&other),element(&original,&other));
+    let before=element(&original,&target);let after=element(&proposal.document,&target);
+    assert_ne!(before["fileId"],after["fileId"]);
+    assert_eq!(before["customData"]["asset"],after["customData"]["asset"]);
+    assert_eq!(before["customData"]["source_sha256"],after["customData"]["source_sha256"]);
+    for key in ["x","y","width","height","scale","frameId","groupIds"]{assert_eq!(before[key],after[key]);}
+    for (id,file) in original["files"].as_object().unwrap(){assert_eq!(proposal.document["files"][id],*file);}
+    assert_eq!(store.get("p",&figure).unwrap().revision,1);
 }

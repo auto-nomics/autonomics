@@ -30,8 +30,18 @@ function insetChange(row: ObjectValue) {
 function changes(value: unknown) {
   return (Array.isArray(value) ? value : []).map(entry => {
     const row = object(entry);
-    return { kind: string(row.kind), ...insetChange(row), ...(["path_style", "path_edit"].includes(String(row.kind)) ? { edits: (Array.isArray(row.edits) ? row.edits : []).map(value => { const edit = object(value); const paint = (v: unknown) => typeof v === "string" && (v === "none" || /^#[a-f\d]{6}$/i.test(v)) ? v : null; return { part_id: string(edit.part_id), ...(Array.isArray(edit.points) ? { points: edit.points.map(value => { const point = object(value); return { index: typeof point.index === "number" && Number.isSafeInteger(point.index) && point.index >= 0 ? point.index : null, position: Array.isArray(point.position) && point.position.length === 2 && point.position.every(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1e6) ? point.position as number[] : null }; }) } : {}), ...(Array.isArray(edit.translate) && edit.translate.length === 2 && edit.translate.every(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 100000) ? { translate: edit.translate as number[] } : {}), fill: paint(edit.fill), stroke: paint(edit.stroke), opacity: typeof edit.opacity === "number" && Number.isFinite(edit.opacity) && edit.opacity >= 0 && edit.opacity <= 1 ? edit.opacity : null }; }) } : {}), colors: Object.fromEntries(Object.entries(object(row.colors)).filter(([from, to]) => /^#[a-f\d]{6}$/i.test(from) && typeof to === "string" && /^#[a-f\d]{6}$/i.test(to))), based_on_file_id: string(row.based_on_file_id), based_on_sha256: string(row.based_on_sha256), result_sha256: string(row.result_sha256), created_at: string(row.created_at) };
+    return { kind: string(row.kind), ...insetChange(row), ...(["path_style", "path_edit"].includes(String(row.kind)) ? { edits: (Array.isArray(row.edits) ? row.edits : []).map(value => { const edit = object(value); const paint = (v: unknown) => typeof v === "string" && (v === "none" || /^#[a-f\d]{6}$/i.test(v)) ? v : null; return { part_id: string(edit.part_id), ...(Array.isArray(edit.points) ? { points: edit.points.map(value => { const point = object(value); return { index: typeof point.index === "number" && Number.isSafeInteger(point.index) && point.index >= 0 ? point.index : null, position: Array.isArray(point.position) && point.position.length === 2 && point.position.every(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1e6) ? point.position as number[] : null }; }) } : {}), ...(Array.isArray(edit.translate) && edit.translate.length === 2 && edit.translate.every(v => typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 100000) ? { translate: edit.translate as number[] } : {}), fill: paint(edit.fill), stroke: paint(edit.stroke), stroke_width: typeof edit.stroke_width === "number" && Number.isFinite(edit.stroke_width) && edit.stroke_width > 0 && edit.stroke_width <= 1000 ? edit.stroke_width : null, opacity: typeof edit.opacity === "number" && Number.isFinite(edit.opacity) && edit.opacity >= 0 && edit.opacity <= 1 ? edit.opacity : null }; }) } : {}), colors: Object.fromEntries(Object.entries(object(row.colors)).filter(([from, to]) => /^#[a-f\d]{6}$/i.test(from) && typeof to === "string" && /^#[a-f\d]{6}$/i.test(to))), based_on_file_id: string(row.based_on_file_id), based_on_sha256: string(row.based_on_sha256), result_sha256: string(row.result_sha256), created_at: string(row.created_at) };
   });
+}
+function displayCrop(value: unknown) {
+  if (value == null) return null;
+  const crop = object(value), keys = ['x','y','width','height','naturalWidth','naturalHeight'] as const;
+  if (!keys.every(key => typeof crop[key] === 'number' && Number.isFinite(crop[key]))
+    || Number(crop.x)<0 || Number(crop.y)<0 || Number(crop.width)<=0 || Number(crop.height)<=0
+    || Number(crop.naturalWidth)<=0 || Number(crop.naturalHeight)<=0
+    || Number(crop.x)+Number(crop.width)>Number(crop.naturalWidth)+1e-6
+    || Number(crop.y)+Number(crop.height)>Number(crop.naturalHeight)+1e-6) return {status:'invalid_native_crop' as const};
+  return {status:'recorded' as const,units:'source_pixels' as const,region:Object.fromEntries(keys.map(key=>[key,crop[key]])),source_file_changed:false};
 }
 function attribution(data: ObjectValue, fallbackName: string) {
   const asset = object(data.asset);
@@ -60,10 +70,14 @@ function fileLookup(files: ObjectValue) {
     return hashes.get(fileId)!;
   };
 }
-async function assetRecord(element: ObjectValue, files: ObjectValue, lookup: ReturnType<typeof fileLookup>) {
+async function assetRecord(element: ObjectValue, files: ObjectValue, lookup: ReturnType<typeof fileLookup>, all?:ObjectValue[]) {
   const data = object(element.customData), fileId = string(element.fileId), file = object(fileId ? files[fileId] : undefined);
   const source = attribution(data, string(element.id) ?? "Image"), hash = await lookup(fileId);
-  return { element_id: string(element.id), semantic_anchor_id: string(data.semanticAnchorId), mime_type: string(file.mimeType), file_id: fileId, ...source, ...hash, hash_matches_recorded: matchesRecordedHash(hash.actual_sha256, source.recorded_sha256), replacement_history: await replacementHistory(data.asset_replacements, lookup) };
+  const badgeOwner=string(data.semanticBadgeAnchorId),badgeMeaning=typeof data.badgeMeaning==='string'&&!/^\s*data:/i.test(data.badgeMeaning)?data.badgeMeaning.slice(0,512):null;
+  const owners=all?.filter(e=>e.id===badgeOwner)??[],owner=owners.length===1?owners[0]:undefined,ownerData=object(owner?.customData),badgeIds=ownerData.visualBadgeIds;
+  const primaryMatches=all?.filter(e=>e.id===ownerData.visualAssetElementId)??[],primary=primaryMatches.length===1?primaryMatches[0]:undefined;
+  const badgeVerified=badgeOwner&&all?all.filter(e=>e.id===element.id).length===1&&Boolean(owner)&&Array.isArray(badgeIds)&&badgeIds.filter(v=>v===element.id).length===1&&primary?.type==='image'&&object(primary.customData).semanticAnchorId===owner?.id&&element.frameId===owner?.frameId:null;
+  return { display_crop: displayCrop(element.crop), element_id: string(element.id), semantic_badge_anchor_id:badgeOwner,badge_meaning:badgeMeaning,badge_ownership_verified:badgeVerified,badge_scientific_meaning_verified:false, semantic_anchor_id: string(data.semanticAnchorId), mime_type: string(file.mimeType), file_id: fileId, ...source, ...hash, hash_matches_recorded: matchesRecordedHash(hash.actual_sha256, source.recorded_sha256), replacement_history: await replacementHistory(data.asset_replacements, lookup) };
 }
 /** Same whitelist and file checks as export, without serializing a whole scene. */
 export function inspectAssetSource(element: unknown, fileInput: unknown) {
@@ -72,10 +86,11 @@ export function inspectAssetSource(element: unknown, fileInput: unknown) {
 }
 export async function createSourceManifest(input: { scene: string; title: string; project_id?: string; figure_id?: string; based_on_revision?: number; unsaved_changes: boolean }) {
   const document = object(JSON.parse(input.scene)), files = object(document.files);
-  const elements = (Array.isArray(document.elements) ? document.elements : []).map(object).filter(element => element.type === "image" && element.isDeleted !== true);
+  const all=(Array.isArray(document.elements)?document.elements:[]).map(object).filter(e=>e.isDeleted!==true);
+  const elements=all.filter(e=>e.type==="image");
   const lookup = fileLookup(files);
-  const assets = await Promise.all(elements.map(element => assetRecord(element, files, lookup)));
-  const credits = unique(assets.map(asset => `${asset.name} — ${asset.authors.length ? asset.authors.join(", ") : "author not recorded"}; ${asset.licenses.length ? asset.licenses.join(", ") : "license not recorded"}${asset.license_urls.length ? ` (${asset.license_urls.join(", ")})` : ""}; ${asset.source_urls.join(", ") || "source not recorded"}${asset.normalization.length || asset.modifications.length ? `; changes: ${[...asset.normalization, ...asset.modifications.map(change => change.kind ?? "unspecified")].join("; ")}` : ""}`));
+  const assets = await Promise.all(elements.map(element => assetRecord(element, files, lookup, all)));
+  const credits = unique(assets.map(asset => `${asset.name} — ${asset.authors.length ? asset.authors.join(", ") : "author not recorded"}; ${asset.licenses.length ? asset.licenses.join(", ") : "license not recorded"}${asset.license_urls.length ? ` (${asset.license_urls.join(", ")})` : ""}; ${asset.source_urls.join(", ") || "source not recorded"}${asset.normalization.length || asset.modifications.length ? `; changes: ${[...asset.normalization, ...asset.modifications.map(change => change.kind ?? "unspecified")].join("; ")}` : ""}${asset.display_crop ? `; display: ${asset.display_crop.status === "recorded" ? "native source crop (source file unchanged)" : "invalid native crop metadata"}` : ""}`));
   return { schema: "autonomics.figure.asset-sources/v1", exported_at: new Date().toISOString(), title: input.title, project_id: input.project_id ?? null, figure_id: input.figure_id ?? null, based_on_revision: input.based_on_revision ?? null, unsaved_changes: input.unsaved_changes, scene_json_sha256: await sha256(new TextEncoder().encode(input.scene)), assets, credits, relation_sources: relationSources(document) };
 }
 export type SourceManifest = Awaited<ReturnType<typeof createSourceManifest>>;

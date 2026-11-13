@@ -1,0 +1,1507 @@
+{
+  "elements": [
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-0",
+          "type": "text"
+        },
+        {
+          "id": "edge-0",
+          "type": "arrow"
+        }
+      ],
+      "fillStyle": "solid",
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 100,
+      "id": "node-0",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1794441324829,
+      "version": 2,
+      "versionNonce": 776896789,
+      "width": 220,
+      "x": 40,
+      "y": 90,
+      "customData": {
+        "evidence": [
+          "R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926"
+        ],
+        "layoutInfo": {
+          "feedback_edges": 0,
+          "font_family": 9,
+          "font_name": "Autonomics Scientific Sans",
+          "font_sha256": "9f643d5ffba0e0b4b0c6fdd1ab391a3ba014009717c04ebdd070dc3cc7441c30",
+          "kind": "grid"
+        },
+        "planningSource": {
+          "based_on_revision": 2,
+          "document": {
+            "assumptions": [
+              "范围已确认（2026-11-11 用户答复）：物种 = Homo sapiens（人）；刺激亚型 = IFN-γ（IFNG），II 型干扰素支路（IFNGR1/IFNGR2 + JAK1/JAK2）；起点 = IFNG 结合 IFNGR 受体复合物；终点 = p-STAT1 同源二聚体进入细胞核（核质）；明确不展开核内转录（GAS/ISRE 结合与 ISG 表达）、药物、反馈抑制（SOCS/PIAS/TCPTP）与 MAPK 支路。",
+              "本图所用记录全部为人类、五星级、isInferred=false（实验策展）：R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926（IFNG 二聚体结合 IFNGR）；R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919（JAK2 磷酸化）；R-HSA-873918 https://reactome.org/content/detail/R-HSA-873918（JAK1 互相磷酸化）；R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924（IFNGR1 被 JAK 磷酸化）；R-HSA-873921 https://reactome.org/content/detail/R-HSA-873921（STAT1 结合 p-IFNGR1）；R-HSA-873922 https://reactome.org/content/detail/R-HSA-873922（STAT1 被 JAK 磷酸化）；R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927（STAT1 二聚体从受体复合物释放）；R-HSA-873917 https://reactome.org/content/detail/R-HSA-873917（STAT1 同源二聚体入核）。",
+              "关键抽象（合并步骤，逐一有反应级来源，非通路总览）：(a) 三条 JAK/受体反应合并为 N2→N3 一条箭头，但箭头证据同时列出 R-HSA-873919（JAK2 自磷酸化，Y1007）、R-HSA-873918（JAK1 互相磷酸化）、R-HSA-873924（IFNGR1 Y440 磷酸化）三条记录；(b) N4→N5 合并了 STAT1 Y701 磷酸化（R-HSA-873922）与二聚化+释放（R-HSA-873927）；(c) 中间态『p-STAT1 同源二聚体结合于 p-IFNGR1』按用户允许合并，未单列为节点。",
+              "同源二聚化的证据归属：人 IFN-γ 支路在 Reactome 中没有独立的『STAT1 二聚化』反应记录，二聚化写在 R-HSA-873927 的摘要中（『磷酸化的 IFNGR1 上的 STAT1 通过互惠 SH2-磷酸酪氨酸相互作用同源二聚化，形成 p-STAT1 同源二聚体（GAF）』）。",
+              "已核验并排除的同名陷阱：R-HSA-909718『Formation of p-STAT1 homodimer』虽为同名事件，但读取后确认其催化复合物为 IFNA/B:IFNAR2:p-JAK1:STAT2:p-IFNAR1:p-TYK2:p-STAT2、祖先通路为 Interferon alpha/beta signaling、输出为 IFNA-activated-factor (AAF)，属 I 型支路，故不得用于本图（https://reactome.org/content/detail/R-HSA-909718）。",
+              "来源不确定性 1（入核机制未记录）：R-HSA-873917 为 BlackBoxEvent，无催化剂条目，记录中未标注 importin/核孔机制；I 型支路的 ISGF3 入核记录显式含 KPNA1/KPNB1，但不得跨支路类推，故本图 E5 只标注『STAT1 同源二聚体进入核质』并把『核转运机制未在该记录中标注』写入画内说明。",
+              "来源不确定性 2（位点措辞）：R-HSA-873922 摘要称 Y701 磷酸化『probably by JAK2』；R-HSA-873919 仅 Y1007 被建模入反应，JAK1 激活位点 Y1033 为基于序列相似性的推测。因此图中不把催化激酶与位点写成确定结论。",
+              "来源不确定性 3（亚型限定）：R-HSA-873921 的底物是 STAT1-1（STAT1-alpha，R-HSA-380745）这一特定亚型（对应 R-HSA-873922 的输出 p-STAT1(Y701)），未涵盖 STAT1β；节点 N4 标签保留 STAT1-1 限定，不泛化到整个 STAT1 家族。",
+              "已读但按范围排除、并说明理由：R-HSA-909552『Phosphorylation of STAT1 at Ser727』（CaMKII/PKCδ，https://reactome.org/content/detail/R-HSA-909552）——其摘要明确写明 S727 磷酸化『对 STAT1 同源二聚化、核转位与 DNA 结合不是必需的』，故不属于本次终点所需的链条，不画入主链；R-HSA-9678561（JAK1/2 抑制剂结合，药物，https://reactome.org/content/detail/R-HSA-9678561）；R-HSA-877312（Regulation of IFNG signaling，反馈抑制，https://reactome.org/content/detail/R-HSA-877312）；R-HSA-9736836（YBX1 入核，MAPK 支路，https://reactome.org/content/detail/R-HSA-9736836）。",
+              "检索范围声明：本次仅覆盖人 IFN-γ 支路的事件级记录（12 条逐条读取成功，status: ok）。未覆盖其他物种、IFN-III/IFN-λ 以及本轮未读取的 IFN-γ 支路事件；这不构成『数据库中不存在』的结论。",
+              "构图约定（仅空间组织）：节点为状态节点，箭头为反应事件，分面 pA/pB/pC 仅为视觉分段，不代表新区室或新阶段；采用 2 列 × 4 行网格，分面内节点纵向堆叠以容纳长标签，左下空位预留给画内说明（物种/刺激/终点/关键不确定性）。整图宽高比目标 0.5–2.5，正文字号不小于 16，不通过删改科学标签、关系或来源压缩版面。节点标签沿用 Reactome 英文实体名与中文状态描述（来源记录原文为英文）；如需中英对照再行调整。",
+              "本轮工作范围：仅检索读取反应级记录并保存就绪计划；未画图、未生成候选、未添加素材。"
+            ],
+            "audience": "生命科学/分子生物学研究生（组会或课程讲授场景）：已具备 JAK-STAT 通路基础概念，但需要理清不同 IFN 亚型下 STAT1 入核复合物与证据强度的差别。",
+            "edges": [
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926"
+                ],
+                "from": "n1",
+                "inhibitory": false,
+                "label": "IFNG 二聚体结合受体复合物（先结合 IFNGR1，再结合 IFNGR2）",
+                "to": "n2"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919",
+                  "R-HSA-873918 https://reactome.org/content/detail/R-HSA-873918",
+                  "R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924"
+                ],
+                "from": "n2",
+                "inhibitory": false,
+                "label": "JAK2 自磷酸化(Y1007) → JAK1 互相磷酸化 → IFNGR1 Y440 磷酸化（STAT1 SH2 停泊位点）",
+                "to": "n3"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873921 https://reactome.org/content/detail/R-HSA-873921"
+                ],
+                "from": "n3",
+                "inhibitory": false,
+                "label": "STAT1 SH2 结合 p-IFNGR1 的 Y440",
+                "to": "n4"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873922 https://reactome.org/content/detail/R-HSA-873922",
+                  "R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927"
+                ],
+                "from": "n4",
+                "inhibitory": false,
+                "label": "STAT1 Y701 磷酸化 → SH2-pTyr 互惠二聚化 → 从受体复合物释放",
+                "to": "n5"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "R-HSA-873917 https://reactome.org/content/detail/R-HSA-873917"
+                ],
+                "from": "n5",
+                "inhibitory": false,
+                "label": "p-STAT1 同源二聚体经核孔进入核质（该记录未标注核转运机制）",
+                "to": "n6"
+              }
+            ],
+            "layout": "grid",
+            "message": "教学用机制图（人 / IFN-γ）：IFNG 结合 IFNGR 受体复合物后，受体相关 JAK 被活化、IFNGR1 Y440 被磷酸化，潜伏 STAT1 被招募并发生 Y701 酪氨酸磷酸化，随后经 SH2-磷酸酪氨酸互惠相互作用形成同源二聚体（GAF）并从受体复合物释放，最后进入细胞核（核质）。图为紧凑分面：2 列 × 4 行网格，三个分面内节点纵向堆叠，左下留作画内说明区（物种/刺激/终点/关键不确定性）。共 6 个生物组件、5 条关系，每条关系均由反应级 Reactome 记录支撑（不使用通路总览证明箭头）。按用户要求不展开核内转录、药物、反馈抑制与 MAPK 支路。",
+            "nodes": [
+              {
+                "column": 0,
+                "evidence": [
+                  "R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926"
+                ],
+                "id": "n1",
+                "label": "IFNGR1:JAK1:IFNGR2:JAK2 受体复合物（质膜，未结合 IFNG）",
+                "panel": "pA",
+                "row": 0,
+                "shape": "rectangle"
+              },
+              {
+                "column": 0,
+                "evidence": [
+                  "R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926",
+                  "R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919"
+                ],
+                "id": "n2",
+                "label": "IFNG:IFNGR1:JAK1:IFNGR2:JAK2（IFNG 二聚体结合后，质膜）",
+                "panel": "pA",
+                "row": 1,
+                "shape": "rectangle"
+              },
+              {
+                "column": 1,
+                "evidence": [
+                  "R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919",
+                  "R-HSA-873918 https://reactome.org/content/detail/R-HSA-873918",
+                  "R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924"
+                ],
+                "id": "n3",
+                "label": "IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2（JAK2/JAK1 活化 + IFNGR1 Y440 磷酸化）",
+                "panel": "pB",
+                "row": 0,
+                "shape": "rectangle"
+              },
+              {
+                "column": 1,
+                "evidence": [
+                  "R-HSA-873921 https://reactome.org/content/detail/R-HSA-873921",
+                  "R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924"
+                ],
+                "id": "n4",
+                "label": "STAT1（STAT1-1，未磷酸化）结合于 p-IFNGR1（质膜）",
+                "panel": "pB",
+                "row": 1,
+                "shape": "rectangle"
+              },
+              {
+                "column": 1,
+                "evidence": [
+                  "R-HSA-873922 https://reactome.org/content/detail/R-HSA-873922",
+                  "R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927"
+                ],
+                "id": "n5",
+                "label": "p-STAT1(Y701) 同源二聚体 GAF（细胞质，已从受体复合物释放）",
+                "panel": "pC",
+                "row": 2,
+                "shape": "rectangle"
+              },
+              {
+                "column": 1,
+                "evidence": [
+                  "R-HSA-873917 https://reactome.org/content/detail/R-HSA-873917"
+                ],
+                "id": "n6",
+                "label": "p-STAT1 同源二聚体（核质）",
+                "panel": "pC",
+                "row": 3,
+                "shape": "rectangle"
+              }
+            ],
+            "panels": [
+              {
+                "column": 0,
+                "id": "pA",
+                "row": 0,
+                "title": "① IFNG 结合 IFNGR 受体复合物"
+              },
+              {
+                "column": 1,
+                "id": "pB",
+                "row": 0,
+                "title": "② 受体相关 JAK 活化与 STAT1 招募"
+              },
+              {
+                "column": 1,
+                "id": "pC",
+                "row": 1,
+                "title": "③ STAT1 磷酸化、同源二聚化与核转位"
+              }
+            ],
+            "questions": [
+              {
+                "answer": "Homo sapiens（人）。依据记录全部为人类五星级、isInferred=false 的实验策展事件，无需注明同源推断。",
+                "blocking": true,
+                "id": "q_species",
+                "question": "物种范围是什么？（例如人 Homo sapiens / 小鼠 Mus musculus / 大鼠 Rat norvegicus 等）注意：Reactome 中人源 STAT1 事件为实验策展+五星级，小鼠等物种的对应记录标注为 PANTHER 同源推断（isInferred=true），若用非人物种需在图内注明推断来源。"
+              },
+              {
+                "answer": "IFN-γ（IFNG），II 型干扰素支路：IFNGR1/IFNGR2 受体 + JAK1（IFNGR1 侧）/JAK2（IFNGR2 侧）。STAT1 以同源二聚体（GAF）入核，不采用 I 型支路的 ISGF3 复合物。",
+                "blocking": true,
+                "id": "q_subtype",
+                "question": "干扰素刺激亚型是哪一支？（I 型 IFNA/IFNB：IFNAR1/2 + TYK2/JAK1 + STAT2，STAT1 以 ISGF3 三聚体入核；II 型 IFNG：IFNGR1/2 + JAK1/JAK2，STAT1 以同二聚体 GAF 入核；是否还包含 III 型 IFN-λ？若是 I 型，还需指明是 IFNA、IFNB 还是 IFNA/B 集合）"
+              },
+              {
+                "answer": "终点 = p-STAT1 同源二聚体进入细胞核（核质中的 p-STAT1 同源二聚体）。不展开核内转录（GAS/ISRE 结合与 ISG 表达）、药物、反馈抑制（SOCS/PIAS/TCPTP）或 MAPK 支路。",
+                "blocking": true,
+                "id": "q_endpoint",
+                "question": "本图的终点画到哪里？（仅核转位 → 核内复合物；核内 DNA 结合（IFN-II 支路为 GAS 元素，IFN-I 支路为 ISRE 元素）；还是继续到 ISG 转录/表达）终点决定 pC 分面需要画到哪一步。"
+              },
+              {
+                "answer": "",
+                "blocking": false,
+                "id": "q_language",
+                "question": "（可选）图内标签与说明用中文、英文还是中英对照？当前默认：节点标签 = Reactome 英文实体名 + 中文状态描述；分面标题 = 中文；画内说明 = 中文。"
+              }
+            ],
+            "relationship_note": "节点为状态节点（复合物/状态），箭头为反应事件；分面 pA/pB/pC 仅为视觉分段，用于避免把 6 步长链排成单行横幅，不代表新的生物学区室或新阶段，也不隐含任何跨面板机制。跨面板连线只有在本支路真实存在显式关系时保留：pA→pB 对应 R-HSA-873919/R-HSA-873918/R-HSA-873924，pB→pC 对应 R-HSA-873922/R-HSA-873927。逐条核对方向与来源一致：E1 N1→N2 为配体结合（R-HSA-873926）；E2 N2→N3 为 JAK2→JAK1→IFNGR1 磷酸化（三条反应合并，各自单列来源）；E3 N3→N4 为 STAT1 SH2 停泊（R-HSA-873921）；E4 N4→N5 为 Y701 磷酸化与二聚化/释放（R-HSA-873922 + R-HSA-873927）；E5 N5→N6 为核转位（R-HSA-873917）。不使用通路总览记录为任何一条箭头作证。"
+          },
+          "version": 2
+        },
+        "scientificId": "n1"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-0",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 60,
+      "id": "label-0",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "IFNGR1:JAK1:IFNGR2:JAK2 受体复合物（质膜，未结合 IFNG）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "IFNGR1:JAK1:IFNGR2:JAK2\n受体复合物（质膜，未结合\nIFNG）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441324829,
+      "version": 3,
+      "versionNonce": 661623770,
+      "verticalAlign": "middle",
+      "width": 210,
+      "x": 45,
+      "y": 110
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-1",
+          "type": "text"
+        },
+        {
+          "id": "edge-0",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-1",
+          "type": "arrow"
+        }
+      ],
+      "fillStyle": "solid",
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 100,
+      "id": "node-1",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 220,
+      "x": 40,
+      "y": 330,
+      "customData": {
+        "evidence": [
+          "R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926",
+          "R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919"
+        ],
+        "scientificId": "n2"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-1",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 60,
+      "id": "label-1",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "IFNG:IFNGR1:JAK1:IFNGR2:JAK2（IFNG 二聚体结合后，质膜）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "IFNG:IFNGR1:JAK1:\nIFNGR2:JAK2（IFNG 二聚体\n结合后，质膜）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441286575,
+      "version": 2,
+      "versionNonce": 1313739134,
+      "verticalAlign": "middle",
+      "width": 210,
+      "x": 45,
+      "y": 350
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-0",
+          "type": "text"
+        }
+      ],
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-1",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 120,
+      "id": "edge-0",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          120
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-0",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794441324829,
+      "version": 2,
+      "versionNonce": 1355426802,
+      "width": 0,
+      "x": 150,
+      "y": 200,
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873926 https://reactome.org/content/detail/R-HSA-873926"
+        ],
+        "from": "n1",
+        "inhibitory": false,
+        "to": "n2"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-0",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 60,
+      "id": "edge-label-0",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "IFNG 二聚体结合受体复合物（先结合 IFNGR1，再结合 IFNGR2）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "IFNG 二聚体结合受体复\n合物（先结合 IFNGR1，\n再结合 IFNGR2）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441324829,
+      "version": 3,
+      "versionNonce": 1108519555,
+      "verticalAlign": "middle",
+      "width": 176,
+      "x": 62,
+      "y": 230
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": null,
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": "panel-0",
+      "groupIds": [],
+      "height": 50,
+      "id": "panel-title-0",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "① IFNG 结合 IFNGR 受体复合物",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "① IFNG 结合 IFNGR 受体\n复合物",
+      "textAlign": "left",
+      "type": "text",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "verticalAlign": "middle",
+      "width": 240,
+      "x": 40,
+      "y": 30,
+      "customData": {
+        "panelId": "pA"
+      }
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 510,
+      "id": "panel-0",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "name": null,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "frame",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 320,
+      "x": 0,
+      "y": 0,
+      "customData": {
+        "panelId": "pA",
+        "title": "① IFNG 结合 IFNGR 受体复合物"
+      }
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-2",
+          "type": "text"
+        },
+        {
+          "id": "edge-2",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-1",
+          "type": "arrow"
+        }
+      ],
+      "fillStyle": "solid",
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 100,
+      "id": "node-2",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 220,
+      "x": 460,
+      "y": 130,
+      "customData": {
+        "evidence": [
+          "R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919",
+          "R-HSA-873918 https://reactome.org/content/detail/R-HSA-873918",
+          "R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924"
+        ],
+        "layoutInfo": {
+          "feedback_edges": 0,
+          "font_family": 9,
+          "font_name": "Autonomics Scientific Sans",
+          "font_sha256": "9f643d5ffba0e0b4b0c6fdd1ab391a3ba014009717c04ebdd070dc3cc7441c30",
+          "kind": "grid"
+        },
+        "scientificId": "n3"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-2",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 80,
+      "id": "label-2",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "IFNG:p-IFNGR1:p-JAK1:IFNGR2:p-JAK2（JAK2/JAK1 活化 + IFNGR1 Y440 磷酸化）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "IFNG:p-IFNGR1:p-\nJAK1:IFNGR2:p-\nJAK2（JAK2/JAK1 活化 +\nIFNGR1 Y440 磷酸化）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441286575,
+      "version": 2,
+      "versionNonce": 344335405,
+      "verticalAlign": "middle",
+      "width": 210,
+      "x": 465,
+      "y": 140
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-3",
+          "type": "text"
+        },
+        {
+          "id": "edge-2",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-3",
+          "type": "arrow"
+        }
+      ],
+      "fillStyle": "solid",
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 100,
+      "id": "node-3",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 220,
+      "x": 460,
+      "y": 330,
+      "customData": {
+        "evidence": [
+          "R-HSA-873921 https://reactome.org/content/detail/R-HSA-873921",
+          "R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924"
+        ],
+        "scientificId": "n4"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-3",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 60,
+      "id": "label-3",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "STAT1（STAT1-1，未磷酸化）结合于 p-IFNGR1（质膜）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "STAT1（STAT1-1，未磷酸\n化）结合于 p-IFNGR1（质\n膜）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441286576,
+      "version": 2,
+      "versionNonce": 836060743,
+      "verticalAlign": "middle",
+      "width": 210,
+      "x": 465,
+      "y": 350
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-2",
+          "type": "text"
+        }
+      ],
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-3",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 80,
+      "id": "edge-2",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          80
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-2",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 0,
+      "x": 570,
+      "y": 240,
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873921 https://reactome.org/content/detail/R-HSA-873921"
+        ],
+        "from": "n3",
+        "inhibitory": false,
+        "to": "n4"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-2",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 40,
+      "id": "edge-label-2",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "STAT1 SH2 结合 p-IFNGR1 的 Y440",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "STAT1 SH2 结合 p-\nIFNGR1 的 Y440",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441286576,
+      "version": 2,
+      "versionNonce": 1508353627,
+      "verticalAlign": "middle",
+      "width": 176,
+      "x": 482,
+      "y": 260
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": null,
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": "panel-1",
+      "groupIds": [],
+      "height": 50,
+      "id": "panel-title-1",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "② 受体相关 JAK 活化与 STAT1 招募",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "② 受体相关 JAK 活化与\nSTAT1 招募",
+      "textAlign": "left",
+      "type": "text",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "verticalAlign": "middle",
+      "width": 240,
+      "x": 460,
+      "y": 30,
+      "customData": {
+        "panelId": "pB"
+      }
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 510,
+      "id": "panel-1",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "name": null,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "frame",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 320,
+      "x": 420,
+      "y": 0,
+      "customData": {
+        "panelId": "pB",
+        "title": "② 受体相关 JAK 活化与 STAT1 招募"
+      }
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-4",
+          "type": "text"
+        },
+        {
+          "id": "edge-4",
+          "type": "arrow"
+        },
+        {
+          "id": "edge-3",
+          "type": "arrow"
+        }
+      ],
+      "fillStyle": "solid",
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 100,
+      "id": "node-4",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 220,
+      "x": 460,
+      "y": 740,
+      "customData": {
+        "evidence": [
+          "R-HSA-873922 https://reactome.org/content/detail/R-HSA-873922",
+          "R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927"
+        ],
+        "layoutInfo": {
+          "feedback_edges": 0,
+          "font_family": 9,
+          "font_name": "Autonomics Scientific Sans",
+          "font_sha256": "9f643d5ffba0e0b4b0c6fdd1ab391a3ba014009717c04ebdd070dc3cc7441c30",
+          "kind": "grid"
+        },
+        "scientificId": "n5"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-4",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 60,
+      "id": "label-4",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "p-STAT1(Y701) 同源二聚体 GAF（细胞质，已从受体复合物释放）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "p-STAT1(Y701) 同源二聚体\nGAF（细胞质，已从受体复合\n物释放）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441286576,
+      "version": 2,
+      "versionNonce": 945574890,
+      "verticalAlign": "middle",
+      "width": 210,
+      "x": 465,
+      "y": 760
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "#e0f2fe",
+      "boundElements": [
+        {
+          "id": "label-5",
+          "type": "text"
+        },
+        {
+          "id": "edge-4",
+          "type": "arrow"
+        }
+      ],
+      "fillStyle": "solid",
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 100,
+      "id": "node-5",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "rectangle",
+      "updated": 1794441324833,
+      "version": 2,
+      "versionNonce": 473743189,
+      "width": 220,
+      "x": 460,
+      "y": 995,
+      "customData": {
+        "evidence": [
+          "R-HSA-873917 https://reactome.org/content/detail/R-HSA-873917"
+        ],
+        "scientificId": "n6"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "node-5",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 40,
+      "id": "label-5",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "p-STAT1 同源二聚体（核质）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "p-STAT1 同源二聚体（核\n质）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441324833,
+      "version": 3,
+      "versionNonce": 280318238,
+      "verticalAlign": "middle",
+      "width": 210,
+      "x": 465,
+      "y": 1025
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-4",
+          "type": "text"
+        }
+      ],
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-5",
+        "focus": 0,
+        "gap": 10
+      },
+      "fillStyle": "solid",
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 135,
+      "id": "edge-4",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          135
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-4",
+        "focus": 0,
+        "gap": 10
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1794441324833,
+      "version": 2,
+      "versionNonce": 1760641284,
+      "width": 0,
+      "x": 570,
+      "y": 850,
+      "customData": {
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873917 https://reactome.org/content/detail/R-HSA-873917"
+        ],
+        "from": "n5",
+        "inhibitory": false,
+        "to": "n6"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-4",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 60,
+      "id": "edge-label-4",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "p-STAT1 同源二聚体经核孔进入核质（该记录未标注核转运机制）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "p-STAT1 同源二聚体经\n核孔进入核质（该记录未\n标注核转运机制）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1794441324833,
+      "version": 3,
+      "versionNonce": 825061445,
+      "verticalAlign": "middle",
+      "width": 176,
+      "x": 482,
+      "y": 887.5
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": null,
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 20,
+      "frameId": "panel-2",
+      "groupIds": [],
+      "height": 50,
+      "id": "panel-title-2",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "③ STAT1 磷酸化、同源二聚化与核转位",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "③ STAT1 磷酸化、同源二\n聚化与核转位",
+      "textAlign": "left",
+      "type": "text",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "verticalAlign": "middle",
+      "width": 240,
+      "x": 460,
+      "y": 640,
+      "customData": {
+        "panelId": "pC"
+      }
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 510,
+      "id": "panel-2",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "name": null,
+      "opacity": 100,
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "frame",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 320,
+      "x": 420,
+      "y": 610,
+      "customData": {
+        "panelId": "pC",
+        "title": "③ STAT1 磷酸化、同源二聚化与核转位"
+      }
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-1",
+          "type": "text"
+        }
+      ],
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-2",
+        "focus": 0,
+        "gap": 12
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 200,
+      "id": "edge-1",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          20,
+          0
+        ],
+        [
+          20,
+          -200
+        ],
+        [
+          98,
+          -200
+        ],
+        [
+          124,
+          -200
+        ],
+        [
+          150,
+          -200
+        ],
+        [
+          176,
+          -200
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-1",
+        "focus": 0,
+        "gap": 12
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 176,
+      "x": 272,
+      "y": 380,
+      "customData": {
+        "crossPanel": true,
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873919 https://reactome.org/content/detail/R-HSA-873919",
+          "R-HSA-873918 https://reactome.org/content/detail/R-HSA-873918",
+          "R-HSA-873924 https://reactome.org/content/detail/R-HSA-873924"
+        ],
+        "from": "n2",
+        "inhibitory": false,
+        "to": "n3"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-1",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 120,
+      "id": "edge-label-1",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "JAK2 自磷酸化(Y1007) → JAK1 互相磷酸化 → IFNGR1 Y440 磷酸化（STAT1 SH2 停泊位点）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "JAK2 自磷酸化\n(Y1007) → JAK1\n互相磷酸化 →\nIFNGR1 Y440 磷酸\n化（STAT1 SH2 停\n泊位点）",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "verticalAlign": "middle",
+      "width": 136.640625,
+      "x": 301.6796875,
+      "y": 120
+    },
+    {
+      "angle": 0,
+      "backgroundColor": "transparent",
+      "boundElements": [
+        {
+          "id": "edge-label-3",
+          "type": "text"
+        }
+      ],
+      "elbowed": false,
+      "endArrowhead": "arrow",
+      "endBinding": {
+        "elementId": "node-4",
+        "focus": 0,
+        "gap": 12
+      },
+      "fillStyle": "solid",
+      "frameId": null,
+      "groupIds": [],
+      "height": 348,
+      "id": "edge-3",
+      "isDeleted": false,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          56
+        ],
+        [
+          0,
+          112
+        ],
+        [
+          -62.83984375,
+          112
+        ],
+        [
+          -125.6796875,
+          112
+        ],
+        [
+          -125.6796875,
+          348
+        ],
+        [
+          -122,
+          348
+        ]
+      ],
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "startArrowhead": null,
+      "startBinding": {
+        "elementId": "node-3",
+        "focus": 0,
+        "gap": 12
+      },
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "type": "arrow",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "width": 125.6796875,
+      "x": 570,
+      "y": 442,
+      "customData": {
+        "crossPanel": true,
+        "direction": "forward",
+        "evidence": [
+          "R-HSA-873922 https://reactome.org/content/detail/R-HSA-873922",
+          "R-HSA-873927 https://reactome.org/content/detail/R-HSA-873927"
+        ],
+        "from": "n4",
+        "inhibitory": false,
+        "to": "n5"
+      }
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": "edge-3",
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 80,
+      "id": "edge-label-3",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "STAT1 Y701 磷酸化 → SH2-pTyr 互惠二聚化 → 从受体复合物释放",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "STAT1 Y701 磷酸\n化 → SH2-pTyr 互\n惠二聚化 → 从受体\n复合物释放",
+      "textAlign": "center",
+      "type": "text",
+      "updated": 1,
+      "version": 1,
+      "versionNonce": 1,
+      "verticalAlign": "middle",
+      "width": 136.890625,
+      "x": 438.71484375,
+      "y": 514
+    },
+    {
+      "angle": 0,
+      "autoResize": false,
+      "backgroundColor": "transparent",
+      "boundElements": [],
+      "containerId": null,
+      "fillStyle": "solid",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "frameId": null,
+      "groupIds": [],
+      "height": 160,
+      "id": "scope-note-1",
+      "isDeleted": false,
+      "lineHeight": 1.25,
+      "link": null,
+      "locked": false,
+      "opacity": 100,
+      "originalText": "范围：人（Homo sapiens）IFN-γ（IFNG）II 型干扰素支路——IFNGR1/IFNGR2 受体复合物与 JAK1/JAK2。\n终点：p-STAT1 同源二聚体进入细胞核（核质）；按范围不展开核内转录、药物、反馈抑制与 MAPK 支路。\n关键不确定性：Y701 磷酸化在来源中记为「probably by JAK2」；JAK2 仅 Y1007 入模型、JAK1 激活位点为序列相似性推测；入核记录未标注核转运机制；被招募的 STAT1 限于 STAT1-1（STAT1-α）。\n（完整来源见各节点与关系的 evidence，可随来源清单导出。）",
+      "roughness": 0,
+      "roundness": null,
+      "seed": 1,
+      "strokeColor": "#1e293b",
+      "strokeStyle": "solid",
+      "strokeWidth": 2,
+      "text": "范围：人（Homo sapiens）IFN-γ（IFNG）II 型干扰素支路——IFNGR1/IFNGR2 受体复合物与\nJAK1/JAK2。\n终点：p-STAT1 同源二聚体进入细胞核（核质）；按范围不展开核内转录、药物、反馈抑制与\nMAPK 支路。\n关键不确定性：Y701 磷酸化在来源中记为「probably by JAK2」；JAK2 仅 Y1007 入模型、JAK1\n激活位点为序列相似性推测；入核记录未标注核转运机制；被招募的 STAT1 限于\nSTAT1-1（STAT1-α）。\n（完整来源见各节点与关系的 evidence，可随来源清单导出。）",
+      "textAlign": "left",
+      "type": "text",
+      "updated": 1794441330807,
+      "version": 2,
+      "versionNonce": 718365571,
+      "verticalAlign": "top",
+      "width": 700,
+      "x": 10,
+      "y": 1140
+    }
+  ],
+  "files": {}
+}
