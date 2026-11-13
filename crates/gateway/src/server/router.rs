@@ -306,6 +306,7 @@ pub fn router_with_bib(
     bib_shared: bib_base::BibShared,
     wiki: Arc<wiki::service::WikiHandle>,
     deck_shared: Arc<ppt_base::DeckHandle>,
+    visualization_store: visualization::Store,
     env_token: Option<String>,
 ) -> Router {
     let auth = Arc::new(AuthContext::new(gateway_token));
@@ -343,6 +344,9 @@ pub fn router_with_bib(
         )),
         None => deck_router,
     };
+    let visualization_router = api_server::visualization::router(visualization_store).layer(
+        axum::middleware::from_fn_with_state(auth.clone(), bearer_or_session),
+    );
     let session: Router = Router::new()
         .route(
             "/api/session",
@@ -355,6 +359,7 @@ pub fn router_with_bib(
         .merge(docs)
         .merge(session)
         .nest("/api/v1/bib", bib)
+        .nest("/api/v1/visualization", visualization_router)
         .nest("/api/v1/wiki", wiki_router)
         .nest("/api/v1/deck", deck_router)
         .nest("/api/v1/deck", deck_open_router)

@@ -7,6 +7,8 @@ rust-version.workspace = true
 description = "Async Rust SDK for the Reactome Content Service and Analysis Service with agent tools."
 
 [dependencies]
+httpdate = "1"
+tokio = { workspace = true, features = ["time"] }
 agentik-core = { path = "../agentik-core" }
 agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }

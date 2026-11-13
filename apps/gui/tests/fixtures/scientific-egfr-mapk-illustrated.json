@@ -1,0 +1,1924 @@
+{
+  "schema": "autonomics.figure.fixture/v1",
+  "description": "Saved reduced human EGFR-MAPK materialization case; generic receptor art does not verify molecular structure.",
+  "artwork_source": {
+    "author": "Jan-Jezierski",
+    "source_url": "https://bioicons.com/icons/cc-0/Cell_membrane/Jan-Jezierski/receptor.svg",
+    "license": "cc-0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "document": {
+    "elements": [
+      {
+        "angle": 0,
+        "backgroundColor": "#e0f2fe",
+        "boundElements": [
+          {
+            "id": "label-0",
+            "type": "text"
+          },
+          {
+            "id": "edge-0",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177942"
+          ],
+          "layoutInfo": {
+            "feedback_edges": 0,
+            "font_family": 9,
+            "font_name": "Autonomics Scientific Sans",
+            "font_sha256": "02b768546998e43f538442bbc1209c5154c3e9988255dbf2dad72a9396411261",
+            "kind": "vertical"
+          },
+          "planningSource": {
+            "based_on_revision": 2,
+            "document": {
+              "assumptions": [
+                "Selected human signaling events only; this is not the complete Reactome pathway.",
+                "EGFR denotes ligand-activated receptor; binding, dimerization and autophosphorylation are collapsed into a summary step.",
+                "RAS and RAF are family-level summaries; MEK1/2 and ERK1/2 denote the stated family members, not single proteins.",
+                "Recruitment and activation summary arrows can omit intermediates, including SHC1 and RAF regulatory steps.",
+                "Panels group explanatory stages, not cellular compartments. Feedback, crosstalk, nuclear transport and phenotypic outcomes are outside this diagram."
+              ],
+              "audience": "Biomedical researchers",
+              "edges": [
+                {
+                  "direction": "forward",
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177942",
+                    "https://reactome.org/content/detail/R-HSA-177929"
+                  ],
+                  "from": "egf",
+                  "inhibitory": false,
+                  "label": "binding and activation (summary)",
+                  "to": "egfr"
+                },
+                {
+                  "direction": "forward",
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177929"
+                  ],
+                  "from": "egfr",
+                  "inhibitory": false,
+                  "label": "recruits relay (summary)",
+                  "to": "relay"
+                },
+                {
+                  "direction": "forward",
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177929"
+                  ],
+                  "from": "relay",
+                  "inhibitory": false,
+                  "label": "promotes GDP/GTP exchange",
+                  "to": "ras"
+                },
+                {
+                  "direction": "forward",
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-5673000",
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "from": "ras",
+                  "inhibitory": false,
+                  "label": "recruitment and activation (summary)",
+                  "to": "raf"
+                },
+                {
+                  "direction": "forward",
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "from": "raf",
+                  "inhibitory": false,
+                  "label": "phosphorylates",
+                  "to": "mek"
+                },
+                {
+                  "direction": "forward",
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "from": "mek",
+                  "inhibitory": false,
+                  "label": "phosphorylates",
+                  "to": "erk"
+                }
+              ],
+              "layout": "vertical",
+              "message": "Reduced human EGFR-MAPK signaling. Panels show explanatory stages, not physical compartments. Show the supplied scope caption below the diagram.",
+              "nodes": [
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177942"
+                  ],
+                  "id": "egf",
+                  "label": "EGF",
+                  "panel": "receptor",
+                  "shape": "rectangle"
+                },
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177929"
+                  ],
+                  "id": "egfr",
+                  "label": "EGFR (ligand-activated)",
+                  "panel": "receptor",
+                  "shape": "rectangle"
+                },
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177929"
+                  ],
+                  "id": "relay",
+                  "label": "GRB2/SOS1 relay",
+                  "panel": "relay",
+                  "shape": "rectangle"
+                },
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-177929",
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "id": "ras",
+                  "label": "RAS-GTP",
+                  "panel": "relay",
+                  "shape": "rectangle"
+                },
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-5673000",
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "id": "raf",
+                  "label": "RAF family",
+                  "panel": "kinases",
+                  "shape": "rectangle"
+                },
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "id": "mek",
+                  "label": "MEK1/2 (MAP2K1/2)",
+                  "panel": "kinases",
+                  "shape": "rectangle"
+                },
+                {
+                  "evidence": [
+                    "https://reactome.org/content/detail/R-HSA-5673001"
+                  ],
+                  "id": "erk",
+                  "label": "ERK1/2 (MAPK3/1)",
+                  "panel": "kinases",
+                  "shape": "rectangle"
+                }
+              ],
+              "panels": [
+                {
+                  "column": 0,
+                  "id": "receptor",
+                  "row": 0,
+                  "title": "A | Ligand and receptor"
+                },
+                {
+                  "column": 1,
+                  "id": "relay",
+                  "row": 0,
+                  "title": "B | RAS activation relay"
+                },
+                {
+                  "column": 2,
+                  "id": "kinases",
+                  "row": 0,
+                  "title": "C | RAF-MEK-ERK cascade"
+                }
+              ],
+              "questions": [],
+              "relationship_note": "Only the six supplied directed relationships; summary edges do not assert single-step direct molecular interactions. No inhibitory relationships are specified."
+            },
+            "version": 1
+          },
+          "scientificId": "egf",
+          "scientificPlan": {
+            "assumptions": [
+              "Selected human signaling events only; this is not the complete Reactome pathway.",
+              "EGFR denotes ligand-activated receptor; binding, dimerization and autophosphorylation are collapsed into a summary step.",
+              "RAS and RAF are family-level summaries; MEK1/2 and ERK1/2 denote the stated family members, not single proteins.",
+              "Recruitment and activation summary arrows can omit intermediates, including SHC1 and RAF regulatory steps.",
+              "Panels group explanatory stages, not cellular compartments. Feedback, crosstalk, nuclear transport and phenotypic outcomes are outside this diagram."
+            ],
+            "audience": "Biomedical researchers",
+            "edges": [
+              {
+                "direction": "forward",
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177942",
+                  "https://reactome.org/content/detail/R-HSA-177929"
+                ],
+                "from": "egf",
+                "inhibitory": false,
+                "label": "binding and activation (summary)",
+                "to": "egfr"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177929"
+                ],
+                "from": "egfr",
+                "inhibitory": false,
+                "label": "recruits relay (summary)",
+                "to": "relay"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177929"
+                ],
+                "from": "relay",
+                "inhibitory": false,
+                "label": "promotes GDP/GTP exchange",
+                "to": "ras"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-5673000",
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "from": "ras",
+                "inhibitory": false,
+                "label": "recruitment and activation (summary)",
+                "to": "raf"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "from": "raf",
+                "inhibitory": false,
+                "label": "phosphorylates",
+                "to": "mek"
+              },
+              {
+                "direction": "forward",
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "from": "mek",
+                "inhibitory": false,
+                "label": "phosphorylates",
+                "to": "erk"
+              }
+            ],
+            "layout": "vertical",
+            "message": "Reduced human EGFR-MAPK signaling. Panels show explanatory stages, not physical compartments. Show the supplied scope caption below the diagram.",
+            "nodes": [
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177942"
+                ],
+                "id": "egf",
+                "label": "EGF",
+                "panel": "receptor",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177929"
+                ],
+                "id": "egfr",
+                "label": "EGFR (ligand-activated)",
+                "panel": "receptor",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177929"
+                ],
+                "id": "relay",
+                "label": "GRB2/SOS1 relay",
+                "panel": "relay",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-177929",
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "id": "ras",
+                "label": "RAS-GTP",
+                "panel": "relay",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-5673000",
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "id": "raf",
+                "label": "RAF family",
+                "panel": "kinases",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "id": "mek",
+                "label": "MEK1/2 (MAP2K1/2)",
+                "panel": "kinases",
+                "shape": "rectangle"
+              },
+              {
+                "evidence": [
+                  "https://reactome.org/content/detail/R-HSA-5673001"
+                ],
+                "id": "erk",
+                "label": "ERK1/2 (MAPK3/1)",
+                "panel": "kinases",
+                "shape": "rectangle"
+              }
+            ],
+            "panels": [
+              {
+                "column": 0,
+                "id": "receptor",
+                "row": 0,
+                "title": "A | Ligand and receptor"
+              },
+              {
+                "column": 1,
+                "id": "relay",
+                "row": 0,
+                "title": "B | RAS activation relay"
+              },
+              {
+                "column": 2,
+                "id": "kinases",
+                "row": 0,
+                "title": "C | RAF-MEK-ERK cascade"
+              }
+            ]
+          }
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-0",
+        "groupIds": [],
+        "height": 100,
+        "id": "node-0",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 40,
+        "y": 105
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "node-0",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-0",
+        "groupIds": [],
+        "height": 25,
+        "id": "label-0",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "EGF",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "EGF",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 200,
+        "x": 50,
+        "y": 142.5
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-0",
+            "type": "arrow"
+          },
+          {
+            "id": "edge-1",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177929"
+          ],
+          "scientificId": "egfr",
+          "visualAssetElementId": "a4c04ee7-f284-4e3f-949e-2ed3a48acbfa",
+          "visualAssetGroupId": "b7e5de8f-b607-466f-8108-b6e8a929fc34",
+          "visualLabelIds": [
+            "label-1"
+          ]
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-0",
+        "groupIds": [
+          "b7e5de8f-b607-466f-8108-b6e8a929fc34"
+        ],
+        "height": 100,
+        "id": "node-1",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "transparent",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1794312218570,
+        "version": 2,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 40,
+        "y": 385
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": null,
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-0",
+        "groupIds": [
+          "b7e5de8f-b607-466f-8108-b6e8a929fc34"
+        ],
+        "height": 50,
+        "id": "label-1",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "EGFR (ligand-activated)",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "EGFR (ligand-\nactivated)",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 200,
+        "x": 50,
+        "y": 497
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-label-0",
+            "type": "text"
+          }
+        ],
+        "customData": {
+          "direction": "forward",
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177942",
+            "https://reactome.org/content/detail/R-HSA-177929"
+          ],
+          "from": "egf",
+          "inhibitory": false,
+          "to": "egfr"
+        },
+        "elbowed": false,
+        "endArrowhead": "arrow",
+        "endBinding": {
+          "elementId": "node-1",
+          "focus": 0,
+          "gap": 10
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-0",
+        "groupIds": [],
+        "height": 160,
+        "id": "edge-0",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            160
+          ]
+        ],
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "startArrowhead": null,
+        "startBinding": {
+          "elementId": "node-0",
+          "focus": 0,
+          "gap": 10
+        },
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "arrow",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 0,
+        "x": 150,
+        "y": 215
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "edge-0",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 16,
+        "frameId": "panel-0",
+        "groupIds": [],
+        "height": 60,
+        "id": "edge-label-0",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "binding and activation (summary)",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "binding and\nactivation\n(summary)",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 82.7421875,
+        "x": 108.62890625,
+        "y": 265
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": null,
+        "customData": {
+          "panelId": "receptor"
+        },
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-0",
+        "groupIds": [],
+        "height": 25,
+        "id": "panel-title-0",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "A | Ligand and receptor",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "A | Ligand and receptor",
+        "textAlign": "left",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 240,
+        "x": 40,
+        "y": 30
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "customData": {
+          "panelId": "receptor",
+          "title": "A | Ligand and receptor"
+        },
+        "fillStyle": "solid",
+        "frameId": null,
+        "groupIds": [],
+        "height": 565,
+        "id": "panel-0",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "name": null,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "frame",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 320,
+        "x": 0,
+        "y": 0
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "#e0f2fe",
+        "boundElements": [
+          {
+            "id": "label-2",
+            "type": "text"
+          },
+          {
+            "id": "edge-2",
+            "type": "arrow"
+          },
+          {
+            "id": "edge-1",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177929"
+          ],
+          "layoutInfo": {
+            "feedback_edges": 0,
+            "font_family": 9,
+            "font_name": "Autonomics Scientific Sans",
+            "font_sha256": "02b768546998e43f538442bbc1209c5154c3e9988255dbf2dad72a9396411261",
+            "kind": "vertical"
+          },
+          "scientificId": "relay"
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 100,
+        "id": "node-2",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 460,
+        "y": 105
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "node-2",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 25,
+        "id": "label-2",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "GRB2/SOS1 relay",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "GRB2/SOS1 relay",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 200,
+        "x": 470,
+        "y": 142.5
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "#e0f2fe",
+        "boundElements": [
+          {
+            "id": "label-3",
+            "type": "text"
+          },
+          {
+            "id": "edge-2",
+            "type": "arrow"
+          },
+          {
+            "id": "edge-3",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177929",
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "scientificId": "ras"
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 100,
+        "id": "node-3",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 460,
+        "y": 385
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "node-3",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 25,
+        "id": "label-3",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "RAS-GTP",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "RAS-GTP",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 200,
+        "x": 470,
+        "y": 422.5
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-label-2",
+            "type": "text"
+          }
+        ],
+        "customData": {
+          "direction": "forward",
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177929"
+          ],
+          "from": "relay",
+          "inhibitory": false,
+          "to": "ras"
+        },
+        "elbowed": false,
+        "endArrowhead": "arrow",
+        "endBinding": {
+          "elementId": "node-3",
+          "focus": 0,
+          "gap": 10
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 160,
+        "id": "edge-2",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            160
+          ]
+        ],
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "startArrowhead": null,
+        "startBinding": {
+          "elementId": "node-2",
+          "focus": 0,
+          "gap": 10
+        },
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "arrow",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 0,
+        "x": 570,
+        "y": 215
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "edge-2",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 16,
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 60,
+        "id": "edge-label-2",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "promotes GDP/GTP exchange",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "promotes\nGDP/GTP\nexchange",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 72.0078125,
+        "x": 533.99609375,
+        "y": 265
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": null,
+        "customData": {
+          "panelId": "relay"
+        },
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-1",
+        "groupIds": [],
+        "height": 25,
+        "id": "panel-title-1",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "B | RAS activation relay",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "B | RAS activation relay",
+        "textAlign": "left",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 240,
+        "x": 460,
+        "y": 30
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "customData": {
+          "panelId": "relay",
+          "title": "B | RAS activation relay"
+        },
+        "fillStyle": "solid",
+        "frameId": null,
+        "groupIds": [],
+        "height": 565,
+        "id": "panel-1",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "name": null,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "frame",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 320,
+        "x": 420,
+        "y": 0
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "#e0f2fe",
+        "boundElements": [
+          {
+            "id": "label-4",
+            "type": "text"
+          },
+          {
+            "id": "edge-4",
+            "type": "arrow"
+          },
+          {
+            "id": "edge-3",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-5673000",
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "layoutInfo": {
+            "feedback_edges": 0,
+            "font_family": 9,
+            "font_name": "Autonomics Scientific Sans",
+            "font_sha256": "02b768546998e43f538442bbc1209c5154c3e9988255dbf2dad72a9396411261",
+            "kind": "vertical"
+          },
+          "scientificId": "raf"
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 100,
+        "id": "node-4",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 880,
+        "y": 130
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "node-4",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 25,
+        "id": "label-4",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "RAF family",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "RAF family",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 200,
+        "x": 890,
+        "y": 167.5
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "#e0f2fe",
+        "boundElements": [
+          {
+            "id": "label-5",
+            "type": "text"
+          },
+          {
+            "id": "edge-4",
+            "type": "arrow"
+          },
+          {
+            "id": "edge-5",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "scientificId": "mek"
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 100,
+        "id": "node-5",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 880,
+        "y": 410
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "node-5",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 25,
+        "id": "label-5",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "MEK1/2 (MAP2K1/2)",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "MEK1/2 (MAP2K1/2)",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 200,
+        "x": 890,
+        "y": 447.5
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "#e0f2fe",
+        "boundElements": [
+          {
+            "id": "label-6",
+            "type": "text"
+          },
+          {
+            "id": "edge-5",
+            "type": "arrow"
+          }
+        ],
+        "customData": {
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "scientificId": "erk"
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 100,
+        "id": "node-6",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "rectangle",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 220,
+        "x": 880,
+        "y": 690
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "node-6",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 50,
+        "id": "label-6",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "ERK1/2 (MAPK3/MAPK1)",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "ERK1/2 (MAPK3/\nMAPK1)",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1794310283515,
+        "version": 2,
+        "versionNonce": 517987968,
+        "verticalAlign": "middle",
+        "width": 210,
+        "x": 885,
+        "y": 715
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-label-4",
+            "type": "text"
+          }
+        ],
+        "customData": {
+          "direction": "forward",
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "from": "raf",
+          "inhibitory": false,
+          "to": "mek"
+        },
+        "elbowed": false,
+        "endArrowhead": "arrow",
+        "endBinding": {
+          "elementId": "node-5",
+          "focus": 0,
+          "gap": 10
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 160,
+        "id": "edge-4",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            160
+          ]
+        ],
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "startArrowhead": null,
+        "startBinding": {
+          "elementId": "node-4",
+          "focus": 0,
+          "gap": 10
+        },
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "arrow",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 0,
+        "x": 990,
+        "y": 240
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "edge-4",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 14,
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 17.5,
+        "id": "edge-label-4",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "phosphorylates",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "phosphorylates",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1794310229759,
+        "version": 2,
+        "versionNonce": 1028957372,
+        "verticalAlign": "middle",
+        "width": 154,
+        "x": 913,
+        "y": 311.25
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-label-5",
+            "type": "text"
+          }
+        ],
+        "customData": {
+          "direction": "forward",
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "from": "mek",
+          "inhibitory": false,
+          "to": "erk"
+        },
+        "elbowed": false,
+        "endArrowhead": "arrow",
+        "endBinding": {
+          "elementId": "node-6",
+          "focus": 0,
+          "gap": 10
+        },
+        "fillStyle": "solid",
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 160,
+        "id": "edge-5",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            160
+          ]
+        ],
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "startArrowhead": null,
+        "startBinding": {
+          "elementId": "node-5",
+          "focus": 0,
+          "gap": 10
+        },
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "arrow",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 0,
+        "x": 990,
+        "y": 520
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "edge-5",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 14,
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 17.5,
+        "id": "edge-label-5",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "phosphorylates",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "phosphorylates",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1794310229759,
+        "version": 2,
+        "versionNonce": 12687386,
+        "verticalAlign": "middle",
+        "width": 154,
+        "x": 913,
+        "y": 591.25
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": null,
+        "customData": {
+          "panelId": "kinases"
+        },
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 20,
+        "frameId": "panel-2",
+        "groupIds": [],
+        "height": 50,
+        "id": "panel-title-2",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "C | RAF-MEK-ERK cascade",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "C | RAF-MEK-ERK\ncascade",
+        "textAlign": "left",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 240,
+        "x": 880,
+        "y": 30
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "customData": {
+          "panelId": "kinases",
+          "title": "C | RAF-MEK-ERK cascade"
+        },
+        "fillStyle": "solid",
+        "frameId": null,
+        "groupIds": [],
+        "height": 870,
+        "id": "panel-2",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "name": null,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "frame",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 320,
+        "x": 840,
+        "y": 0
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-label-1",
+            "type": "text"
+          }
+        ],
+        "customData": {
+          "crossPanel": true,
+          "direction": "forward",
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-177929"
+          ],
+          "from": "egfr",
+          "inhibitory": false,
+          "to": "relay"
+        },
+        "elbowed": false,
+        "endArrowhead": "arrow",
+        "endBinding": {
+          "elementId": "node-2",
+          "focus": 0,
+          "gap": 12
+        },
+        "fillStyle": "solid",
+        "frameId": null,
+        "groupIds": [],
+        "height": 280,
+        "id": "edge-1",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            -70
+          ],
+          [
+            0,
+            -140
+          ],
+          [
+            0,
+            -280
+          ],
+          [
+            176,
+            -280
+          ]
+        ],
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "startArrowhead": null,
+        "startBinding": {
+          "elementId": "node-1",
+          "focus": 0,
+          "gap": 12
+        },
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "arrow",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 176,
+        "x": 272,
+        "y": 435
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "edge-1",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 16,
+        "frameId": null,
+        "groupIds": [],
+        "height": 40,
+        "id": "edge-label-1",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "recruits relay (summary)",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "recruits relay\n(summary)",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 91.578125,
+        "x": 226.2109375,
+        "y": 275
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [
+          {
+            "id": "edge-label-3",
+            "type": "text"
+          }
+        ],
+        "customData": {
+          "crossPanel": true,
+          "direction": "forward",
+          "evidence": [
+            "https://reactome.org/content/detail/R-HSA-5673000",
+            "https://reactome.org/content/detail/R-HSA-5673001"
+          ],
+          "from": "ras",
+          "inhibitory": false,
+          "to": "raf"
+        },
+        "elbowed": false,
+        "endArrowhead": "arrow",
+        "endBinding": {
+          "elementId": "node-4",
+          "focus": 0,
+          "gap": 12
+        },
+        "fillStyle": "solid",
+        "frameId": null,
+        "groupIds": [],
+        "height": 255,
+        "id": "edge-3",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            -63.75
+          ],
+          [
+            0,
+            -127.5
+          ],
+          [
+            0,
+            -255
+          ],
+          [
+            176,
+            -255
+          ]
+        ],
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "startArrowhead": null,
+        "startBinding": {
+          "elementId": "node-3",
+          "focus": 0,
+          "gap": 12
+        },
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "type": "arrow",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 176,
+        "x": 692,
+        "y": 435
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": "edge-3",
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 16,
+        "frameId": null,
+        "groupIds": [],
+        "height": 60,
+        "id": "edge-label-3",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "recruitment and activation (summary)",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "recruitment and\nactivation\n(summary)",
+        "textAlign": "center",
+        "type": "text",
+        "updated": 1,
+        "version": 1,
+        "versionNonce": 1,
+        "verticalAlign": "middle",
+        "width": 111.1640625,
+        "x": 636.41796875,
+        "y": 277.5
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": null,
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 18,
+        "frameId": null,
+        "groupIds": [],
+        "height": 22.5,
+        "id": "scope-caption-1",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "Reduced human EGFR-MAPK schematic: selected events; RAS and RAF are family-level summaries.",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "Reduced human EGFR-MAPK schematic: selected events; RAS and RAF are family-level summaries.",
+        "textAlign": "left",
+        "type": "text",
+        "updated": 1794310229759,
+        "version": 2,
+        "versionNonce": 1768282051,
+        "verticalAlign": "top",
+        "width": 1100,
+        "x": 40,
+        "y": 905
+      },
+      {
+        "angle": 0,
+        "autoResize": false,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "containerId": null,
+        "fillStyle": "solid",
+        "fontFamily": 9,
+        "fontSize": 16,
+        "frameId": null,
+        "groupIds": [],
+        "height": 20,
+        "id": "art-specificity-note",
+        "isDeleted": false,
+        "lineHeight": 1.25,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "originalText": "Generic receptor artwork; not an EGFR molecular structure.",
+        "roughness": 0,
+        "roundness": null,
+        "seed": 1,
+        "strokeColor": "#1e293b",
+        "strokeStyle": "solid",
+        "strokeWidth": 2,
+        "text": "Generic receptor artwork; not an EGFR molecular structure.",
+        "textAlign": "left",
+        "type": "text",
+        "updated": 1794312145279,
+        "version": 2,
+        "versionNonce": 645775987,
+        "verticalAlign": "top",
+        "width": 1160,
+        "x": 0,
+        "y": 963.5
+      },
+      {
+        "angle": 0,
+        "backgroundColor": "transparent",
+        "boundElements": [],
+        "crop": null,
+        "customData": {
+          "asset": {
+            "author": "Jan-Jezierski",
+            "author_url": null,
+            "catalog_sha256": "69a1d8d879778802c12568de3475996ede8a9f6a2b601692a5c3d0d1b8281f9b",
+            "category": "Cell_membrane",
+            "id": "b318ba95d1e3fc87f32c66f29ba37712d0db988d112aa71284b3cb67b3e0f2bc",
+            "license": "cc-0",
+            "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+            "name": "receptor",
+            "source_url": "https://bioicons.com/?query=receptor",
+            "svg_url": "https://bioicons.com/icons/cc-0/Cell_membrane/Jan-Jezierski/receptor.svg"
+          },
+          "colors": [
+            "#e90f97",
+            "#c1e0e8",
+            "#39acf3",
+            "#000000"
+          ],
+          "normalization": [
+            "SVG normalized; text outlined using bundled Liberation Sans"
+          ],
+          "semanticAnchorId": "node-1",
+          "sha256": "4753a3962d6d0de0a463f2a8a0ff0cfc52ec6ecc29113593209d74e4b9181607",
+          "source": "BioIcons",
+          "source_sha256": "a10ec9f10c1ced239d05feb5797d007a1f6895c64300bc0c1724ed8972690f49"
+        },
+        "fileId": "4753a3962d6d0de0a463f2a8a0ff0cfc52ec6ecc29113593209d74e4b9181607",
+        "fillStyle": "solid",
+        "frameId": "panel-0",
+        "groupIds": [
+          "b7e5de8f-b607-466f-8108-b6e8a929fc34"
+        ],
+        "height": 99.99999999999999,
+        "id": "a4c04ee7-f284-4e3f-949e-2ed3a48acbfa",
+        "isDeleted": false,
+        "link": null,
+        "locked": false,
+        "opacity": 100,
+        "roughness": 0,
+        "roundness": null,
+        "scale": [
+          1,
+          1
+        ],
+        "seed": 1,
+        "status": "saved",
+        "strokeColor": "transparent",
+        "strokeStyle": "solid",
+        "strokeWidth": 1,
+        "type": "image",
+        "updated": 1794312218569,
+        "version": 1,
+        "versionNonce": 1,
+        "width": 70.70347284060551,
+        "x": 114.64826357969724,
+        "y": 385
+      }
+    ],
+    "files": {
+      "4753a3962d6d0de0a463f2a8a0ff0cfc52ec6ecc29113593209d74e4b9181607": {
+        "created": 1794312218569,
+        "dataURL": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI3OTMuNzAwOCIgaGVpZ2h0PSIxMTIyLjUxOTciIHZpZXdCb3g9IjAgMCA3OTMuNzAwOCAxMTIyLjUxOTciPgogICAgPGRlZnMvPgogICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoMy43Nzk1Mjc0IDAgMCAzLjc3OTUyNzQgMC4wMDAwMzA1MiAwKSI+CiAgICAgICAgPGcgaWQ9IlJlY2VwdG9yIiB0cmFuc2Zvcm09Im1hdHJpeCgtMi43NDU2NjQgMCAwIDIuNzQ1NjY0IDQ1Ny44NDU4NiAtMTU3LjE2NDAzKSI+CiAgICAgICAgICAgIDxnIGlkPSJtYWluX3JlY2VwdG9yX2JvZHkiPgogICAgICAgICAgICAgICAgPGcgaWQ9ImcyNTYtOCIgdHJhbnNmb3JtPSJtYXRyaXgoMSAwIDAgMSA4My4yMDQ2MyAyNi4zNDM2OTUpIj4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI0OS03IiBmaWxsPSJub25lIiBzdHJva2U9IiNlOTBmOTciIHN0cm9rZS13aWR0aD0iMy4xOTgwOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBkPSJNIDQzLjM2NjQ5MyAxMjMuOTE0MzYgTCA0My4zNjY0OTMgMTM1LjcwMzQxIi8+CiAgICAgICAgICAgICAgICAgICAgPHBhdGggaWQ9InBhdGgyNDktNC03IiBmaWxsPSJub25lIiBzdHJva2U9IiNlOTBmOTciIHN0cm9rZS13aWR0aD0iMy4xNzcxNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBkPSJNIDQzLjM2NjQ5MyAxMDkuMDkxNTMgTCA0My4zNjY0OTMgMTIwLjcyNjc2Ii8+CiAgICAgICAgICAgICAgICAgICAgPHBhdGggaWQ9InBhdGgyNTEtOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTkwZjk3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0gNDMuMzY2NDkzIDc1LjQyMzc0IEwgNDMuMzY2NDkzIDEzNi44MDI0NCIvPgogICAgICAgICAgICAgICAgICAgIDxwYXRoIGlkPSJwYXRoMjUyLTMiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U5MGY5NyIgc3Ryb2tlLXdpZHRoPSIwLjkzODQxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0gNDMuMzkxOTggNzUuMzcxNDYgQyA0MC44ODAxNCA3NS4zNjE0MSAzOC41NjQ0NiA3NC4wMTIwOCAzNy4zMTcyNDUgNzEuODMxNzMgQyAzNi4wNzAwMjYgNjkuNjUxMzkgMzYuMDgwNzUgNjYuOTcxMjkgMzcuMzQ1Mzc1IDY0LjgwMDk5NSBDIDM4LjYwOTk5NyA2Mi42MzA2OTUgNDAuOTM2Mzk0IDYxLjI5OTkzIDQzLjQ0ODIzNSA2MS4zMDk5ODIiLz4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI1Mi05LTgiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U5MGY5NyIgc3Ryb2tlLXdpZHRoPSIwLjkzODQxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0gNDMuMzkxOTggNjEuMzA4NzU4IEMgNDAuODgwMTQgNjEuMjk4NzE0IDM4LjU2NDQ2IDU5Ljk0OTM3NSAzNy4zMTcyNDUgNTcuNzY5MDM1IEMgMzYuMDcwMDI2IDU1LjU4ODY5IDM2LjA4MDc1IDUyLjkwODU5IDM3LjM0NTM3NSA1MC43MzgzIEMgMzguNjA5OTk3IDQ4LjU2OCA0MC45MzYzOTQgNDcuMjM3MjM2IDQzLjQ0ODIzNSA0Ny4yNDcyODQiLz4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI1Mi05LTMtMyIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTkwZjk3IiBzdHJva2Utd2lkdGg9IjAuOTM4NDEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTSA0My4zOTE5OCA0Ny4yNDYyNzMgQyA0MC44ODAxNCA0Ny4yMzYyMyAzOC41NjQ0NiA0NS44ODY4OSAzNy4zMTcyNDUgNDMuNzA2NTUgQyAzNi4wNzAwMjYgNDEuNTI2MjA3IDM2LjA4MDc1IDM4Ljg0NjEwNCAzNy4zNDUzNzUgMzYuNjc1ODEgQyAzOC42MDk5OTcgMzQuNTA1NTE2IDQwLjkzNjM5NCAzMy4xNzQ3NSA0My40NDgyMzUgMzMuMTg0OCIvPgogICAgICAgICAgICAgICAgPC9nPgogICAgICAgICAgICAgICAgPGcgaWQ9ImcyNTYtOC00IiB0cmFuc2Zvcm09Im1hdHJpeCgtMSAwIDAgMSAxNzYuMDEwOTYgMjYuMzQzNjk1KSI+CiAgICAgICAgICAgICAgICAgICAgPHBhdGggaWQ9InBhdGgyNDktNy0yIiBmaWxsPSJub25lIiBzdHJva2U9IiNlOTBmOTciIHN0cm9rZS13aWR0aD0iMy4xOTgwOCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBkPSJNIDQzLjM2NjQ5MyAxMjMuOTE0MzYgTCA0My4zNjY0OTMgMTM1LjcwMzQxIi8+CiAgICAgICAgICAgICAgICAgICAgPHBhdGggaWQ9InBhdGgyNDktNC03LTMiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U5MGY5NyIgc3Ryb2tlLXdpZHRoPSIzLjE3NzE1IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0gNDMuMzY2NDkzIDEwOS4wOTE1MyBMIDQzLjM2NjQ5MyAxMjAuNzI2NzYiLz4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI1MS04LTIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U5MGY5NyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBkPSJNIDQzLjM2NjQ5MyA3NS40MjM3NCBMIDQzLjM2NjQ5MyAxMzYuODAyNDQiLz4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI1Mi0zLTIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U5MGY5NyIgc3Ryb2tlLXdpZHRoPSIwLjkzODQxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0gNDMuMzkxOTggNzUuMzcxNDYgQyA0MC44ODAxNCA3NS4zNjE0MSAzOC41NjQ0NiA3NC4wMTIwOCAzNy4zMTcyNDUgNzEuODMxNzMgQyAzNi4wNzAwMjYgNjkuNjUxMzkgMzYuMDgwNzUgNjYuOTcxMjkgMzcuMzQ1Mzc1IDY0LjgwMDk5NSBDIDM4LjYwOTk5NyA2Mi42MzA2OTUgNDAuOTM2Mzk0IDYxLjI5OTkzIDQzLjQ0ODIzNSA2MS4zMDk5ODIiLz4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI1Mi05LTgtMSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZTkwZjk3IiBzdHJva2Utd2lkdGg9IjAuOTM4NDEiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTSA0My4zOTE5OCA2MS4zMDg3NTggQyA0MC44ODAxNCA2MS4yOTg3MTQgMzguNTY0NDYgNTkuOTQ5Mzc1IDM3LjMxNzI0NSA1Ny43NjkwMzUgQyAzNi4wNzAwMjYgNTUuNTg4NjkgMzYuMDgwNzUgNTIuOTA4NTkgMzcuMzQ1Mzc1IDUwLjczODMgQyAzOC42MDk5OTcgNDguNTY4IDQwLjkzNjM5NCA0Ny4yMzcyMzYgNDMuNDQ4MjM1IDQ3LjI0NzI4NCIvPgogICAgICAgICAgICAgICAgICAgIDxwYXRoIGlkPSJwYXRoMjUyLTktMy0zLTYiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2U5MGY5NyIgc3Ryb2tlLXdpZHRoPSIwLjkzODQxIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIGQ9Ik0gNDMuMzkxOTggNDcuMjQ2MjczIEMgNDAuODgwMTQgNDcuMjM2MjMgMzguNTY0NDYgNDUuODg2ODkgMzcuMzE3MjQ1IDQzLjcwNjU1IEMgMzYuMDcwMDI2IDQxLjUyNjIwNyAzNi4wODA3NSAzOC44NDYxMDQgMzcuMzQ1Mzc1IDM2LjY3NTgxIEMgMzguNjA5OTk3IDM0LjUwNTUxNiA0MC45MzYzOTQgMzMuMTc0NzUgNDMuNDQ4MjM1IDMzLjE4NDgiLz4KICAgICAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPC9nPgogICAgICAgICAgICA8ZyBpZD0icGhvc3Bob3JpbGF0aW9uIiB0cmFuc2Zvcm09Im1hdHJpeCgxIDAgMCAxIC0yLjgwNjg5NzIgLTAuNDkxMzYyKSI+CiAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI2MS05IiBmaWxsPSIjYzFlMGU4IiBzdHJva2U9IiMzOWFjZjMiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIgZD0iTSAxNDEuODk5MzcgMTYwLjE4MDUzIEMgMTQxLjg5OTM3IDE2MC45MTg3MyAxNDEuNjA2MTIgMTYxLjYyNjcgMTQxLjA4NDE0IDE2Mi4xNDg2OCBDIDE0MC41NjIxNSAxNjIuNjcwNjcgMTM5Ljg1NDE5IDE2Mi45NjM5MSAxMzkuMTE1OTggMTYyLjk2MzkxIEMgMTM4LjM3Nzc4IDE2Mi45NjM5MSAxMzcuNjY5ODIgMTYyLjY3MDY3IDEzNy4xNDc4MyAxNjIuMTQ4NjggQyAxMzYuNjI1ODQgMTYxLjYyNjcgMTM2LjMzMjYgMTYwLjkxODczIDEzNi4zMzI2IDE2MC4xODA1MyBDIDEzNi4zMzI2IDE1OS40NDIzMiAxMzYuNjI1ODQgMTU4LjczNDM2IDEzNy4xNDc4MyAxNTguMjEyMzcgQyAxMzcuNjY5ODIgMTU3LjY5MDM4IDEzOC4zNzc3OCAxNTcuMzk3MTQgMTM5LjExNTk4IDE1Ny4zOTcxNCBDIDEzOS44NTQxOSAxNTcuMzk3MTQgMTQwLjU2MjE1IDE1Ny42OTAzOCAxNDEuMDg0MTQgMTU4LjIxMjM3IEMgMTQxLjYwNjEyIDE1OC43MzQzNiAxNDEuODk5MzcgMTU5LjQ0MjMyIDE0MS44OTkzNyAxNjAuMTgwNTMgWiIvPgogICAgICAgICAgICAgICAgPGcgdHJhbnNmb3JtPSJtYXRyaXgoLTEgMCAwIDEgMjY0LjgyOTM4IDApIj4KICAgICAgICAgICAgICAgICAgICA8cGF0aCBpZD0icGF0aDI2MS05LTUiIGZpbGw9IiNjMWUwZTgiIHN0cm9rZT0iIzM5YWNmMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBkPSJNIDE0MS44OTkzNyAxNjAuMTgwNTMgQyAxNDEuODk5MzcgMTYwLjkxODczIDE0MS42MDYxMiAxNjEuNjI2NyAxNDEuMDg0MTQgMTYyLjE0ODY4IEMgMTQwLjU2MjE1IDE2Mi42NzA2NyAxMzkuODU0MTkgMTYyLjk2MzkxIDEzOS4xMTU5OCAxNjIuOTYzOTEgQyAxMzguMzc3NzggMTYyLjk2MzkxIDEzNy42Njk4MiAxNjIuNjcwNjcgMTM3LjE0NzgzIDE2Mi4xNDg2OCBDIDEzNi42MjU4NCAxNjEuNjI2NyAxMzYuMzMyNiAxNjAuOTE4NzMgMTM2LjMzMjYgMTYwLjE4MDUzIEMgMTM2LjMzMjYgMTU5LjQ0MjMyIDEzNi42MjU4NCAxNTguNzM0MzYgMTM3LjE0NzgzIDE1OC4yMTIzNyBDIDEzNy42Njk4MiAxNTcuNjkwMzggMTM4LjM3Nzc4IDE1Ny4zOTcxNCAxMzkuMTE1OTggMTU3LjM5NzE0IEMgMTM5Ljg1NDE5IDE1Ny4zOTcxNCAxNDAuNTYyMTUgMTU3LjY5MDM4IDE0MS4wODQxNCAxNTguMjEyMzcgQyAxNDEuNjA2MTIgMTU4LjczNDM2IDE0MS44OTkzNyAxNTkuNDQyMzIgMTQxLjg5OTM3IDE2MC4xODA1MyBaIi8+CiAgICAgICAgICAgICAgICA8L2c+CiAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPGcgaWQ9InRleHQiIHRyYW5zZm9ybT0ibWF0cml4KDEgMCAwIDEgLTIuODA2ODk5OCAtMC40OTEzNjIpIj4KICAgICAgICAgICAgICAgIDxnIHRyYW5zZm9ybT0ibWF0cml4KC0wLjI2NDU4MzMyIDAgMCAwLjI2NDU4MzMyIDI2NS4wNjcxIC0wLjQwNzUyMzYpIj4KICAgICAgICAgICAgICAgICAgICA8ZyBpZD0idGV4dDI2Mi0wIj4KICAgICAgICAgICAgICAgICAgICAgICAgPHBhdGggZmlsbD0iIzAwMDAwMCIgc3Ryb2tlPSJub25lIiBkPSJNIDUzMC4xNTYyNSA2MDUuNDU5NTMgUSA1MzAuMTU2MjUgNjA2LjYzMTQgNTI5LjM5MTYgNjA3LjMyMjggUSA1MjguNjI2OTUgNjA4LjAxNDIgNTI3LjMxNDQ1IDYwOC4wMTQyIEwgNTI0Ljg4ODcgNjA4LjAxNDIgTCA1MjQuODg4NyA2MTEuMjMxIEwgNTIzLjc2OTUzIDYxMS4yMzEgTCA1MjMuNzY5NTMgNjAyLjk3NTE2IEwgNTI3LjI0NDE0IDYwMi45NzUxNiBRIDUyOC42MzI4IDYwMi45NzUxNiA1MjkuMzk0NTMgNjAzLjYyNTU1IFEgNTMwLjE1NjI1IDYwNC4yNzU5NCA1MzAuMTU2MjUgNjA1LjQ1OTUzIFogTSA1MjkuMDMxMjUgNjA1LjQ3MTI1IFEgNTI5LjAzMTI1IDYwMy44NzE2NCA1MjcuMTA5NCA2MDMuODcxNjQgTCA1MjQuODg4NyA2MDMuODcxNjQgTCA1MjQuODg4NyA2MDcuMTI5NDYgTCA1MjcuMTU2MjUgNjA3LjEyOTQ2IFEgNTI5LjAzMTI1IDYwNy4xMjk0NiA1MjkuMDMxMjUgNjA1LjQ3MTI1IFoiLz4KICAgICAgICAgICAgICAgICAgICA8L2c+CiAgICAgICAgICAgICAgICA8L2c+CiAgICAgICAgICAgICAgICA8ZyB0cmFuc2Zvcm09Im1hdHJpeCgtMC4yNjQ1ODMzMiAwIDAgMC4yNjQ1ODMzMiAyNzguNDY5NjcgLTAuNDA3NTI0NTYpIj4KICAgICAgICAgICAgICAgICAgICA8ZyBpZD0idGV4dDI2Mi0wLTciPgogICAgICAgICAgICAgICAgICAgICAgICA8cGF0aCBmaWxsPSIjMDAwMDAwIiBzdHJva2U9Im5vbmUiIGQ9Ik0gNTMwLjE1NjI1IDYwNS40NTk1MyBRIDUzMC4xNTYyNSA2MDYuNjMxNCA1MjkuMzkxNiA2MDcuMzIyOCBRIDUyOC42MjY5NSA2MDguMDE0MiA1MjcuMzE0NDUgNjA4LjAxNDIgTCA1MjQuODg4NyA2MDguMDE0MiBMIDUyNC44ODg3IDYxMS4yMzEgTCA1MjMuNzY5NTMgNjExLjIzMSBMIDUyMy43Njk1MyA2MDIuOTc1MTYgTCA1MjcuMjQ0MTQgNjAyLjk3NTE2IFEgNTI4LjYzMjggNjAyLjk3NTE2IDUyOS4zOTQ1MyA2MDMuNjI1NTUgUSA1MzAuMTU2MjUgNjA0LjI3NTk0IDUzMC4xNTYyNSA2MDUuNDU5NTMgWiBNIDUyOS4wMzEyNSA2MDUuNDcxMjUgUSA1MjkuMDMxMjUgNjAzLjg3MTY0IDUyNy4xMDk0IDYwMy44NzE2NCBMIDUyNC44ODg3IDYwMy44NzE2NCBMIDUyNC44ODg3IDYwNy4xMjk0NiBMIDUyNy4xNTYyNSA2MDcuMTI5NDYgUSA1MjkuMDMxMjUgNjA3LjEyOTQ2IDUyOS4wMzEyNSA2MDUuNDcxMjUgWiIvPgogICAgICAgICAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgICAgIDwvZz4KICAgICAgICAgICAgPC9nPgogICAgICAgIDwvZz4KICAgIDwvZz4KPC9zdmc+",
+        "id": "4753a3962d6d0de0a463f2a8a0ff0cfc52ec6ecc29113593209d74e4b9181607",
+        "mimeType": "image/svg+xml"
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {readFile,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {summarizeLiveTiming} from './helpers/canvas-live-timing.mjs';
+const [directory,rawTurn='1']=process.argv.slice(2),turn=Number(rawTurn);
+assert.ok(directory&&Number.isSafeInteger(turn)&&turn>=1,'supply evaluation directory and optional positive turn number');
+const read=async n=>JSON.parse(await readFile(join(directory,`turn-${n}-stream-progress.json`),'utf8'));
+const afterSequence=turn===1?0:(await read(turn-1)).last_seq;
+assert.ok(Number.isSafeInteger(afterSequence),'previous turn needs an authoritative final stream sequence');
+const report=summarizeLiveTiming(await read(turn),{afterSequence});
+await writeFile(join(directory,`turn-${turn}-timing-audit.json`),JSON.stringify(report,null,2)+'\n',{mode:0o600});
+console.log(JSON.stringify(report));
+assert.equal(report.complete,true,'timing coverage incomplete; inspect saved warnings before interpreting durations');

@@ -65,6 +65,11 @@ pub enum AgentError {
     #[error("Tool error: {0}")]
     Tool(#[from] ToolError),
 
+    #[error(
+        "Model output was truncated (max_tokens). Partial output is saved; increase the configured output limit or retry. No tools were executed from the truncated response."
+    )]
+    ModelOutputTruncated,
+
     #[error("Max iterations ({0}) reached")]
     MaxIterations(usize),
 

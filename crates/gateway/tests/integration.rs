@@ -1430,3 +1430,107 @@ async fn plugin_terminal_websocket_requires_authentication() {
 
     gateway_daemon.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn visualization_projects_require_auth_and_persist_revisions() {
+    use serde_json::{Value, json};
+    let gateway = start_mock_gateway("ok").await;
+    let http = reqwest::Client::new();
+    let base = format!("http://{}/api/v1/visualization", gateway.addr);
+    let queued = http
+        .get(format!("{base}/proposal-preview-requests"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(queued.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let queued: Value = http
+        .get(format!("{base}/proposal-preview-requests"))
+        .bearer_auth(&gateway.token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(queued, json!([]));
+    let response = http.get(format!("{base}/projects")).send().await.unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let response = http
+        .post(format!("{base}/projects"))
+        .bearer_auth(&gateway.token)
+        .json(&json!({"id":"study","title":"Study"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let figure: Value = http
+        .post(format!("{base}/projects/study/figures"))
+        .bearer_auth(&gateway.token)
+        .json(&json!({"title":"Cell","format":"excalidraw/v2","document":{"elements":[]}}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let url = format!(
+        "{base}/projects/study/figures/{}",
+        figure["id"].as_str().unwrap()
+    );
+    let updated: Value = http.post(format!("{url}/operations")).bearer_auth(&gateway.token)
+        .json(&json!({"expected_revision":1,"operations":[{"op":"add","element":{"id":"cell","type":"ellipse"}}]}))
+        .send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(updated["revision"], 2);
+    let stale = http
+        .post(format!("{url}/operations"))
+        .bearer_auth(&gateway.token)
+        .json(&json!({"expected_revision":1,"operations":[]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), reqwest::StatusCode::CONFLICT);
+    let scene: Value = http
+        .get(&url)
+        .bearer_auth(&gateway.token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(scene["scene"]["document"]["elements"][0]["id"], "cell");
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+    http.put(format!("{url}/revisions/2/preview"))
+        .bearer_auth(&gateway.token)
+        .json(&json!({"dataURL":png}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let preview: Value = http
+        .get(format!("{url}/revisions/2/preview"))
+        .bearer_auth(&gateway.token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(preview["dataURL"], png);
+    let stale_preview = http
+        .put(format!("{url}/revisions/1/preview"))
+        .bearer_auth(&gateway.token)
+        .json(&json!({"dataURL":png}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale_preview.status(), reqwest::StatusCode::CONFLICT);
+    gateway.stop().await;
+}

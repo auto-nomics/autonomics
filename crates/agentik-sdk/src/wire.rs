@@ -30,6 +30,8 @@ pub use anthropic::AnthropicWire;
 pub use ollama::OllamaChatWire;
 pub use openai::{ChatgptResponsesWire, OpenAiChatWire, OpenAiResponsesWire};
 pub use zai::ZaiAnthropicWire;
+pub mod minimax;
+pub use minimax::MinimaxAnthropicWire;
 
 use crate::model::ProviderType;
 use crate::types::errors::Result;
@@ -62,6 +64,7 @@ pub enum WireProtocolKind {
     /// This keeps the Anthropic request and event shape but emits GLM's
     /// top-level `reasoning_effort` field.
     ZaiAnthropic,
+    MinimaxAnthropic,
 }
 
 impl WireProtocolKind {
@@ -75,6 +78,7 @@ impl WireProtocolKind {
             Self::OpenaiResponses => "openai_responses",
             Self::ChatgptResponses => "chatgpt_responses",
             Self::ZaiAnthropic => "zai_anthropic",
+            Self::MinimaxAnthropic => "minimax_anthropic",
         }
     }
 }
@@ -281,6 +285,7 @@ pub fn build_wire(kind: WireProtocolKind) -> Result<std::sync::Arc<dyn WireProto
         WireProtocolKind::OpenaiResponses => Ok(std::sync::Arc::new(OpenAiResponsesWire)),
         WireProtocolKind::ChatgptResponses => Ok(std::sync::Arc::new(ChatgptResponsesWire)),
         WireProtocolKind::ZaiAnthropic => Ok(std::sync::Arc::new(ZaiAnthropicWire)),
+        WireProtocolKind::MinimaxAnthropic => Ok(std::sync::Arc::new(MinimaxAnthropicWire)),
     }
 }
 
@@ -403,13 +408,14 @@ mod tests {
     }
 
     #[test]
-    fn known_presets_default_to_anthropic_wire() {
+    fn wire_kind_names_match_their_adapters() {
         for kind in [
             WireProtocolKind::Anthropic,
             WireProtocolKind::OpenaiChat,
             WireProtocolKind::OpenaiResponses,
             WireProtocolKind::ChatgptResponses,
             WireProtocolKind::ZaiAnthropic,
+            WireProtocolKind::MinimaxAnthropic,
         ] {
             assert_eq!(
                 kind.as_str(),
@@ -419,6 +425,7 @@ mod tests {
                     WireProtocolKind::OpenaiResponses => "openai_responses",
                     WireProtocolKind::ChatgptResponses => "chatgpt_responses",
                     WireProtocolKind::ZaiAnthropic => "zai_anthropic",
+                    WireProtocolKind::MinimaxAnthropic => "minimax_anthropic",
                     WireProtocolKind::OllamaChat => "ollama_chat",
                 }
             );
@@ -428,18 +435,18 @@ mod tests {
     }
 
     #[test]
-    fn all_builtin_provider_types_advertise_anthropic() {
+    fn builtin_provider_types_route_to_their_anthropic_adapters() {
         use crate::provider::registry::wire_protocol;
         for p in [
             ProviderType::Bailian,
             ProviderType::Deepseek,
             ProviderType::Mimo,
-            ProviderType::Minimax,
             ProviderType::Moonshot,
             ProviderType::Sensenova,
         ] {
             assert_eq!(wire_protocol(&p), WireProtocolKind::Anthropic, "{p}");
         }
+        assert_eq!(wire_protocol(&ProviderType::Minimax),WireProtocolKind::MinimaxAnthropic);
         // Custom providers default to the Anthropic-compatible wire.
         assert_eq!(
             wire_protocol(&ProviderType::Custom("any-openai".into())),

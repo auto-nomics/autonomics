@@ -7,9 +7,9 @@ const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host
 let output = '', browser;
 server.stdout.on('data', chunk => output += chunk); server.stderr.on('data', chunk => output += chunk);
 try {
-  for (let n = 0; !output.includes(origin); n++) { if (server.exitCode !== null || n > 120) throw new Error(output); await new Promise(r => setTimeout(r, 50)); }
+  for (let n = 0; !output.includes(origin); n++) { if (server.exitCode !== null || n > 1200) throw new Error(output); await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ executablePath: process.env.PDF_TEST_CHROMIUM || (existsSync('/usr/bin/chromium') ? '/usr/bin/chromium' : undefined), args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }); page.setDefaultTimeout(10000);
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } }); page.setDefaultTimeout(10000); page.setDefaultNavigationTimeout(60000);
   // Pre-open both agents as view tabs (the persisted open-tab list) so the
   // tab strip exposes /root/beta for switching below.
   await page.addInitScript(() => localStorage.setItem('autonomics.openTabs', JSON.stringify(['/root/alpha', '/root/beta'])));
@@ -29,7 +29,7 @@ try {
     if (!(path in responses)) return route.fulfill({ status: 404, json: { error: 'Not mocked: ' + path } });
     return route.fulfill({ json: responses[path] });
   });
-  await page.goto(origin);
+  await page.goto(origin, { waitUntil: "domcontentloaded" });
   const composer = page.locator('[data-agent-workspace="/root/alpha"]').getByPlaceholder('输入消息…'), basket = page.getByRole('region', { name: '上下文篮子' });
   const go = name => page.getByRole('button', { name, exact: true }).click();
   // Agent switching targets the unified editor tab (title = full path);
@@ -169,6 +169,8 @@ try {
   assert.ok(sends.at(-1).text.includes('followed document selection'), 'follow mode retains the document when chat gains focus');
   await page.locator('[data-agent-workspace="/root/alpha"]').getByRole('button', { name: '解除文档绑定' }).click();
   await page.setViewportSize({ width: 390, height: 844 }); await composer.waitFor();
+  // Wait for the media-query render before dispatching the edge gesture.
+  await page.locator('[data-slot="workbench-sidebar"] > [data-tauri-drag-region]').waitFor({ state: 'attached' });
   // Mobile keeps the nav drawer closed (invisible, outside the a11y tree);
   // its edge-swipe opens on TouchEvents, so drive the gesture synthetically.
   await page.evaluate(() => {

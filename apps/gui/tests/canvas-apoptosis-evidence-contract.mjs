@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {checkApoptosisPlan,checkApoptosisClarification,checkApoptosisCaptions,checkCasp9ProcessingQualification,reviewApoptosisPlan,apoptosisScenario} from './helpers/canvas-apoptosis-evidence.mjs';
+const first={version:1,status:'needs_clarification',document:{questions:[{id:'species',question:'研究物种是什么？',answer:'',blocking:true},{id:'scope',question:'图的起点和终点是什么？',answer:'',blocking:true}]}};
+checkApoptosisClarification(first,[{name:'figure_evidence',input:{action:'search',query:'intrinsic apoptosis'},is_error:false}]);
+const ids=['114284','114254','114256','9627056','114252'],url=id=>`https://reactome.org/content/detail/R-HSA-${id}`;
+const records=ids.map(id=>({provider:'Reactome',source_url:url(id),record:{stId:`R-HSA-${id}`,schemaClass:'Reaction'}}));
+const qualification='人类内源性凋亡机制抽象；CASP9在凋亡小体内二聚活化，蛋白水解加工并非其催化活性的必要条件。';
+const nodes=['CYCS（线粒体膜间隙）','CYCS（胞质）','APAF1:ATP:CYCS（胞质）','凋亡小体募集procaspase-9（胞质）','凋亡小体内CASP9二聚活化（胞质）','活化CASP3（胞质）'].map((label,i)=>({id:`n${i}`,label}));
+const plan={version:2,status:'ready',document:{message:qualification,assumptions:[qualification],questions:first.document.questions.map(q=>({...q,answer:'人类；CYCS释放至CASP3活化'})),nodes,edges:ids.map((id,i)=>({from:`n${i}`,to:`n${i+1}`,evidence:[url(id)]}))}};
+checkApoptosisPlan(plan,first,records);
+const equivalent=structuredClone(plan);equivalent.document.nodes[5].label='活性 caspase-3（CASP3）· 胞质';checkApoptosisPlan(equivalent,first,records);
+checkCasp9ProcessingQualification('CASP9二聚化活化，蛋白水解加工可能非必需。');
+checkCasp9ProcessingQualification('caspase-9在凋亡小体上同源二聚化；procaspase-9的蛋白水解加工是另一独立步骤，该加工并非 caspase-9 催化活性所必需。');
+assert.throws(()=>checkCasp9ProcessingQualification('caspase-9在凋亡小体上同源二聚化；procaspase-9的蛋白水解加工是 caspase-9 催化活性所必需。'),/obligatory/);
+checkCasp9ProcessingQualification('CASP9二聚化活化，催化活性不依赖该加工。');checkApoptosisCaptions(qualification+' 终点CASP3活化。');
+function reject(edit,pattern){const bad=structuredClone(plan);edit(bad);assert.throws(()=>checkApoptosisPlan(bad,first,records),pattern);}
+reject(p=>{p.document.nodes[0].label='CYCS（线粒体基质）';},/intermembrane/);
+reject(p=>{p.document.nodes[5].label='CASP3（胞质）';},/active CASP3/);
+reject(p=>{p.document.nodes[4].label='活化CASP8（胞质）';},/excluded branches/);
+reject(p=>{p.document.message='CASP9切割后才被活化';p.document.assumptions=[];},/dimer/);
+reject(p=>{p.document.message='CASP9二聚并经必需的切割后活化';p.document.assumptions=[];},/obligatory/);
+reject(p=>{p.document.edges[0].evidence=[url('999999')];},/unread/);
+reject(p=>{p.document.edges[4].evidence=[url('114254')];},/114252/);
+reject(p=>{p.document.questions[0].answer='';});
+reject(p=>{p.document.questions[0].blocking=false;});
+const entityRecords=structuredClone(records);entityRecords[0].record.schemaClass='Complex';assert.throws(()=>checkApoptosisPlan(plan,first,entityRecords),/reaction\/event/);
+const disconnected=structuredClone(plan);disconnected.document.edges[0].from='n1';assert.throws(()=>checkApoptosisPlan(disconnected,first,records),/directed path/);
+for(const id of ids)assert.ok(!JSON.stringify(apoptosisScenario.initialRequest+apoptosisScenario.confirmation).includes(`R-HSA-${id}`),'oracle IDs never enter discovery prompts');
+console.log('apoptosis contract: retained clarification, actual reaction citations, compartment/endpoint/processing boundaries and directed coverage passed; synthetic contract only');
+
+assert.equal(reviewApoptosisPlan(plan,records),null);
+const review=reviewApoptosisPlan(plan,records.filter(r=>r.record.stId!=='R-HSA-9627056'));assert.ok(review.includes('二聚活化'));assert.ok(!review.includes('R-HSA-9627056'),'review explains the missing mechanism without revealing oracle IDs');
+reject(p=>{p.document.nodes[5].label='活性CASP3 p20/p10';},/unverified CASP3/);

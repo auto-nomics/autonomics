@@ -1,3 +1,5 @@
+import { CanvasSidebar } from "@/features/canvas/canvas-sidebar";
+import { PencilRuler } from "lucide-react";
 import { Camera, Compass, Library, Rss, type LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { setProjectSidebarSlot } from "@/features/projects/sidebar-slot";
@@ -85,3 +87,5 @@ function DecksView() {
 registerWorkbenchView({ id: "decks", title: "幻灯片", defaultLocation: "primarySidebar", body: DecksView });
 
 registerWorkbenchView({ id: "agents", title: "Agent", defaultLocation: "primarySidebar", body: ({ onSpawn }) => <AgentSidebar onSpawn={onSpawn} /> });
+
+registerWorkbenchView({ id: "canvases", title: "画布", icon: PencilRuler, defaultLocation: "primarySidebar", body: CanvasSidebar });

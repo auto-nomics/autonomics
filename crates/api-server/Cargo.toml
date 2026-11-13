@@ -7,6 +7,10 @@ rust-version.workspace = true
 description = "Composable local HTTP API server hosted by the Autonomics gateway daemon."
 
 [dependencies]
+bioart = { path = "../bioart" }
+bioicons = { path = "../bioicons" }
+visualization = { path = "../visualization" }
+visualization-assets = { path = "../visualization-assets" }
 bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 axum = { version = "0.8", features = ["multipart"] }
@@ -26,6 +30,10 @@ ppt-base = { path = "../ppt-base", features = ["vfs"] }
 ppt-types = { path = "../ppt-types" }
 
 [dev-dependencies]
+agentik-core = { path = "../agentik-core" }
+agentik-sdk = { path = "../agentik-sdk" }
+rusqlite = "0.40.1"
+visualization-tools = { path = "../visualization-tools" }
 turso.workspace = true
 async-trait.workspace = true
 http-body-util = "0.1"

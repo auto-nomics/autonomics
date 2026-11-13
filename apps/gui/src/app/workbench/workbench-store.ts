@@ -237,6 +237,7 @@ function reviveState(raw: unknown): WorkbenchState | null {
     const pluginGroup = allGroups(state.groups).find(([, group]) => group.editors.some(editor => editor.id === id));
     if (pluginGroup && pluginEditors.some(editor => editor.id === focused?.activeId)) state.groups.active = pluginGroup[0];
   }
+  for (const [,group] of allGroups(state.groups)) for (const editor of group.editors) if (editor.kind === "canvas") editor.state = { ...(editor.state && typeof editor.state === "object" ? editor.state : {}), inspectedSvgPath: null, selectionReady: false };
   const ids = new Set(allGroups(state.groups).map(([id]) => id));
   state.editorLayout = validLayout(source.editorLayout, ids) ? source.editorLayout : [...ids].slice(1).reduce<EditorLayout>((layout, id) => ({ axis: "horizontal", ratio: state.splitRatio, first: layout, second: { group: id } }), { group: "main" });
   if (!getGroup(state.groups, state.groups.active)) state.groups.active = "main";

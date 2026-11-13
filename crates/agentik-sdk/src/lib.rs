@@ -38,7 +38,7 @@ pub use streaming::MessageStream;
 pub use tokens::{ModelPrice, ModelUsage, RequestUsage, TokenCounter, UsageStats, UsageSummary};
 pub use wire::{
     AnthropicWire, ChatgptResponsesWire, OpenAiChatWire, OpenAiResponsesWire, ProtocolFeatures,
-    StreamState, ThinkingSupport, WireProtocol, WireProtocolKind, ZaiAnthropicWire, build_wire,
+    StreamState, ThinkingSupport, WireProtocol, WireProtocolKind, ZaiAnthropicWire, MinimaxAnthropicWire, build_wire,
     wire_protocol_for_provider,
 };
 

@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {createSourceManifest,sha256} from '../src/features/canvas/canvas-source-manifest.ts';
+const bytes=new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="80"/>'),hash=await sha256(bytes);
+const crop={x:20,y:10,width:50,height:40,naturalWidth:100,naturalHeight:80};
+const scene={elements:[{id:'i',type:'image',fileId:'f',crop,customData:{source:'Fixture',sha256:hash,asset:{name:'generic illustration',author:'Artist',license:'CC0',source_url:'https://example.org/art'}}}],files:{f:{mimeType:'image/svg+xml',dataURL:'data:image/svg+xml;base64,'+Buffer.from(bytes).toString('base64')}}};const before=structuredClone(scene);
+const manifest=await createSourceManifest({scene:JSON.stringify(scene),title:'Crop fixture',unsaved_changes:false});
+assert.deepEqual(manifest.assets[0].display_crop,{status:'recorded',units:'source_pixels',region:crop,source_file_changed:false});assert.equal(manifest.assets[0].hash_matches_recorded,true);assert.equal(manifest.assets[0].actual_sha256,hash);assert.ok(manifest.credits.some(c=>c.includes('native source crop')));assert.deepEqual(scene,before);
+scene.elements[0].crop={x:'invalid legacy'};const invalid=await createSourceManifest({scene:JSON.stringify(scene),title:'Legacy',unsaved_changes:false});assert.equal(invalid.assets[0].display_crop.status,'invalid_native_crop');
+scene.elements[0].crop=null;const none=await createSourceManifest({scene:JSON.stringify(scene),title:'Uncropped',unsaved_changes:false});assert.equal(none.assets[0].display_crop,null);
+console.log('native crop provenance: source-pixel region, unchanged file hash, attribution credits and invalid legacy status passed');

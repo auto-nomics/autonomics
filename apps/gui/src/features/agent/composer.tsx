@@ -1,3 +1,5 @@
+import { parseContextMessage, resourceKey, serializeContext } from "@/features/context/context-model";
+import { DraftContextAttachments } from "@/features/context/draft-context-attachments";
 import { useEffect, useState } from "react";
 import {
   Archive,
@@ -94,6 +96,7 @@ export type AgentComposerProps = {
  *  回合进行中发送键变终止键,外圈虚线环旋转,颜色随生命周期状态。 */
 export function AgentComposer(props: AgentComposerProps) {
   const { activeAgent, draft, busy, streamingActive, status } = props;
+  const attachedDraft = parseContextMessage(draft), visibleDraft = attachedDraft?.text ?? draft;
 
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [effortPickerOpen, setEffortPickerOpen] = useState(false);
@@ -270,13 +273,14 @@ export function AgentComposer(props: AgentComposerProps) {
       {/* Card-style composer: borderless textarea with a floating
           round send button, meta row below (model / hints / streaming). */}
       <div className="rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+        <DraftContextAttachments resources={attachedDraft?.resources ?? []} onRemove={resource => props.onDraftChange(visibleDraft + serializeContext((attachedDraft?.resources ?? []).filter(item => resourceKey(item) !== resourceKey(resource))))} />
         <div className="flex items-end gap-2 px-2.5 pt-2">
           <Textarea
-            value={draft}
+            value={visibleDraft}
             rows={1}
-            onChange={(event) => props.onDraftChange(event.target.value)}
+            onChange={(event) => props.onDraftChange(event.target.value + serializeContext(attachedDraft?.resources ?? []))}
             onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && draft.trim() && busy !== "send") {
+              if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && visibleDraft.trim() && busy !== "send") {
                 event.preventDefault();
                 props.onSend();
               }
@@ -313,7 +317,7 @@ export function AgentComposer(props: AgentComposerProps) {
               type="submit"
               size="icon"
               className="mb-0.5 shrink-0 rounded-full"
-              disabled={!draft.trim()}
+              disabled={!visibleDraft.trim()}
               aria-label="发送"
               title="发送（Ctrl+Enter）"
             >

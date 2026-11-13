@@ -821,8 +821,10 @@ impl MessageStream {
                         // object rather than a string — a string input is not
                         // a valid dictionary and causes API errors when the
                         // message is replayed to any provider.
-                        *input = serde_json::from_str(accumulated)
-                            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+                        *input = serde_json::from_str(accumulated).unwrap_or_else(|error| {
+                            tracing::warn!(phase = "block_stop", json_error_category = ?error.classify(), json_error_line = error.line(), json_error_column = error.column(), argument_bytes = accumulated.len(), "malformed streamed tool arguments; using empty object for replay compatibility");
+                            serde_json::Value::Object(serde_json::Map::new())
+                        });
                     }
                 }
                 MessageStreamEvent::MessageDelta { delta, usage } => {
@@ -853,7 +855,8 @@ impl MessageStream {
                         if let ContentBlock::ToolUse { input, .. } = block
                             && let serde_json::Value::String(accumulated) = input
                         {
-                            *input = serde_json::from_str(accumulated).unwrap_or_else(|_| {
+                            *input = serde_json::from_str(accumulated).unwrap_or_else(|error| {
+                                tracing::warn!(phase = "message_stop", json_error_category = ?error.classify(), json_error_line = error.line(), json_error_column = error.column(), argument_bytes = accumulated.len(), "malformed streamed tool arguments; using empty object for replay compatibility");
                                 serde_json::Value::Object(serde_json::Map::new())
                             });
                         }

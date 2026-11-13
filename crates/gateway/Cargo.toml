@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Resident backend gateway: one daemon owning the RuntimeHost, many thin frontends over HTTP+SSE."
 
 [dependencies]
+visualization = { path = "../visualization" }
 data-engine = { path = "../data-engine" }
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
@@ -60,6 +61,7 @@ test-util = [
 ]
 
 [dev-dependencies]
+rusqlite = "0.40.1"
 # Self-reference so `cargo test -p gateway` enables `test-util` for the
 # integration tests too (workspace-wide runs get it via `headless`).
 gateway = { path = ".", features = ["test-util"] }
@@ -71,3 +73,11 @@ http-body-util = "0.1"
 
 [lints]
 workspace = true
+
+[[example]]
+name = "visualization_workflow"
+required-features = ["test-util"]
+
+[[example]]
+name = "visualization_gateway_live"
+required-features = ["test-util"]

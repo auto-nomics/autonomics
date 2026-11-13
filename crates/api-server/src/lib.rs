@@ -16,3 +16,9 @@ pub mod wiki;
 pub use server::{
     DEFAULT_HTTP_API_ADDR, HttpServerHandle, api_router, api_router_with_auth, start,
 };
+
+pub mod visualization;
+
+mod bioart;
+mod bioicons;
+mod visualization_assets;

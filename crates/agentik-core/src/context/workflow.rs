@@ -460,6 +460,13 @@ impl Context {
         self.remember(response_message.clone())?;
         self.token_budget.add_pending_message(&response_message);
 
+        if response_message.stop_reason == Some(agentik_types::StopReason::MaxTokens) {
+            // A truncated answer is not a completed turn, even if it contains
+            // some text or an earlier complete tool block. Preserve the evidence
+            // and fail explicitly instead of silently stopping or executing a prefix.
+            return Err(AgentError::ModelOutputTruncated);
+        }
+
         let toolcalls = self.extract_toolcalls(&response_message);
 
         if toolcalls.is_empty() {
@@ -1062,6 +1069,17 @@ impl Context {
             builder = builder.with_extra_section(extra);
         }
 
+        let memory_enabled = self
+            .core
+            .memory
+            .as_ref()
+            .is_some_and(|memory| memory.effective_memory_config().use_memory);
+        builder = builder.with_extra_section(if memory_enabled {
+            "## Memory tool availability\n\nPersistent memory is enabled for this agent. Generic memory guidance applies; use the configured memory tools when relevant."
+        } else {
+            "## Memory tool availability\n\nPersistent memory is disabled for this agent. Generic profile or skill references to memory tools apply only when memory is enabled. Do not call memory_search, memory_read, memory_list or memory_note while disabled. Continue using the current conversation and explicitly requested project artifacts; this does not enable memory or authorize additional writes."
+        });
+
         // Inject cross-session memory. with_extra_section appends, so the
         // memory summary supplements the agent's profile section above
         // instead of replacing it.
@@ -1451,7 +1469,7 @@ mod tests {
         let mut mock = MockApiClient::new();
         let cap = Arc::clone(&captured);
         mock.expect_request_stream_with_system()
-            .times(1)
+            .times(2)
             .returning(move |_, _, _, system| {
                 cap.lock().unwrap().push(system);
                 Ok(MessageStream::from_events(
@@ -1491,7 +1509,7 @@ mod tests {
             context_provider: None,
             system_prompt_section: Some("## Profile\nYou are the orchestrator agent.".into()),
             system_prompt_identity: None,
-            memory: Some(memory),
+            memory: Some(memory.clone()),
             tool_registry: Arc::new(registry),
             tasks: Arc::new(tokio::sync::RwLock::new(
                 crate::tools::task_runtime::TaskStore::new(),
@@ -1508,6 +1526,7 @@ mod tests {
         let calls = std::mem::take(&mut *captured.lock().unwrap());
         assert_eq!(calls.len(), 1, "exactly 1 model call expected");
         let system = calls[0].as_deref().expect("system prompt must be sent");
+        assert!(system.contains("Persistent memory is enabled for this agent."));
         let profile_at = system
             .find("## Profile\nYou are the orchestrator agent.")
             .expect("profile section must survive memory injection");
@@ -1522,6 +1541,18 @@ mod tests {
             profile_at < memory_at,
             "profile section must render before the memory section"
         );
+        let mut config = memory.runtime_config();
+        config.use_memory = false;
+        memory.set_runtime_config(config);
+        session
+            .remember(Message::user("Continue without persistent memory"))
+            .unwrap();
+        session.agent_workflow(&internal_tx, None).await.unwrap();
+        let calls = std::mem::take(&mut *captured.lock().unwrap());
+        let disabled = calls[0].as_deref().unwrap();
+        assert!(disabled.contains("Persistent memory is disabled for this agent."));
+        assert!(!disabled.contains("### MEMORY_SUMMARY"));
+        assert!(disabled.contains("## Profile\nYou are the orchestrator agent."));
     }
 
     /// Skill 指导随 system 一起到达模型边界:静态行为文本进 system
@@ -1576,6 +1607,10 @@ mod tests {
 
         let system = captured.lock().unwrap().clone().expect("system captured");
         assert!(system.contains("## Skill library"), "{system}");
+        assert!(
+            system.contains("Persistent memory is disabled for this agent."),
+            "{system}"
+        );
         for tool in ["skill_search", "skill_get", "memory_note", "memory_search"] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }
@@ -1709,6 +1744,71 @@ mod tests {
                 });
         }
         agentik_sdk::model::Model::with_client(dummy_model_info(name), mock)
+    }
+
+    #[tokio::test]
+    async fn truncated_responses_fail_the_turn_retain_evidence_and_execute_no_tool_prefix() {
+        use agentik_types::{AgentLifecycleStatus, StopReason};
+        let mut thinking = Message::assistant_text("");
+        thinking.content = vec![ContentBlock::Thinking {
+            thinking: "partial reasoning".into(),
+            signature: String::new(),
+        }];
+        for response in [
+            thinking,
+            Message::assistant_text("unfinished answer"),
+            Message::assistant_tool_use(
+                "partial-call",
+                "view_task_status",
+                serde_json::json!({"task":1}),
+            ),
+        ] {
+            let response = response.with_stop_reason(StopReason::MaxTokens);
+            let model = scripted_model("truncated-turn", vec![response.clone()]);
+            let (tx, mut events) = tokio::sync::mpsc::unbounded_channel();
+            let tasks = Arc::new(tokio::sync::RwLock::new(crate::tools::TaskStore::new()));
+            let mut registry = crate::tools::ToolRegistry::new();
+            registry
+                .register_all(crate::tools::task_registrations(Arc::clone(&tasks)))
+                .unwrap();
+            let core = turn_test_shared_with(model, tx, registry, Some(tasks));
+            let mut session = Context::new_for_tests(core, agentik_types::AgentPath::root());
+            session.remember(Message::user("continue work")).unwrap();
+            let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
+            session
+                .run_context(&internal_tx, &mut internal_rx, None)
+                .await;
+            assert_eq!(*session.lifecycle.status(), AgentLifecycleStatus::Error);
+            assert!(
+                session
+                    .messages
+                    .iter()
+                    .any(|message| message.id == response.id
+                        && message.content == response.content
+                        && message.stop_reason == Some(StopReason::MaxTokens))
+            );
+            let mut failed = 0;
+            let mut done = 0;
+            let mut errors = 0;
+            while let Ok(event) = events.try_recv() {
+                match event {
+                    AgentEvent::TurnCompleted { status, .. } => {
+                        assert_eq!(status, TurnExecutionStatus::Failed);
+                        failed += 1;
+                    }
+                    AgentEvent::ToolCall { .. } => {
+                        panic!("no prefix tools may run from a truncated response")
+                    }
+                    AgentEvent::Error(message) => {
+                        assert!(message.contains("max_tokens"));
+                        errors += 1;
+                    }
+                    AgentEvent::Done => done += 1,
+                    _ => {}
+                }
+            }
+            assert_eq!((failed, done, errors), (1, 1, 1));
+        }
     }
 
     /// Collect the turn lifecycle events in order.

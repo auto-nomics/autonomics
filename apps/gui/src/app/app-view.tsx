@@ -2,6 +2,7 @@
 // shell. All agent state and gateway wiring lives in use-agent-runtime;
 // the workbench (activity bar / side bar / editor area / panel / aux bar)
 // lives in app/workbench/.
+import { CandidatePreviewService } from "@/features/canvas/canvas-proposal-renderer";
 import { ContextBasketProvider } from "@/features/context/context-basket";
 import { useAgentRuntime } from "@/app/use-agent-runtime";
 import { openAgentTab } from "@/app/workbench/static-commands";
@@ -73,6 +74,7 @@ export function App() {
       // the basket strip is visible where the chat lives.
       onAdd={() => openAgentTab(runtime.activeAgent)}
     >
+      <CandidatePreviewService />
       <WorkbenchShell runtime={runtime} />
     </ContextBasketProvider>
   );

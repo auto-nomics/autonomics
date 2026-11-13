@@ -32,13 +32,13 @@ pub const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A booted test daemon. Dropping the [`TestGateway`] (or calling
 /// [`TestGateway::stop`]) cancels the driver and shuts the server down;
-/// the temp state dir is removed on drop.
+/// ephemeral state is removed on drop; caller-owned evaluation state is kept.
 pub struct TestGateway {
     pub addr: std::net::SocketAddr,
     pub token: String,
     server: api_server::HttpServerHandle,
     shutdown: CancellationToken,
-    _dir: tempfile::TempDir,
+    _dir: Option<tempfile::TempDir>,
     /// The daemon's shared infrastructure — kept so tests can reach
     /// deterministic handles (e.g. the skills manager) without racing
     /// the process-global singleton other parallel setups swap.
@@ -230,17 +230,42 @@ pub async fn start_mock_gateway(reply: &'static str) -> TestGateway {
 /// [`start_mock_gateway`] with an explicit mock model — failure and
 /// retry harnesses inject their own scripting.
 pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    start_model_gateway(model, root, Some(dir)).await
+}
+
+/// Keep an opt-in long evaluation's isolated databases in a fresh caller-owned
+/// directory. Existing directories are rejected; this is not a resume API.
+pub async fn start_persistent_gateway_with_model(
+    model: Model,
+    root: PathBuf,
+) -> std::io::Result<TestGateway> {
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&root)?;
+    Ok(start_model_gateway(model, root, None).await)
+}
+
+async fn start_model_gateway(
+    model: Model,
+    root: PathBuf,
+    dir: Option<tempfile::TempDir>,
+) -> TestGateway {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
         .try_init();
 
-    let dir = tempfile::tempdir().unwrap();
     let mut config = RuntimeConfig::default();
     isolate_runtime_paths(
         &mut config,
-        dir.path().join("data"),
-        dir.path().join("state"),
+        root.join("data"),
+        root.join("state"),
     );
     config.use_memory = false;
     config.generate_memory = false;
@@ -251,6 +276,12 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let mut host = RuntimeHost::open(&config).await.unwrap();
     // One slot shared by the host and the gateway state — exactly like
     // the real daemon wires it.
+    let provider = if model.provider_name().is_empty() {
+        "mock"
+    } else {
+        model.provider_name()
+    };
+    let model_spec = format!("{}:{}", provider, model.model_info.model_name);
     let model_slot: Arc<ArcSwapOption<Model>> = Arc::new(ArcSwapOption::from_pointee(Some(model)));
     host.set_model(model_slot.clone());
 
@@ -263,10 +294,10 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
     let (model_events, model_event_rx) = tokio::sync::mpsc::unbounded_channel();
     let models = runtime::model_actor::start(storage, model_events);
     crate::hub::spawn_model_event_bridge(model_event_rx, hub.clone());
-    // Report the injected mock through the same channel a real daemon
+    // Report the injected model through the same channel a real daemon
     // uses (`active_model` in the settings table), so `/state` consumers
     // (e.g. the headless runner's run.started.model) see it.
-    let _ = models.put_setting("active_model", "mock:mock-model").await;
+    let _ = models.put_setting("active_model", &model_spec).await;
     // Same install-later pattern as the daemon: the bound address exists
     // only after `start()` (tests bind an ephemeral port).
     let addr_slot: Arc<ArcSwapOption<String>> = Arc::new(ArcSwapOption::default());
@@ -295,6 +326,8 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         bib_shared,
         wiki_shared,
         deck_shared,
+        visualization::Store::open(config.app_db_path.with_file_name("visualizations.sqlite"))
+            .unwrap(),
         None,
     );
     let server = api_server::server::start(router, "127.0.0.1:0")
@@ -315,3 +348,6 @@ pub async fn start_mock_gateway_with_model(model: Model) -> TestGateway {
         infra,
     }
 }
+
+mod figure_workflow;
+pub use figure_workflow::{FigureTrace, scripted_figure_model};

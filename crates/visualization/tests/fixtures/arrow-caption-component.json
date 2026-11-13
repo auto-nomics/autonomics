@@ -1,0 +1,122 @@
+{
+  "elements": [
+    {
+      "id": "f",
+      "type": "frame",
+      "x": 0,
+      "y": 0,
+      "width": 440,
+      "height": 940,
+      "angle": 0
+    },
+    {
+      "id": "source",
+      "type": "rectangle",
+      "x": 100,
+      "y": 400,
+      "width": 80,
+      "height": 140,
+      "angle": 0
+    },
+    {
+      "id": "target",
+      "type": "rectangle",
+      "x": 100,
+      "y": 680,
+      "width": 80,
+      "height": 140,
+      "angle": 0
+    },
+    {
+      "id": "a",
+      "type": "arrow",
+      "x": 140,
+      "y": 550,
+      "width": 10,
+      "height": 120,
+      "angle": 0,
+      "roughness": 0,
+      "roundness": null,
+      "frameId": "f",
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          2,
+          5
+        ],
+        [
+          4,
+          5
+        ],
+        [
+          5,
+          5
+        ],
+        [
+          10,
+          5
+        ],
+        [
+          10,
+          62.5
+        ],
+        [
+          0,
+          62.5
+        ],
+        [
+          0,
+          120
+        ]
+      ],
+      "startBinding": {
+        "elementId": "source",
+        "gap": 10,
+        "focus": 0
+      },
+      "endBinding": {
+        "elementId": "target",
+        "gap": 10,
+        "focus": 0
+      },
+      "boundElements": [
+        {
+          "id": "caption",
+          "type": "text"
+        }
+      ],
+      "startArrowhead": null,
+      "endArrowhead": "arrow",
+      "customData": {
+        "evidence": [
+          "user-declared"
+        ],
+        "direction": "forward"
+      }
+    },
+    {
+      "id": "caption",
+      "type": "text",
+      "x": 15,
+      "y": 535,
+      "width": 260,
+      "height": 40,
+      "angle": 0,
+      "containerId": "a",
+      "frameId": "f",
+      "text": "Complete unchanged caption",
+      "originalText": "Complete unchanged caption",
+      "fontFamily": 9,
+      "fontSize": 16,
+      "lineHeight": 1.25
+    }
+  ],
+  "files": {}
+}

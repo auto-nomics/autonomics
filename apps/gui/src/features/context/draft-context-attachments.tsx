@@ -1,0 +1,6 @@
+import { Button } from "@/components/ui/button";
+import { contextKindLabel, resourceKey, type ContextResource } from "./context-model";
+export function DraftContextAttachments({ resources, onRemove }: { resources: ContextResource[]; onRemove: (resource: ContextResource) => void }) {
+  if (!resources.length) return null;
+  return <section aria-label="本次消息附件" className="space-y-1 border-b px-3 py-2 text-xs"><p className="font-medium">本次消息附件（{resources.length}）</p><p className="text-muted-foreground">随这次消息发送；可展开检查或移除。</p><div className="max-h-48 overflow-auto">{resources.map(resource => <div key={resourceKey(resource)} className="flex items-start gap-2"><details className="min-w-0 flex-1"><summary className="cursor-pointer break-words">{contextKindLabel[resource.kind]} · {resource.title}</summary><p className="break-all text-muted-foreground">{resource.scope} · {resource.source}{resource.revision ? ` · 版本 ${resource.revision}` : ""}</p><pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words" data-draft-context-content>{resource.content}</pre></details><Button type="button" size="xs" variant="ghost" aria-label={`移除本次附件：${resource.title}`} onClick={() => onRemove(resource)}>移除</Button></div>)}</div></section>;
+}

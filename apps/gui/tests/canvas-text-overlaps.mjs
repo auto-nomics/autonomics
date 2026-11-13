@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {textOverlapChanges,textOverlaps} from '../src/features/canvas/canvas-text-overlaps.ts';
+const text=(id,x=0,y=0)=>({id,type:'text',x,y,width:100,height:20,angle:0});
+const result=textOverlaps({elements:[text('a'),text('b',50,10),text('touch',100,0),{...text('rotated'),angle:1},{...text('deleted'),isDeleted:true},{...text('bad'),x:NaN},{...text('hidden'),opacity:0},{id:'shape',type:'rectangle',x:0,y:0,width:100,height:100}]});
+assert.equal(result.count,2);assert.deepEqual(result.pairs[0],{first:'a',second:'b'});assert.equal(result.skipped,3);assert.equal(result.total,6);
+assert.equal(textOverlaps({elements:[text('a'),text('touch',100,0)]}).count,0);
+assert.equal(textOverlaps({elements:[text('a'),text('sliver',99.5,0)]}).count,0);
+const many=textOverlaps({elements:Array.from({length:1002},(_,i)=>text(String(i)))});assert.equal(many.checked,1000);assert.equal(many.skipped,2);assert.equal(many.count,499500);assert.equal(many.pairs.length,50);assert.equal(many.truncated,true);
+assert.equal(textOverlaps(null).count,0);
+console.log('canvas-text-overlaps: bounded text rectangles, touching/sliver exclusion, rotated/invalid/invisible skips and completeness passed');
+
+const initial={elements:[text('a'),text('b',50),text('c',300),text('d',350)]};
+const revised={elements:[text('a'),text('b',50),text('c',600),text('d',350),text('new',360)]};
+assert.deepEqual(textOverlapChanges(initial,revised).counts,{introduced:1,persisting:1,resolved:1,unknown:0});
+assert.deepEqual(textOverlapChanges({elements:[text('a'),{...text('b',50),angle:1}]},{elements:[text('a'),text('b',50)]}).counts,{introduced:0,persisting:0,resolved:0,unknown:1});
+const reordered={elements:[...initial.elements].reverse()};assert.equal(textOverlapChanges(initial,reordered).counts.persisting,2);
+const dense={elements:Array.from({length:12},(_,i)=>text(String(i)))};const denseChange=textOverlapChanges(dense,dense);assert.equal(denseChange.counts.persisting,66);assert.equal(denseChange.counts.introduced,0);assert.equal(denseChange.truncated,true);
+assert.equal(textOverlapChanges(initial,{elements:[]}).counts.resolved,2);
+console.log('canvas-text-overlaps: introduced/persisting/resolved, skipped geometry unknown, reorder independence and classification beyond output cap passed');
+const omittedBaseline={elements:[...Array.from({length:1000},(_,i)=>text(String(i),i*200)),text('omitted',0)]};
+const omittedChange=textOverlapChanges(omittedBaseline,{elements:[text('0'),text('omitted')]});
+assert.equal(omittedChange.counts.introduced,0);assert.equal(omittedChange.counts.unknown,1);assert.equal(omittedChange.before.skipped,1);
+assert.equal(textOverlapChanges({elements:[text('a'),text('b',50)]},{elements:[text('a'),{...text('b',50),angle:1}]}).counts.resolved,0);
+console.log('canvas-text-overlaps: capped baseline and newly rotated text remain unknown rather than introduced/resolved passed');

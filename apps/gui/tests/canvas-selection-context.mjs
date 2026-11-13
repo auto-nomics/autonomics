@@ -1,0 +1,71 @@
+import assert from 'node:assert/strict';
+import {canvasReadInput,canvasSelectionContext} from '../src/features/canvas/canvas-selection-context.ts';
+const reference={kind:'image_inset_snapshot',anchor_id:'panel',image_id:'detail',region_id:'region',callout_id:'leader',source_element_id:'source',source_revision:3,region:{x:.1,y:.2,width:.4,height:.5},private_note:'PRIVATE-REFERENCE'};
+const elements=[
+ {id:'source',type:'image',x:1,y:2,width:200,height:100,angle:.7,scale:[-1,-1],crop:{x:100,y:20,width:200,height:80,naturalWidth:400,naturalHeight:200},fileId:'source-file',customData:{user_note:'PRIVATE-NOTE',dataURL:'PRIVATE-BYTES'}},
+ {id:'panel',type:'rectangle',customData:{inset:reference,visualAssetElementId:'detail',visualLabelIds:['title'],visualAssetGroupId:'detail-group'}},
+ {id:'detail',type:'image',fileId:'detail-file',customData:{inset:reference,semanticAnchorId:'panel'}},
+ {id:'region',type:'rectangle',customData:{inset:reference,annotationKind:'inset_region'}},
+ {id:'leader',type:'arrow',startBinding:{elementId:'region'},endBinding:{elementId:'panel'},customData:{inset:reference,annotationKind:'inset_callout'}},
+ {id:'title',type:'text',text:'Detail',groupIds:['detail-group']},
+ {id:'deleted',type:'rectangle',isDeleted:true},
+];
+const selected=Object.fromEntries(elements.map(e=>[e.id,true]));
+const snapshot=canvasSelectionContext(elements,selected);
+assert.equal(snapshot.total,6);assert.equal(snapshot.truncated,false);
+assert.deepEqual(snapshot.objects.map(e=>e.role),['canvas_object','inset_panel','inset_image','inset_region','inset_callout','inset_title']);
+const source=snapshot.objects[0];assert.equal(source.angle,.7);assert.deepEqual(source.scale,[-1,-1]);assert.deepEqual(source.crop,elements[0].crop);
+assert.equal(snapshot.objects[2].semantic_anchor_verified,true);
+assert.equal(snapshot.objects[4].start_binding_id,'region');assert.equal(snapshot.objects[4].end_binding_id,'panel');
+assert.ok(!JSON.stringify(snapshot).includes('PRIVATE-'));
+assert.equal(canvasSelectionContext(elements,{source:false,detail:true}).total,1,'false selection map entries are not selected');
+const moved=structuredClone(elements);moved[0].x=45;
+assert.notDeepEqual(canvasSelectionContext(moved,{source:true}),canvasSelectionContext(elements,{source:true}),'geometry changes update context even with unchanged IDs');
+const missingSource=canvasSelectionContext(elements.filter(e=>e.id!=='source'),{detail:true});
+assert.equal(missingSource.objects[0].inset.source_available,false);assert.equal(missingSource.objects[0].inset.identity_verified,true,'frozen snapshot survives source removal');
+const copied={...elements[2],id:'copied-image'};
+const copy=canvasSelectionContext([...elements,copied],{'copied-image':true}).objects[0];
+assert.equal(copy.role,'unverified_inset_reference');assert.equal(copy.inset.identity_verified,false);assert.equal(copy.semantic_anchor_verified,false);
+const malformed=structuredClone(elements);malformed[3].customData.inset={...reference,source_revision:4};
+assert.equal(canvasSelectionContext(malformed,{region:true}).objects[0].role,'unverified_inset_reference');
+const detached=structuredClone(elements);detached[5].groupIds=[];
+assert.equal(canvasSelectionContext(detached,{title:true}).objects[0].role,'canvas_object','do not infer title ownership after ungrouping');
+const many=Array.from({length:150},(_,n)=>({id:`element-${n}`,type:'text',text:'x'.repeat(1200)}));
+const large=canvasSelectionContext(many,Object.fromEntries(many.map(e=>[e.id,true])));
+assert.equal(large.total,150);assert.equal(large.truncated,true);assert.ok(large.objects.length<100);assert.ok(JSON.stringify(large.objects).length<=16000);assert.equal(large.objects[0].text_truncated,true);
+const oversized=canvasSelectionContext([{id:'z'.repeat(513),type:'rectangle'}],{['z'.repeat(513)]:true});
+assert.equal(oversized.total,1);assert.equal(oversized.truncated,true);assert.deepEqual(oversized.objects,[],'never silently truncate opaque IDs');
+console.log('canvas-selection-context: transform/crop, verified roles, false/deleted selections, copied/ambiguous ownership, privacy and bounded completeness passed');
+
+const grouped=canvasSelectionContext([{id:'group-member',type:'rectangle',groupIds:Array.from({length:40},(_,n)=>`group-${n}`)}],{'group-member':true}).objects[0];
+assert.equal(grouped.group_ids.length,32);assert.equal(grouped.group_ids_truncated,true);assert.equal(grouped.group_ids[0],'group-0');
+
+const relation={id:'relation',type:'arrow',startArrowhead:'arrow',endArrowhead:'arrow',customData:{direction:'bidirectional',private_note:'PRIVATE-NOTE'}};
+const relationContext=canvasSelectionContext([relation],{relation:true}).objects[0];
+assert.equal(relationContext.start_arrowhead,'arrow');assert.equal(relationContext.end_arrowhead,'arrow');assert.equal(relationContext.declared_direction,'bidirectional');
+assert.ok(!JSON.stringify(relationContext).includes('PRIVATE-'));
+relation.endArrowhead=null;
+const manuallyEdited=canvasSelectionContext([relation],{relation:true}).objects[0];
+assert.equal(manuallyEdited.end_arrowhead,null);assert.equal(manuallyEdited.declared_direction,'bidirectional','declared direction does not overwrite observed manual arrowheads');
+
+relation.customData.inhibitory=true;
+assert.equal(canvasSelectionContext([relation],{relation:true}).objects[0].declared_inhibitory,true);
+relation.customData.inhibitory=false;
+assert.equal(canvasSelectionContext([relation],{relation:true}).objects[0].declared_inhibitory,false);
+relation.customData.inhibitory='unknown';
+assert.equal(canvasSelectionContext([relation],{relation:true}).objects[0].declared_inhibitory,undefined);
+
+const typography=canvasSelectionContext([{id:'label',type:'text',text:'Visible label',fontFamily:9,fontSize:20,lineHeight:1.25,containerId:'node-0',autoResize:false,textAlign:'center',verticalAlign:'middle',originalText:'PRIVATE-ORIGINAL',customData:{note:'PRIVATE-NOTE'}}],{label:true}).objects[0];
+assert.equal(typography.font_family,9);assert.equal(typography.font_size,20);assert.equal(typography.line_height,1.25);assert.equal(typography.container_id,'node-0');assert.equal(typography.auto_resize,false);assert.equal(typography.text_align,'center');assert.equal(typography.vertical_align,'middle');assert.ok(!JSON.stringify(typography).includes('PRIVATE-'));
+const malformedTypography=canvasSelectionContext([{id:'bad-label',type:'text',fontSize:Infinity,fontFamily:'9',lineHeight:NaN,containerId:'x'.repeat(513),autoResize:'false',textAlign:'PRIVATE-ALIGN',verticalAlign:'PRIVATE-ALIGN'}],{'bad-label':true}).objects[0];
+for(const key of ['font_size','font_family','line_height','container_id','auto_resize','text_align','vertical_align'])assert.equal(malformedTypography[key],null);
+
+const opaqueAlignment=canvasSelectionContext([{id:'opaque-label',type:'text',textAlign:{toString:'not-callable',valueOf:'not-callable'},verticalAlign:{}}],{'opaque-label':true}).objects[0];assert.equal(opaqueAlignment.text_align,null);assert.equal(opaqueAlignment.vertical_align,null);
+
+const baseRead={action:'read',project_id:'p',figure_id:'f',expected_revision:7};
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext(elements,{source:true})),{...baseRead,element_ids:['source']});
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext(elements,{})),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,large),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,oversized),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext(elements,{deleted:true})),baseRead);
+assert.deepEqual(canvasReadInput('p','f',7,canvasSelectionContext([...elements,elements[0]],{source:true})),baseRead);

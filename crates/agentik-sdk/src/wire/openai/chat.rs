@@ -261,19 +261,9 @@ impl WireProtocol for OpenAiChatWire {
                 usage: None,
                 request_id: None,
             };
-            // Emit MessageStart first; the caller will pick up subsequent
-            // events on the next poll.
-            //
-            // We *also* process this chunk below for any delta content, but
-            // return only MessageStart here so the consumer sees a clean
-            // start-of-stream. Subsequent chunks fall through to delta
-            // processing.
-            //
-            // If this first chunk carries content too, re-dispatch on the
-            // next call by not returning early — but we can only return one
-            // event per call, so we return the MessageStart now and let the
-            // next chunk carry its deltas.
-            return Ok(Some(MessageStreamEvent::MessageStart { message }));
+            state
+                .pending_events
+                .push_back(MessageStreamEvent::MessageStart { message });
         }
 
         let Some(choice) = chunk
@@ -281,39 +271,36 @@ impl WireProtocol for OpenAiChatWire {
             .and_then(|c| c.as_array())
             .and_then(|arr| arr.first())
         else {
-            return Ok(None);
+            return Ok(state.pending_events.pop_back());
         };
 
         let delta = &choice["delta"];
 
-        // Text content delta → ContentBlockDelta::TextDelta at index 0.
+        // Preserve every text fragment, including the first, with a unique block index.
         if let Some(text) = delta.get("content").and_then(|c| c.as_str())
             && !text.is_empty()
         {
             if !state.text_block_open {
                 state.text_block_open = true;
-                // We can only return one event per call; emit the
-                // ContentBlockStart now and let the consumer poll again
-                // for the delta. To avoid losing the delta, we re-queue
-                // it by not consuming — but since we can't, we instead
-                // emit the start now and the text delta will come on the
-                // next chunk. This is acceptable: OpenAI's first text
-                // delta is almost always preceded by a role-only delta
-                // chunk.
-                state.next_block_index = 1;
-                return Ok(Some(MessageStreamEvent::ContentBlockStart {
-                    content_block: ContentBlock::Text {
-                        text: String::new(),
-                    },
-                    index: 0,
-                }));
+                state.text_block_index = state.next_block_index;
+                state.next_block_index += 1;
+                state
+                    .pending_events
+                    .push_back(MessageStreamEvent::ContentBlockStart {
+                        content_block: ContentBlock::Text {
+                            text: String::new(),
+                        },
+                        index: state.text_block_index,
+                    });
             }
-            return Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                delta: ContentBlockDelta::TextDelta {
-                    text: text.to_string(),
-                },
-                index: 0,
-            }));
+            state
+                .pending_events
+                .push_back(MessageStreamEvent::ContentBlockDelta {
+                    delta: ContentBlockDelta::TextDelta {
+                        text: text.to_string(),
+                    },
+                    index: state.text_block_index,
+                });
         }
 
         // Tool call deltas.
@@ -340,14 +327,16 @@ impl WireProtocol for OpenAiChatWire {
                     }
                     if !slot.id.is_empty() || !slot.name.is_empty() {
                         slot.block_started = true;
-                        return Ok(Some(MessageStreamEvent::ContentBlockStart {
-                            content_block: ContentBlock::ToolUse {
-                                id: slot.id.clone(),
-                                name: slot.name.clone(),
-                                input: json!({}),
-                            },
-                            index: slot.block_index,
-                        }));
+                        state
+                            .pending_events
+                            .push_back(MessageStreamEvent::ContentBlockStart {
+                                content_block: ContentBlock::ToolUse {
+                                    id: slot.id.clone(),
+                                    name: slot.name.clone(),
+                                    input: json!({}),
+                                },
+                                index: slot.block_index,
+                            });
                     }
                 }
 
@@ -356,16 +345,16 @@ impl WireProtocol for OpenAiChatWire {
                     && !args.is_empty()
                 {
                     slot.arguments.push_str(args);
-                    return Ok(Some(MessageStreamEvent::ContentBlockDelta {
-                        delta: ContentBlockDelta::InputJsonDelta {
-                            partial_json: args.to_string(),
-                        },
-                        index: slot.block_index,
-                    }));
+                    state
+                        .pending_events
+                        .push_back(MessageStreamEvent::ContentBlockDelta {
+                            delta: ContentBlockDelta::InputJsonDelta {
+                                partial_json: args.to_string(),
+                            },
+                            index: slot.block_index,
+                        });
                 }
             }
-            // Consumed tool_calls deltas without emitting (e.g. all empty).
-            return Ok(None);
         }
 
         // finish_reason → close blocks + MessageDelta + (on next call)
@@ -386,7 +375,8 @@ impl WireProtocol for OpenAiChatWire {
             return Ok(self.finalize_stream(state));
         }
 
-        Ok(None)
+        // The HTTP pump emits queued events before this returned final event.
+        Ok(state.pending_events.pop_back())
     }
 }
 
@@ -599,7 +589,13 @@ mod tests {
             .adapt_sse_event("", chunk2, &mut state)
             .unwrap()
             .unwrap();
-        assert!(matches!(ev, MessageStreamEvent::ContentBlockStart { .. }));
+        assert!(matches!(
+            state.pending_events.pop_front(),
+            Some(MessageStreamEvent::ContentBlockStart { index: 0, .. })
+        ));
+        assert!(
+            matches!(ev, MessageStreamEvent::ContentBlockDelta { delta: ContentBlockDelta::TextDelta { ref text }, index: 0 } if text == "Hi")
+        );
         // Second text delta yields the delta.
         let chunk3 =
             r#"{"choices":[{"index":0,"delta":{"content":" there"},"finish_reason":null}]}"#;
@@ -624,6 +620,79 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(ev, MessageStreamEvent::MessageStop);
+    }
+
+    #[test]
+    fn chat_stream_preserves_first_chunk_text_and_all_parallel_tool_fragments() {
+        let wire = OpenAiChatWire;
+        let mut state = StreamState::default();
+        let chunks = [
+            json!({"id":"coalesced","model":"test","choices":[{"delta":{"content":"First", "tool_calls":[
+                {"index":0,"id":"a","function":{"name":"visualization","arguments":"{\"action\":"}},
+                {"index":1,"id":"b","function":{"name":"other","arguments":"{\"x\":1}"}}
+            ]}}]}),
+            json!({"choices":[{"delta":{"content":" second","tool_calls":[
+                {"index":0,"function":{"arguments":"\"read\"}"}},
+                {"index":1,"function":{"arguments":" "}}
+            ]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":20}}),
+        ];
+        let mut events = Vec::new();
+        for chunk in chunks {
+            let main = wire
+                .adapt_sse_event("", &chunk.to_string(), &mut state)
+                .unwrap();
+            events.extend(state.pending_events.drain(..));
+            events.extend(main);
+        }
+        assert!(matches!(
+            events.first(),
+            Some(MessageStreamEvent::MessageStart { .. })
+        ));
+        assert!(matches!(
+            events.last(),
+            Some(MessageStreamEvent::MessageStop)
+        ));
+        let mut text = String::new();
+        let mut arguments = std::collections::BTreeMap::<usize, String>::new();
+        let mut starts = Vec::new();
+        for event in events {
+            match event {
+                MessageStreamEvent::ContentBlockStart {
+                    index,
+                    content_block,
+                } => {
+                    assert!(!starts.contains(&index));
+                    starts.push(index);
+                    if matches!(content_block, ContentBlock::ToolUse { .. }) {
+                        arguments.insert(index, String::new());
+                    }
+                }
+                MessageStreamEvent::ContentBlockDelta {
+                    index,
+                    delta: ContentBlockDelta::TextDelta { text: fragment },
+                } => {
+                    assert_eq!(index, 0);
+                    text.push_str(&fragment);
+                }
+                MessageStreamEvent::ContentBlockDelta {
+                    index,
+                    delta: ContentBlockDelta::InputJsonDelta { partial_json },
+                } => arguments.get_mut(&index).unwrap().push_str(&partial_json),
+                _ => {}
+            }
+        }
+        assert_eq!(text, "First second");
+        assert_eq!(starts, [0, 1, 2]);
+        assert_eq!(
+            serde_json::from_str::<Value>(&arguments[&1]).unwrap(),
+            json!({"action":"read"})
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&arguments[&2]).unwrap(),
+            json!({"x":1})
+        );
+        assert_eq!(state.tool_calls[&0].arguments, arguments[&1]);
+        assert_eq!(state.tool_calls[&1].arguments, arguments[&2]);
     }
 
     #[test]
