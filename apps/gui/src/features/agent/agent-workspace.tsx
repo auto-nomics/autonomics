@@ -17,7 +17,7 @@ import {
 import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
 import { TokenUsageBadge } from "./token-usage";
 import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
-import { renderMarkdown } from "@/lib/markdown";
+import { useAgentMarkdown } from "./agent-markdown";
 import type { AgentInfo, ChatItem, CompactionView, ModelRow, QueuedMessage, StoredAgent } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -155,6 +155,13 @@ function TranscriptSkeleton() {
   );
 }
 
+/** Assistant message body — Comark-rendered markdown (async render keeps the
+ *  last frame while streaming, so the message never blanks mid-update). */
+function AssistantMarkdown({ text }: { text: string }) {
+  const html = useAgentMarkdown(text);
+  return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 type MessageItemProps = {
   message: ChatItem;
   streamingId: number | null;
@@ -205,7 +212,7 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
             <Copy className="size-3" />
           </button>
         </div>
-        <div className="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(message.text) }} />
+        <AssistantMarkdown text={message.text} />
         {isStreaming && <span className="mt-1 inline-block h-4 w-2 animate-pulse bg-foreground/70 align-text-bottom" />}
       </div>
     );
