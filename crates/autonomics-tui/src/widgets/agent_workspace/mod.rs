@@ -34,7 +34,7 @@ use crate::state::{AgentTabState, DisplaySettings};
 use crate::widgets::agent_leaf::AgentLeaf;
 
 use empty_state::EmptyState;
-pub(crate) use status::{display_name, status_color, status_icon};
+pub(crate) use status::{display_name, status_color, status_icon, status_label};
 
 /// Composes the workspace from its empty state or active-leaf parts.
 pub struct AgentWorkspace<'a> {

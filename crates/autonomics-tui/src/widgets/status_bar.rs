@@ -8,6 +8,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::state::{AgentStatus, CompactState};
+use crate::widgets::agent_workspace::{status_color, status_icon, status_label};
 
 /// 1-row status bar showing the active agent's path, its state, and the
 /// active model, drawn on a dark-navy background strip spanning the full
@@ -46,17 +47,12 @@ impl Widget for StatusBar<'_> {
         let theme = crate::theme::current();
         // Compaction takes over the status display so the user can see the
         // agent is summarizing context, not idle/requesting.
-        let (base_indicator, indicator_color, base_text) = match self.status {
-            AgentStatus::Idle | AgentStatus::Aborted => ("○", theme.text_dim, "idle"),
-            AgentStatus::Requesting => ("◐", theme.warning, "requesting"),
-            AgentStatus::Streaming => ("●", theme.success, "streaming"),
-            AgentStatus::ToolRunning => ("⚙", theme.accent, "tool running"),
-            AgentStatus::Retrying => ("↻", theme.warning, "retrying"),
-            AgentStatus::Error => ("x", theme.error, "error"),
-            AgentStatus::Cancelled => ("⊘", theme.text_faint, "cancelled"),
-            AgentStatus::Compacting => ("◐", theme.accent_alt, "compacting"),
-            AgentStatus::Waiting => ("▮▮", theme.info, "waiting"),
-        };
+        // Glyph, color, and label come from the shared agent-status
+        // helpers so every surface (status bar, tab bar, agents panel)
+        // renders one consistent mapping.
+        let base_indicator = status_icon(self.status);
+        let indicator_color = status_color(self.status);
+        let base_text = status_label(self.status);
 
         // While compacting, replace the static label with a spinning
         // indicator and the live pass detail line.
@@ -286,6 +282,6 @@ mod tests {
         let row: String = (0..area.width)
             .map(|x| buf[(x, 0)].symbol().to_string())
             .collect();
-        assert!(row.trim_start().starts_with("○"), "row: {row:?}");
+        assert!(row.trim_start().starts_with("●"), "row: {row:?}");
     }
 }

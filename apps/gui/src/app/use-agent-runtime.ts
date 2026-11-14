@@ -709,8 +709,9 @@ export function useAgentRuntime() {
   }, [openTabs]);
 
   const sendMessageTo = async (path: string, context = "") => {
-    const text = (draftsRef.current[path] ?? "").trim();
-    if (!(parseContextMessage(text)?.text ?? text).trim() || !path || sendingRef.current.has(path)) return false;
+    const text = draftsRef.current[path] ?? "";
+    const prepared = parseContextMessage(text);
+    if ((!((prepared?.text ?? text).trim()) && !prepared?.resources.some(item => item.kind === "image")) || !path || sendingRef.current.has(path)) return false;
     sendingRef.current.add(path);
     const pending = { id: makeItem("user", text).id, text: mergeDraftContext(text, context), status: "sending" as const };
     setQueuedMessages(current => ({ ...current, [path]: [...(current[path] ?? []), pending] }));

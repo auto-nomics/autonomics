@@ -1,6 +1,6 @@
 import { parseContextMessage, resourceKey, serializeContext } from "@/features/context/context-model";
 import { DraftContextAttachments } from "@/features/context/draft-context-attachments";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Archive,
   ArrowUp,
@@ -98,6 +98,12 @@ export function AgentComposer(props: AgentComposerProps) {
   const { activeAgent, draft, busy, streamingActive, status } = props;
   const attachedDraft = parseContextMessage(draft), visibleDraft = attachedDraft?.text ?? draft;
 
+  const latestDraft = useRef({ draft, activeAgent });
+  latestDraft.current = { draft, activeAgent };
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [pasting, setPasting] = useState(false);
+  const hasContent = Boolean(visibleDraft.trim() || attachedDraft?.resources.some(item => item.kind === "image"));
+
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [effortPickerOpen, setEffortPickerOpen] = useState(false);
   // Set when the catalog fetch fails; the open list shows the error
@@ -171,7 +177,7 @@ export function AgentComposer(props: AgentComposerProps) {
       className="relative shrink-0 border-t bg-muted p-2 sm:p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        props.onSend();
+        if (!pasting) props.onSend();
       }}
     >
       {/* Model switcher: floats above the composer card so the
@@ -273,14 +279,46 @@ export function AgentComposer(props: AgentComposerProps) {
       {/* Card-style composer: borderless textarea with a floating
           round send button, meta row below (model / hints / streaming). */}
       <div className="rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
+        {imageError && <p role="alert" className="px-3 pt-2 text-xs text-destructive">{imageError}</p>}
+        {pasting && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">正在读取图片…</p>}
         <DraftContextAttachments resources={attachedDraft?.resources ?? []} onRemove={resource => props.onDraftChange(visibleDraft + serializeContext((attachedDraft?.resources ?? []).filter(item => resourceKey(item) !== resourceKey(resource))))} />
         <div className="flex items-end gap-2 px-2.5 pt-2">
           <Textarea
             value={visibleDraft}
             rows={1}
             onChange={(event) => props.onDraftChange(event.target.value + serializeContext(attachedDraft?.resources ?? []))}
+            onPaste={async event => {
+              const files = Array.from(event.clipboardData.items).filter(item => item.kind === "file" && item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => Boolean(file));
+              if (!files.length) return;
+              event.preventDefault();
+              if (pasting) return;
+              const agent = activeAgent;
+              const pastedText = event.clipboardData.getData("text/plain");
+              setPasting(true);
+              setImageError(null);
+              try {
+                const images = await Promise.all(files.map(async file => {
+                  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) throw new Error("支持 PNG、JPEG、WebP 和 GIF 图片");
+                  if (file.size > 1300000) throw new Error("图片过大，请缩小图片后重试（总计约 1 MB）");
+                  const content = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result));
+                    reader.onerror = () => reject(new Error("图片读取失败，请重试"));
+                    reader.readAsDataURL(file);
+                  });
+                  return { kind: "image" as const, id: crypto.randomUUID(), title: file.name || "粘贴的图片", scope: "本次消息图片", source: "clipboard", content };
+                }));
+                if (latestDraft.current.activeAgent !== agent) return;
+                const current = parseContextMessage(latestDraft.current.draft);
+                const resources = [...(current?.resources ?? []), ...images];
+                const next = (current?.text ?? latestDraft.current.draft) + pastedText + serializeContext(resources);
+                if (new TextEncoder().encode(next).length > 1800000) throw new Error("图片附件总大小过大，请缩小图片后重试（总计约 1 MB）");
+                props.onDraftChange(next);
+              } catch (cause) { setImageError(cause instanceof Error ? cause.message : String(cause)); }
+              finally { setPasting(false); }
+            }}
             onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && visibleDraft.trim() && busy !== "send") {
+              if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && hasContent && !pasting && busy !== "send") {
                 event.preventDefault();
                 props.onSend();
               }
@@ -317,7 +355,7 @@ export function AgentComposer(props: AgentComposerProps) {
               type="submit"
               size="icon"
               className="mb-0.5 shrink-0 rounded-full"
-              disabled={!visibleDraft.trim()}
+              disabled={!hasContent || pasting}
               aria-label="发送"
               title="发送（Ctrl+Enter）"
             >

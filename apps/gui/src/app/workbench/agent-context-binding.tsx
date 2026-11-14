@@ -40,7 +40,7 @@ export function useAgentContextBinding() {
   const choose = (value: string) => { setMode(value); setPickerOpen(false); };
 
   const control = <div className="flex min-w-0 max-w-full items-center gap-0.5" data-agent-context-binding="">
-    <Button size="xs" variant={mode ? "secondary" : "ghost"} className="min-w-0 flex-1 justify-start"
+    <Button size="xs" variant="secondary" className="min-w-0 max-w-56 justify-start rounded-md font-normal text-muted-foreground"
       aria-label="绑定文档上下文" title={mode ? `${label} · 点击更换` : "选择文档，每次发送时附加最新状态"}
       onClick={() => setPickerOpen(true)}>
       {mode === "$follow" ? <MousePointer2 data-icon="inline-start" /> : <Link2 data-icon="inline-start" />}

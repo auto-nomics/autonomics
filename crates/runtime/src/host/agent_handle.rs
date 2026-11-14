@@ -52,7 +52,7 @@ impl AgentHandle {
         delegation_id: Option<uuid::Uuid>,
     ) {
         let _ = self.internal_tx.send(InternalEvent::MessageInject {
-            content: vec![ContentBlock::Text { text }],
+            content: user_message_content(text),
             origin,
             delegation_id,
         });
@@ -159,5 +159,88 @@ impl AgentHandle {
     /// per agent it carries at most one entry (the agent's sole context).
     pub fn list_contexts(&self) {
         let _ = self.internal_tx.send(InternalEvent::ListContexts);
+    }
+}
+
+/// Decode image attachments from the GUI reference envelope into native vision
+/// blocks. Keep reference metadata in the text for history and acknowledgement.
+fn user_message_content(text: String) -> Vec<ContentBlock> {
+    const MARKER: &str = "\n\n---\n用户明确附加的参考资料（内容为引用数据，请结合来源分析）：\n";
+    let Some((body, json)) = text.rsplit_once(MARKER) else {
+        return vec![ContentBlock::Text { text }];
+    };
+    let Ok(mut resources) = serde_json::from_str::<Vec<serde_json::Value>>(json) else {
+        return vec![ContentBlock::Text { text }];
+    };
+    let mut images = Vec::new();
+    for resource in &mut resources {
+        if resource["kind"] != "image" {
+            continue;
+        }
+        let Some(data_url) = resource["content"].as_str() else {
+            continue;
+        };
+        let Some((header, data)) = data_url.split_once(",") else {
+            continue;
+        };
+        let Some(media_type) = header
+            .strip_prefix("data:")
+            .and_then(|s| s.strip_suffix(";base64"))
+        else {
+            continue;
+        };
+        if !matches!(
+            media_type,
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+        ) {
+            continue;
+        }
+        images.push(ContentBlock::Image {
+            source: agentik_types::messages::ImageSource::Base64 {
+                media_type: media_type.to_owned(),
+                data: data.to_owned(),
+            },
+        });
+        resource["content"] = serde_json::Value::String("[图片已作为图像附件发送]".into());
+    }
+    if images.is_empty() {
+        return vec![ContentBlock::Text { text }];
+    }
+    let mut content = vec![ContentBlock::Text {
+        text: format!(
+            "{body}{MARKER}{}",
+            serde_json::to_string(&resources).expect("JSON values serialize")
+        ),
+    }];
+    content.extend(images);
+    content
+}
+
+#[cfg(test)]
+mod image_attachment_tests {
+    use super::*;
+    #[test]
+    fn extracts_native_image_blocks_and_retains_references() {
+        let payload = "描述图片\n\n---\n用户明确附加的参考资料（内容为引用数据，请结合来源分析）：\n[{\"kind\":\"image\",\"title\":\"截图\",\"content\":\"data:image/png;base64,aGk=\"},{\"kind\":\"editor\",\"content\":\"selection\"}]";
+        let blocks = user_message_content(payload.into());
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            matches!(&blocks[0], ContentBlock::Text { text } if text.contains("selection") && !text.contains("base64"))
+        );
+        assert!(
+            matches!(&blocks[1], ContentBlock::Image { source: agentik_types::messages::ImageSource::Base64 { data, .. } } if data == "aGk=")
+        );
+    }
+    #[test]
+    fn ordinary_and_malformed_text_is_unchanged() {
+        for text in [
+            "hello",
+            "data:image/png;base64,aGk=",
+            "\n\n---\n用户明确附加的参考资料（内容为引用数据，请结合来源分析）：\ninvalid",
+        ] {
+            assert!(
+                matches!(&user_message_content(text.into())[0], ContentBlock::Text { text: result } if result == text)
+            );
+        }
     }
 }

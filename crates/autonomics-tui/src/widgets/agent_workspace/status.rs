@@ -27,6 +27,22 @@ pub(crate) fn status_icon(status: &AgentStatus) -> &'static str {
     }
 }
 
+/// Lowercase lifecycle label rendered next to the glyph.
+pub(crate) fn status_label(status: &AgentStatus) -> &'static str {
+    match status {
+        AgentStatus::Idle => "idle",
+        AgentStatus::Aborted => "aborted",
+        AgentStatus::Requesting => "requesting",
+        AgentStatus::Streaming => "streaming",
+        AgentStatus::ToolRunning => "tool running",
+        AgentStatus::Retrying => "retrying",
+        AgentStatus::Error => "error",
+        AgentStatus::Cancelled => "cancelled",
+        AgentStatus::Waiting => "waiting",
+        AgentStatus::Compacting => "compacting",
+    }
+}
+
 pub(crate) fn status_color(status: &AgentStatus) -> Color {
     let theme = crate::theme::current();
     match status {

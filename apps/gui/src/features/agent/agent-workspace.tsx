@@ -179,7 +179,7 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
               {attached.resources.map((resource, index) => <details key={index}>
                 <summary className="cursor-pointer">{contextKindLabel[resource.kind]} · {resource.title}</summary>
                 <p className="break-all text-muted-foreground">{resource.scope} · {resource.source}</p>
-                <pre className="mt-1 whitespace-pre-wrap break-words">{resource.content}</pre>
+                {resource.kind === "image" && resource.content.startsWith("data:image/") ? <img src={resource.content} alt={resource.title} className="mt-1 max-h-64 max-w-full object-contain" /> : <pre className="mt-1 whitespace-pre-wrap break-words">{resource.content}</pre>}
               </details>)}
             </div>
           </details>}
