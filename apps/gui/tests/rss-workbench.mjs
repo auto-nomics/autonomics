@@ -21,7 +21,7 @@ try {
     const data = {
       '/bib/rss/feeds': { feeds: [feed] }, '/bib/rss/items': { items: [item], next: null },
       '/bib/rss/status': { scheduler: { running: true, active_checks: 0, last_error: null } },
-      '/bib/rss/nature/check': { outcome: { status: 'not_modified', new_items: 0 } },
+      '/bib/rss/feeds/nature': { outcome: { status: 'not_modified', new_items: 0 } },
       '/bib/collections': { collections: [{ id: 'research', name: 'Research collection', article_ids: [] }] },
       '/bib/articles': { articles: [], total: 0 }, '/bib/health': { article_count: 0 },
       '/bib/search/status': { engine: 'legacy' },
@@ -37,7 +37,7 @@ try {
   const editor = page.getByRole('region', { name: 'RSS subscriptions', exact: true });
   assert.equal(await editor.getByLabel('Feed list', { exact: true }).count(), 0);
   for (const name of ['Refresh', 'Check all', 'Add feed']) { assert.equal(await sidebar.getByRole('button', { name, exact: true }).count(), 1); assert.equal(await editor.getByRole('button', { name, exact: true }).count(), 0); }
-  await sidebar.getByRole('button', { name: /Nature Research/ }).click();
+  await sidebar.locator('.rss-feed-select').filter({ hasText: 'Nature Research' }).click();
   await editor.getByRole('heading', { name: 'Nature Research', exact: true }).waitFor();
   await editor.getByLabel('Search loaded articles').fill('atlas');
   await editor.locator('.rss-article-select').click();

@@ -190,3 +190,30 @@ async fn check_feed_dedups_and_supports_not_modified() {
     let (kept, _) = shared.rss.items(None, None, 50).await.unwrap();
     assert_eq!(kept.len(), 2);
 }
+
+#[tokio::test]
+async fn scheduler_keeps_http_errors_on_the_feed_and_manual_success_clears_them() {
+    let shared = BibShared::open_in_memory().await.unwrap();
+    let origin = serve("404 Not Found", "", "").await;
+    let feed = shared.rss.create_feed(spec(&format!("{origin}/missing"))).await.unwrap();
+    let scheduler = rss::RssScheduler::start(shared.clone(), 1);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let current = shared.rss.get_feed(&feed.id).await.unwrap();
+            if current.last_error.is_some() && scheduler.status().active_checks == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    assert!(shared.rss.get_feed(&feed.id).await.unwrap().last_error.unwrap().contains("404"));
+    assert!(scheduler.status().running);
+    assert!(scheduler.status().last_error.is_none());
+
+    let origin = serve("200 OK", "", "<rss version=\"2.0\"><channel><title>Recovered</title></channel></rss>").await;
+    shared.rss.replace_feed(&feed.id, feed.version, spec(&format!("{origin}/feed"))).await.unwrap();
+    rss::check_feed(&shared, &feed.id).await.unwrap();
+    assert!(shared.rss.get_feed(&feed.id).await.unwrap().last_error.is_none());
+    assert!(scheduler.status().last_error.is_none());
+    scheduler.shutdown().await;
+}

@@ -988,11 +988,14 @@ impl RssScheduler {
         tokio::spawn(async move {
             let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
             loop {
-                let due = shared
-                    .rss
-                    .due_feeds(now_ms(), 50)
-                    .await
-                    .unwrap_or_default();
+                let mut errors = Vec::new();
+                let due = match shared.rss.due_feeds(now_ms(), 50).await {
+                    Ok(due) => due,
+                    Err(error) => {
+                        errors.push(error.to_string());
+                        Vec::new()
+                    }
+                };
                 let mut workers = Vec::new();
                 for feed in due {
                     let permit = semaphore.clone();
@@ -1006,14 +1009,25 @@ impl RssScheduler {
                         let result = check_feed(&shared, &feed.id).await;
                         if let Ok(mut current) = status.lock() {
                             current.active_checks -= 1;
-                            if let Err(error) = &result {
-                                current.last_error = Some(error.to_string());
-                            }
+                        }
+                        // Fetch/parse errors are persisted on the subscription. They
+                        // are not scheduler failures; deletion during a check is normal.
+                        match result {
+                            Err(error @ RssError::Store(_)) => Some(error.to_string()),
+                            _ => None,
                         }
                     }));
                 }
                 for worker in workers {
-                    let _ = worker.await;
+                    match worker.await {
+                        Ok(Some(error)) => errors.push(error),
+                        Err(error) => errors.push(format!("RSS worker failed: {error}")),
+                        Ok(None) => {}
+                    }
+                }
+                if let Ok(mut current) = status.lock() {
+                    current.active_checks = 0;
+                    current.last_error = if errors.is_empty() { None } else { Some(errors.join("; ")) };
                 }
                 if tokio::select! {
                     _ = shutdown.notified() => true,

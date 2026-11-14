@@ -519,3 +519,11 @@
   .rss-external-sidebar .rss-reader { display: flex; }
   .rss-external-sidebar .rss-has-selection .rss-timeline { display: flex; }
 }
+
+.rss-feed-row { display: flex; align-items: center; gap: 2px; }
+.rss-feed-row .rss-feed-select { flex: 1; min-width: 0; }
+.rss-feed-row > button:last-child { flex-shrink: 0; color: var(--muted-foreground); }
+.rss-feed-row > button:last-child:hover { color: var(--destructive); }
+
+.rss-feed-error { padding: 4px 6px; font-size: 11px; color: var(--destructive); overflow-wrap: anywhere; }
+.rss-feed-error p + p { margin-top: 4px; color: var(--muted-foreground); }
