@@ -1,14 +1,12 @@
-//! Inter-agent delegation commands: `Delegate` (request-response, gated
-//! to direct children, with virtual-actor activation of dormant targets)
-//! and `ListDelegations` (live ledger + persisted history merge).
+//! Inter-agent delegation command: request-response delivery to direct children,
+//! with virtual-actor activation of dormant targets.
 
 use agentik_core::tools::ProgressBuffer;
 
-use crate::control::{DelegationSnapshot, DelegationStatus};
-use super::super::delegation::delegation_status_from_str;
+use super::super::RuntimeHost;
 use super::super::events::PendingDelivery;
 use super::super::unix_epoch_ms;
-use super::super::RuntimeHost;
+use crate::control::{DelegationSnapshot, DelegationStatus};
 
 impl RuntimeHost {
     /// `HostCommand::Delegate` — open a ledger entry and deliver the task
@@ -24,9 +22,8 @@ impl RuntimeHost {
         reply_tx: tokio::sync::oneshot::Sender<String>,
     ) {
         let Some(caller_path) = caller_path else {
-            let _ = reply_tx.send(
-                "Delegation failed: the calling agent path is unavailable.".to_string(),
-            );
+            let _ = reply_tx
+                .send("Delegation failed: the calling agent path is unavailable.".to_string());
             return;
         };
         // Resolve the target from the caller's viewpoint: full paths
@@ -91,86 +88,5 @@ impl RuntimeHost {
                 },
             );
         }
-    }
-
-    /// `HostCommand::ListDelegations` — merge the live ledger with
-    /// persisted history (deduped by delegation id, newest first).
-    pub(super) fn handle_list_delegations(
-        &mut self,
-        caller_path: Option<String>,
-        target_path: Option<String>,
-        status: Option<String>,
-        reply_tx: tokio::sync::oneshot::Sender<Vec<DelegationSnapshot>>,
-    ) {
-        let target_path =
-            target_path.map(|target| self.resolve_agent(&target).unwrap_or(target));
-        let live_records: Vec<_> = self
-            .ledger
-            .snapshots()
-            .filter(|&record| {
-                caller_path.as_deref().is_none_or(|value| {
-                    record
-                        .caller_path
-                        .as_ref()
-                        .is_some_and(|caller| caller.as_str() == value)
-                }) && target_path
-                    .as_deref()
-                    .is_none_or(|value| record.target_path.as_str() == value)
-                    && status
-                        .as_deref()
-                        .is_none_or(|value| record.status.as_str() == value)
-            })
-            .cloned()
-            .collect();
-        let storage = self.infra.storage.clone();
-        agentik_core::supervise::spawn_safe_on(
-            &self.infra.runtime_handle,
-            "list_delegations",
-            async move {
-                let mut records = live_records;
-                let live_ids: std::collections::HashSet<_> =
-                    records.iter().map(|record| record.delegation_id).collect();
-                if let Ok(persisted) = storage
-                    .list_agent_delegations(
-                        caller_path.as_deref(),
-                        target_path.as_deref(),
-                        status.as_deref(),
-                        1000,
-                    )
-                    .await
-                {
-                    records.extend(persisted.into_iter().filter_map(move |record| {
-                        let delegation_id = record.delegation_id;
-                        if live_ids.contains(&delegation_id) {
-                            return None;
-                        }
-                        // Storage boundary: rows are written from
-                        // validated paths, so both parse; a corrupt
-                        // row is dropped rather than poisoning the
-                        // typed snapshot.
-                        let caller_path = record
-                            .caller_path
-                            .as_deref()
-                            .and_then(|path| agentik_types::AgentPath::try_from(path).ok());
-                        let target_path =
-                            agentik_types::AgentPath::try_from(record.target_path.as_str()).ok()?;
-                        Some(DelegationSnapshot {
-                            delegation_id,
-                            caller_path,
-                            target_path,
-                            task: record.task,
-                            status: delegation_status_from_str(&record.status),
-                            turn_id: record.turn_id,
-                            session_id: record.session_id,
-                            response: record.response,
-                            created_at: record.created_at,
-                            updated_at: record.updated_at,
-                        })
-                    }));
-                }
-                records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-                let _ = reply_tx.send(records);
-            },
-        );
     }
 }

@@ -56,7 +56,6 @@ fn host_tool_registry_matches_policy() {
             "get_agent_info",
             "interrupt_agent",
             "list_agents",
-            "list_delegations",
             "spawn_agent",
         ]
     );
@@ -150,7 +149,10 @@ async fn list_agents_returns_only_visible_agents_and_no_topology() {
         assert!(payload.get(key).is_none(), "leaked `{key}`: {payload}");
     }
     assert!(payload["profiles"].is_array(), "{payload}");
-    assert!(payload["dormant_children"].as_array().unwrap().is_empty(), "{payload}");
+    assert!(
+        payload["dormant_children"].as_array().unwrap().is_empty(),
+        "{payload}"
+    );
 }
 
 /// Persisted children without a live instance surface as dormant
@@ -203,7 +205,9 @@ async fn list_agents_merges_dormant_children_from_storage() {
         other => panic!("expected JSON content, got {other:?}"),
     };
 
-    let dormant = payload["dormant_children"].as_array().expect("dormant array");
+    let dormant = payload["dormant_children"]
+        .as_array()
+        .expect("dormant array");
     assert_eq!(dormant.len(), 1, "{payload}");
     assert_eq!(dormant[0]["path"], "/root/p/c1/ghost");
     assert_eq!(dormant[0]["name"], "ghost");

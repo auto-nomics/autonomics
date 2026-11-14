@@ -495,50 +495,6 @@ fn int_col(row: &turso::Row, idx: usize) -> Result<i64, turso::Error> {
     }
 }
 
-fn parse_agent_delegation_row(
-    row: &turso::Row,
-) -> Result<crate::storage::AgentDelegationRecord, StorageError> {
-    let delegation_id = Uuid::parse_str(&text_col(row, 0)?)
-        .map_err(|e| StorageError::Other(format!("parse delegation_id: {e}").into()))?;
-    let caller_path = match row.get_value(1)? {
-        Value::Text(value) => Some(value),
-        _ => None,
-    };
-    let target_path = text_col(row, 2)?;
-    let task = text_col(row, 3)?;
-    let status = text_col(row, 4)?;
-    let turn_id =
-        match row.get_value(5)? {
-            Value::Text(value) => Some(Uuid::parse_str(&value).map_err(|e| {
-                StorageError::Other(format!("parse delegation turn_id: {e}").into())
-            })?),
-            _ => None,
-        };
-    let response = match row.get_value(6)? {
-        Value::Text(value) => Some(value),
-        _ => None,
-    };
-    let session_id = match row.get_value(9)? {
-        Value::Text(value) => Some(Uuid::parse_str(&value).map_err(|e| {
-            StorageError::Other(format!("parse delegation session_id: {e}").into())
-        })?),
-        _ => None,
-    };
-
-    Ok(crate::storage::AgentDelegationRecord {
-        delegation_id,
-        caller_path,
-        target_path,
-        task,
-        status,
-        turn_id,
-        session_id,
-        response,
-        created_at: int_col(row, 7)?,
-        updated_at: int_col(row, 8)?,
-    })
-}
-
 fn row_to_snapshot(row: &turso::Row) -> Result<AgentSnapshot, StorageError> {
     let snapshot_id_str = text_col(row, 0)?;
     let agent_id_str = text_col(row, 1)?;
@@ -987,10 +943,7 @@ impl AgentStorage for TursoAgentStorage {
         collect_rows(&mut rows, row_to_record).await
     }
 
-    async fn list_child_agents(
-        &self,
-        parent_path: &str,
-    ) -> Result<Vec<AgentRecord>, StorageError> {
+    async fn list_child_agents(&self, parent_path: &str) -> Result<Vec<AgentRecord>, StorageError> {
         let mut rows = self
             .conn
             .query(
@@ -1685,60 +1638,6 @@ impl AgentStorage for TursoAgentStorage {
             )
             .await?;
         Ok(())
-    }
-
-    async fn list_agent_delegations(
-        &self,
-        caller_path: Option<&str>,
-        target_path: Option<&str>,
-        status: Option<&str>,
-        limit: u32,
-    ) -> Result<Vec<crate::storage::AgentDelegationRecord>, StorageError> {
-        let mut rows = self
-            .conn
-            .query(
-                "SELECT delegations.delegation_id AS delegation_id,
-                        delegations.caller_path AS caller_path,
-                        delegations.target_path AS target_path,
-                        delegations.task AS task,
-                        delegations.status AS status,
-                        delegations.turn_id AS turn_id,
-                        delegations.response AS response,
-                        delegations.created_at AS created_at,
-                        delegations.updated_at AS updated_at,
-                        turns.session_id AS session_id
-                 FROM agent_delegations AS delegations
-                 LEFT JOIN agent_turns AS turns
-                    ON turns.turn_id = delegations.turn_id
-                 WHERE (?1 IS NULL OR delegations.caller_path = ?1)
-                   AND (?2 IS NULL OR delegations.target_path = ?2)
-                   AND (?3 IS NULL OR delegations.status = ?3)
-                 ORDER BY delegations.updated_at DESC, delegations.delegation_id DESC
-                 LIMIT ?4",
-                params_from_iter([
-                    caller_path
-                        .map(|value| Value::Text(value.to_string()))
-                        .unwrap_or(Value::Null),
-                    target_path
-                        .map(|value| Value::Text(value.to_string()))
-                        .unwrap_or(Value::Null),
-                    status
-                        .map(|value| Value::Text(value.to_string()))
-                        .unwrap_or(Value::Null),
-                    Value::Integer(limit as i64),
-                ]),
-            )
-            .await?;
-
-        let mut records = Vec::new();
-        loop {
-            match rows.next().await {
-                Ok(Some(row)) => records.push(parse_agent_delegation_row(&row)?),
-                Ok(None) => break,
-                Err(e) => return Err(e.into()),
-            }
-        }
-        Ok(records)
     }
 
     async fn get_latest_snapshot_for_session(
@@ -2453,14 +2352,6 @@ mod tests {
             .await
             .unwrap();
 
-        let running = store
-            .list_agent_delegations(Some("/root/caller"), None, Some("running"), 10)
-            .await
-            .unwrap();
-        assert_eq!(running.len(), 1);
-        assert_eq!(running[0].turn_id, Some(turn_id));
-        assert_eq!(running[0].session_id, Some(session_id));
-
         store
             .finish_agent_turn(crate::storage::AgentTurnRecord {
                 turn_id,
@@ -2495,20 +2386,6 @@ mod tests {
             })
             .await
             .unwrap();
-
-        assert!(
-            store
-                .list_agent_delegations(Some("/root/caller"), None, Some("running"), 10)
-                .await
-                .unwrap()
-                .is_empty()
-        );
-        let completed = store
-            .list_agent_delegations(None, Some("/root/researcher"), Some("completed"), 10)
-            .await
-            .unwrap();
-        assert_eq!(completed.len(), 1);
-        assert_eq!(completed[0].response.as_deref(), Some("analysis complete"));
 
         let mut rows = store
             .conn

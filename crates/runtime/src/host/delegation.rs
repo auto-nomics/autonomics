@@ -83,11 +83,6 @@ impl DelegationLedger {
             .map(|record| record.snapshot.clone())
     }
 
-    /// Live snapshots of all entries (for `ListDelegations`).
-    pub(super) fn snapshots(&self) -> impl Iterator<Item = &DelegationSnapshot> {
-        self.entries.values().map(|record| &record.snapshot)
-    }
-
     /// Bind a started turn to its delegation: `Pending → Running` with the
     /// turn identity recorded. Returns whether the entry exists — the
     /// caller persists on `true`.
@@ -256,16 +251,6 @@ fn push_delegation_progress(
     }
     if let Ok(mut log) = progress.lock() {
         log.push(record);
-    }
-}
-
-pub(super) fn delegation_status_from_str(value: &str) -> DelegationStatus {
-    match value {
-        "pending" => DelegationStatus::Pending,
-        "running" => DelegationStatus::Running,
-        "completed" => DelegationStatus::Completed,
-        "interrupted" => DelegationStatus::Interrupted,
-        _ => DelegationStatus::Failed,
     }
 }
 

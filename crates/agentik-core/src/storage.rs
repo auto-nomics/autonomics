@@ -236,10 +236,7 @@ pub trait AgentStorage: Send + Sync {
     /// Hierarchy is encoded in the path itself — the `agent_relations`
     /// table exists but is never written — so this is a path-prefix
     /// query, newest activity first.
-    async fn list_child_agents(
-        &self,
-        parent_path: &str,
-    ) -> Result<Vec<AgentRecord>, StorageError>;
+    async fn list_child_agents(&self, parent_path: &str) -> Result<Vec<AgentRecord>, StorageError>;
     /// Search persisted identities by ordered path characters (case-insensitive
     /// SQL `LIKE`), newest activity first, capped to `limit`. Backs the
     /// frontend agent picker: identities are searched and paged, never
@@ -360,14 +357,6 @@ pub trait AgentStorage: Send + Sync {
         delegation: AgentDelegationRecord,
     ) -> Result<(), StorageError>;
 
-    /// List persisted delegations ordered newest first.
-    async fn list_agent_delegations(
-        &self,
-        caller_path: Option<&str>,
-        target_path: Option<&str>,
-        status: Option<&str>,
-        limit: u32,
-    ) -> Result<Vec<AgentDelegationRecord>, StorageError>;
     // ── Session plan (per-conversation persistent task plan) ──
 
     /// Persist a session's current plan (full-snapshot upsert).

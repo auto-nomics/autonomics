@@ -141,14 +141,6 @@ impl RuntimeHost {
             } => {
                 self.handle_delegate(to, message, caller_path, delegation_id, progress, reply_tx);
             }
-            HostCommand::ListDelegations {
-                caller_path,
-                target_path,
-                status,
-                reply_tx,
-            } => {
-                self.handle_list_delegations(caller_path, target_path, status, reply_tx);
-            }
             HostCommand::GetAgentHistory {
                 agent_name,
                 limit,

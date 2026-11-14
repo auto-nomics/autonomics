@@ -15,7 +15,6 @@ mod get_agent_history;
 mod get_agent_info;
 mod interrupt_agent;
 mod list_agents;
-mod list_delegations;
 mod spawn_agent;
 
 use delegate_to::DelegateToTool;
@@ -23,7 +22,6 @@ use get_agent_history::GetAgentHistoryTool;
 use get_agent_info::GetAgentInfoTool;
 use interrupt_agent::InterruptAgentTool;
 use list_agents::ListAgentsTool;
-use list_delegations::ListDelegationsTool;
 use spawn_agent::SpawnAgentTool;
 
 /// One-hop visibility: an agent sees itself, its direct parent, and its
@@ -67,10 +65,6 @@ pub fn host_tools(
         ToolRegistration::from(ListAgentsTool {
             control: ctrl.clone(),
             self_path: self_path.clone(),
-        }),
-        ToolRegistration::from(ListDelegationsTool {
-            control: ctrl.clone(),
-            caller_path: self_path.as_str().to_string(),
         }),
         ToolRegistration::from(GetAgentHistoryTool {
             control: ctrl.clone(),

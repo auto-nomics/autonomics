@@ -416,28 +416,6 @@ impl HostControl {
         .await
     }
 
-    /// List all agents persisted in the storage graph (Phase 4 query
-    /// entry). Includes agents that are not currently registered with
-    /// the host (e.g. leftover from a previous process run). The caller
-    /// is responsible for filtering / joining with the in-memory
-    /// registry.
-    ///
-    /// List delegation records, newest first.
-    pub async fn list_delegations(
-        &self,
-        caller_path: Option<&str>,
-        target_path: Option<&str>,
-        status: Option<&str>,
-    ) -> Option<Vec<DelegationSnapshot>> {
-        self.ask(|tx| HostCommand::ListDelegations {
-            caller_path: caller_path.map(str::to_string),
-            target_path: target_path.map(str::to_string),
-            status: status.map(str::to_string),
-            reply_tx: tx,
-        })
-        .await
-    }
-
     /// Read the persisted execution history for a live agent.
     pub async fn agent_history(
         &self,
@@ -520,14 +498,6 @@ pub enum HostCommand {
         delegation_id: Uuid,
         progress: Option<ProgressBuffer>,
         reply_tx: oneshot::Sender<String>,
-    },
-
-    /// Query first-class delegation records.
-    ListDelegations {
-        caller_path: Option<String>,
-        target_path: Option<String>,
-        status: Option<String>,
-        reply_tx: oneshot::Sender<Vec<DelegationSnapshot>>,
     },
 
     /// Read an agent's persisted conversation history.
