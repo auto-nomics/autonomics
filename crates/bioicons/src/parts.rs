@@ -183,7 +183,10 @@ pub(super) fn path_tree(canonical: &[u8], hash: &str) -> Result<(usvg::Tree, Vec
             .ok_or_else(|| invalid("rendered path cannot be located"))?;
         part.translation_supported &= node.abs_transform().invert().is_some();
         if let usvg::Node::Path(path) = node {
-            part.stroke_width = path.stroke().map(|s| f64::from(s.width().get())).unwrap_or(0.);
+            part.stroke_width = path
+                .stroke()
+                .map(|s| f64::from(s.width().get()))
+                .unwrap_or(0.);
             part.point_count = path
                 .data()
                 .segments()
@@ -270,8 +273,13 @@ pub fn edit(bytes: &[u8], expected_sha256: &str, edits: &[Edit]) -> Result<Prepa
         {
             return Err(invalid("path edit has no changes"));
         }
-        if edit.stroke_width.is_some_and(|v| !v.is_finite() || v <= 0. || v > 1000.) {
-            return Err(invalid("path stroke width must be finite and within (0,1000] local SVG units"));
+        if edit
+            .stroke_width
+            .is_some_and(|v| !v.is_finite() || v <= 0. || v > 1000.)
+        {
+            return Err(invalid(
+                "path stroke width must be finite and within (0,1000] local SVG units",
+            ));
         }
         if edit
             .opacity
@@ -288,7 +296,7 @@ pub fn edit(bytes: &[u8], expected_sha256: &str, edits: &[Edit]) -> Result<Prepa
             ));
         }
         if edit.points.is_some() && edit.translate.is_some() {
-            return Err(invalid("edit points and translate in separate proposals"));
+            return Err(invalid("edit points and translate in separate operations"));
         }
         if pending.insert(edit.part_id.clone(), edit).is_some() {
             return Err(invalid("duplicate path ID"));

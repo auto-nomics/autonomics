@@ -17,7 +17,7 @@ try{
  await until(()=>{assert.equal(vite.exitCode,null,output);return output.includes(origin);},'Vite ready');
  browser=await chromium.launch({executablePath:process.env.PDF_TEST_CHROMIUM||(existsSync('/usr/bin/chromium')?'/usr/bin/chromium':undefined),args:['--no-sandbox']});
  page=await browser.newPage({viewport:{width:1600,height:1000}});page.setDefaultTimeout(15000);
- const errors=[],projects=[],figures=new Map(),specialists=new Map(),sent=[];let nextId=0,failNext=false,firstList=true,releaseInitialList,markCaptured;
+ const errors=[],projects=[],figures=new Map(),specialists=new Map(),sent=[];let nextId=0,failNext=false,failDelete=false,firstList=true,releaseInitialList,markCaptured;
  const captured=new Promise(resolve=>{markCaptured=resolve;});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/api/session',r=>r.fulfill({json:{}}));
  await page.route('**/api/v1/**',async route=>{
@@ -41,6 +41,12 @@ try{
   }
   const figure=p.match(/^\/visualization\/projects\/([^/]+)\/figures\/([^/]+)(.*)$/);
   if(figure){const record=figures.get(figure[1])?.find(r=>r.metadata.id===figure[2]);assert.ok(record);
+   if(!figure[3] && method==='DELETE') {
+    if(failDelete){failDelete=false;return route.fulfill({status:409,json:{error:'Revision conflict'}});}
+    assert.equal(route.request().postDataJSON().expected_revision,record.metadata.revision);
+    figures.set(figure[1],figures.get(figure[1]).filter(item=>item!==record));
+    return reply({deleted:true});
+   }
    if(!figure[3])return reply(record);
    if(figure[3]==='/proposal-summary')return reply({current_revision:1,total:0,current:0,stale:0,latest:null});
    if(figure[3]==='/proposal-index')return reply({items:[],next_before:null});
@@ -82,6 +88,42 @@ try{
  await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();assert.deepEqual(errors,[]);
  await until(async()=>await page.getByRole('button',{name:'新建画布',exact:true}).isEnabled(),'creation has settled');await page.locator('[data-slot=workbench-sidebar]').screenshot({path:join(directory,'sidebar-dark.png')});await page.evaluate(async()=>{const theme=await import('/src/lib/theme.ts');theme.setThemeMode('light');await new Promise(requestAnimationFrame);await new Promise(requestAnimationFrame);});await page.locator('[data-slot=workbench-sidebar]').screenshot({path:join(directory,'sidebar-light.png')});
  await page.setViewportSize({width:1000,height:820});
+ // Right-click deletion: cancel, server failure, then success closes the target tab.
+ await sidebar.getByRole('button',{name:'未命名画布',exact:true}).first().click();
+ const deleteTarget=sidebar.getByRole('button',{name:'未命名画布',exact:true}).first();
+ const countBefore=figures.get(second).length;
+ await deleteTarget.click({button:'right'});
+ page.once('dialog',dialog=>dialog.dismiss());
+ await page.getByRole('menuitem',{name:'删除画布',exact:true}).click();
+ assert.equal(figures.get(second).length,countBefore);
+ failDelete=true;
+ await deleteTarget.click({button:'right'});
+ page.once('dialog',dialog=>dialog.accept());
+ await page.getByRole('menuitem',{name:'删除画布',exact:true}).click();
+ await sidebar.getByRole('alert').filter({hasText:'删除画布失败'}).waitFor();
+ assert.equal(figures.get(second).length,countBefore);
+ const tabsBefore=await page.getByRole('tab',{name:'未命名画布',exact:true}).count();
+ await deleteTarget.click({button:'right'});
+ page.once('dialog',dialog=>dialog.accept());
+ await page.getByRole('menuitem',{name:'删除画布',exact:true}).click();
+ await until(async()=>await sidebar.getByRole('button',{name:'未命名画布',exact:true}).count()===countBefore-1,'deleted canvas disappears');
+ assert.equal(await page.getByRole('tab',{name:'未命名画布',exact:true}).count(),tabsBefore-1);
+ assert.equal(figures.get(second).length,countBefore-1);
+ const localId=await page.evaluate(async()=>{
+  const store=await import('/src/features/canvas/legacy-canvas-store.ts');
+  const canvas=await store.createCanvas();await store.saveCanvas({...canvas,title:'Local deletion fixture'});return canvas.id;
+ });
+ await sidebar.locator('summary').click();
+ await sidebar.getByRole('button',{name:'Local deletion fixture',exact:true}).click({button:'right'});
+ page.once('dialog',dialog=>dialog.accept());
+ await page.getByRole('menuitem',{name:'删除画布',exact:true}).click();
+ await sidebar.getByRole('button',{name:'Local deletion fixture',exact:true}).waitFor({state:'hidden'});
+ assert.equal(await page.evaluate(async id=>{
+  const store=await import('/src/features/canvas/legacy-canvas-store.ts');
+  try{await store.readCanvas(id);return true;}catch{return false;}
+ },localId),false);
+ console.log('canvas deletion: cancel, conflict, removal, tab closure and local deletion passed');
+ if (!process.env.CANVAS_DELETE_ONLY) {
  const header=page.getByRole('group',{name:'画布工具栏',exact:true});assert.ok((await header.boundingBox()).height<=48,'canvas name and save stay compact inside footer');assert.equal(await header.getByRole('button').count(),1,'footer title group contains save');
  await page.getByRole('toolbar',{name:'画布快捷操作',exact:true}).waitFor();
  assert.equal(await page.getByRole('toolbar',{name:'画布快捷操作',exact:true}).getByRole('button',{name:'素材',exact:true}).count(),0,'materials use the native browser entry only');
@@ -128,5 +170,6 @@ try{
  await page.screenshot({path:join(directory,'native-illustrator-chat.png')});assert.deepEqual(errors,[]);
  await writeFile(join(directory,'result.json'),JSON.stringify({passed:true,backend_fixture:true,model_used:false,project_opens_initial_canvas:true,late_empty_list_preserves_new_canvas:true,sidebar_reopens_canvas:true,creation_failure_preserves_project_and_retry:true,manual_add_preserved:true,compact_title_bar:true,in_canvas_action_menus:true,menu_dialog_and_source_export:true,native_footer_responsive_dialog_persistence:true,native_material_tabs_and_search_persistence:true},null,2));
  console.log(`project-open: passed; artifacts=${directory}`);
+ }
 }catch(error){if(page)await writeFile(join(directory,'diagnostics.json'),JSON.stringify(await page.evaluate(()=>({canvas:[...document.querySelectorAll('[data-canvas-surface]')].map(e=>({width:e.getBoundingClientRect().width,footer:e.querySelectorAll('.layer-ui__wrapper__footer').length,mobile:e.querySelectorAll('.App-toolbar-content').length,center:e.querySelectorAll('.footer-center').length})),hosts:[...document.querySelectorAll('.canvas-native-footer-host')].map(e=>({parent:e.parentElement?.outerHTML.slice(0,350)})),catalogLayout:[...document.querySelectorAll('input[aria-label="BioArt 搜索词"]')].map(e=>{const a=[];for(let i=0;e&&i<9;i++,e=e.parentElement){const r=e.getBoundingClientRect(),s=getComputedStyle(e);a.push({tag:e.tagName,cls:e.className,rect:{x:r.x,y:r.y,w:r.width,h:r.height},display:s.display,visibility:s.visibility,overflow:s.overflow});}return a;}),materials:[...document.querySelectorAll('.canvas-material-browser')].map(e=>e.outerHTML.slice(-7000)),slots:[...document.querySelectorAll('[data-canvas-catalog-slot]')].map(e=>({slot:e.getAttribute('data-canvas-catalog-slot'),html:e.innerHTML.slice(0,500)})),viewport:innerWidth})),null,2)).catch(()=>{});if(page)await page.screenshot({path:join(directory,'failure.png')}).catch(()=>{});console.error(`project-open: failed; artifacts=${directory}`);throw error;
 }finally{await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();if(vite.exitCode===null){vite.kill();await new Promise(resolve=>vite.once('exit',resolve));}}

@@ -1,7 +1,7 @@
 //! Shared API/agent operations over current SVG files, independent of web UI.
-pub mod candidate;
-mod rendered_bounds;
 pub mod bioart;
+mod rendered_bounds;
+pub mod svg;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -130,10 +130,16 @@ pub fn recolor(
     revision: i64,
     target: &str,
     colors: &BTreeMap<String, String>,
-) -> Result<visualization::proposal::Proposal> {
+) -> Result<visualization::Visualization> {
     let document = current(store, project, figure, revision)?;
     let next = recolor_document(&document, target, colors)?;
-    Ok(store.propose(project, figure, revision, "调整矢量素材配色", &next)?)
+    Ok(store.save(
+        project,
+        figure,
+        revision,
+        &store.get(project, figure)?.title,
+        &next,
+    )?)
 }
 
 /// Read paths from this exact saved file, including a numbered review visual.
@@ -180,10 +186,16 @@ pub fn edit_parts(
     target: &str,
     sha256: &str,
     edits: &[bioicons::parts::Edit],
-) -> Result<visualization::proposal::Proposal> {
+) -> Result<visualization::Visualization> {
     let document = current(store, project, figure, revision)?;
     let next = edit_parts_document(&document, target, sha256, edits)?;
-    Ok(store.propose(project, figure, revision, "调整矢量素材局部路径", &next)?)
+    Ok(store.save(
+        project,
+        figure,
+        revision,
+        &store.get(project, figure)?.title,
+        &next,
+    )?)
 }
 
 /// Read endpoint/control handles for one exact file snapshot.
@@ -252,21 +264,21 @@ pub fn image_info_document(document: &Value, target: &str) -> Result<Value> {
         let bounds = rendered_bounds::preview_alpha_bounds(&v.preview_data_url)?;
         (v.width, v.height, Some(bounds))
     } else {
-        let (width,height) = ::image::ImageReader::new(std::io::Cursor::new(&bytes))
+        let (width, height) = ::image::ImageReader::new(std::io::Cursor::new(&bytes))
             .with_guessed_format()
             .map_err(|_| Error::Invalid("invalid image header"))?
             .into_dimensions()
             .map_err(|_| Error::Invalid("unsupported image dimensions"))?;
-        (width,height,None)
+        (width, height, None)
     };
     if width == 0 || height == 0 || width > 100000 || height > 100000 {
         return Err(Error::Invalid("invalid natural image size"));
     }
     let crop = visualization::inset::crop(source, width, height)?;
-    let mut info=json!({"file_id":file,"element_id":source["id"],"natural_width":width,"natural_height":height,"visible_crop":crop,"scale":source["scale"],"angle":source["angle"],"sha256":format!("{:x}",Sha256::digest(&bytes)),"dataURL":url,"provenance":source["customData"]});
-    if let Some(mut bounds)=svg_alpha_bounds {
-        bounds["file_sha256"]=info["sha256"].clone();
-        info["svg_preview_alpha_bounds"]=bounds;
+    let mut info = json!({"file_id":file,"element_id":source["id"],"natural_width":width,"natural_height":height,"visible_crop":crop,"scale":source["scale"],"angle":source["angle"],"sha256":format!("{:x}",Sha256::digest(&bytes)),"dataURL":url,"provenance":source["customData"]});
+    if let Some(mut bounds) = svg_alpha_bounds {
+        bounds["file_sha256"] = info["sha256"].clone();
+        info["svg_preview_alpha_bounds"] = bounds;
     }
     Ok(info)
 }
@@ -276,7 +288,7 @@ pub fn inset(
     figure: &str,
     revision: i64,
     spec: &visualization::inset::Spec,
-) -> Result<visualization::proposal::Proposal> {
+) -> Result<visualization::Visualization> {
     let info = image_info(store, project, figure, revision, &spec.element_id)?;
     let document = current(store, project, figure, revision)?;
     let next = visualization::inset::compile(
@@ -287,7 +299,13 @@ pub fn inset(
         revision,
         info["sha256"].as_str().unwrap(),
     )?;
-    Ok(store.propose(project, figure, revision, "添加局部放大快照", &next)?)
+    Ok(store.save(
+        project,
+        figure,
+        revision,
+        &store.get(project, figure)?.title,
+        &next,
+    )?)
 }
 
 /// Compare against the recorded source snapshot, not the figure revision number alone.
@@ -349,7 +367,7 @@ pub fn refresh_inset(
     revision: i64,
     target: &str,
     discard_detail_edits: bool,
-) -> Result<visualization::proposal::Proposal> {
+) -> Result<visualization::Visualization> {
     let status = inset_status(store, project, figure, revision, target)?;
     if status["source_available"] != true {
         return Err(Error::Invalid(
@@ -378,5 +396,11 @@ pub fn refresh_inset(
         info["sha256"].as_str().unwrap(),
         status["current_detail_sha256"].as_str().unwrap(),
     )?;
-    Ok(store.propose(project, figure, revision, "从当前源图刷新放大快照", &next)?)
+    Ok(store.save(
+        project,
+        figure,
+        revision,
+        &store.get(project, figure)?.title,
+        &next,
+    )?)
 }

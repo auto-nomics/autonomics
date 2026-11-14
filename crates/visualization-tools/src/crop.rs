@@ -2,16 +2,13 @@
 use super::*;
 #[tool(
     name = "visualization_crop_image",
-    description = "Crop a reviewed image on an exact pending candidate using x/y/width/height fractions of the ORIGINAL source, not canvas pixels or the current cropped viewport. Actual source dimensions are read from the saved file; never supply a raw native crop object. Retained pixels keep their current canvas positions and proportions; files, provenance, labels and other images remain unchanged. Supports unlocked unrotated standalone, primary or accessory images with valid ownership and numeric flips. The new rectangle must lie inside the currently visible crop. Cropping invalidates the owner's fit snapshot. Optional fit_to_crop:true fits a SINGLE-primary component to the explicit crop RECTANGLE in the same atomic revision; transparent margins remain included, not an alpha/semantic detection. It rejects multi-image components: refit their full union separately. Read the candidate and preview before choosing the region, inspect the child PNG, and continue from its returned ID/hash. Never adopts or infers scientific identity."
+    description = "Directly crop an image using x/y/width/height fractions of the original source. Source dimensions are read from the current file. Preserves files/provenance. Optional fit_to_crop fits a single-primary owner to the crop rectangle in the same atomic edit. Inspect the current canvas first."
 )]
 #[serde(deny_unknown_fields)]
 pub struct CropInput {
     pub project_id: String,
     pub figure_id: String,
-    pub proposal_id: String,
-    pub document_sha256: String,
     pub expected_revision: i64,
-    pub title: String,
     pub element_id: String,
     pub file_id: String,
     pub x: f64,
@@ -20,11 +17,6 @@ pub struct CropInput {
     pub height: f64,
     #[serde(default)]
     pub fit_to_crop: bool,
-    #[serde(
-        default,
-        deserialize_with = "crate::asset_candidate::deserialize_markup_ids"
-    )]
-    pub markup_ids: Option<Vec<String>>,
 }
 struct CropTool {
     path: PathBuf,
@@ -39,19 +31,11 @@ fn operations(path: PathBuf, input: &CropInput) -> Result<Value, ToolError> {
     {
         return Err(failure(visualization::Error::Conflict));
     }
-    let proposal = store
-        .proposal(&input.project_id, &input.figure_id, &input.proposal_id)
+    let scene = store
+        .revision(&input.project_id, &input.figure_id, input.expected_revision)
         .map_err(failure)?;
-    if proposal.status != "pending"
-        || proposal.base_revision != input.expected_revision
-        || proposal.document_sha256 != input.document_sha256
-    {
-        return Err(invalid(
-            "crop requires the exact pending candidate hash and current revision",
-        ));
-    }
     let image =
-        visualization::image::element(&proposal.document, &input.element_id).map_err(failure)?;
+        visualization::image::element(&scene.document, &input.element_id).map_err(failure)?;
     if image["fileId"] != input.file_id {
         return Err(invalid("crop file_id does not match the current image"));
     }
@@ -59,13 +43,13 @@ fn operations(path: PathBuf, input: &CropInput) -> Result<Value, ToolError> {
         .as_str()
         .ok_or_else(|| invalid("missing image ID"))?;
     let info =
-        visualization_assets::image_info_document(&proposal.document, image_id).map_err(failure)?;
+        visualization_assets::image_info_document(&scene.document, image_id).map_err(failure)?;
     let mut result = vec![
         json!({"op":"crop_image","id":image_id,"file_id":input.file_id,"natural_width":info["natural_width"],"natural_height":info["natural_height"],"normalized_crop":[input.x,input.y,input.width,input.height]}),
     ];
     if input.fit_to_crop {
         let owner=image["customData"]["semanticAnchorId"].as_str().ok_or_else(||invalid("fit_to_crop requires an owned primary image; crop standalone/accessory images without this option"))?;
-        let anchor = proposal.document["elements"]
+        let anchor = scene.document["elements"]
             .as_array()
             .unwrap()
             .iter()
@@ -101,7 +85,7 @@ impl ToolFunction for CropTool {
             ));
         }
         let operations = operations(self.path.clone(), &input)?;
-        let value = json!({"action":"revise_proposal","project_id":input.project_id,"figure_id":input.figure_id,"proposal_id":input.proposal_id,"document_sha256":input.document_sha256,"expected_revision":input.expected_revision,"title":input.title,"operations":operations,"markup_ids":input.markup_ids});
+        let value = json!({"action":"apply","project_id":input.project_id,"figure_id":input.figure_id,"expected_revision":input.expected_revision,"operations":operations});
         FigureTool {
             path: self.path.clone(),
         }

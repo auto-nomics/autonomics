@@ -717,10 +717,7 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
     }
   };
 
-  const uploadFulltext = async () => {
-    if (!selected) return;
-    await uploadForArticle(selected);
-  };
+
 
   const readerRef = useRef<{ close: () => void } | null>(null);
   const libraryAlive = useRef(true);
@@ -948,9 +945,6 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
             onClick={() => setDetailsOpen(true)}
           >
             <PanelRight />
-          </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Upload full text" title="Upload full text" onClick={() => void uploadFulltext()} disabled={!selected || busy === "upload"}>
-            <Upload />
           </Button>
           <Button size="icon-sm" variant="ghost" aria-label="Export BibTeX" title={retrieval ? "Export retrieved candidates as BibTeX" : "Export BibTeX"} onClick={() => void exportLibrary()} disabled={loading || busy === "export" || (mode === "hybrid" && resultContext !== JSON.stringify(currentRequest))}>
             <Download />

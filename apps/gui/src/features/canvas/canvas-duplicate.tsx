@@ -5,7 +5,7 @@ import type {CanvasInset} from "./canvas-inset";
 import {gatewayRequest} from "@/gateway";
 import {Button} from "@/components/ui/button";
 import {Dialog,DialogContent,DialogTitle} from "@/components/ui/dialog";
-export function CanvasDuplicate({projectId,canvasId,disabled,getApi,getRevision,ensureSaved,isDirty,onProposed}:ComponentProps<typeof CanvasInset>){
+export function CanvasDuplicate({projectId,canvasId,disabled,getApi,getRevision,ensureSaved,isDirty,onApplied}:ComponentProps<typeof CanvasInset>){
   const [open,setOpen]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [review,setReview]=useState<{ids:string[];revision:number;snapshot:string;prefix:string}|null>(null),[dx,setDx]=useState("240"),[dy,setDy]=useState("0");
   const snapshot=()=>{const api=getApi();return api?serializeAsJSON(api.getSceneElements(),api.getAppState(),api.getFiles(),"local"):"";};
@@ -20,7 +20,7 @@ export function CanvasDuplicate({projectId,canvasId,disabled,getApi,getRevision,
         if(!ids.length||ids.length>100)throw new Error("请选中 1 至 100 个对象；组合和附属对象会自动展开。");
         setReview({ids,revision,snapshot:snapshot(),prefix:`copy_${crypto.randomUUID().replaceAll('-','')}`});
       }catch(cause){setError(String(cause));}finally{setBusy(false);}
-    }}>复制组件提案</Button>
+    }}>复制组件修改</Button>
     <DialogContent className="max-h-[85vh] overflow-auto sm:max-w-xl"><DialogTitle>复制选中组件</DialogTitle>
       {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
       {review&&<div className="space-y-3 text-sm">
@@ -32,11 +32,11 @@ export function CanvasDuplicate({projectId,canvasId,disabled,getApi,getRevision,
           if(busy)return;setBusy(true);setError("");
           try{
             if(isDirty()||getRevision()!==review.revision||snapshot()!==review.snapshot)throw new Error("画布发生变化，请重新选择复制组件。");
-            const candidate=await gatewayRequest("POST",`/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/proposals`,{expected_revision:review.revision,summary:"复制选中组件",operations:[{op:"duplicate",element_ids:review.ids,id_prefix:review.prefix,dx:Number(dx),dy:Number(dy)}]}) as {id:string};
-            if(isDirty()||getRevision()!==review.revision||snapshot()!==review.snapshot)throw new Error("生成期间画布发生变化；提案已保留，请从列表重新核对。");
-            setOpen(false);onProposed(candidate.id);
+            const saved=await gatewayRequest("POST",`/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/operations`,{expected_revision:review.revision,summary:"复制选中组件",operations:[{op:"duplicate",element_ids:review.ids,id_prefix:review.prefix,dx:Number(dx),dy:Number(dy)}]}) as {id:string};
+            if(isDirty()||getRevision()!==review.revision||snapshot()!==review.snapshot)throw new Error("生成期间画布发生变化；修改已保存，请核对当前画布。");
+            setOpen(false);onApplied(saved.id);
           }catch(cause){setError(String(cause));}finally{setBusy(false);}
-        }}>预览复制提案</Button>
+        }}>应用复制修改</Button>
       </div>}
     </DialogContent>
   </Dialog>;

@@ -162,7 +162,7 @@ pub fn scripted_figure_model() -> (Model, Arc<Mutex<FigureTrace>>) {
     let observed = trace.clone();
     let mut mock = MockApiClient::new();
     mock.expect_request_stream_with_system().times(15).returning(move|messages,tools,_,_|{
-        assert!(tools.iter().any(|t|t.name=="visualization"),"production researcher profile exposes the figure tool");
+        assert!(tools.iter().any(|t|t.name=="visualization"),"production illustrator profile exposes the figure tool");
         let h=handoff(&messages);let mut trace=observed.lock().unwrap();let step=trace.step;trace.step+=1;
         let mut input=json!({"project_id":h["project_id"],"figure_id":h["figure_id"]});
         let action=match step {
@@ -171,15 +171,15 @@ pub fn scripted_figure_model() -> (Model, Arc<Mutex<FigureTrace>>) {
             2=>{return Ok(stream(step,None,"Which generic components and explicit relations should be shown?"));}
             3|4=>"read",
             5=>{input["expected_revision"]=h["observed_revision"].clone();input["document"]=json!({"message":"Generic conceptual relationship","audience":"Researcher","layout":"horizontal","nodes":[{"id":"a","label":"A"},{"id":"b","label":"B"},{"id":"c","label":"C"}],"edges":[{"from":"a","to":"b","label":"explicit relation 1"},{"from":"b","to":"c","label":"explicit relation 2"}],"assumptions":["Conceptual fixture only; no biological mechanism is asserted."]});input["title"]=json!("Generic pathway draft");"sketch"}
-            6|10|14=>{assert_eq!(result(&messages)["status"],"pending");return Ok(stream(step,None,"The candidate is ready for review in the figure proposal panel."));}
+            6|10|14=>{assert!(result(&messages)["revision"].as_i64().unwrap()>1);return Ok(stream(step,None,"The canvas has been updated."));}
             8|12=>{let read=result(&messages);trace.revision=read["metadata"]["revision"].as_i64().unwrap();trace.scene=read["scene"]["document"].clone();input["expected_revision"]=json!(trace.revision);if step==8{"read_preview"}else{input["markup_id"]=h["markups"][0]["id"].clone();"read_markup"}}
             9|13=>{
                 let caption=result(&messages);assert!(messages.last().is_some_and(|m|m.content.iter().any(|b|matches!(b,ContentBlock::Image{..}))),"tool PNG is attached through the production vision path");trace.vision_results+=1;if let Some(ContentBlock::Image{source:agentik_types::messages::ImageSource::Base64{media_type,data}})=messages.last().unwrap().content.iter().find(|b|matches!(b,ContentBlock::Image{..})) {assert_eq!(media_type,"image/png");trace.image_lengths.push(data.len());}
                 input["expected_revision"]=json!(trace.revision);
                 let elements=trace.scene["elements"].as_array().unwrap();let b=elements.iter().find(|e|e["customData"]["scientificId"]=="b").unwrap();let label=elements.iter().find(|e|e["type"]=="text"&&e["containerId"]==b["id"]).unwrap();
                 if step==9 {assert_eq!(caption["revision"],trace.revision);input["title"]=json!("Rename B only");input["operations"]=json!([{"op":"update","id":label["id"],"changes":{"text":"B revised"}}]);}
-                else {assert_eq!(caption["current_revision"],trace.revision);assert_eq!(caption["historical"],false);let mut ids=vec![b["id"].clone(),label["id"].clone()];for arrow in elements.iter().filter(|e|e["type"]=="arrow"&&(e["startBinding"]["elementId"]==b["id"]||e["endBinding"]["elementId"]==b["id"])) {ids.push(arrow["id"].clone());ids.extend(elements.iter().filter(|e|e["type"]=="text"&&e["containerId"]==arrow["id"]).map(|e|e["id"].clone()));}input["title"]=json!("Address crossed component");input["markup_ids"]=json!([h["markups"][0]["id"]]);input["operations"]=Value::Array(ids.into_iter().map(|id|json!({"op":"remove","id":id})).collect());}
-                "propose"
+                else {assert_eq!(caption["current_revision"],trace.revision);assert_eq!(caption["historical"],false);let mut ids=vec![b["id"].clone(),label["id"].clone()];for arrow in elements.iter().filter(|e|e["type"]=="arrow"&&(e["startBinding"]["elementId"]==b["id"]||e["endBinding"]["elementId"]==b["id"])) {ids.push(arrow["id"].clone());ids.extend(elements.iter().filter(|e|e["type"]=="text"&&e["containerId"]==arrow["id"]).map(|e|e["id"].clone()));}input["title"]=json!("Address crossed component");input["operations"]=Value::Array(ids.into_iter().map(|id|json!({"op":"remove","id":id})).collect());}
+                "apply"
             }
             _=>panic!("unexpected model request {step}"),
         };

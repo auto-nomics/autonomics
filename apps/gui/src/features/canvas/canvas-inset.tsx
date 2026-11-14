@@ -8,9 +8,9 @@ import { CanvasInsetRefresh } from "./canvas-inset-refresh";
 import { imagePlacement } from "./canvas-image-placement";
 type Region = { x: number; y: number; width: number; height: number };
 type Info = { element_id: string; revision: number; natural_width: number; natural_height: number; visible_crop: number[]; angle: number; scale: number[]; dataURL: string; displayWidth: number; displayHeight: number };
-export function CanvasInset({ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onProposed }: {
+export function CanvasInset({ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onApplied }: {
   projectId: string; canvasId: string; disabled: boolean; getApi: () => ExcalidrawImperativeAPI | null;
-  getRevision: () => number | undefined; ensureSaved: () => Promise<boolean>; isDirty: () => boolean; onProposed: (id: string) => void;
+  getRevision: () => number | undefined; ensureSaved: () => Promise<boolean>; isDirty: () => boolean; onApplied: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [info, setInfo] = useState<Info | null>(null), [observed, setObserved] = useState("");
@@ -22,7 +22,7 @@ export function CanvasInset({ projectId, canvasId, disabled, getApi, getRevision
   const path = `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}`;
   const snapshot = () => { const api = getApi(); return api ? serializeAsJSON(api.getSceneElements(), api.getAppState(), api.getFiles(), "local") : ""; };
   const unchanged = () => info && !isDirty() && getRevision() === info.revision && snapshot() === observed;
-  return <><CanvasInsetRefresh {...{ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onProposed }} /><Button size="sm" variant="outline" disabled={disabled || busy} title="选中放大图内容组或边框，预览删除图组、区域框和引导线" onClick={async () => {
+  return <><CanvasInsetRefresh {...{ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onApplied }} /><Button size="sm" variant="outline" disabled={disabled || busy} title="选中放大图内容组或边框，预览删除图组、区域框和引导线" onClick={async () => {
     setBusy(true); setError("");
     try {
       if (!await ensureSaved()) throw new Error("请先解决画布保存错误。");
@@ -31,10 +31,9 @@ export function CanvasInset({ projectId, canvasId, disabled, getApi, getRevision
       const elements = api.getSceneElements(), selected = api.getAppState().selectedElementIds;
       const anchors = elements.filter(element => !element.isDeleted && element.customData?.inset?.kind === "image_inset_snapshot" && element.customData?.inset?.anchor_id === element.id && (selected[element.id] || elements.some(child => selected[child.id] && child.id === element.customData?.visualAssetElementId && child.customData?.semanticAnchorId === element.id)));
       if (anchors.length !== 1) throw new Error("请只选中一个放大图的内容组或边框。");
-      const before = snapshot();
-      const proposal = await gatewayRequest("POST", `${path}/proposals`, { expected_revision: revision, summary: "删除放大图及其区域注释", operations: [{ op: "remove", id: anchors[0].id }] }) as { id: string };
-      if (isDirty() || getRevision() !== revision || snapshot() !== before) throw new Error("生成期间画布发生变化；提案已保留，请在提案列表核对。");
-      onProposed(proposal.id);
+      const saved = await gatewayRequest("POST", `${path}/operations`, { expected_revision: revision, summary: "删除放大图及其区域注释", operations: [{ op: "remove", id: anchors[0].id }] }) as { id: string };
+
+      onApplied(saved.id);
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
   }}>删除放大图</Button>{!open && error && <span role="alert" className="text-xs text-destructive">{error}</span>}<Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}>
     <Button size="sm" variant="outline" disabled={disabled || busy} onClick={async () => {
@@ -90,11 +89,11 @@ export function CanvasInset({ projectId, canvasId, disabled, getApi, getRevision
           if (!unchanged()) throw new Error("画布发生变化，请取消并重新框选。");
           const api = getApi(); if (!api) throw new Error("画布不可用。");
           const placement = imagePlacement(api, 344, 440);
-          const proposal = await gatewayRequest("POST", `${path}/insets`, { expected_revision: info.revision, inset: { element_id: info.element_id, region, x: placement.x, y: placement.y, max_size: 320, title } }) as { id: string };
-          if (!unchanged()) throw new Error("生成期间画布发生变化；提案已保留，请在提案列表核对。");
-          setOpen(false); onProposed(proposal.id);
+          const saved = await gatewayRequest("POST", `${path}/insets`, { expected_revision: info.revision, inset: { element_id: info.element_id, region, x: placement.x, y: placement.y, max_size: 320, title } }) as { id: string };
+
+          setOpen(false); onApplied(saved.id);
         } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-      }}>预览放大提案</Button></div>
+      }}>应用放大修改</Button></div>
     </DialogContent>
   </Dialog></>;
 }

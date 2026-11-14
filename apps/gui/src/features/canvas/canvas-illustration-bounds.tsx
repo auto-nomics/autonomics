@@ -3,10 +3,10 @@ import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 
 type Bounds = [number, number, number, number];
-export function CanvasIllustrationBounds({ path, imageId, fileId, revision, preview, visibleCrop, imageGeometry, unchanged, busy, onBusy, onError, onProposed }: {
+export function CanvasIllustrationBounds({ path, imageId, fileId, revision, preview, visibleCrop, imageGeometry, unchanged, busy, onBusy, onError, onApplied }: {
   path: string; imageId: string; fileId: string; revision: number; preview: string; visibleCrop?: Bounds; imageGeometry?: Bounds;
   unchanged: () => boolean; busy: boolean; onBusy: (value: boolean) => void;
-  onError: (message: string) => void; onProposed: (id: string) => void;
+  onError: (message: string) => void; onApplied: (id: string) => void;
 }) {
   const [dimensions, setDimensions] = useState<[number, number] | null>(null);
   const [editGeometry, setEditGeometry] = useState(false);
@@ -23,7 +23,7 @@ export function CanvasIllustrationBounds({ path, imageId, fileId, revision, prev
   const valid = bounds !== null && bounds.every(Number.isFinite) && bounds[0] >= 0 && bounds[1] >= 0 && bounds[2] > 0 && bounds[3] > 0 && bounds[0] + bounds[2] <= 1 && bounds[1] + bounds[3] <= 1 && bounds[0] >= crop[0] - 1e-9 && bounds[1] >= crop[1] - 1e-9 && bounds[0] + bounds[2] <= crop[0] + crop[2] + 1e-9 && bounds[1] + bounds[3] <= crop[1] + crop[3] + 1e-9;
   return <section aria-label="插图贴合范围" className="mt-4 border-t pt-3">
     <p className="text-sm font-medium">插图贴合范围</p>
-    <p className="my-2 text-xs text-muted-foreground">在原始素材中拖框，选中连接线应靠近的可见内容。只调整该插图的语义锚点及相连线端点；图片、裁剪和科学依据保留。旋转、镜像按画布变换计算，锚点使用可见范围的轴对齐外框。范围不代表生物学结构，采用前请核对预览。</p>
+    <p className="my-2 text-xs text-muted-foreground">在原始素材中拖框，选中连接线应靠近的可见内容。只调整该插图的语义锚点及相连线端点；图片、裁剪和科学依据保留。旋转、镜像按画布变换计算，锚点使用可见范围的轴对齐外框。范围不代表生物学结构，请在画布中核对结果。</p>
     {visibleCrop && <p className="mb-2 text-xs text-muted-foreground">灰色区域已被画布裁剪，框选须位于虚线标示的可见区域内。</p>}
     <img src={preview} alt="" className="hidden" onLoad={event => { const image = event.currentTarget; if (image.naturalWidth > 0 && image.naturalHeight > 0) setDimensions([image.naturalWidth, image.naturalHeight]); }} />
     {dimensions && <svg role="img" aria-label="框选插图贴合范围" viewBox={`0 0 ${dimensions[0]} ${dimensions[1]}`} className="max-h-72 w-full rounded border bg-white" style={{ touchAction: "none", cursor: busy ? undefined : "crosshair" }} onPointerDown={event => {
@@ -45,10 +45,10 @@ export function CanvasIllustrationBounds({ path, imageId, fileId, revision, prev
       if (!valid || !bounds || !validGeometry) return; onBusy(true); onError("");
       try {
         if (!unchanged()) throw new Error("画布发生变化，请重新打开素材编辑并选择范围。");
-        const result = await gatewayRequest("POST", `${path}/proposals`, { expected_revision: revision, summary: editGeometry ? "调整插图布局与连接范围" : "调整插图连接范围", operations: [editGeometry ? { op: "set_illustration_geometry", id: imageId, file_id: fileId, x: geometry[0], y: geometry[1], width: geometry[2], height: geometry[3], normalized_bounds: bounds } : { op: "fit_illustration_anchor", id: imageId, file_id: fileId, normalized_bounds: bounds }] }) as { id: string };
-        if (!unchanged()) throw new Error("生成提案期间画布发生变化。提案已保留，请保存后在提案列表核对版本。");
-        onProposed(result.id);
+        const result = await gatewayRequest("POST", `${path}/operations`, { expected_revision: revision, summary: editGeometry ? "调整插图布局与连接范围" : "调整插图连接范围", operations: [editGeometry ? { op: "set_illustration_geometry", id: imageId, file_id: fileId, x: geometry[0], y: geometry[1], width: geometry[2], height: geometry[3], normalized_bounds: bounds } : { op: "fit_illustration_anchor", id: imageId, file_id: fileId, normalized_bounds: bounds }] }) as { id: string };
+        if (!unchanged()) throw new Error("生成修改期间画布发生变化。修改已保留，请保存后在修改列表核对版本。");
+        onApplied(result.id);
       } catch (cause) { onError(String(cause)); } finally { onBusy(false); }
-    }}>预览贴合提案</Button></div>
+    }}>应用贴合修改</Button></div>
   </section>;
 }

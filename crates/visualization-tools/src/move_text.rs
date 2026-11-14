@@ -2,23 +2,16 @@
 use super::*;
 #[tool(
     name = "visualization_move_text",
-    description = "Move exactly one existing live unlocked unbound text object by numeric dx/dy. Omit BOTH proposal_id and document_sha256 to propose directly from the saved formal expected_revision; this creates one pending candidate without an unchanged seed and never reads an unadopted candidate. To continue a pending candidate supply BOTH its proposal_id and exact document_sha256. A partial or blank pair is rejected. Unlike visualization_translate, this never expands a group: an illustration label moves without its image, semantic anchor, connectors or other labels. Preserve its text, wrapping, font, size, ownership and metadata. Read the intended formal revision or current candidate first; element_id is the text ID, not its image or anchor. Bound node/arrow text follows its container and is rejected here; use text reflow or move the container instead. Existing frame membership is preserved and text must remain inside that frame. dx/dy are top-level JSON numbers, not strings or operations. Continue from the returned child ID/hash and inspect its PNG. This only proposes a change and never adopts it."
+    description = "Directly move one unbound text object by numeric dx/dy, without moving its component. Retains text, typography and ownership; bound labels must move with their container. Returns the committed revision."
 )]
+#[serde(deny_unknown_fields)]
 pub struct MoveTextInput {
     pub project_id: String,
     pub figure_id: String,
-    pub proposal_id: Option<String>,
-    pub document_sha256: Option<String>,
     pub expected_revision: i64,
-    pub title: String,
     pub element_id: String,
     pub dx: f64,
     pub dy: f64,
-    #[serde(
-        default,
-        deserialize_with = "crate::asset_candidate::deserialize_markup_ids"
-    )]
-    pub markup_ids: Option<Vec<String>>,
 }
 struct MoveTextTool {
     path: PathBuf,
@@ -48,15 +41,6 @@ impl ToolFunction for MoveTextTool {
                 "dx/dy must be finite JSON numbers within coordinate limits",
             ));
         }
-        let candidate = match (&input.proposal_id, &input.document_sha256) {
-            (None, None) => false,
-            (Some(id), Some(hash)) if !id.trim().is_empty() && !hash.trim().is_empty() => true,
-            _ => {
-                return Err(invalid(
-                    "provide both nonblank proposal_id and document_sha256 for a candidate, or omit both for the saved formal revision",
-                ));
-            }
-        };
         let store = Store::open(&self.path).map_err(failure)?;
         if store
             .get(&input.project_id, &input.figure_id)
@@ -66,29 +50,10 @@ impl ToolFunction for MoveTextTool {
         {
             return Err(failure(visualization::Error::Conflict));
         }
-        let document = if candidate {
-            let parent = store
-                .proposal(
-                    &input.project_id,
-                    &input.figure_id,
-                    input.proposal_id.as_deref().unwrap(),
-                )
-                .map_err(failure)?;
-            if Some(parent.document_sha256.as_str()) != input.document_sha256.as_deref() {
-                return Err(invalid(
-                    "document_sha256 does not match the immutable parent; read that candidate before retrying",
-                ));
-            }
-            if parent.status != "pending" || parent.base_revision != input.expected_revision {
-                return Err(failure(visualization::Error::Conflict));
-            }
-            parent.document
-        } else {
-            store
-                .revision(&input.project_id, &input.figure_id, input.expected_revision)
-                .map_err(failure)?
-                .document
-        };
+        let document = store
+            .revision(&input.project_id, &input.figure_id, input.expected_revision)
+            .map_err(failure)?
+            .document;
         let elements = document["elements"]
             .as_array()
             .ok_or_else(|| invalid("source has no native elements"))?;
@@ -143,10 +108,7 @@ impl ToolFunction for MoveTextTool {
             return Err(invalid("text frame identity is invalid"));
         }
         drop(store);
-        let mut value = json!({"action":if candidate {"revise_proposal"} else {"propose"},"project_id":input.project_id,"figure_id":input.figure_id,"proposal_id":input.proposal_id,"document_sha256":input.document_sha256,"expected_revision":input.expected_revision,"title":input.title,"operations":[{"op":"set_text_position","id":input.element_id,"x":x,"y":y}]});
-        if let Some(ids) = input.markup_ids {
-            value["markup_ids"] = json!(ids);
-        }
+        let value = json!({"action":"apply","project_id":input.project_id,"figure_id":input.figure_id,"expected_revision":input.expected_revision,"operations":[{"op":"set_text_position","id":input.element_id,"x":x,"y":y}]});
         FigureTool {
             path: self.path.clone(),
         }

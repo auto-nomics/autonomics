@@ -2,24 +2,15 @@
 use super::*;
 #[tool(
     name = "visualization_fit_svg_preview",
-    description = "This tool fits only the primary image. For the full footprint of an uncropped unrotated SVG group, prefer visualization_fit_svg_group_preview; it derives all primary/accessory samples from the exact saved candidate. For other explicitly reviewed group bounds, use visualization propose/revise_proposal with fit_illustration_group and current samples for every member. Fit an owned scientific SVG illustration anchor using backend-derived nonzero-alpha preview bounds with one preview-pixel padding. Read the candidate and review the artwork first. Pass the exact pending proposal ID/hash, current figure revision, image or anchor element_id and current file_id. No manual path arithmetic or normalized bounds input is needed. Only uncropped unrotated SVGs with nonempty rendered content are supported. Opaque backgrounds and decorations are included: this is sampled layout geometry, not exact vector geometry, scientific validation or semantic component detection. For an explicitly reviewed rectangle or raster artwork use visualization_fit instead. This creates a child through the same protected revision path, never adopts or changes the parent. Inspect the child PNG and preserve complete labels and sources."
+    description = "Fit a primary SVG illustration anchor using backend-measured nonzero-alpha bounds. Requires current file_id and expected_revision; supports uncropped unrotated nonempty SVGs. Directly commits the fit. Bounds include decoration and are not scientific identity checks. For accessories use visualization_fit_svg_group_preview."
 )]
 #[serde(deny_unknown_fields)]
 pub struct SvgFitInput {
     pub project_id: String,
     pub figure_id: String,
-    pub proposal_id: String,
-    pub document_sha256: String,
     pub expected_revision: i64,
-    pub title: String,
     pub element_id: String,
     pub file_id: String,
-    #[desc = "Optional sketch review IDs as a JSON array, never an empty string. Omit or use [] when no sketch review is being addressed."]
-    #[serde(
-        default,
-        deserialize_with = "crate::asset_candidate::deserialize_markup_ids"
-    )]
-    pub markup_ids: Option<Vec<String>>,
 }
 struct SvgFitTool {
     path: PathBuf,
@@ -35,16 +26,8 @@ pub(crate) fn measured_bounds(path: PathBuf, input: &SvgFitInput) -> Result<Valu
         return Err(failure(visualization::Error::Conflict));
     }
     let candidate = store
-        .proposal(&input.project_id, &input.figure_id, &input.proposal_id)
+        .revision(&input.project_id, &input.figure_id, input.expected_revision)
         .map_err(failure)?;
-    if candidate.status != "pending"
-        || candidate.base_revision != input.expected_revision
-        || candidate.document_sha256 != input.document_sha256
-    {
-        return Err(invalid(
-            "SVG preview fit requires the exact pending candidate hash and current revision",
-        ));
-    }
     let elements = candidate.document["elements"]
         .as_array()
         .ok_or_else(|| invalid("candidate elements are missing"))?;
@@ -89,9 +72,6 @@ impl ToolFunction for SvgFitTool {
         if [
             &input.project_id,
             &input.figure_id,
-            &input.proposal_id,
-            &input.document_sha256,
-            &input.title,
             &input.element_id,
             &input.file_id,
         ]
@@ -109,10 +89,7 @@ impl ToolFunction for SvgFitTool {
         })
         .await
         .map_err(failure)??;
-        let mut value = json!({"action":"revise_proposal","project_id":input.project_id,"figure_id":input.figure_id,"proposal_id":input.proposal_id,"document_sha256":input.document_sha256,"expected_revision":input.expected_revision,"title":input.title,"operations":[{"op":"fit_illustration_anchor","id":input.element_id,"file_id":input.file_id,"normalized_bounds":bounds["normalized_bounds"]}]});
-        if let Some(ids) = input.markup_ids {
-            value["markup_ids"] = json!(ids);
-        }
+        let value = json!({"action":"apply","project_id":input.project_id,"figure_id":input.figure_id,"expected_revision":input.expected_revision,"operations":[{"op":"fit_illustration_anchor","id":input.element_id,"file_id":input.file_id,"normalized_bounds":bounds["normalized_bounds"]}]});
         let mut result = FigureTool {
             path: self.path.clone(),
         }

@@ -37,6 +37,10 @@ impl SystemPromptBuilder {
             include_str!("system_prompt/tooluse_guidance.md"),
             "\n",
             include_str!("system_prompt/plan_guidance.md"),
+            "\n",
+            include_str!("system_prompt/intelligent_ui_guidance.md"),
+            "\n",
+            include_str!("system_prompt/resource_links_guidance.md"),
         )
         .to_string();
         self
@@ -94,6 +98,16 @@ impl SystemPromptBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn intelligent_ui_guidance_is_included_in_standard_guidance() {
+        let prompt = SystemPromptBuilder::default().build_tooluse_guidance().parse();
+        assert!(prompt.contains("## Intelligent UI"));
+        assert!(prompt.contains("```generative-ui"));
+        assert!(prompt.contains("jsExpressions"));
+        assert!(prompt.contains("CopilotKit"));
+        assert!(!SystemPromptBuilder::default().parse().contains("## Intelligent UI"));
+    }
 
     #[test]
     fn skill_guidance_renders_only_when_built() {

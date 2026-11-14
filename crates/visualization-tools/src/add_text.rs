@@ -2,15 +2,13 @@
 use super::*;
 #[tool(
     name = "visualization_add_text",
-    description = "Add a new editable scope note or heading to an existing pending candidate. Supply x/y/max_width/font_size as JSON numbers, never strings. Coordinates and width use canvas units; font_size is 4..200. element_id must be a new unique ID. For compact notes, set fit_width:true to shrink the box to its measured wrapped lines; omitted/false retains the fixed max_width. This does not shorten text or change line breaks. This uses the same scientific-font measurement/wrapping and candidate revision path as add_wrapped_text, preserving existing objects, sources and parent. Omit frame_id for notes below the figure; a supplied frame must contain the new text. Read the returned child and preview, and continue dependent edits from its proposal_id/document_sha256. Never adopts a candidate or verifies scientific claims."
+    description = "Add complete editable text to the canvas using numeric x/y/max_width/font_size. element_id must be unique. Optional fit_width shrinks the measured text box; optional frame_id must contain it. Directly commits one revision."
 )]
+#[serde(deny_unknown_fields)]
 pub struct AddTextInput {
     pub project_id: String,
     pub figure_id: String,
-    pub proposal_id: String,
-    pub document_sha256: String,
     pub expected_revision: i64,
-    pub title: String,
     pub element_id: String,
     pub text: String,
     pub x: f64,
@@ -21,11 +19,6 @@ pub struct AddTextInput {
     pub font_size: f64,
     #[serde(default)]
     pub frame_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::asset_candidate::deserialize_markup_ids"
-    )]
-    pub markup_ids: Option<Vec<String>>,
 }
 struct AddTextTool {
     path: PathBuf,
@@ -38,10 +31,7 @@ impl ToolFunction for AddTextTool {
         if let Some(frame) = input.frame_id {
             operation["frame_id"] = json!(frame);
         }
-        let mut value = json!({"action":"revise_proposal","project_id":input.project_id,"figure_id":input.figure_id,"proposal_id":input.proposal_id,"document_sha256":input.document_sha256,"expected_revision":input.expected_revision,"title":input.title,"operations":[operation]});
-        if let Some(ids) = input.markup_ids {
-            value["markup_ids"] = json!(ids);
-        }
+        let value = json!({"action":"apply","project_id":input.project_id,"figure_id":input.figure_id,"expected_revision":input.expected_revision,"operations":[operation]});
         FigureTool {
             path: self.path.clone(),
         }

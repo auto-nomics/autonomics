@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { gatewayRequest } from "@/gateway";
-import type { DagSnapshot } from "@/types";
+import type { DagNode, DagSnapshot } from "@/types";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { RefreshCw, ZoomIn, ZoomOut, GitBranch } from "lucide-react";
@@ -172,7 +172,9 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
         <div className="flex items-center gap-1"><Button size="icon" variant="ghost" className="size-7" aria-label="Zoom out" onClick={() => changeZoom(zoom / 1.2)}><ZoomOut className="size-4" /></Button><button type="button" className="min-w-12 rounded px-1 py-1 tabular-nums hover:bg-accent" title="Reset zoom" onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%</button><Button size="icon" variant="ghost" className="size-7" aria-label="Zoom in" onClick={() => changeZoom(zoom * 1.2)}><ZoomIn className="size-4" /></Button><span className="mx-1 h-4 w-px bg-border" /><Button size="icon" variant="ghost" className="size-7" aria-label="Refresh DAG" disabled={loading || !activeAgent} onClick={() => void load(activeAgent)}><RefreshCw className={cn("size-4", loading && "animate-spin")} /></Button></div>
       </div>
       {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
-      <div className="relative min-h-0 flex-1">
+      <ResizablePanelGroup orientation="vertical" className="min-h-0 flex-1">
+      <ResizablePanel defaultSize="65%" minSize="20%">
+      <div className="relative h-full min-h-0">
       {snapshot && layout && snapshot.nodes.length > 0 ? (
           <ScrollArea className="h-full" scrollOrientation="both" viewportRef={setViewport} viewportLabel="DAG graph" viewportTabIndex={0}>
           <div style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
@@ -224,20 +226,35 @@ export function DagView({ activeAgent }: { activeAgent: string }) {
       ) : <div className="grid h-full place-items-center p-6 text-center text-sm text-muted-foreground">{loading ? "Loading DAG snapshot…" : error ? "Could not load DAG." : "No DAG nodes"}</div>}
       {snapshot && snapshot.nodes.length > 0 && <div className="pointer-events-none absolute bottom-2 left-3 rounded bg-background/90 px-2 py-1 text-[11px] text-muted-foreground">Ctrl + scroll to zoom</div>}
       </div>
-      <Card className="max-h-40 overflow-auto rounded-none border-x-0 border-b-0 bg-muted/20 p-3 shadow-none">
-        {selectedNode ? (
-          <pre className="text-xs whitespace-pre-wrap">
-            {[
-              `ID: ${selectedNode.id}`,
-              `Kind: ${selectedNode.kind}`,
-              `Status: ${dagStatus(selectedNode.status)}`,
-              `Cache: ${selectedNode.dirty ? "dirty" : "cached"}`,
-              `Inputs: ${selectedNode.inputs.map((port) => `[${port.index}] ${port.label || port.data_type}`).join(", ") || "—"}`,
-              `Outputs: ${selectedNode.outputs.map((port) => `[${port.index}] ${port.label || port.data_type}`).join(", ") || "—"}`,
-            ].join("\n")}
-          </pre>
-        ) : <div className="text-sm text-muted-foreground">No node selected</div>}
-      </Card>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel defaultSize="35%" minSize="15%">
+        <ScrollArea className="h-full" viewportLabel="Node details">
+          {selectedNode && snapshot ? <DagNodeDetails key={selectedNode.id} node={selectedNode} snapshot={snapshot} onSelect={setSelected} /> : <div className="p-4 text-sm text-muted-foreground">No node selected</div>}
+        </ScrollArea>
+      </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
+}
+
+
+function DagNodeDetails({ node, snapshot, onSelect }: { node: DagNode; snapshot: DagSnapshot; onSelect: (id: string) => void }) {
+  const value = (data: unknown) => data == null ? "—" : typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  const time = (ms?: number) => ms ? new Date(ms).toLocaleString() : "—";
+  const fields = (data: Record<string, unknown>) => <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">{Object.entries(data).map(([label, data]) => <div key={label} className="contents"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 whitespace-pre-wrap break-words font-mono">{value(data)}</dd></div>)}</dl>;
+  return <section aria-label="Selected node details" className="space-y-4 p-4">
+    <h2 className="break-all text-sm font-semibold">{node.id}</h2>
+    {fields({ Kind: node.kind, Status: node.status, Cache: node.dirty ? "Dirty (recomputation required)" : "Clean", "Run ID": snapshot.run_id, "DAG running": snapshot.running, "Snapshot updated": time(snapshot.observed_at_ms) })}
+    <div className="space-y-2"><h3 className="text-xs font-semibold">Execution</h3>{node.execution ? fields({ Phase: node.execution.phase, Progress: `${node.execution.current ?? "—"} / ${node.execution.total ?? "—"} ${node.execution.unit ?? ""}`, Message: node.execution.message, "Phase started": time(node.execution.phase_started_at_ms), "Last progress": time(node.execution.last_work_progress_at_ms), "Observed at": time(node.execution.observed_at_ms), Worker: node.execution.worker }) : <p className="text-xs text-muted-foreground">No execution observation available.</p>}</div>
+    <div className="grid gap-4 md:grid-cols-2">{(["inputs", "outputs"] as const).map(direction => <div key={direction} className="min-w-0 space-y-2"><h3 className="text-xs font-semibold">{direction === "inputs" ? "Inputs" : "Outputs"} ({node[direction].length})</h3>{node[direction].length ? <div className="overflow-x-auto rounded border"><table className="w-full text-left text-xs"><thead className="bg-muted/50"><tr><th className="p-2">Port</th><th className="p-2">Label</th><th className="p-2">Data type</th></tr></thead><tbody>{node[direction].map(port => <tr key={port.index} className="border-t align-top"><td className="p-2 font-mono">{port.index}</td><td className="p-2 whitespace-pre-wrap break-all">{port.label || "—"}</td><td className="p-2 whitespace-pre-wrap break-all font-mono">{port.data_type}</td></tr>)}</tbody></table></div> : <p className="text-xs text-muted-foreground">No ports</p>}</div>)}</div>
+    <div className="grid gap-4 md:grid-cols-2">{(["upstream", "downstream"] as const).map(direction => {
+      const edges = snapshot.edges.filter(edge => direction === "upstream" ? edge.to === node.id : edge.from === node.id);
+      return <div key={direction} className="min-w-0 space-y-2"><h3 className="text-xs font-semibold">{direction === "upstream" ? "Upstream" : "Downstream"} ({edges.length})</h3>{edges.length ? edges.map((edge, index) => {
+        const target = direction === "upstream" ? edge.from : edge.to;
+        return <button key={index} type="button" disabled={!snapshot.nodes.some(n => n.id === target)} onClick={() => onSelect(target)} className="block w-full rounded border p-2 text-left text-xs font-mono whitespace-pre-wrap break-all hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" title={`Select ${target}`}>{edge.from} [{edge.from_port}] → {edge.to} [{edge.to_port}]</button>;
+      }) : <p className="text-xs text-muted-foreground">No connections</p>}</div>;
+    })}</div>
+    <details><summary className="cursor-pointer text-xs font-semibold">Raw node JSON</summary><pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted/50 p-3 text-xs">{JSON.stringify(node, null, 2)}</pre></details>
+  </section>;
 }

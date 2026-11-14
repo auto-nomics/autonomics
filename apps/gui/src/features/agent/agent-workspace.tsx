@@ -17,7 +17,9 @@ import {
 import { ContextBasket, useContextBasket } from "@/features/context/context-basket";
 import { TokenUsageBadge } from "./token-usage";
 import { serializeContext, parseContextMessage, contextKindLabel } from "@/features/context/context-model";
+import { openResourceLink } from "./resource-links";
 import { useAgentMarkdown } from "./agent-markdown";
+import { IntelligentResponse } from "./intelligent-response";
 import type { AgentInfo, ChatItem, CompactionView, ModelRow, QueuedMessage, StoredAgent } from "@/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -219,7 +221,7 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
             <Copy className="size-3" />
           </button>
         </div>
-        <AssistantMarkdown text={message.text} streaming={isStreaming} />
+        <IntelligentResponse text={message.text} streaming={isStreaming} fallback={<AssistantMarkdown text={message.text} streaming={isStreaming} />} />
       </div>
     );
   }
@@ -546,6 +548,12 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
   useEffect(() => {
     const onClick = (event: MouseEvent) => {
+      const anchor = event.target instanceof Element ? event.target.closest("a[href]") : null;
+      if (anchor instanceof HTMLAnchorElement && target.contains(anchor) && /^(?:wiki|bib):\/\//.test(anchor.getAttribute("href") ?? "")) {
+        event.preventDefault();
+        openResourceLink(anchor.getAttribute("href")!, anchor.textContent?.trim() ?? "");
+        return;
+      }
       const button = event.target instanceof HTMLElement ? event.target.closest("[data-copy-code]") : null;
       if (!(button instanceof HTMLElement) || !target.contains(button)) return;
       const code = button.closest(".md-code")?.querySelector("pre");

@@ -376,6 +376,17 @@ export type DagNode = {
   kind: string;
   status: unknown;
   dirty: boolean;
+  execution?: {
+    phase: string;
+    current?: number | null;
+    total?: number | null;
+    unit?: string | null;
+    message?: string | null;
+    worker?: unknown;
+    observed_at_ms?: number;
+    last_work_progress_at_ms?: number;
+    phase_started_at_ms?: number;
+  } | null;
   inputs: DagPort[];
   outputs: DagPort[];
 };
@@ -388,6 +399,9 @@ export type DagEdge = {
 };
 
 export type DagSnapshot = {
+  running?: boolean;
+  run_id?: string | null;
+  observed_at_ms?: number;
   nodes: DagNode[];
   edges: DagEdge[];
 };

@@ -17,7 +17,7 @@ function observed(start: unknown, end: unknown): { direction: Direction | ""; in
 }
 const headName = (head: unknown) => head == null ? "无" : head === "arrow" ? "箭头" : head === "bar" ? "抑制横杠" : "其他样式";
 type Review = { id: string; revision: number; snapshot: string; start: string; end: string; declared: Direction | ""; inhibition?: boolean; mismatch: boolean; evidence: string[]; evidenceCount: number; evidenceUnknown: boolean; expectedEvidence: unknown; editableEvidence: boolean };
-export function CanvasRelation({ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onProposed }: ComponentProps<typeof CanvasInset>) {
+export function CanvasRelation({ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onApplied }: ComponentProps<typeof CanvasInset>) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [review, setReview] = useState<Review | null>(null), [direction, setDirection] = useState<Direction | "">(""), [inhibitory, setInhibitory] = useState(false);
   const [references, setReferences] = useState<string[]>([]);
@@ -26,9 +26,9 @@ export function CanvasRelation({ projectId, canvasId, disabled, getApi, getRevis
     if (!review || busy) return; setBusy(true); setError("");
     try {
       if (isDirty() || getRevision() !== review.revision || snapshot() !== review.snapshot) throw new Error("画布发生变化，请重新检查连线。");
-      const candidate = await gatewayRequest("POST", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/proposals`, { expected_revision: review.revision, summary, operations: [operation] }) as { id: string };
-      if (isDirty() || getRevision() !== review.revision || snapshot() !== review.snapshot) throw new Error("生成期间画布发生变化；提案已保留，请从列表重新核对。");
-      setOpen(false); onProposed(candidate.id);
+      const saved = await gatewayRequest("POST", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}/operations`, { expected_revision: review.revision, summary, operations: [operation] }) as { id: string };
+
+      setOpen(false); onApplied(saved.id);
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
   }
   return <Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}>
@@ -67,13 +67,13 @@ export function CanvasRelation({ projectId, canvasId, disabled, getApi, getRevis
           <p>每条记录一项引用或来源说明，请核对它是否支持当前关系。提交只修改依据，不应用下方的方向设置。</p>
           {references.map((reference,index) => <div key={index} className="flex items-start gap-2"><textarea aria-label={`关系引用 ${index+1}`} className="min-h-16 flex-1 rounded border bg-background p-2" maxLength={2000} value={reference} disabled={busy} onChange={event => setReferences(current => current.map((value,i) => i === index ? event.target.value : value))} /><Button size="sm" variant="outline" disabled={busy} aria-label={`删除关系引用 ${index+1}`} onClick={() => setReferences(current => current.filter((_,i) => i !== index))}>删除</Button></div>)}
           <Button size="sm" variant="outline" disabled={busy || references.length >= 100} onClick={() => setReferences(current => [...current, ""])}>添加引用依据</Button>
-          {!references.length && <p role="status">当前将提交空依据列表；采用后会清空这条关系的已记录依据。</p>}
-          <Button size="sm" disabled={busy || references.some(value => !value.trim())} onClick={() => void submit({op:"set_relation_evidence",id:review.id,expected_evidence:review.expectedEvidence,evidence:references}, "修改选中关系的引用依据")}>预览依据修改提案</Button>
+          {!references.length && <p role="status">当前将提交空依据列表；应用后会清空这条关系的已记录依据。</p>}
+          <Button size="sm" disabled={busy || references.some(value => !value.trim())} onClick={() => void submit({op:"set_relation_evidence",id:review.id,expected_evidence:review.expectedEvidence,evidence:references}, "修改选中关系的引用依据")}>应用依据修改</Button>
         </div> : <p className="mt-2">此关系包含结构化或超出编辑上限的依据。为保留完整信息，请通过源文档或 Agent 核对后修改。</p>}</details>
         <label className="block">新关系方向<select aria-label="新关系方向" className="ml-2 rounded border bg-background p-1" value={direction} disabled={busy || inhibitory} onChange={event => setDirection(directionValue(event.target.value))}><option value="">请选择方向</option>{Object.entries(names).map(([value, name]) => <option key={value} value={value}>{name}</option>)}</select></label>
         <label className="flex items-center gap-2"><input aria-label="新关系抑制标记" type="checkbox" checked={inhibitory} disabled={busy || (direction !== "forward" && !inhibitory)} onChange={event => setInhibitory(event.target.checked)} />单向抑制端标记</label>
-        <p className="text-xs text-muted-foreground">初始设置按当前画法显示。提交后先预览提案，核对方向、文字与依据，再采用。</p>
-        <Button disabled={busy || !direction} onClick={() => { if (direction) void submit({op:"set_relation_direction",id:review.id,direction,inhibitory}, "修改选中关系的方向与抑制标记"); }}>预览关系修改提案</Button>
+        <p className="text-xs text-muted-foreground">初始设置按当前画法显示。修改直接生效，请在画布中核对方向、文字与依据。</p>
+        <Button disabled={busy || !direction} onClick={() => { if (direction) void submit({op:"set_relation_direction",id:review.id,direction,inhibitory}, "修改选中关系的方向与抑制标记"); }}>应用关系修改</Button>
       </div>}
     </DialogContent>
   </Dialog>;

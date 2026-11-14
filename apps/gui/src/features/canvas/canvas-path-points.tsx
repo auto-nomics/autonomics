@@ -17,7 +17,7 @@ export function CanvasPathPoints({ path, elementId, revision, sha256, partId, di
     if (!geometry) return;
     const next = new Map(current.current);
     if (point.every((value, axis) => Math.abs(value - geometry.points[index].position[axis]) < 1e-7)) next.delete(index);
-    else { if (!next.has(index) && next.size >= 64) { onError("一次最多修改 64 个点，请先预览并采用当前修改。"); return; } next.set(index, point); }
+    else { if (!next.has(index) && next.size >= 64) { onError("一次最多修改 64 个点，请先应用当前修改。"); return; } next.set(index, point); }
     current.current = next; setChanges(next); onChange(next.size ? [...next].map(([index, position]) => ({ index, position })) : undefined);
   };
   const root = (event: React.PointerEvent<SVGCircleElement>): [number, number] | null => {
@@ -36,7 +36,7 @@ export function CanvasPathPoints({ path, elementId, revision, sha256, partId, di
         setGeometry(value); setSelected(0); reset();
       } catch (cause) { onError(String(cause)); } finally { onBusy(false); }
     }}>读取端点与控制点</Button> : <div className="flex flex-col gap-3">
-      <p className="text-xs text-muted-foreground">橙点为端点，紫点为曲线控制点。选择编号后拖动圆点或输入 SVG 根坐标；橙色为编辑轮廓，正式效果请预览提案。只移动指定点，不自动平滑相邻曲线。控制点修改与整条路径平移需分开采用。</p>
+      <p className="text-xs text-muted-foreground">橙点为端点，紫点为曲线控制点。选择编号后拖动圆点或输入 SVG 根坐标；橙色为编辑轮廓，应用后请在画布核对效果。只移动指定点，不自动平滑相邻曲线。控制点修改与整条路径平移需分开应用。</p>
       <svg role="img" aria-label="路径控制点预览" viewBox={`0 0 ${geometry.width} ${geometry.height}`} className="max-h-72 w-full rounded bg-white" style={{ touchAction: "none" }}>
         <image href={geometry.previewDataURL} width={geometry.width} height={geometry.height} />
         <path d={geometry.commands.map(command => `${command.command} ${command.points.map(index => position(index).join(" ")).join(" ")}`).join(" ")} fill="none" stroke="#f97316" strokeWidth={2} vectorEffect="non-scaling-stroke" pointerEvents="none" />

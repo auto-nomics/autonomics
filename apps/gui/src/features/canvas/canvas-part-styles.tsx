@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button";
 type Part = { part_id: string; index: number; svg_id: string | null; fill: string; stroke: string; stroke_width: number; opacity: number; bounds: [number, number, number, number]; translation_supported: boolean; geometry_supported: boolean; point_count: number; changed_preview_pixels_when_hidden?: number };
 type Inspection = { sha256: string; width: number; height: number; parts: Part[]; previewDataURL: string; render_contribution?: { status: "completed"; width: number; height: number } | { status: "not_computed"; reason: string } };
 type Edit = { part_id: string; fill?: string; stroke?: string; stroke_width?: number; opacity?: number; translate?: [number, number]; points?: PointEdit[] };
-export function CanvasPartStyles({ projectId, canvasId, path, elementId, revision, unchanged, onProposed, onPrepared, onError, busy, onBusy, capturePreview }: {
+export function CanvasPartStyles({ projectId, canvasId, path, elementId, revision, unchanged, onApplied, onPrepared, onError, busy, onBusy, capturePreview }: {
   capturePreview: () => Promise<boolean>; projectId: string; canvasId: string; onPrepared: () => void;
-  path: string; elementId: string; revision: number; unchanged: () => boolean; onProposed: (id: string) => void;
+  path: string; elementId: string; revision: number; unchanged: () => boolean; onApplied: (id: string) => void;
   onError: (error: string) => void; busy: boolean; onBusy: (value: boolean) => void;
 }) {
   const [inspection, setInspection] = useState<Inspection | null>(null);
@@ -28,7 +28,7 @@ export function CanvasPartStyles({ projectId, canvasId, path, elementId, revisio
       catch (cause) { onError(String(cause)); } finally { onBusy(false); }
     }}>读取内部路径</Button>
     {inspection && part && <div className="mt-3 flex flex-col gap-3">
-      <p className="text-xs text-muted-foreground">编号仅标识当前文件中的图形路径，不代表生物学组件。可修改所选路径样式或在源 SVG 坐标中平移。拖动橙框中心圆点可设置平移，预览提案核对实际效果。上层裁剪和素材边界保持原位，超出部分会被裁掉。透明度系数相对当前效果叠加，1 保持、0 隐藏；隐藏后可通过历史版本恢复。下方可继续读取并编辑端点与曲线控制点。</p>
+      <p className="text-xs text-muted-foreground">编号仅标识当前文件中的图形路径，不代表生物学组件。可修改所选路径样式或在源 SVG 坐标中平移。拖动橙框中心圆点可设置平移，预览修改核对实际效果。上层裁剪和素材边界保持原位，超出部分会被裁掉。透明度系数相对当前效果叠加，1 保持、0 隐藏；隐藏后可通过历史版本恢复。下方可继续读取并编辑端点与曲线控制点。</p>
       {inspection.render_contribution?.status === "completed" && typeof part.changed_preview_pixels_when_hidden === "number" && <p aria-label="路径渲染贡献" className="text-xs text-muted-foreground">在 {inspection.render_contribution.width} × {inspection.render_contribution.height} 的透明背景 SVG 预览中，隐藏此路径会改变 {part.changed_preview_pixels_when_hidden} 个像素。这不是路径面积；0 可能来自遮挡、同色覆盖、裁剪或细小结构。请结合预览核对可见效果。</p>}
       {inspection.render_contribution?.status === "not_computed" && <p aria-label="路径渲染贡献" className="text-xs text-muted-foreground">此素材超过逐路径比较的计算上限，未计算渲染贡献。请以预览为准。</p>}
       <svg role="img" aria-label={`选中的素材路径 ${part.index}`} viewBox={`0 0 ${inspection.width} ${inspection.height}`} className="max-h-64 w-full rounded bg-white">
@@ -60,9 +60,9 @@ export function CanvasPartStyles({ projectId, canvasId, path, elementId, revisio
       <CanvasPathAgent capturePreview={capturePreview} key={part.part_id} projectId={projectId} canvasId={canvasId} elementId={elementId} revision={revision} sha256={inspection.sha256} partId={part.part_id} partIndex={part.index} busy={busy} unchanged={unchanged} onBusy={onBusy} onError={onError} onPrepared={onPrepared} />
       <Button size="sm" disabled={busy || !Object.values(edit).some(value => value !== undefined) || (edit.stroke_width!==undefined&&(!Number.isFinite(edit.stroke_width)||edit.stroke_width<=0||edit.stroke_width>1000))} onClick={async () => {
         onBusy(true); onError("");
-        try { check(); const result = await gatewayRequest("POST", `${path}/vector-parts`, { element_id: elementId, expected_revision: revision, sha256: inspection.sha256, edits: [{ ...edit, part_id: part.part_id }] }) as { id: string }; check(); onProposed(result.id); }
+        try { check(); const result = await gatewayRequest("POST", `${path}/vector-parts`, { element_id: elementId, expected_revision: revision, sha256: inspection.sha256, edits: [{ ...edit, part_id: part.part_id }] }) as { id: string }; check(); onApplied(result.id); }
         catch (cause) { onError(String(cause)); } finally { onBusy(false); }
-      }}>预览路径修改提案</Button>
+      }}>应用路径修改</Button>
     </div>}
   </section>;
 }

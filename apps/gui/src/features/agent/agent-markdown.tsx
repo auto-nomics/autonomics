@@ -21,7 +21,15 @@ const renderer = createHtmlRenderer({
  *  parse from render, so the renderer returns a promise). */
 export async function renderAgentMarkdown(text: string): Promise<string> {
   const html = await renderer(text);
-  return DOMPurify.sanitize(html, SANITIZE);
+  return sanitizeAgentHtml(html);
+}
+
+export function sanitizeAgentHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ...SANITIZE,
+    // DOMPurify default safe URI rules, extended only for internal resources.
+    ALLOWED_URI_REGEXP: /^(?:(?:wiki|bib):\/\/|(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+  });
 }
 
 /**

@@ -7,7 +7,6 @@ use std::path::Path;
 
 pub struct Store {
     pub(crate) connection: Connection,
-    pub(crate) linear_candidate_revisions: bool,
 }
 fn nonblank(value: &str, field: &'static str) -> Result<()> {
     if value.trim().is_empty() {
@@ -31,12 +30,6 @@ pub(crate) fn metadata(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visualizatio
     })
 }
 impl Store {
-    /// Require pending leaf parents for revisions. Explicit alternative workflows
-    /// can leave this disabled; validation happens inside the write transaction.
-    pub fn with_linear_candidate_revisions(mut self, enabled: bool) -> Self {
-        self.linear_candidate_revisions = enabled;
-        self
-    }
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Self::initialize(Connection::open(path)?)
     }
@@ -57,20 +50,6 @@ impl Store {
               visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
               revision INTEGER NOT NULL, title TEXT NOT NULL, document TEXT NOT NULL, created_at TEXT NOT NULL,
               PRIMARY KEY(visualization_id, revision));
-            CREATE TABLE IF NOT EXISTS visualization_proposals (
-              id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
-              base_revision INTEGER NOT NULL, summary TEXT NOT NULL, document TEXT NOT NULL,
-              status TEXT NOT NULL, created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS visualization_proposal_lineage (
-              proposal_id TEXT PRIMARY KEY REFERENCES visualization_proposals(id) ON DELETE CASCADE,
-              parent_id TEXT NOT NULL REFERENCES visualization_proposals(id) ON DELETE CASCADE,
-              parent_document_sha256 TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS visualization_proposals_figure ON visualization_proposals(visualization_id,created_at,id);
-            CREATE TABLE IF NOT EXISTS visualization_proposal_previews (
-              proposal_id TEXT PRIMARY KEY REFERENCES visualization_proposals(id) ON DELETE CASCADE,
-              document_sha256 TEXT NOT NULL, render_status TEXT NOT NULL,
-              data_url TEXT, error TEXT, renderer TEXT, requested_at TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS visualization_proposal_preview_queue ON visualization_proposal_previews(render_status,requested_at,proposal_id);
             CREATE TABLE IF NOT EXISTS visualization_annotations (
               id TEXT PRIMARY KEY, visualization_id TEXT NOT NULL REFERENCES visualizations(id) ON DELETE CASCADE,
               at_revision INTEGER NOT NULL, element_ids TEXT NOT NULL, note TEXT NOT NULL,
@@ -81,18 +60,11 @@ impl Store {
               status TEXT NOT NULL, created_at TEXT NOT NULL,
               FOREIGN KEY(visualization_id, at_revision) REFERENCES visualization_revisions(visualization_id, revision) ON DELETE CASCADE);
             CREATE INDEX IF NOT EXISTS visualization_markups_figure ON visualization_markups(visualization_id, created_at);
-            CREATE TABLE IF NOT EXISTS visualization_proposal_markups (
-              proposal_id TEXT NOT NULL REFERENCES visualization_proposals(id) ON DELETE CASCADE,
-              markup_id TEXT NOT NULL REFERENCES visualization_markups(id) ON DELETE CASCADE,
-              PRIMARY KEY(proposal_id,markup_id));
             CREATE TABLE IF NOT EXISTS visualization_previews (
               visualization_id TEXT NOT NULL, revision INTEGER NOT NULL, data_url TEXT NOT NULL,
               PRIMARY KEY(visualization_id, revision),
               FOREIGN KEY(visualization_id, revision) REFERENCES visualization_revisions(visualization_id, revision) ON DELETE CASCADE);")?;
-        Ok(Self {
-            connection,
-            linear_candidate_revisions: false,
-        })
+        Ok(Self { connection })
     }
     /// Caller supplies a stable project ID, allowing association with the host project system.
     pub fn create_project(&self, id: &str, title: &str) -> Result<Project> {
@@ -184,7 +156,7 @@ impl Store {
     }
     /// Saves a new immutable revision. Stale writers fail without modifying history.
     pub fn save(
-        &mut self,
+        &self,
         project_id: &str,
         id: &str,
         expected_revision: i64,
@@ -193,7 +165,7 @@ impl Store {
     ) -> Result<Visualization> {
         nonblank(title, "title")?;
         let mut record = self.get(project_id, id)?;
-        let transaction = self.connection.transaction()?;
+        let transaction = self.connection.unchecked_transaction()?;
         let timestamp = now();
         let changed = transaction.execute("UPDATE visualizations SET title=?1,revision=revision+1,updated_at=?2 WHERE project_id=?3 AND id=?4 AND revision=?5",params![title.trim(),timestamp,project_id,id,expected_revision])?;
         if changed == 0 {

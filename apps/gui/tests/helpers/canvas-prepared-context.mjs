@@ -4,8 +4,6 @@ export async function readCanvasPreparedPrompt(page, title="绘图请求上下�
 }
 export async function readCanvasPreparedContext(page) { const prompt=await readCanvasPreparedPrompt(page);return JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{')+2)); }
 
-export async function readCandidatePreparedPrompt(page) { return readCanvasPreparedPrompt(page,"候选修订上下文"); }
-export async function readCandidatePreparedContext(page) { const prompt=await readCandidatePreparedPrompt(page);return JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{')+2)); }
 
 export async function readPlanPreparedPrompt(page) { return readCanvasPreparedPrompt(page,"计划审阅上下文"); }
 export async function readPlanPreparedContext(page) { const prompt=await readPlanPreparedPrompt(page);return JSON.parse(prompt.slice(prompt.lastIndexOf('\n\n{')+2)); }

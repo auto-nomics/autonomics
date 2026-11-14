@@ -13,13 +13,16 @@ use super::capabilities::PromptCapabilities;
 
 const PROMPT_HEADER: &str = include_str!("system_prompt/sections/header.md");
 
-const PROMPT_BIBLIOGRAPHY: &str = concat!("\n", include_str!("system_prompt/sections/bibliography.md"));
+const PROMPT_BIBLIOGRAPHY: &str =
+    concat!("\n", include_str!("system_prompt/sections/bibliography.md"));
 
 const PROMPT_OPENGWAS: &str = concat!("\n", include_str!("system_prompt/sections/opengwas.md"));
 
-const PROMPT_OPENTARGETS: &str = concat!("\n", include_str!("system_prompt/sections/opentargets.md"));
+const PROMPT_OPENTARGETS: &str =
+    concat!("\n", include_str!("system_prompt/sections/opentargets.md"));
 
-const PROMPT_GWASCATALOG: &str = concat!("\n", include_str!("system_prompt/sections/gwascatalog.md"));
+const PROMPT_GWASCATALOG: &str =
+    concat!("\n", include_str!("system_prompt/sections/gwascatalog.md"));
 
 const PROMPT_CHEMBL: &str = concat!("\n", include_str!("system_prompt/sections/chembl.md"));
 
@@ -28,36 +31,54 @@ const PROMPT_RCSB: &str = include_str!("system_prompt/sections/rcsb.md");
 const PROMPT_STRING: &str = concat!("\n", include_str!("system_prompt/sections/string.md"));
 const PROMPT_KEGG: &str = concat!("\n", include_str!("system_prompt/sections/kegg.md"));
 
-const PROMPT_BIOMEDICAL_RESOURCES: &str = concat!("\n", include_str!("system_prompt/sections/biomedical_resources.md"));
+const PROMPT_BIOMEDICAL_RESOURCES: &str = concat!(
+    "\n",
+    include_str!("system_prompt/sections/biomedical_resources.md")
+);
 
 const PROMPT_WIKI_READ: &str = concat!("\n", include_str!("system_prompt/sections/wiki_read.md"));
 
 const PROMPT_WIKI_WRITE: &str = concat!("\n", include_str!("system_prompt/sections/wiki_write.md"));
 
-const PROMPT_RESOURCE_DOWNLOADS: &str = concat!("\n", include_str!("system_prompt/sections/resource_downloads.md"));
+const PROMPT_RESOURCE_DOWNLOADS: &str = concat!(
+    "\n",
+    include_str!("system_prompt/sections/resource_downloads.md")
+);
 
 const PROMPT_DAG_ENGINE: &str = concat!("\n", include_str!("system_prompt/sections/dag_engine.md"));
 
-const PROMPT_DAG_HISTORY: &str = concat!("\n", include_str!("system_prompt/sections/dag_history.md"));
+const PROMPT_DAG_HISTORY: &str =
+    concat!("\n", include_str!("system_prompt/sections/dag_history.md"));
 
 const PROMPT_PLUGIN_RSI: &str = concat!("\n", include_str!("system_prompt/sections/plugin_rsi.md"));
 
-const PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF: &str = concat!("\n", include_str!("system_prompt/sections/researcher_development_handoff.md"));
+const PROMPT_RESEARCHER_DEVELOPMENT_HANDOFF: &str = concat!(
+    "\n",
+    include_str!("system_prompt/sections/researcher_development_handoff.md")
+);
 
-const PROMPT_DEVELOPER_HANDOFF: &str = concat!("\n", include_str!("system_prompt/sections/developer_handoff.md"));
+const PROMPT_DEVELOPER_HANDOFF: &str = concat!(
+    "\n",
+    include_str!("system_prompt/sections/developer_handoff.md")
+);
 
 const PROMPT_BROWSER: &str = concat!("\n", include_str!("system_prompt/sections/browser.md"));
 
-const PROMPT_BROWSER_HANDOFF: &str = concat!("\n", include_str!("system_prompt/sections/browser_handoff.md"));
+const PROMPT_BROWSER_HANDOFF: &str = concat!(
+    "\n",
+    include_str!("system_prompt/sections/browser_handoff.md")
+);
 
-const PROMPT_SQL_CONVENTIONS: &str = concat!("\n", include_str!("system_prompt/sections/sql_conventions.md"));
+const PROMPT_SQL_CONVENTIONS: &str = concat!(
+    "\n",
+    include_str!("system_prompt/sections/sql_conventions.md")
+);
 
 const PROMPT_FILESYSTEM: &str = concat!("\n", include_str!("system_prompt/sections/filesystem.md"));
 
 const PROMPT_GENERAL: &str = concat!("\n", include_str!("system_prompt/sections/general.md"));
 
 const PROMPT_HPC: &str = concat!("\n", include_str!("system_prompt/sections/hpc.md"));
-
 
 /// Build the default system prompt dynamically, including only the sections for
 /// tool groups that are actually enabled. This prevents the prompt from
@@ -126,7 +147,7 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
         s.push_str(PROMPT_PLUGIN_RSI);
         s.push_str(PROMPT_DEVELOPER_HANDOFF);
     } else if caps.is_illustrator() {
-        s.push_str("\n### Illustration Collaboration\nYou own editable figure composition and visual refinement. Ask the researcher for missing scientific conclusions or analysis; use delegate_to with profile_segment=\"researcher\" when appropriate. Delegate plugin implementation to profile_segment=\"developer\". Work from the active canvas context, inspect candidate previews, preserve source attribution, and leave artwork pending for human review.\n");
+        s.push_str("\n### Illustration Collaboration\nYou own editable figure composition and visual refinement. Ask the researcher for missing scientific conclusions or analysis; use delegate_to with profile_segment=\"researcher\" when appropriate. Delegate plugin implementation to profile_segment=\"developer\". Work from the active canvas context, apply edits directly to the current canvas, inspect its preview, and preserve source attribution.\n");
     } else if !caps.enable_browser() {
         // Browser agents participate in neither collaboration: they get
         // their own handoff section below instead of the

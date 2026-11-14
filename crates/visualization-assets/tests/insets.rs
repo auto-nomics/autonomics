@@ -39,8 +39,9 @@ fn rotated_flipped_crop_is_a_reviewable_immutable_vector_snapshot() {
         visualization_assets::image_info(&store, "p", &figure.id, 1, &spec.element_id).unwrap();
     assert_eq!(info["visible_crop"], json!([100., 20., 200., 100.]));
     let proposal = visualization_assets::inset(&store, "p", &figure.id, 1, &spec).unwrap();
-    assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
-    let next = &proposal.document;
+    assert_eq!(store.get("p", &figure.id).unwrap().revision, 2);
+    let saved = store.revision("p", &figure.id, proposal.revision).unwrap();
+    let next = &saved.document;
     assert_eq!(next["files"], scene["files"]);
     assert_eq!(next["elements"][0], scene["elements"][0]);
     assert_eq!(next["elements"].as_array().unwrap().len(), 6);
@@ -67,10 +68,10 @@ fn rotated_flipped_crop_is_a_reviewable_immutable_vector_snapshot() {
     assert_eq!(next["elements"][2]["endArrowhead"], serde_json::Value::Null);
     assert!(visualization_assets::inset(&store, "p", &figure.id, 0, &spec).is_err());
     spec.region.width = f64::MIN_POSITIVE;
-    assert!(visualization_assets::inset(&store, "p", &figure.id, 1, &spec).is_err());
+    assert!(visualization_assets::inset(&store, "p", &figure.id, 2, &spec).is_err());
     spec.region.width = 1.;
-    assert!(visualization_assets::inset(&store, "p", &figure.id, 1, &spec).is_err());
-    assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
+    assert!(visualization_assets::inset(&store, "p", &figure.id, 2, &spec).is_err());
+    assert_eq!(store.get("p", &figure.id).unwrap().revision, 2);
 }
 
 #[test]
@@ -172,13 +173,13 @@ fn refresh_fixture() -> (Store, String, String, String) {
         },
     )
     .unwrap();
-    let anchor = proposal.document["elements"][3]["id"]
+    let anchor = store
+        .revision("p", &figure.id, proposal.revision)
+        .unwrap()
+        .document["elements"][3]["id"]
         .as_str()
         .unwrap()
         .to_owned();
-    store
-        .accept_proposal("p", &figure.id, &proposal.id)
-        .unwrap();
     (store, figure.id, source, anchor)
 }
 fn element_mut<'a>(document: &'a mut serde_json::Value, id: &str) -> &'a mut serde_json::Value {
@@ -244,9 +245,10 @@ fn explicit_refresh_keeps_ids_panel_title_styles_other_insets_and_history() {
     }
     assert_eq!(stale["detail_edited"], false);
     let p = refresh_inset(&store, "p", &figure, 4, &anchor, false).unwrap();
-    assert_eq!(store.get("p", &figure).unwrap().revision, 4);
+    assert_eq!(store.get("p", &figure).unwrap().revision, 5);
+    let saved = store.revision("p", &figure, p.revision).unwrap();
     let old_members = visualization::inset_refresh::members(&changed, &anchor).unwrap();
-    let members = visualization::inset_refresh::members(&p.document, &anchor).unwrap();
+    let members = visualization::inset_refresh::members(&saved.document, &anchor).unwrap();
     assert_eq!(members.image["id"], old_members.image["id"]);
     assert_eq!(members.image["fileId"], updated.sha256);
     assert_eq!(
@@ -287,7 +289,7 @@ fn explicit_refresh_keeps_ids_panel_title_styles_other_insets_and_history() {
         .filter(|e| !updated_ids.contains(&e["id"]))
     {
         assert_eq!(
-            p.document["elements"]
+            saved.document["elements"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -296,9 +298,8 @@ fn explicit_refresh_keeps_ids_panel_title_styles_other_insets_and_history() {
             element
         );
     }
-    assert_eq!(p.document["files"], changed["files"]);
+    assert_eq!(saved.document["files"], changed["files"]);
     assert!(refresh_inset(&store, "p", &figure, 3, &anchor, false).is_err());
-    store.accept_proposal("p", &figure, &p.id).unwrap();
     assert_eq!(
         inset_status(&store, "p", &figure, 5, &anchor).unwrap()["changed"],
         false
@@ -321,7 +322,7 @@ fn refresh_checks_local_edits_missing_sources_copied_members_and_rotated_panels(
     );
     assert!(refresh_inset(&store, "p", &figure, 3, &anchor, false).is_err());
     let proposed = refresh_inset(&store, "p", &figure, 3, &anchor, true).unwrap();
-    assert_eq!(store.get("p", &figure).unwrap().revision, 3);
+    assert_eq!(store.get("p", &figure).unwrap().revision, 4);
     let mut copied = doc["elements"]
         .as_array()
         .unwrap()
@@ -337,14 +338,17 @@ fn refresh_checks_local_edits_missing_sources_copied_members_and_rotated_panels(
         visualization::inset_refresh::compile(&doc, &anchor, 100, 100, 3, "hash", "previous")
             .is_err()
     );
-    let mut missing = proposed.document;
+    let mut missing = store
+        .revision("p", &figure, proposed.revision)
+        .unwrap()
+        .document;
     missing["elements"]
         .as_array_mut()
         .unwrap()
         .retain(|e| e["id"] != source);
-    store.save("p", &figure, 3, "Figure", &missing).unwrap();
+    store.save("p", &figure, 4, "Figure", &missing).unwrap();
     assert_eq!(
-        inset_status(&store, "p", &figure, 4, &anchor).unwrap()["source_available"],
+        inset_status(&store, "p", &figure, 5, &anchor).unwrap()["source_available"],
         false
     );
     assert!(refresh_inset(&store, "p", &figure, 4, &anchor, true).is_err());

@@ -81,7 +81,7 @@ async fn turn(
 }
 const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn scientific_figure_conversation_uses_production_gateway_tools_and_review() {
+async fn scientific_figure_conversation_directly_edits_canvas_through_gateway() {
     use reqwest::Method;
     let (model, trace) = scripted_figure_model();
     let gw = start_mock_gateway_with_model(model).await;
@@ -99,7 +99,7 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     EventPump::spawn(client.clone(), state.last_seq, tx);
     let agent = client
-        .spawn_agent("figure", "/root", "researcher", None, None)
+        .spawn_agent("figure", "/root", "illustrator", None, None)
         .await
         .unwrap();
     let h = |request: &str, revision: i64| json!({"project_id":"study","figure_id":figure["id"],"observed_revision":revision,"request":request});
@@ -113,32 +113,12 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
         .await,
         2
     );
-    assert!(
-        api(&gw, Method::GET, &format!("{path}/proposals"), None)
-            .await
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
     assert_eq!(
         api(&gw, Method::GET, &path, None).await["metadata"]["revision"],
         1
     );
     let answer = "Show generic A, B and C, with explicit A to B and B to C relations.";
     assert_eq!(turn(&client, &agent, &mut rx, h(answer, 1)).await, 3);
-    let candidates = api(&gw, Method::GET, &format!("{path}/proposals"), None).await;
-    assert_eq!(candidates.as_array().unwrap().len(), 1);
-    assert_eq!(candidates[0]["status"], "pending");
-    api(
-        &gw,
-        Method::POST,
-        &format!(
-            "{path}/proposals/{}/accept",
-            candidates[0]["id"].as_str().unwrap()
-        ),
-        None,
-    )
-    .await;
     let before = api(&gw, Method::GET, &path, None).await;
     api(
         &gw,
@@ -157,17 +137,8 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
         .await,
         3
     );
-    let proposals = api(&gw, Method::GET, &format!("{path}/proposals"), None).await;
-    let candidate = proposals
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["status"] == "pending")
-        .unwrap();
-    assert_eq!(
-        api(&gw, Method::GET, &path, None).await["metadata"]["revision"],
-        2
-    );
+    let edited = api(&gw, Method::GET, &path, None).await;
+    assert_eq!(edited["metadata"]["revision"], 3);
     for element in before["scene"]["document"]["elements"]
         .as_array()
         .unwrap()
@@ -175,7 +146,7 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
         .filter(|e| e["id"] != "label-1")
     {
         assert_eq!(
-            candidate["document"]["elements"]
+            edited["scene"]["document"]["elements"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -183,16 +154,6 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
             Some(element)
         );
     }
-    api(
-        &gw,
-        Method::POST,
-        &format!(
-            "{path}/proposals/{}/accept",
-            candidate["id"].as_str().unwrap()
-        ),
-        None,
-    )
-    .await;
     let current = api(&gw, Method::GET, &path, None).await;
     assert_eq!(
         current["scene"]["document"]["elements"]
@@ -210,29 +171,6 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
     );
     request["markups"] = json!([mark]);
     assert_eq!(turn(&client, &agent, &mut rx, request).await, 3);
-    let proposals = api(&gw, Method::GET, &format!("{path}/proposals"), None).await;
-    let candidate = proposals
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["status"] == "pending")
-        .unwrap();
-    assert_eq!(candidate["review_markups"][0]["id"], mark["id"]);
-    assert_eq!(
-        api(&gw, Method::GET, &format!("{path}/markups"), None).await[0]["status"],
-        "open"
-    );
-    assert_eq!(api(&gw, Method::GET, &path, None).await, current);
-    api(
-        &gw,
-        Method::POST,
-        &format!(
-            "{path}/proposals/{}/accept?resolve_markups=true",
-            candidate["id"].as_str().unwrap()
-        ),
-        None,
-    )
-    .await;
     let final_scene = api(&gw, Method::GET, &path, None).await;
     let elements = final_scene["scene"]["document"]["elements"]
         .as_array()
@@ -241,7 +179,7 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
     assert!(!elements.iter().any(|e| e["type"] == "arrow"));
     assert_eq!(
         api(&gw, Method::GET, &format!("{path}/markups"), None).await[0]["status"],
-        "resolved"
+        "open"
     );
     assert_eq!(
         api(&gw, Method::GET, &format!("{path}/revisions/3"), None).await["document"],

@@ -51,6 +51,8 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  // Prebundle lazy drawing dependencies so the first preview does not reload dev chat.
+  optimizeDeps: { include: ["@jetbrains/websandbox", "partial-json", "zod"] },
   clearScreen: false,
   server: {
     allowedHosts: true,

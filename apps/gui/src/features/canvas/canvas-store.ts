@@ -48,3 +48,12 @@ export async function createCanvas(projectId: string) {
 export function useCanvases() {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => summaries);
 }
+export async function deleteCanvas(canvas: CanvasRecord) {
+  if (!canvas.projectId) return legacy.deleteCanvas(canvas.id);
+  await gatewayRequest("DELETE", `${path(canvas.projectId)}/${encodeURIComponent(canvas.id)}`, { expected_revision: canvas.revision });
+  if (selectedProject === canvas.projectId) {
+    ++listRequest;
+    summaries = summaries.filter(item => item.id !== canvas.id);
+    emit();
+  }
+}

@@ -2,22 +2,14 @@
 use super::*;
 #[tool(
     name = "visualization_fit_svg_group_preview",
-    description = "Fit an entire bound illustration group using backend-derived nonzero-alpha SVG preview rectangles for the primary and ALL recorded accessories. Read the exact candidate and review artwork first. Supply an anchor or owned image element_id, pending proposal ID/hash and current revision; do not supply samples or normalized_bounds. Reads exact file IDs and full membership from the candidate and creates one protected child with fit_illustration_group. Every image must be an uncropped unrotated nonempty SVG; raster/cropped/unsupported members need explicitly reviewed group samples instead. Bounds include one preview-pixel padding, backgrounds and decorative paint; they are layout measurements, not component identity, topology or stoichiometry detection. Files, images, labels, source records and scientific metadata stay unchanged; only anchor/fit records and supported connectors follow the measured union. Locked/invalid ownership, stale scope or unsupported connector geometry reject atomically. Inspect the child PNG; never adopts."
+    description = "Fit a complete SVG illustration group using backend-measured bounds of every primary/accessory image. Directly commits one atomic edit. Supports uncropped unrotated nonempty SVGs; inspect the resulting canvas preview."
 )]
 #[serde(deny_unknown_fields)]
 pub struct GroupFitInput {
     pub project_id: String,
     pub figure_id: String,
-    pub proposal_id: String,
-    pub document_sha256: String,
     pub expected_revision: i64,
-    pub title: String,
     pub element_id: String,
-    #[serde(
-        default,
-        deserialize_with = "crate::asset_candidate::deserialize_markup_ids"
-    )]
-    pub markup_ids: Option<Vec<String>>,
 }
 struct GroupFitTool {
     path: PathBuf,
@@ -33,16 +25,8 @@ fn measure(path: PathBuf, input: &GroupFitInput) -> Result<(String, Value, Value
         return Err(failure(visualization::Error::Conflict));
     }
     let candidate = store
-        .proposal(&input.project_id, &input.figure_id, &input.proposal_id)
+        .revision(&input.project_id, &input.figure_id, input.expected_revision)
         .map_err(failure)?;
-    if candidate.status != "pending"
-        || candidate.base_revision != input.expected_revision
-        || candidate.document_sha256 != input.document_sha256
-    {
-        return Err(invalid(
-            "group preview fitting requires the exact pending candidate hash and current revision",
-        ));
-    }
     let elements = candidate.document["elements"]
         .as_array()
         .ok_or_else(|| invalid("missing candidate elements"))?;
@@ -101,13 +85,11 @@ fn measure(path: PathBuf, input: &GroupFitInput) -> Result<(String, Value, Value
             &crate::fit_svg::SvgFitInput {
                 project_id: input.project_id.clone(),
                 figure_id: input.figure_id.clone(),
-                proposal_id: input.proposal_id.clone(),
-                document_sha256: input.document_sha256.clone(),
+
                 expected_revision: input.expected_revision,
-                title: input.title.clone(),
+
                 element_id: id.clone(),
                 file_id: file_id.into(),
-                markup_ids: None,
             },
         )?;
         samples.push(
@@ -121,16 +103,9 @@ fn measure(path: PathBuf, input: &GroupFitInput) -> Result<(String, Value, Value
 impl ToolFunction for GroupFitTool {
     type Input = GroupFitInput;
     async fn run(&self, input: GroupFitInput) -> Result<ToolResult, ToolError> {
-        if [
-            &input.project_id,
-            &input.figure_id,
-            &input.proposal_id,
-            &input.document_sha256,
-            &input.title,
-            &input.element_id,
-        ]
-        .iter()
-        .any(|v| v.trim().is_empty())
+        if [&input.project_id, &input.figure_id, &input.element_id]
+            .iter()
+            .any(|v| v.trim().is_empty())
         {
             return Err(invalid(
                 "group SVG preview fitting requires nonblank scope, title and element_id",
@@ -143,7 +118,7 @@ impl ToolFunction for GroupFitTool {
         })
         .await
         .map_err(failure)??;
-        let value = json!({"action":"revise_proposal","project_id":input.project_id,"figure_id":input.figure_id,"proposal_id":input.proposal_id,"document_sha256":input.document_sha256,"expected_revision":input.expected_revision,"title":input.title,"operations":[{"op":"fit_illustration_group","anchor_id":anchor,"samples":samples}],"markup_ids":input.markup_ids});
+        let value = json!({"action":"apply","project_id":input.project_id,"figure_id":input.figure_id,"expected_revision":input.expected_revision,"operations":[{"op":"fit_illustration_group","anchor_id":anchor,"samples":samples}]});
         let mut result = FigureTool {
             path: self.path.clone(),
         }

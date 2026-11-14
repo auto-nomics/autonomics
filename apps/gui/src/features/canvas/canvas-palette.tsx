@@ -9,9 +9,9 @@ import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 type Palette = { vector?: boolean; labels?: IllustrationLabel[]; image_geometry?: [number, number, number, number]; anchor_id?: string; visible_crop?: [number, number, number, number]; element_id: string; revision: number; file_id: string; colors: string[]; previewDataURL: string };
-export function CanvasPalette({ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onProposed, capturePreview }: {
+export function CanvasPalette({ projectId, canvasId, disabled, getApi, getRevision, ensureSaved, isDirty, onApplied, capturePreview }: {
   capturePreview: () => Promise<boolean>; projectId: string; canvasId: string; disabled: boolean; getApi: () => ExcalidrawImperativeAPI | null;
-  getRevision: () => number | undefined; ensureSaved: () => Promise<boolean>; isDirty: () => boolean; onProposed: (id: string) => void;
+  getRevision: () => number | undefined; ensureSaved: () => Promise<boolean>; isDirty: () => boolean; onApplied: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [palette, setPalette] = useState<Palette | null>(null), [colors, setColors] = useState<Record<string, string>>({});
@@ -42,21 +42,21 @@ export function CanvasPalette({ projectId, canvasId, disabled, getApi, getRevisi
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
   }}>素材编辑</Button><DialogContent showCloseButton={false} className="flex max-h-[85vh] w-[min(650px,95vw)] flex-col overflow-hidden"><DialogTitle>{palette?.vector === false ? "图像素材编辑" : "矢量素材编辑"}</DialogTitle>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    {busy && !palette ? <p role="status">读取素材…</p> : palette && <div className="min-h-0 overflow-auto"><p className="text-sm font-medium">{palette.vector ? "整体配色" : "图像布局"}</p><img src={palette.previewDataURL} alt="当前素材" className="my-2 max-h-64 w-full rounded bg-white object-contain" />{palette.vector ? <p className="mb-3 text-sm text-muted-foreground">相同颜色的填充、描边和渐变色将一起替换，每次最多 32 种；SVG 内的文字须已转为路径。只修改当前素材实例，不改变其他实例、文字标记形状或布局。修改后先预览提案。</p> : <p className="mb-3 text-sm text-muted-foreground">位图保留原始像素和来源，可调整绑定插图的布局、连接范围和标签。独立图片可直接使用画布变换控件。</p>}
+    {busy && !palette ? <p role="status">读取素材…</p> : palette && <div className="min-h-0 overflow-auto"><p className="text-sm font-medium">{palette.vector ? "整体配色" : "图像布局"}</p><img src={palette.previewDataURL} alt="当前素材" className="my-2 max-h-64 w-full rounded bg-white object-contain" />{palette.vector ? <p className="mb-3 text-sm text-muted-foreground">相同颜色的填充、描边和渐变色将一起替换，每次最多 32 种；SVG 内的文字须已转为路径。只修改当前素材实例，不改变其他实例、文字标记形状或布局。修改后先预览修改。</p> : <p className="mb-3 text-sm text-muted-foreground">位图保留原始像素和来源，可调整绑定插图的布局、连接范围和标签。独立图片可直接使用画布变换控件。</p>}
       {palette.vector && !palette.colors.length && <p>没有可替换的实色。</p>}
       <div className="grid grid-cols-2 gap-3">{palette.colors.map(color => <label key={color} className="flex items-center justify-between gap-3 rounded border p-2 text-sm"><span>{color}</span><input type="color" aria-label={`替换颜色 ${color}`} disabled={busy} value={colors[color] ?? color} onChange={event => setColors(current => ({ ...current, [color]: event.target.value }))} /></label>)}</div>
-      {palette.anchor_id && <CanvasIllustrationBounds key={`${palette.element_id}:${palette.revision}`} path={path} imageId={palette.element_id} fileId={palette.file_id} revision={palette.revision} preview={palette.previewDataURL} imageGeometry={palette.image_geometry} visibleCrop={palette.visible_crop} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onProposed={id => { setOpen(false); onProposed(id); }} />}
-      {Boolean(palette.labels?.length) && <CanvasIllustrationLabels key={`labels:${palette.element_id}:${palette.revision}`} labels={palette.labels!} path={path} revision={palette.revision} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onProposed={id => { setOpen(false); onProposed(id); }} />}
-      {palette.vector && <CanvasPartStyles capturePreview={capturePreview} key={palette.file_id} projectId={projectId} canvasId={canvasId} onPrepared={() => setOpen(false)} path={path} elementId={palette.element_id} revision={palette.revision} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onProposed={id => { setOpen(false); onProposed(id); }} />}
+      {palette.anchor_id && <CanvasIllustrationBounds key={`${palette.element_id}:${palette.revision}`} path={path} imageId={palette.element_id} fileId={palette.file_id} revision={palette.revision} preview={palette.previewDataURL} imageGeometry={palette.image_geometry} visibleCrop={palette.visible_crop} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onApplied={id => { setOpen(false); onApplied(id); }} />}
+      {Boolean(palette.labels?.length) && <CanvasIllustrationLabels key={`labels:${palette.element_id}:${palette.revision}`} labels={palette.labels!} path={path} revision={palette.revision} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onApplied={id => { setOpen(false); onApplied(id); }} />}
+      {palette.vector && <CanvasPartStyles capturePreview={capturePreview} key={palette.file_id} projectId={projectId} canvasId={canvasId} onPrepared={() => setOpen(false)} path={path} elementId={palette.element_id} revision={palette.revision} unchanged={() => !isDirty() && getRevision() === palette.revision && snapshot() === observed} busy={busy} onBusy={setBusy} onError={setError} onApplied={id => { setOpen(false); onApplied(id); }} />}
     </div>}
     <div className="flex justify-end gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setOpen(false)}>关闭素材编辑</Button>{palette?.vector !== false && <Button size="sm" disabled={busy || !palette || !Object.entries(colors).some(([from, to]) => from !== to)} onClick={async () => {
       if (!palette || busy) return; setBusy(true); setError("");
       try {
         if (isDirty() || getRevision() !== palette.revision || snapshot() !== observed) throw new Error("画布发生变化，请取消后重新读取素材配色。");
         const result = await gatewayRequest("POST", `${path}/vector-colors`, { element_id: palette.element_id, expected_revision: palette.revision, colors: Object.fromEntries(Object.entries(colors).filter(([from, to]) => from !== to)) }) as { id: string };
-        if (isDirty() || getRevision() !== palette.revision || snapshot() !== observed) throw new Error("生成配色提案期间画布发生变化。提案已保留，请保存后在提案列表核对版本。");
-        setOpen(false); onProposed(result.id);
+        if (isDirty() || getRevision() !== palette.revision || snapshot() !== observed) throw new Error("生成配色修改期间画布发生变化。修改已保留，请保存后在修改列表核对版本。");
+        setOpen(false); onApplied(result.id);
       } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-    }}>预览配色提案</Button>}</div>
+    }}>应用配色修改</Button>}</div>
   </DialogContent></Dialog>;
 }

@@ -17,25 +17,6 @@ pub fn validate(ids: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn project(mut proposal: Value, current: i64, ids: &[String]) -> Result<Value, String> {
-    let mut result = select(
-        proposal
-            .get("document")
-            .ok_or("Missing candidate document")?,
-        ids,
-    )?;
-    let base_is_current = proposal["base_revision"] == current;
-    proposal
-        .as_object_mut()
-        .ok_or("Invalid proposal metadata")?
-        .remove("document");
-    result["scope"]["hash_scope"] = json!("complete_immutable_proposal");
-    result["proposal"] = proposal;
-    result["current_revision"] = json!(current);
-    result["base_is_current"] = json!(base_is_current);
-    Ok(result)
-}
-
 pub fn project_saved(mut full: Value, ids: &[String]) -> Result<Value, String> {
     let mut projection = select(&full["scene"]["document"], ids)?;
     projection["scope"]["revision_scope"] = json!("complete_immutable_saved_revision");
@@ -157,8 +138,8 @@ mod tests {
     fn context_is_bounded_and_discloses_omissions() {
         let mut elements = vec![json!({"id":"selected","type":"rectangle"})];
         elements.extend((0..205).map(|i| json!({"id":format!("other-{i}"),"type":"line","x":"malformed-preserved","points":vec![[0,0];70],"customData":{"large_plan":"omitted"}})));
-        let proposal = json!({"base_revision":1,"document":{"elements":elements}});
-        let output = project(proposal, 1, &["selected".into()]).unwrap();
+        let full = json!({"scene":{"document":{"elements":elements}}});
+        let output = project_saved(full, &["selected".into()]).unwrap();
         let context = &output["geometry_context"];
         let count = context["elements"].as_array().unwrap().len();
         assert!(count <= 200);
@@ -173,13 +154,13 @@ mod tests {
     fn ambiguous_and_oversized_selections_fail_without_truncation() {
         let duplicate = json!({"document":{"elements":[{"id":"a"},{"id":"a","isDeleted":true}]}});
         assert!(
-            project(duplicate, 1, &["a".into()])
+            select(&duplicate["document"], &["a".into()])
                 .unwrap_err()
                 .contains("ambiguous")
         );
         let large = json!({"document":{"elements":[{"id":"a","text":"x".repeat(256*1024)}]}});
         assert!(
-            project(large, 1, &["a".into()])
+            select(&large["document"], &["a".into()])
                 .unwrap_err()
                 .contains("256 KiB")
         );

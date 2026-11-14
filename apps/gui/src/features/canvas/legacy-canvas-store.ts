@@ -45,6 +45,18 @@ export async function createCanvas() {
   await saveCanvas(record);
   return record;
 }
+export async function deleteCanvas(id: string) {
+  const connection = await db();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = connection.transaction("canvases", "readwrite");
+    transaction.objectStore("canvases").delete(id);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error ?? new Error("删除已中止"));
+  });
+  summaries = summaries.filter(record => record.id !== id);
+  listeners.forEach(listener => listener());
+}
 export function useCanvases() {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => summaries);
 }

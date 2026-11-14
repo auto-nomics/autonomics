@@ -24,9 +24,9 @@ export function repairNativeDuplicate<T extends Element>(next:readonly T[],previ
   const identities=new Map<string,string>(),groups=new Map<string,string>();
   for(const copy of copies){
     const source=marker(copy);
-    if(!source||identities.has(source.id))throw new Error('未取得唯一复制标识，本次复制未完成；请使用复制组件提案。');
+    if(!source||identities.has(source.id))throw new Error('未取得唯一复制标识，本次复制未完成；请使用复制组件修改。');
     identities.set(source.id,copy.id);
-    if(source.groups.length!==copy.groupIds.length)throw new Error('组合结构发生变化，本次复制未完成；请使用复制组件提案。');
+    if(source.groups.length!==copy.groupIds.length)throw new Error('组合结构发生变化，本次复制未完成；请使用复制组件修改。');
     source.groups.forEach((group,i)=>{const target=copy.groupIds[i];if(groups.has(group)&&groups.get(group)!==target)throw new Error('无法确认复制组合，本次复制未完成。');groups.set(group,target);});
   }
   const result=next.map(element=>{

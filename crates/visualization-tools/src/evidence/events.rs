@@ -55,7 +55,7 @@ pub(super) async fn list(
         "titles_truncated":events.iter().take(limit).any(|event|matches!(event,reactome::types::EventReference::Event(event) if text(&event.display_name).chars().count()>500)),
         "typed_events_sha256":format!("{:x}",Sha256::digest(serde_json::to_vec(&events).map_err(error)?)),
         "hash_scope":"serde_json_serialization_of_typed_event_list_not_http_bytes_or_full_records",
-        "instruction":"Navigation metadata only: none of these event records has been read by this action. Read relevant IDs with record and compare inputs, outputs, catalyst and receptor/scaffold identity before citing. Prefer a narrow discovered receptor branch over a top-level pathway. An empty or truncated list never proves database-wide absence. No plan, canvas or proposal is changed.",
+        "instruction":"Navigation metadata only: none of these event records has been read by this action. Read relevant IDs with record and compare inputs, outputs, catalyst and receptor/scaffold identity before citing. Prefer a narrow discovered receptor branch over a top-level pathway. An empty or truncated list never proves database-wide absence. No plan or canvas is changed.",
         "results":results}),
     )
 }

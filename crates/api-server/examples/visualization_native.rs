@@ -73,36 +73,6 @@ async fn find_space(
         })?;
     Ok(Json(serde_json::to_value(result).unwrap()))
 }
-// Test-only checkpoint import; deliberately absent from production routers/tools.
-#[derive(serde::Deserialize)]
-struct SavedCandidate {
-    project_id: String,
-    figure_id: String,
-    expected_revision: i64,
-    title: String,
-    document: Value,
-}
-async fn saved_candidate(
-    State(path): State<String>,
-    Json(input): Json<SavedCandidate>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let propose = || -> visualization::Result<Value> {
-        let store = visualization::Store::open(&path)?;
-        Ok(json!(store.propose(
-            &input.project_id,
-            &input.figure_id,
-            input.expected_revision,
-            &input.title,
-            &input.document
-        )?))
-    };
-    propose().map(Json).map_err(|error| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error":error.to_string()})),
-        )
-    })
-}
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -123,7 +93,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(
             Router::new()
                 .route("/test/visualization", post(tool))
-                .route("/test/saved-candidate", post(saved_candidate))
                 .route("/test/bioicons", post(bioicons))
                 .route("/test/bioart", post(bioart))
                 .route("/test/find-space", post(find_space))

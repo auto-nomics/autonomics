@@ -40,8 +40,9 @@ fn colour_proposals_change_only_one_shared_file_instance_and_keep_history() {
     assert_eq!(p["element_id"], target);
     assert_eq!(p["colors"], json!(["#ff0000"]));
     let proposal = recolor(&store, "p", &figure, 1, "node-0", &colors).unwrap();
-    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
-    let next = &proposal.document;
+    assert_eq!(store.get("p", &figure).unwrap().revision, 2);
+    let saved = store.revision("p", &figure, proposal.revision).unwrap();
+    let next = &saved.document;
     let before = element(&original, &target);
     let after = element(next, &target);
     for old in original["elements"]
@@ -79,7 +80,6 @@ fn colour_proposals_change_only_one_shared_file_instance_and_keep_history() {
             .len(),
         64
     );
-    store.accept_proposal("p", &figure, &proposal.id).unwrap();
     assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
     assert_eq!(
         palette(&store, "p", &figure, 2, &other).unwrap()["colors"],
@@ -97,7 +97,7 @@ fn stale_invalid_and_wrong_project_requests_do_not_create_proposals() {
     assert!(recolor(&store, "p", &figure, 1, &target, &colors).is_err());
     assert!(recolor(&store, "p", &figure, 2, &target, &colors).is_err());
     assert!(palette(&store, "other", &figure, 1, &target).is_err());
-    assert!(store.proposals("p", &figure).unwrap().is_empty());
+    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
     assert_eq!(store.get("p", &figure).unwrap().revision, 1);
 }
 
@@ -126,7 +126,7 @@ fn path_style_proposals_preserve_shared_instances_and_source_history() {
         std::slice::from_ref(&edit),
     )
     .unwrap();
-    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
+    assert_eq!(store.get("p", &figure).unwrap().revision, 2);
     for old in original["elements"]
         .as_array()
         .unwrap()
@@ -134,15 +134,28 @@ fn path_style_proposals_preserve_shared_instances_and_source_history() {
         .filter(|e| e["id"] != target)
     {
         assert_eq!(
-            element(&proposal.document, old["id"].as_str().unwrap()),
+            element(
+                &store
+                    .revision("p", &figure, proposal.revision)
+                    .unwrap()
+                    .document,
+                old["id"].as_str().unwrap()
+            ),
             old
         );
     }
     assert_eq!(
-        element(&proposal.document, &other),
+        element(
+            &store
+                .revision("p", &figure, proposal.revision)
+                .unwrap()
+                .document,
+            &other
+        ),
         element(&original, &other)
     );
-    let after = element(&proposal.document, &target);
+    let saved = store.revision("p", &figure, proposal.revision).unwrap();
+    let after = element(&saved.document, &target);
     for (key, value) in element(&original, &target).as_object().unwrap() {
         if !["fileId", "customData", "updated", "version", "versionNonce"].contains(&key.as_str()) {
             assert_eq!(&after[key], value);
@@ -174,8 +187,7 @@ fn path_style_proposals_preserve_shared_instances_and_source_history() {
         )
         .is_err()
     );
-    assert_eq!(store.proposals("p", &figure).unwrap().len(), 1);
-    store.accept_proposal("p", &figure, &proposal.id).unwrap();
+    assert_eq!(store.get("p", &figure).unwrap().revision, 2);
     assert_eq!(
         visualization_assets::parts(&store, "p", &figure, 2, &target).unwrap()["parts"][0]["fill"],
         "#7744aa"
@@ -222,7 +234,7 @@ fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
         std::slice::from_ref(&edit),
     )
     .unwrap();
-    assert_eq!(store.get("p", &figure).unwrap().revision, 1);
+    assert_eq!(store.get("p", &figure).unwrap().revision, 2);
     for old in original["elements"]
         .as_array()
         .unwrap()
@@ -230,15 +242,28 @@ fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
         .filter(|e| e["id"] != target)
     {
         assert_eq!(
-            element(&proposal.document, old["id"].as_str().unwrap()),
+            element(
+                &store
+                    .revision("p", &figure, proposal.revision)
+                    .unwrap()
+                    .document,
+                old["id"].as_str().unwrap()
+            ),
             old
         );
     }
     assert_eq!(
-        element(&proposal.document, &other),
+        element(
+            &store
+                .revision("p", &figure, proposal.revision)
+                .unwrap()
+                .document,
+            &other
+        ),
         element(&original, &other)
     );
-    let after = element(&proposal.document, &target);
+    let saved = store.revision("p", &figure, proposal.revision).unwrap();
+    let after = element(&saved.document, &target);
     assert_eq!(
         after["customData"]["asset"],
         element(&original, &target)["customData"]["asset"]
@@ -248,7 +273,6 @@ fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
         after["customData"]["modifications"][0]["edits"][0]["points"][0]["position"],
         serde_json::json!([7., 9.])
     );
-    store.accept_proposal("p", &figure, &proposal.id).unwrap();
     let next = visualization_assets::parts(&store, "p", &figure, 2, &target).unwrap();
     let changed = visualization_assets::geometry(
         &store,
@@ -273,18 +297,51 @@ fn point_edits_only_change_the_target_svg_and_remain_reviewable() {
 
 #[test]
 fn stroke_width_edit_creates_reviewable_child_and_preserves_shared_file_and_source() {
-    let (store,figure,target,other)=fixture();
-    let original=store.revision("p",&figure,1).unwrap().document;
-    let read=visualization_assets::parts(&store,"p",&figure,1,"node-0").unwrap();
+    let (store, figure, target, other) = fixture();
+    let original = store.revision("p", &figure, 1).unwrap().document;
+    let read = visualization_assets::parts(&store, "p", &figure, 1, "node-0").unwrap();
     let edit:bioicons::parts::Edit=serde_json::from_value(serde_json::json!({"part_id":read["parts"][0]["part_id"],"stroke":"#000000","stroke_width":3.})).unwrap();
-    let proposal=visualization_assets::edit_parts(&store,"p",&figure,1,"node-0",read["sha256"].as_str().unwrap(),&[edit]).unwrap();
-    assert_eq!(store.revision("p",&figure,1).unwrap().document,original);
-    assert_eq!(element(&proposal.document,&other),element(&original,&other));
-    let before=element(&original,&target);let after=element(&proposal.document,&target);
-    assert_ne!(before["fileId"],after["fileId"]);
-    assert_eq!(before["customData"]["asset"],after["customData"]["asset"]);
-    assert_eq!(before["customData"]["source_sha256"],after["customData"]["source_sha256"]);
-    for key in ["x","y","width","height","scale","frameId","groupIds"]{assert_eq!(before[key],after[key]);}
-    for (id,file) in original["files"].as_object().unwrap(){assert_eq!(proposal.document["files"][id],*file);}
-    assert_eq!(store.get("p",&figure).unwrap().revision,1);
+    let proposal = visualization_assets::edit_parts(
+        &store,
+        "p",
+        &figure,
+        1,
+        "node-0",
+        read["sha256"].as_str().unwrap(),
+        &[edit],
+    )
+    .unwrap();
+    assert_eq!(store.revision("p", &figure, 1).unwrap().document, original);
+    assert_eq!(
+        element(
+            &store
+                .revision("p", &figure, proposal.revision)
+                .unwrap()
+                .document,
+            &other
+        ),
+        element(&original, &other)
+    );
+    let before = element(&original, &target);
+    let saved = store.revision("p", &figure, proposal.revision).unwrap();
+    let after = element(&saved.document, &target);
+    assert_ne!(before["fileId"], after["fileId"]);
+    assert_eq!(before["customData"]["asset"], after["customData"]["asset"]);
+    assert_eq!(
+        before["customData"]["source_sha256"],
+        after["customData"]["source_sha256"]
+    );
+    for key in ["x", "y", "width", "height", "scale", "frameId", "groupIds"] {
+        assert_eq!(before[key], after[key]);
+    }
+    for (id, file) in original["files"].as_object().unwrap() {
+        assert_eq!(
+            store
+                .revision("p", &figure, proposal.revision)
+                .unwrap()
+                .document["files"][id],
+            *file
+        );
+    }
+    assert_eq!(store.get("p", &figure).unwrap().revision, 2);
 }

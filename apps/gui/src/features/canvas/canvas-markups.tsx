@@ -105,7 +105,7 @@ export function CanvasMarkups(props: CanvasAgentHandoffProps & { agentPath?: str
       {(error || handoff.error) && <p role="alert" className="p-2 text-sm text-destructive">{[error, handoff.error].filter(Boolean).join("；")}</p>}
       <div className="flex min-h-0 flex-1"><aside className="flex w-64 shrink-0 flex-col gap-2 overflow-auto border-r p-3">
         <Button size="sm" disabled={busy} onClick={() => void start()}>新建标记</Button>
-        <p className="text-xs text-muted-foreground">可保存标记并直接准备修改草稿，检查后再发送给所选 Agent；不会自动采用或完成标记。交接失败后可从已保存记录重试。</p>
+        <p className="text-xs text-muted-foreground">可保存标记并直接准备修改草稿，检查后再发送给所选 Agent；不会自动发送或完成标记。交接失败后可从已保存记录重试。</p>
         <p className="text-xs text-muted-foreground">笔迹与说明独立保存，不进入正式图稿或导出。可筛选待处理意见并加载更早记录。</p>
         <label className="text-sm">标记状态<select aria-label="标记状态" className="mt-1 w-full rounded border bg-background p-1" value={status} disabled={busy} onChange={async event => {
           const filter = event.target.value; setBusy(true); setError(""); handoff.clearError();

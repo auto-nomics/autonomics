@@ -12,7 +12,7 @@ import { emptySvgPathState, svgPathTransition, type SvgPathEvent, type SvgPathCo
 import { embedLocalSvgFonts } from "./canvas-svg-fonts";
 import { hasProtectedCopyTarget, prepareNativePaste, repairNativeDuplicate, stampNativeIdentities } from "./canvas-native-duplicate";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Excalidraw, MainMenu, exportToBlob, exportToSvg, serializeAsJSON } from "@excalidraw/excalidraw";
+import { Excalidraw, MainMenu, CaptureUpdateAction, exportToBlob, exportToSvg, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
 import "@excalidraw/excalidraw/index.css";
 import { gatewayRequest } from "@/gateway";
@@ -32,7 +32,6 @@ import { CanvasFrameFit } from "./canvas-frame-fit";
 import { CanvasRouting } from "./canvas-routing";
 import { CanvasMarkups } from "./canvas-markups";
 import { CanvasHistory } from "./canvas-history";
-import { CanvasProposals } from "./canvas-proposals";
 import { CanvasIllustratorContext } from "./canvas-illustrator-context";
 import { useCanvasIllustrator } from "./use-canvas-illustrator";
 import { CanvasSelectionAnnotations } from "./canvas-selection-annotations";
@@ -64,10 +63,13 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const viewportSize = useRef<{width:number;height:number}|null>(null);
   const titleRef = useRef("");
   const saving = useRef(false);
+  const syncing = useRef(false);
+  const previewRevision = useRef<number | undefined>(undefined);
+  const lastEditAt = useRef(0);
+  const syncRef = useRef<() => Promise<void>>(async () => {});
   const latestTitle = useRef("未命名画布");
   const [title, setTitle] = useState("未命名画布");
   const [error, setError] = useState("");
-  const [proposalRequest, setProposalRequest] = useState<{ id: string }>();
   const [imagesReady, setImagesReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [initial, setInitial] = useState<ExcalidrawInitialDataState | null>(null);
@@ -101,6 +103,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   }, [id, projectId]);
   const dirty = (value: boolean, count?: number, fileCount?: number, providedSelection?: ReturnType<typeof canvasSelectionContext>) => {
     setDocumentDirty(`canvas:${id}`, value);
+    if (value && !saving.current) lastEditAt.current = Date.now();
     const selection = providedSelection ?? canvasSelectionContext(api.current?.getSceneElements() ?? [], api.current?.getAppState().selectedElementIds ?? {});
     pathDirty.current=value;
     const selectionKey=JSON.stringify(selection.ids);
@@ -146,6 +149,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       const dataURL = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
       if (version !== revision.current || serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== observed) throw new Error("生成预览时画布发生变化，请重新保存并交接。");
       await gatewayRequest("PUT", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(id)}/revisions/${version}/preview`, { dataURL });
+      previewRevision.current = version;
       return true;
     } finally { setBusy(false); }
   }
@@ -169,6 +173,47 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     const instance = api.current;
     return saving.current || !instance || serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current;
   };
+  async function syncCanvas() {
+    const instance = api.current;
+    if (!projectId || !instance || !loaded || saving.current || syncing.current) return;
+    syncing.current = true;
+    try {
+      const head = await gatewayRequest("GET", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(id)}/head`) as { revision: number };
+      if (head.revision === revision.current) {
+        if (hasUnsavedChanges()) {
+          if (Date.now() - lastEditAt.current >= 600) await save();
+        } else if (previewRevision.current !== revision.current && instance.getSceneElements().length) {
+          await capturePreview();
+        }
+        return;
+      }
+      const record = await readCanvas(id, projectId);
+      if (hasUnsavedChanges()) {
+        setError("Agent 已更新画布；本地有未保存的编辑，请先导出本地源文件，再重新载入最新画布。");
+        return;
+      }
+      const scene = normalizeEmptyNativeFields(JSON.parse(record.scene || "{}"));
+      sourceFiles.current = structuredClone(scene.files ?? {});
+      revision.current = record.revision;
+      titleRef.current = record.title; latestTitle.current = record.title; setTitle(record.title);
+      instance.addFiles(Object.values(scene.files ?? {}));
+      instance.updateScene({ elements: scene.elements, ...(typeof scene.appState?.viewBackgroundColor === "string" ? { appState: { viewBackgroundColor: scene.appState.viewBackgroundColor } } : {}), captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      baseline.current = serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local");
+      dirty(false);
+      setError("");
+      if (instance.getSceneElements().length) await capturePreview();
+    } catch (cause) { setError(`画布同步失败：${String(cause)}`); }
+    finally { syncing.current = false; }
+  }
+  syncRef.current = syncCanvas;
+  useEffect(() => {
+    if (!projectId || !loaded) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => { await syncRef.current(); if (!stopped) timer = setTimeout(tick, 750); };
+    void tick();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [projectId, id, loaded]);
   async function ensureSaved() {
     if (saving.current) return false;
     if (!hasUnsavedChanges()) return true;
@@ -190,9 +235,9 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); void save(); }
   }}>
-    {inspectedPath && <div aria-label="SVG 路径上下文" className="flex items-center gap-2 border-b px-2 py-1 text-xs text-muted-foreground"><span>{inspectedPath.panel_visible?"正在查看":"上次查看"}：{inspectedPath.scope==="proposal_candidate"?"候选":"正式图"} SVG 路径 {inspectedPath.part_index}</span><Button size="sm" variant="ghost" onClick={() => publishPath({kind:"clear"})}>清除路径上下文</Button></div>}
+    {inspectedPath && <div aria-label="SVG 路径上下文" className="flex items-center gap-2 border-b px-2 py-1 text-xs text-muted-foreground"><span>{inspectedPath.panel_visible?"正在查看":"上次查看"}：画布 SVG 路径 {inspectedPath.part_index}</span><Button size="sm" variant="ghost" onClick={() => publishPath({kind:"clear"})}>清除路径上下文</Button></div>}
     {illustrator.error && <p role="alert" className="p-2 text-sm text-destructive">{illustrator.error}</p>}
-    {error && <p role="alert" className="p-2 text-sm text-destructive">{error}</p>}
+    {error && <div role="alert" className="p-2 text-sm text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => { if (!hasUnsavedChanges() || window.confirm("重新载入会丢弃本地未保存的编辑。请先导出需要保留的内容，是否继续？")) onReload(); }}>重新载入画布</Button></div>}
     {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" style={{ containerType: "inline-size" }} ref={surface} data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => {
         api.current = instance;pointerSubscription.current?.();
@@ -265,25 +310,24 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
           <CanvasActionMenu label="审阅批注" icon={MessageSquare}>
             <CanvasActionGroup title="审阅与协作">
       {projectId && <CanvasMarkups agentPath={illustrator.path} projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} capturePreview={capturePreview} isDirty={hasUnsavedChanges} />}
-      {projectId && <CanvasProposals projectId={projectId} canvasId={id} isDirty={hasUnsavedChanges} onAccepted={onReload} request={proposalRequest} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
           <CanvasActionMenu label="对象编辑" icon={Shapes}>
             <CanvasActionGroup title="对象编辑">
       <CanvasCodeDrawing getApi={() => api.current} disabled={!loaded || busy} />
-      {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasDuplicate projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasEvidenceList projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasRelation projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasDuplicate projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasEvidenceList projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
           <CanvasActionMenu label="布局连线" icon={LayoutGrid}>
             <CanvasActionGroup title="分面与连线">
-      {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasFrameFit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
-      {projectId && <CanvasFrameSwap projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onProposed={id => setProposalRequest({ id })} />}
+      {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasFrameFit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
+      {projectId && <CanvasFrameSwap projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
           <CanvasActionMenu label="版本" icon={History}>
