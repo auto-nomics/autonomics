@@ -1,19 +1,34 @@
 /**
- * Slide-content markdown pipeline.
+ * Slide-content markdown pipeline — Comark edition.
  *
- * Same math/GFM base as the app pipeline (`lib/markdown.ts`), plus:
+ * Same shared base as the agent/wiki pipelines (`lib/comark-markdown`):
+ * math, breaks, GFM, the `.md-code` shell — plus deck specifics:
  * - `assets://{id}` refs resolved to raw asset URLs before parsing;
- * - `<v-click>` markers annotated to `data-deck-click` spans (order must
- *   match the server's ClickPlan — see deck-model.ts);
- * - ```mermaid fences rendered by the lazy-loaded mermaid module.
+ * - `<v-click>` markers annotated to `data-deck-click` spans after
+ *   rendering (order must match the server's ClickPlan — see
+ *   deck-model.ts). Comark passes raw HTML (tags and attributes)
+ *   straight through, so the annotation regexes see the same shapes the
+ *   marked pipeline produced;
+ * - ```mermaid fences live-render client-side by the lazy mermaid module
+ *   (the Rust engine wraps them as `deck-mermaid-holder` blocks).
+ *
+ * Rendering is async (Comark decouples parse from render); SlideView
+ * consumes it through `useSlideContent`, which keeps the last frame
+ * while the next one renders.
  */
+import { useEffect, useState } from "react";
+import { createHtmlRenderer } from "@comark/html";
 import DOMPurify from "dompurify";
-import { createMarkdownPipeline, escapeHtml } from "@/lib/markdown";
+import { comarkBasePlugins, comarkBaseComponents } from "@/lib/comark-markdown";
+import { escapeHtml } from "@/lib/markdown";
 import type { AssetMeta } from "../deck-api";
 import { annotateClickElements } from "./deck-model";
 import { renderMermaidBlocks } from "./mermaid";
 
-const deckPipeline = createMarkdownPipeline();
+const deckRenderer = createHtmlRenderer({
+  plugins: comarkBasePlugins,
+  components: comarkBaseComponents,
+});
 
 export interface SlideRenderOptions {
   deckId: string;
@@ -21,19 +36,38 @@ export interface SlideRenderOptions {
 }
 
 /** Parse one slide's markdown into sanitized HTML with annotations. */
-export function renderSlideContent(content: string, options: SlideRenderOptions): string {
+export async function renderSlideContent(content: string, options: SlideRenderOptions): Promise<string> {
   const resolved = resolveAssetRefs(content, options.assets, options.deckId);
-  const parsed = deckPipeline.parse(resolved);
+  const parsed = await deckRenderer(resolved);
   const annotated = annotateClickElements(parsed);
   // Mermaid fences → placeholder divs (lazy client render); sync blocks
   // render inline via the shared pipeline's code renderer otherwise.
-  const sanitized = DOMPurify.sanitize(annotated, {
+  return DOMPurify.sanitize(annotated, {
     USE_PROFILES: { html: true, mathMl: true },
     ADD_TAGS: ["semantics", "annotation"],
     // data-deck-click / data-deck-at / data-mermaid survive sanitize.
     ADD_ATTR: ["data-deck-click", "data-deck-at", "data-mermaid", "target"],
   });
-  return sanitized;
+}
+
+/**
+ * Per-slide rendered HTML. Keeps the last frame while the next one
+ * renders; DOM passes in SlideView (mermaid, click visibility) key on
+ * the returned HTML, so they re-run after markup lands.
+ */
+export function useSlideContent(content: string, options: SlideRenderOptions): string {
+  const { deckId, assets } = options;
+  const [html, setHtml] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    renderSlideContent(content, { deckId, assets }).then((next) => {
+      if (!cancelled) setHtml(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content, deckId, assets]);
+  return html;
 }
 
 function resolveAssetRefs(content: string, assets: AssetMeta[], deckId: string): string {

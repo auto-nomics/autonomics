@@ -8,7 +8,7 @@
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { AssetMeta, OutlineEntry, SlideSpec } from "../deck-api";
-import { figureImageSrc, renderSlideContent, renderMermaidBlocks } from "./markdown";
+import { figureImageSrc, useSlideContent, renderMermaidBlocks } from "./markdown";
 import { applyClickVisibility, CLICK_HIDDEN } from "./deck-model";
 import { scopeSlideCss } from "./scoped-css";
 import { SectionNav } from "./section-nav";
@@ -41,11 +41,9 @@ export function SlideView({
   outline,
   onNavigate,
 }: SlideViewProps): React.ReactNode {
-  const html = useMemo(
-    () => renderSlideContent(slide.content, { deckId, assets }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- revision pins content
-    [slide.revision, deckId, assets],
-  );
+  // Comark renders async; the hook keeps the last frame between revisions
+  // and the DOM passes below (mermaid, click visibility) key on `html`.
+  const html = useSlideContent(slide.content, { deckId, assets });
   const figureSrc = useMemo(
     () => figureImageSrc(slide.frontmatter.image, { deckId, assets }),
     [slide.frontmatter.image, deckId, assets],

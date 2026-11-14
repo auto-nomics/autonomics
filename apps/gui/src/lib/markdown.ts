@@ -7,9 +7,7 @@
  *  - `wikiLexer` — the wiki block editor's lossless block splitter; it
  *    needs each top-level block's raw source fragment, which Comark's
  *    compact AST does not preserve.
- *  - `createMarkdownPipeline` / `escapeHtml` / `SANITIZE` — the deck
- *    feature builds its slide renderer on the factory, and the Comark
- *    pipelines reuse `escapeHtml` and the shared DOMPurify profile.
+ *  - `escapeHtml` / `SANITIZE` — reused by the Comark pipelines.
  *
  * KaTeX runs in MathML output mode: the gateway serves the SPA as three
  * embedded text assets, so there are no font files to host — the browser
@@ -267,9 +265,5 @@ export function wikiLexer(content: string): Tokens.Generic[] {
   return wikiPipeline.lexer(content);
 }
 
-/**
- * Escape hatch for feature-local pipelines (deck slides add asset-ref +
- * click-directive handling on top of the same math/GFM base). The deck
- * feature sanitizes with its own profile (it injects data-* attributes).
- */
-export { createMarkdownPipeline, SANITIZE };
+/** Shared DOMPurify profile (html + mathMl) for the Comark pipelines. */
+export { SANITIZE };

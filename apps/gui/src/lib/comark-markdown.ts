@@ -49,9 +49,19 @@ export const comarkBaseComponents = {
     return `<span class="md-math${display ? " md-math--display" : ""}">${rendered}</span>`;
   },
   // Code shell (language header + copy button) — same markup the marked
-  // pipeline produced, so view CSS and copy handlers carry over.
+  // pipeline produced, so view CSS and copy handlers carry over. Only
+  // markdown fences (a `language` attr on the pre node) get the shell;
+  // raw `<pre>` passthrough keeps its own markup and classes verbatim
+  // (e.g. the deck engine's `<pre><code class="language-mermaid">`
+  // holders that the lazy mermaid renderer scans for).
   pre: async ([, attrs, codeNode]: ElementNode) => {
-    const language = String(attrs?.language ?? "").trim().split(/\s+/)[0] ?? "";
+    const codeAttrs = Array.isArray(codeNode) && codeNode[1] && typeof codeNode[1] === "object" ? codeNode[1] : {};
+    if (attrs?.language === undefined) {
+      const cls = codeAttrs.class ? ` class="${escapeHtml(String(codeAttrs.class))}"` : "";
+      const text = Array.isArray(codeNode) ? String(codeNode[2] ?? "") : "";
+      return `<pre><code${cls}>${escapeHtml(text)}</code></pre>`;
+    }
+    const language = String(attrs.language).trim().split(/\s+/)[0] ?? "";
     const text = Array.isArray(codeNode) ? String(codeNode[2] ?? "") : "";
     return [
       '<div class="md-code">',
