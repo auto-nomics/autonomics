@@ -55,7 +55,7 @@ export async function runLiveReviewedRepair({page,call,path,send,persist,directo
  await page.getByRole('button',{name:'查看 Agent 提案',exact:true}).click();const dialog=page.getByRole('dialog',{name:'Agent 修改预览',exact:true});
  await dialog.getByRole('button',{name:`${parent.summary} · v${revision}`,exact:true}).click();await dialog.getByRole('region',{name:'候选画布'}).locator('.excalidraw').waitFor();
  const request=[
-  '这是对保存图稿的两项明确审阅意见，请定点修订，不重建图稿，也不要修改已保存计划或历史 planningSource。',
+  '这是对保存图稿的两项明确审阅意见，请定点修订，不重建图稿，也不要修改其他元数据。',
   `1. 重新读取 Reactome R-HSA-5672973：输出复合物名称含 p-2T MAPK，而正文说明活化环 threonine 和 tyrosine 磷酸化。核对这个来源字段冲突；仅将 ${targets.erk_id} 的完整文字改为「${targets.expected_erk_text}」，用 set_wrapped_text 在原绑定容器中重排。不要把矛盾简写继续作为残基化学结论，也不要新增残基编号或删引用。`,
   `2. ${targets.crossing.arrow_id} 穿过所属插图的标签 ${targets.receptor_label_id}。只调整这份独立标签的 x/y 和换行宽度，使其避开连线及其他文字，可放在插图旁边；完整原文、字号、字体、来源不变，仍在原分面内。不要移动图片、锚点、连线或其他标签。`,
   '先读取父候选与 PNG，逐步生成单一连续子候选链；读取最终候选 PNG 核对后留待审阅，不采用。除了上述两份文字允许的编辑，所有对象、文件、证据、关系、元数据及历史保持原样。'

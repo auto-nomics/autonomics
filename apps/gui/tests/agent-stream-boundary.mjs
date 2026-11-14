@@ -78,13 +78,13 @@ try {
   emit({LifecycleChanged:'STREAMING'});emit({TextDelta:preface.slice(0,10)});
   emit({ToolCall:{name:'unrelated_agent_tool',input:{}}},'/root/beta');
   emit({TextDelta:preface.slice(10)});emit({UsageUpdate:{input_tokens:100,output_tokens:20}});
-  emit({ToolCall:{name:'save_plan',input:{planning_version:2}}});emit({ToolResult:{ok:true,content:'{"version":3}'}});
-  emit({ToolCall:{name:'read_plan',input:{}}});emit({ToolResult:{ok:true,content:'{"status":"ready"}'}});
+  emit({ToolCall:{name:'write_note',input:{version:2}}});emit({ToolResult:{ok:true,content:'{"version":3}'}});
+  emit({ToolCall:{name:'read_note',input:{}}});emit({ToolResult:{ok:true,content:'{"status":"ready"}'}});
   emit({TextDelta:final.slice(0,13)});emit({TextDelta:final.slice(13)});emit({LifecycleChanged:'IDLE'});flush();
   const copies=page.getByRole('button',{name:'复制助手回复',exact:true});await copies.nth(1).waitFor();assert.equal(await copies.count(),2,'tool boundary separates commentary from final text');
   await copies.last().click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),final);
   await copies.first().click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),preface,'other-agent tools do not split this assistant stream');
-  historyRows=[{id:'preface',role:'assistant',content:[{type:'text',text:preface},{type:'tool_use',id:'tool',name:'save_plan',input:{}}]},{id:'result',role:'user',content:[{type:'tool_result',tool_use_id:'tool',content:'{"version":3}'}]},{id:'final',role:'assistant',content:[{type:'text',text:final}]}];
+  historyRows=[{id:'preface',role:'assistant',content:[{type:'text',text:preface},{type:'tool_use',id:'tool',name:'write_note',input:{}}]},{id:'result',role:'user',content:[{type:'tool_result',tool_use_id:'tool',content:'{"version":3}'}]},{id:'final',role:'assistant',content:[{type:'text',text:final}]}];
   await page.reload();await page.getByRole('button',{name:'复制助手回复',exact:true}).nth(1).waitFor();
   await page.getByRole('button',{name:'复制助手回复',exact:true}).last().click();assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),final,'reloaded final text agrees exactly with streamed final text');assert.deepEqual(errors,[]);
   console.log('agent-stream-boundary: distinct copied replies across tools, other-agent isolation and history reload passed');

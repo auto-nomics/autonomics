@@ -73,14 +73,6 @@ fn contradictory_inhibition_is_rejected_without_silent_direction_changes() {
                     .to_string()
                     .contains("inhibitory is supported only for forward")
             );
-            let brief: visualization::planning::Brief =
-                serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap();
-            assert!(brief.issues().iter().any(|issue| {
-                issue.field == "structure"
-                    && issue
-                        .message
-                        .contains("inhibitory is supported only for forward")
-            }));
             assert_eq!(input.edges[3].direction, direction);
             assert!(input.edges[3].inhibitory);
         }

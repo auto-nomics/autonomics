@@ -22,7 +22,6 @@ mod node_geometry;
 pub mod markup;
 mod panel_routes;
 mod panels;
-pub mod planning;
 pub mod placement;
 pub mod preview;
 pub mod proposal;

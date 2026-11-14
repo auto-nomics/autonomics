@@ -4,6 +4,9 @@
 /// [`agentik_core::AgentKind`] or a [`RuntimeConfig`] — both carry the same
 /// boolean tool-capability flags.
 pub trait PromptCapabilities {
+    fn is_illustrator(&self) -> bool {
+        false
+    }
     fn enable_bibliography(&self) -> bool;
     fn enable_opengwas(&self) -> bool;
     fn enable_opentargets(&self) -> bool;
@@ -43,6 +46,9 @@ pub trait PromptCapabilities {
 // we can build a dynamic system prompt that only mentions tools the kind
 // actually enables.
 impl PromptCapabilities for crate::profile::AgentKind {
+    fn is_illustrator(&self) -> bool {
+        matches!(self, Self::Illustrator)
+    }
     fn enable_bibliography(&self) -> bool {
         (*self).enable_bibliography()
     }

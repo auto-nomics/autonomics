@@ -773,6 +773,28 @@ export function useAgentRuntime() {
     }
   }, [closeTab, refreshStoredAgents]);
 
+  const specialistRequests = useRef(new Map<string, Promise<string>>());
+  const ensureIllustratorAgent = useCallback((name: string): Promise<string> => {
+    const path = `/root/${name}`;
+    if (stateRef.current.agents.some(agent => agent.path === path)) {
+      setOpenTabs(current => current.includes(path) ? current : [...current, path]);
+      return Promise.resolve(path);
+    }
+    const pending = specialistRequests.current.get(path);
+    if (pending) return pending;
+    const request = (async () => {
+      const result = await gatewayRequest("POST", "/agents", {
+        name, parent_path: "/root", profile: "illustrator", model_spec: null,
+      });
+      if (result?.path !== path) throw new Error("插画专家创建失败：返回的 Agent 路径不匹配。");
+      setAgents(current => current.some(agent => agent.path === path) ? current : [...current, { path, agent_id: null, status: "Idle" }]);
+      setOpenTabs(current => current.includes(path) ? current : [...current, path]);
+      return path;
+    })().finally(() => specialistRequests.current.delete(path));
+    specialistRequests.current.set(path, request);
+    return request;
+  }, []);
+
   const spawnAgent = async (input: { name: string; parentPath: string; profile: string }) => {
     setBusy("spawn");
     try {
@@ -897,6 +919,7 @@ export function useAgentRuntime() {
     statuses,
     selectAgent,
     spawnAgent,
+    ensureIllustratorAgent,
     shutdownAgent,
     resumeAgent,
     storedAgents,

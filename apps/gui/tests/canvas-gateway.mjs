@@ -69,12 +69,10 @@ try {
     await page.locator('[data-canvas-surface] .excalidraw:visible').waitFor();
   };
   await handoff('Help draft a figure; first clarify which generic components and relations to use.', 3, 0);
-  assert.equal((await call('GET', `${path}/planning`)).status, 'needs_clarification');
   assert.equal((await call('GET', `${path}/proposals`)).length, 0);
   assert.equal((await call('GET', path)).scene.document.elements.length, 0);
   const answer = 'Show generic A, B and C, with explicit A to B and B to C relations.';
   await handoff(answer, 7, 1);
-  const plan = await call('GET', `${path}/planning`); assert.equal(plan.document.questions[0].answer, answer);
   const initialCandidates = (await call('GET', `${path}/proposals`)).filter(item => item.status === 'pending'); assert.equal(initialCandidates.length, 1);
   assert.equal((await call('GET', path)).scene.document.elements.length, 0);
   await adopt('Generic pathway draft');

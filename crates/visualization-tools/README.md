@@ -2,7 +2,6 @@
 
 Agent 工具适配层，独立于 runtime 和 HTTP 服务。Runtime 使用 `registrations(database_path)` 与 `bioart_registrations(database_path)` 注册；二者使用与 Gateway 相同的项目画布数据库。
 
-- visualization：projects、list、read、read_image、read_preview、read_markup、read_plan、save_plan、sketch_plan、create、sketch、propose、apply。
 - bioart：search、preview、insert、replace；图片数据和来源信息一同保存。
 
 优先使用 propose 供用户在 GUI 预览和采用；所有修改必须使用已读取的版本。GUI 未保存内容不会自动暴露给工具。
@@ -21,9 +20,7 @@ Agent 工具适配层，独立于 runtime 和 HTTP 服务。Runtime 使用 `regi
 
 sketch.document 支持 layout=grid（默认）、horizontal、vertical。网格模式要求唯一 column/row；自动模式省略坐标，按显式边分层，保留反馈和并行关系。图稿仍作为可审阅提案进入活动画布。自动布局不会补充科学关系；环内节点输入顺序影响前向/反馈通道。
 
-科研规划使用 read_plan / save_plan / sketch_plan。save_plan.document 保存科学图意、受众、组件、关系、假设及问题/答案，可在信息不完整时持久化；生成要求 issues 为空且计划与图稿版本一致。planning_version=0 创建，后续使用 read_plan 返回的 version。更新和生成均须 expected_revision；旧版写入返回冲突。已有计划的画布必须使用 sketch_plan 生成草图，不能用直接 sketch 跳过问题历史。普通 read 只附计划摘要。
 
-多面板计划：`panels:[{id,title,column,row}]`，每个 node 的 `panel` 引用所属面板，组件 ID 全图唯一。各面板独立布局；显式跨面板 edges 生成绑定实际组件的场景级连接线，正交路径避开节点和标题，保留方向、抑制与依据。输出保留原生 frameId，更新 frame 的 x/y 会整体移动内容并更新外部箭头端点（不会在每次移动时自动重新避障），删除 frame 则保留内容并解除归属。GUI 绘图计划与 save_plan/sketch_plan 使用同一结构与版本审阅流程。
 
 `{op:"reroute",id}` 仅整理现有生成式跨面板箭头；可放在 propose.operations 中，跟在移动操作之后执行。以当前绑定和当前标签尺寸重新避障，保留文字、样式、ID、科学依据及无关对象。操作失败时整批回滚，不从旧计划重建图稿。端点解绑、旋转的绑定组件或无效几何需先处理；普通手绘箭头不在此操作范围。GUI 的“整理跨面板连线”使用相同操作并进入提案审阅流程。
 
@@ -73,7 +70,6 @@ GUI 的 `test:canvas:bioart-svg:catalog` 验证真实目录搜索/预览/插入�
 
 候选预览由已登录工作台统一渲染，不再要求目标画布编辑器已打开。队列仍只接受显式 `read_proposal_preview` 请求；首次字体初始化在正式渲染前完成。没有打开工作台时仍可能排队或失败，应保持工作台登录后重试，不会替换成正式画布图像。完全无浏览器的渲染尚未实现。
 
-科学计划的 `edges[].direction` 支持 `forward`（默认）、`bidirectional`、`undirected`，控制原生连线两端箭头，跨面板同样适用。`from/to` 对无向关系仅为布局端点；不得推断因果。`inhibitory:true` 仅支持单向；冲突需先澄清或显式修正，不自动改写。`read_plan/save_plan/sketch_plan` 与直接 `sketch` 共用该计划结构。
 
 现有连线的局部修改可用 `operations:[{op:"set_relation_direction",id:"edge-0",direction:"bidirectional",inhibitory:false}]`，两个状态字段都必须明确给出。支持提案与候选连续修订，保留端点几何、绑定、文字、依据和历史计划。不能用来改变放大图引导线、批注或已锁定/删除对象；不能将抑制与双向/无向组合。改变图示方向前须核对科学意图及证据，不要据新端标记声称已经验证机制。
 
@@ -84,7 +80,6 @@ GUI 的 `test:canvas:bioart-svg:catalog` 验证真实目录搜索/预览/插入�
 `propose` / `revise_proposal` 的 `sync_inset_region` 操作用于源图变换后重新定位固定快照的区域框和引导线，不刷新放大内容。指定完整放大图的锚点或图片 ID；以记录的原始裁剪像素及源文件 SHA-256 校验定位，保留快照、引用和图像字节。源文件变化、区域被裁掉、成员不完整/锁定、旋转面板或复杂引导线会拒绝，应核对并选择显式刷新或原生编辑。该操作生成待审候选，不启用自动跟随。
 
 
-`save_plan` 优先使用独立的 `planning` 对象参数（message/audience/layout/nodes/edges/assumptions/relationship_note/questions），与任意场景导入的 `document` 联合类型分开，保持嵌套数组的明确 schema。旧 document 兼容，禁止两者同时传入；planning 只能用于 save_plan。数组仍严格验证，不将 item 包装或字符串自动视作数组，未回答问题保存在 questions 中，不能只写入 message。实际 Gateway 模型已用该通道保存 8 个结构化问题。
 
 
 FigureTool 的输入反序列化错误会报告具体字段（例如 `input.markup_ids`），操作解析报告操作下标。`markup_ids` 必须是 JSON 数组；不自动把 `{}`、item 包装或字符串转换成 `[]`。省略字段不代表解除父候选已有的审阅关联，显式 `[]` 才可解除，且不关闭原审阅。18 项工具回归覆盖错误输入无子提案、显式保留/解除关联、父候选和正式版本不变。
@@ -105,11 +100,9 @@ BioArt 和 BioIcons 的 `replace` 支持可选 `proposal_id` 与 `document_sha25
 
 ### 精确范围的只读后续参数
 
-成功的、有画布范围的 `visualization` 结果附带 `figure_scope` 与 `follow_up_inputs`。后者提供可直接复制为工具输入的 `read`/`read_plan`；候选创建、读取及 PNG 元数据还包含完整的 `read_proposal`/`read_proposal_preview` 参数。`candidate_context` 给出真实项目、画布、候选 ID、文档哈希、当前 `expected_revision` 与原 `base_revision`。复制参数，勿从 `visualization_id` 推导输入字段或重写 UUID，也不要把 `planning_version` 当作图稿版本。
 
 这些是只读输入，既不自动执行，也不采用、修改或授权候选。结果过期后调用仍会冲突，需显式重新读取并核对；检查历史候选时保留当前图稿版本与候选基础版本的区别。不补齐错误请求的 ID，不猜测项目或图稿。字段是工具输出的附加上下文，不写入正式场景、候选文档或计划历史；当前只适用于 `visualization` 工具，目录素材工具的结果格式不在此变更范围。
 
-注册工具回归验证计划 v3 / 图稿 v1 下原样复制参数可读取正确候选，错误项目/画布/候选与计划版本误用仍拒绝，过期输入不自动刷新，显式读取历史候选使用当前图稿版本，原候选哈希不变。PNG 回归核对图像块旁元数据中的同一参数（含已采用的历史候选）；22 项工具库测试、注册回归与严格 Clippy 通过。真实模型能否减少误填 ID 与重复生成，仍需独立验收。
 
 后续真实单例 `/tmp/autonomics-canvas-live-dNDUtr` 已完成三轮来源工作流，第三轮六次绘图调用均成功（创建、读取、子候选修订和 PNG 检查），GUI 采用及来源导出通过。此前 44 次/29 错误的失败轨迹仍保留；两次运行不足以证明所有模型或场景的稳定性。图下说明的科学语言仍有两处需按明确审阅意见收窄，独立记录于 `manual-source-review.json`；结构/调用成功不等于每一句话获科学验证。
 
@@ -176,7 +169,6 @@ BioArt 插入/替换以及 BioIcons 插入/替换/改色/路径修改的成功�
 
 正式图稿端到端回归可在 GUI 目录运行 `test:canvas:formal-scoped-source-review:live`（配置同上，输入为保留原范围短语的已保存IFNG图稿）。从正式图开始，不预创建候选，验证实际局部读取返回、propose、候选PNG、采用前正式图不变、GUI采用与可编辑导出。v76已通过，模型另有一次被禁用记忆工具拒绝的非绘图调用；不将单例通过解释为跨主题科学正确性。
 
-科学计划 edges 可显式传 `line_style:"solid"|"dashed"|"dotted"`，缺省实线。该字段进入原生 strokeStyle，独立于 direction/inhibitory；任何科学含义由明确标签/图例和依据表达，不能把 dashed 当作已证实的可选性。原生浅更新已有箭头时使用 strokeStyle 字段，保留其ID/绑定/文字/来源；不要为改线型重建关系。
 
 ## 查询新增对象的位置
 
@@ -189,9 +181,7 @@ BioArt 插入/替换以及 BioIcons 插入/替换/改色/路径修改的成功�
 v83 已通过实际模型区域查询→BioArt预览/插入→单图移动→GUI采用/源与来源清单导出（约161秒、20调用1次恢复），原图逐字段保持。输入为显式已保存的v79图稿，不冒充同会话从空项目生成。独立BioArt插入的PNG哈希字段为customData.sha256；带图预览的SDK文本可附[image omitted]标记，评估只剥离这一已知尾标记，仍严格解析其JSON并核对实际文件哈希。
 
 
-`test:canvas:plan-agent-review:live` 使用 `VISUALIZATION_LIVE_PLAN_REVIEW_SOURCE` 显式提供已保存的计划记录，走实际 GUI 计划审阅草稿和生产 Gateway：先验证只读建议不写入，再明确授权一条标签修订，核对计划历史、其他字段、正式图与候选保持。不提供计划时在启动模型前拒绝；该测试不代表新科学图生成。
 
-计划审阅可勾选已保存长标签，草稿中的 `selected_plan_fields` 绑定当前计划版本；非空时提示 Agent 仅审阅这些字段，保存仍需用户明确要求。这是模型上下文约束，不是服务端字段级权限。`test:canvas:plan-agent-focus` 验证原生 GUI 的范围选择、重开清空与版本保护；`test:canvas:plan-agent-focus:live` 沿用上述显式计划源，额外通过实际 GUI 勾选字段验证两轮模型行为。
 
 
 可用只读命令 `cargo run -p visualization --example find_space -- SCENE_JSON REFERENCE_ID WIDTH HEIGHT GAP` 检查显式保存的场景、图稿记录或原生导出（输入上限64MiB）。输出几何诊断与候选位置，不打开数据库、不写源文件、不下载素材。
@@ -208,23 +198,15 @@ v83 已通过实际模型区域查询→BioArt预览/插入→单图移动→GUI
 
 `test:canvas:context-art:image-info:live` 在显式保存图上验证素材结果和图片聚焦草稿中的image_info模板被真实模型执行，核对候选范围、文件哈希、自然尺寸与无字节响应，再执行仅图片移动、采用和导出；需 `VISUALIZATION_LIVE_SOURCE_REVIEW_SCENE`。此模式要求实际元数据调用，不以仅出现模板作为通过依据。
 
-`test:canvas:plan-review-compiled` 接收 `VISUALIZATION_PLAN_REVIEW_COMPILED_SOURCE`（含 review-original-plan.json / review-final-plan.json 的显式审阅目录），在新项目中分别编译两份计划，核对仅指定标签变化、预览前后PNG并由GUI采用和导出；不调用模型，不代表重新检索科研来源。
 
-单条已保存计划标签修订可用 `visualization_update_plan_label`：传项目/图稿、`expected_revision`、`planning_version`、规范字段路径 `nodes[i].label` / `edges[i].label` / `panels[i].title`、完整 `expected_text` 和新 `text`。服务端读取并保留全部其他字段，仅以当前版本保存该标签；原文不匹配、旧计划基线、无效路径、空白/超过120字符或无变化均拒绝。成功返回新计划版本、变化字段及布局诊断，不生成候选、不修改画布，也不证明措辞科学正确。用户需明确授权保存。注册工具测试：`cargo test -p visualization-tools --test plan_label`。
 
-`test:canvas:plan-agent-label:live` 使用同一显式计划源，实际GUI勾选标签，验证只读轮无写入和授权轮确实调用 `visualization_update_plan_label`（不回传完整计划），并核对所有其他字段、历史与正式画布保持。
 
 计划 `layout_review.long_labels[].context` 提供声明的节点/面板归属；关系的 `cross_panel` 为 false/true/null，分别表示同面板/跨面板/未声明可比较归属。它是计划拓扑而非像素布局原因、来源验证或生物因果推断；不能从标签长短猜测跨面板关系。旧诊断可缺少 context。
 
-多条已授权标签可用 `visualization_update_plan_labels`，公共项目/图稿及两类版本同单标签工具，`changes` 为 1–20 条 `{plan_field,expected_text,text}` 数组。字段不得重复，任一条失败整批不保存；成功只产生一个新计划版本，其他内容仍在服务端保留。依赖修订须使用返回的新版本串行执行；不生成图稿、不自动采用。
 
-`test:canvas:plan-agent-labels:live` 在显式计划源上通过GUI勾选两条标签，验证真实模型一次调用批量工具并只产生一个计划版本；随后可设置 `VISUALIZATION_PLAN_REVIEW_COMPILED_BATCH=1` 和该结果目录作为 `VISUALIZATION_PLAN_REVIEW_COMPILED_SOURCE` 执行 `test:canvas:plan-review-compiled`，检查双标签重编译、PNG、采用与导出。
 
-GUI 绘图计划从 v2 起支持展开“查看计划 vN-1 → vN 的修改”，读取相邻历史版本并比较已保存内容，未保存草稿另行提示；此视图不保存、回滚或生成图稿。`test:canvas:plan-diff` 检查差异计算，`test:canvas:plan-changes` 检查真实历史读取、版本拒绝和零写入，`test:canvas:plan-review-compiled` 也会核对实际标签修订的比较表格。
 
-计划版本比较中可将上一版载入草稿。当前计划有未保存修改或操作进行中时禁用；载入后由用户检查并点击保存，生成新计划版本，既有历史不覆盖，图稿场景不回滚。`test:canvas:plan-restore` 验证草稿/保存/历史与澄清状态保护。
 
-绘图计划面板打开且页面可见时每5秒检查外部计划版本，窗口回焦时也检查；发现较新版本后提示刷新，保留本地草稿并停用旧版本的保存/生成/审阅。刷新遇dirty草稿时由用户确认是否放弃；没有自动合并，最终写入仍由服务端版本校验保护。`test:canvas:plan-updates` 验证实际外部写入、回焦/定时检测与草稿保护。
 
 远端版本变化且本地有草稿时，可点“合并未冲突修改”。按共同已保存版本三方比较，成功仅载入草稿并采用最新保存基线；同字段或并发结构变化有冲突时保留现有草稿并列出位置。它不是科学/图关系验证，检查后需另行保存；冲突详情中可逐项取舍。`test:canvas:plan-merge` 检查合并逻辑，`test:canvas:plan-updates` 包含实际外部写入与合并后版本保存验证。
 
@@ -236,7 +218,6 @@ GUI 绘图计划从 v2 起支持展开“查看计划 vN-1 → vN 的修改”�
 
 长流程 `visualization_gateway_live` 宿主将隔离数据库保留在评估输出目录的 `runtime/` 中，`ready.json` 含该路径（文件含登录token，禁止公开）。已有评估目录仍拒绝复用；这便于中断后诊断，不提供自动续跑。长任务终端日志应定向到工作区中的独立日志文件，避免仅存 `/tmp`。
 
-`sketch_plan` 的 `title` 是可选候选摘要；省略时使用GUI默认“根据绘图计划生成草图”，显式空白仍报错。完整计划、版本校验、已有图稿替换授权要求均保持。
 
 Reactome Content Service 的 JSON/文本/二进制 GET 遇429最多额外重试2次，尊重秒数或HTTP-date形式的 Retry-After，每次最多等待10秒；超过预算直接保留原错误，不截短服务端等待后重试。无头时等待1秒、2秒。404和Analysis提交不重试，限流持续时仍报告失败而非空来源。离线验证：`cargo test -p reactome --test rate_limit`。
 
@@ -248,7 +229,6 @@ Reactome Content Service 的 JSON/文本/二进制 GET 遇429最多额外重试2
 
 `visualization_reflow_text` 也支持直接从正式图稿生成一份待审候选：同时省略 `proposal_id/document_sha256`，提供当前 `expected_revision`、文字ID、完整 `text` 和需要调整的数值 `max_width/font_size`。已有候选修订仍须成对提供精确ID/哈希；半对或空字符串拒绝。来源不会自动选取未采用候选，沿用原生换行、容器与文字几何校验，正式图稿、其他对象和历史计划保持不变，人工预览后决定是否采用。
 
-保存计划时可显式传 `compact_response:true`（仅 `save_plan` 支持）。回执省略重复的 `document`，保留保存版本、状态、验证问题、布局诊断、对象计数及 `follow_up_inputs.read_plan`；省略或传 false 仍返回原有全文。它不改变保存内容、来源、历史、澄清状态或候选生成权限；需要全文时读取计划，不能用回执当文档覆盖。这是工具响应体积优化，不保证模型实际延迟下降。
 
 整体平移分面时，支持对已生成、无旋转、无粗糙和无圆角的原生跨分面箭头按当前组件/说明边界重布线，不再仅限分面交换或对齐操作。保留绑定端点、箭头方向、线型、依据和说明全文；锁定箭头/说明或无法满足路由约束时拒绝整次修改。路径和说明位置可能明显变化，必须查看子候选 PNG；此能力不推断科学顺序，也不保证消除折返或达到出版质量。
 

@@ -37,19 +37,6 @@ async fn durable_evaluation_retains_project_records_and_refuses_existing_root() 
         .await
         .unwrap();
     let figure_id = figure["id"].as_str().unwrap();
-    let brief = json!({"message":"Reviewed scope","audience":"Researchers","nodes":[{"id":"n","label":"Node","evidence":["source record"]}]});
-    reqwest::Client::new()
-        .put(format!(
-            "http://{}/api/v1/visualization/projects/durable-project/figures/{figure_id}/planning",
-            server.addr
-        ))
-        .bearer_auth(&server.token)
-        .json(&json!({"expected_revision":1,"expected_plan_version":0,"document":brief}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap();
     server.stop().await;
     let store = visualization::Store::open(root.join("state/visualizations.sqlite")).unwrap();
     assert_eq!(
@@ -59,12 +46,6 @@ async fn durable_evaluation_retains_project_records_and_refuses_existing_root() 
             .document,
         document
     );
-    let planning = store
-        .planning("durable-project", figure_id)
-        .unwrap()
-        .unwrap();
-    assert_eq!(planning.version, 1);
-    assert_eq!(planning.document.nodes[0].evidence, vec!["source record"]);
     let projects = store.projects().unwrap();
     assert_eq!(projects.len(), 1);
     assert_eq!(projects[0].id, "durable-project");

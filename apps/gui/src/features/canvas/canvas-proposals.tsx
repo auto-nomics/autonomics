@@ -16,7 +16,6 @@ import { candidateFeedbackScope, type CandidateFeedbackComparison } from "./canv
 import { CanvasCandidateLabelPosition } from "./canvas-candidate-label-position";
 import { CanvasCandidateArtwork } from "./canvas-candidate-artwork";
 import { CanvasCandidateEvidence } from "./canvas-candidate-evidence";
-import { CanvasPlanRelationReview } from "./canvas-plan-relation-review";
 import { CanvasCandidateRelation } from "./canvas-candidate-relation";
 import { CanvasCandidateDraftProvider } from "./canvas-candidate-drafts";
 import { CanvasCandidateNode } from "./canvas-candidate-node";
@@ -29,7 +28,6 @@ import { CanvasCandidatePath } from "./canvas-candidate-path";
 import { CanvasCaptionPathReview, type CaptionPathReview } from "./canvas-caption-path-review";
 import { illustrationConnectorLabelOverlaps } from "./canvas-connector-label-overlaps";
 import { illustrationLabelOverlaps } from "./canvas-illustration-overlaps";
-import { CanvasPlanReview } from "./canvas-plan-review-panel";
 import { CanvasAssetComparison } from "./canvas-asset-comparison";
 import { CanvasCandidateObjects } from "./canvas-candidate-objects";
 import { useEffect, useMemo, useState } from "react";
@@ -205,8 +203,6 @@ export function CanvasProposals({ projectId, canvasId, isDirty, onAccepted, requ
         {selected && <CanvasPaintedReview onFocus={id => setFocus(current => ({id,request:(current?.request ?? 0)+1}))} path={path} id={selected.id} hash={selected.document_sha256} revision={selected.base_revision} document={selected.document} />}
         {illustrationOverlaps && (illustrationOverlaps.count > 0 || illustrationOverlaps.skipped > 0 || illustrationOverlaps.omitted > 0) && <details className="shrink-0 border-b text-xs" aria-label="插图标签重叠检查"><summary className="cursor-pointer p-2">插图与标签边界重叠 {illustrationOverlaps.count} 对</summary><div className="max-h-40 space-y-2 overflow-auto p-2"><p>已检查 {illustrationOverlaps.checked} 对，跳过 {illustrationOverlaps.skipped} 对，超过上限 {illustrationOverlaps.omitted} 对。检查旋转后的标签和所属图片显示外框，透明留白也可能相交；请结合预览核对，不代表字形碰撞，也不阻止采用。</p>{illustrationOverlaps.pairs.map(pair => <p key={`${pair.image_id}:${pair.label_id}`}>{pair.image_id} ↔ {pair.label_id} <Button size="sm" variant="outline" aria-label={`定位插图标签 ${pair.label_id}`} onClick={() => setFocus(current => ({id:pair.label_id,request:(current?.request ?? 0)+1}))}>定位标签</Button> <Button size="sm" variant="outline" aria-label={`定位标签所属插图 ${pair.image_id}`} onClick={() => setFocus(current => ({id:pair.image_id,request:(current?.request ?? 0)+1}))}>定位插图</Button></p>)}</div></details>}
         <CanvasCaptionPathReview review={captionReview} loading={captionReviewLoading} onFocus={id => setFocus(current => ({id, request:(current?.request ?? 0)+1}))} />
-        <CanvasPlanReview document={selected.document} onFocus={id => setFocus(current => ({id, request:(current?.request ?? 0)+1}))} />
-        <CanvasPlanRelationReview document={selected.document} onFocus={id => setFocus(current => ({id, request:(current?.request ?? 0)+1}))} />
         {diff && <details className="shrink-0 border-b text-xs" aria-label="逐对象修改明细"><summary className="cursor-pointer p-2">逐对象修改明细</summary><div className="max-h-56 overflow-auto p-2"><Button size="sm" variant="outline" className="mb-2" onClick={() => setFocus(null)}>查看整图</Button>
           {diff.objects.map(object => <article key={object.id} className="mb-2 rounded border p-2"><p className="mb-1 break-all font-medium">{object.kind === "added" ? "新增" : object.kind === "removed" ? "删除" : "修改"} · {object.type} · {object.id} <Button size="sm" variant="outline" onClick={() => setFocus(current => ({ id: object.id, request: (current?.request ?? 0) + 1 }))} aria-label={`定位对象 ${object.id}`}>定位对象</Button></p><table className="w-full table-fixed"><thead><tr><th className="w-1/4 text-left">字段</th><th className="text-left">修改前</th><th className="text-left">候选值</th></tr></thead><tbody>{object.fields.map(field => <tr key={field.field}><td className="break-all align-top">{field.field}</td><td className="whitespace-pre-wrap break-all align-top">{field.before}</td><td className="whitespace-pre-wrap break-all align-top">{field.after}</td></tr>)}</tbody></table>{object.fieldsTruncated && <p>字段较多，明细已截断，请结合源文件核对。</p>}</article>)}
           {diff.files.map(file => <p key={file.id} className="break-all">素材文件 · {file.id} · {file.kind === "added" ? "新增" : file.kind === "removed" ? "删除" : "内容或属性已修改"}</p>)}

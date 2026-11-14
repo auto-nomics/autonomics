@@ -1,0 +1,65 @@
+.canvas-native-footer-host {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+}
+.canvas-native-footer-host [data-canvas-toolbar] > button,
+.canvas-native-footer-host [data-canvas-action-dock] > button,
+.canvas-native-footer-host [data-canvas-action-dock] > div > div:first-child > button {
+  color: var(--color-on-surface, #1b1b1f);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.canvas-native-footer-host [data-canvas-toolbar] > button:hover,
+.canvas-native-footer-host [data-canvas-action-dock] > button:hover,
+.canvas-native-footer-host [data-canvas-action-dock] > button[aria-expanded="true"],
+.canvas-native-footer-host [data-canvas-action-dock] > div > div:first-child > button:hover,
+.canvas-native-footer-host [data-canvas-action-dock] > div > div:first-child > button[aria-expanded="true"] {
+  background: var(--color-surface-low, #ececf4);
+}
+
+.canvas-native-footer-host [data-canvas-toolbar] {
+  color: var(--color-on-surface, #1b1b1f);
+}
+
+/* Match Excalidraw's native tool dropdown, including its independent theme. */
+.canvas-action-popup {
+  color: var(--color-on-surface, #1b1b1f);
+  background: var(--island-bg-color, #fff);
+  box-shadow: var(--shadow-island, 0 4px 16px #0002);
+  font-size: 14px;
+}
+.canvas-action-group + .canvas-action-group {
+  border-top: 1px solid var(--color-surface-high, #ededf4);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.canvas-action-heading {
+  margin: 0;
+  padding: 4px 8px 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.canvas-action-items > button {
+  width: calc(100% - 2px);
+  min-height: 32px;
+  height: auto;
+  margin: 1px;
+  padding: 6px 8px;
+  justify-content: flex-start;
+  white-space: normal;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: var(--border-radius-md, 6px);
+  box-shadow: none;
+  font-size: 14px;
+  font-weight: 400;
+}
+.canvas-action-items > button:hover:not(:disabled),
+.canvas-action-items > button:focus-visible {
+  background: var(--button-hover-bg, #f1f0ff);
+}

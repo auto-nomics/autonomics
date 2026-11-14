@@ -22,7 +22,7 @@ import { WindowControls } from "./window-controls";
 import "../builtin-views";
 import { workbenchView, useWorkbenchViews } from "../view-registry";
 import { moveWorkbenchView, useViewLayout, workbenchViewLocation } from "../view-layout";
-import { viewDropTarget } from "../view-drag";
+import { startViewDrag, viewDropTarget } from "../view-drag";
 import { ViewLocationMenu } from "../view-location-menu";
 
 
@@ -169,7 +169,7 @@ function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId
   return (
     <>
       {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && container !== "decks" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
-        <span className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        <span draggable={container === "canvases"} onDragStart={event => { if (container === "canvases") startViewDrag(event, container); }} className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {workbenchView(container)?.title}
         </span>
         <span className="flex-1" />

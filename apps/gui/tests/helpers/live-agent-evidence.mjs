@@ -30,7 +30,7 @@ export async function retainFigureEvidence({ origin, token, figurePath, persist 
   if (!/^\/api\/v1\/visualization\/projects\/[^/?#]+\/figures\/[^/?#]+$/.test(figurePath)) throw new Error('evidence requires an exact project figure path');
   const get = await evidenceReader({ origin, token });
   const report = { checked_at: new Date().toISOString(), figure_path: figurePath, saved: [], errors: [] };
-  for (const [resource, suffix, name] of [['figure', '', 'failure-figure.json'], ['planning', '/planning', 'failure-planning.json'], ['candidates', '/proposals', 'failure-candidates.json']]) {
+  for (const [resource, suffix, name] of [['figure', '', 'failure-figure.json'], ['candidates', '/proposals', 'failure-candidates.json']]) {
     try { await persist(name, await get(figurePath + suffix)); report.saved.push(resource); }
     catch (error) { report.errors.push({ resource, reason: String(error) }); }
   }

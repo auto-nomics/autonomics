@@ -6,15 +6,21 @@ import { imagePlacement } from "./canvas-image-placement";
 import { Button } from "@/components/ui/button";
 type Asset = { id: string; name: string; category: string; license: string; license_url: string | null; author: string; source_url: string };
 type VectorAsset = { asset: Asset; dataURL: string; previewDataURL: string; width: number; height: number; sha256: string; source_sha256: string; colors: string[]; normalization: string[] };
-export function BioIconsPanel({ getApi }: { getApi: () => ExcalidrawImperativeAPI | null }) {
+export function useBioIconsState() {
   const [query, setQuery] = useState(""), [assets, setAssets] = useState<Asset[]>([]), [preview, setPreview] = useState<VectorAsset | null>(null);
   const [author, setAuthor] = useState("");
   const [searchedQuery, setSearchedQuery] = useState<string | null>(null);
   const [appliedAuthor, setAppliedAuthor] = useState<string | null>(null);
   const [partialOnly, setPartialOnly] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  return { query, setQuery, assets, setAssets, preview, setPreview, author, setAuthor, searchedQuery, setSearchedQuery, appliedAuthor, setAppliedAuthor, partialOnly, setPartialOnly, busy, setBusy, error, setError };
+}
+export function BioIconsPanel({ getApi, embedded = false, controller }: { getApi: () => ExcalidrawImperativeAPI | null; embedded?: boolean; controller?: ReturnType<typeof useBioIconsState> }) {
+  const local = useBioIconsState();
+  const { query, setQuery, assets, setAssets, preview, setPreview, author, setAuthor, searchedQuery, setSearchedQuery, appliedAuthor, setAppliedAuthor, partialOnly, setPartialOnly, busy, setBusy, error, setError } = controller ?? local;
   async function load(asset: Asset) { return await gatewayRequest("GET", `/visualization/bioicons/${encodeURIComponent(asset.id)}/vector`) as VectorAsset; }
-  return <aside aria-label="BioIcons 矢量素材" className="w-72 shrink-0 overflow-auto border-l p-2 text-sm"><form className="flex flex-col gap-2" onSubmit={async event => {
+  const Container = embedded ? "section" : "aside";
+  return <Container aria-label="BioIcons 矢量素材" className={embedded ? "canvas-catalog-panel min-w-0 overflow-auto p-3 text-sm" : "w-72 shrink-0 overflow-auto border-l p-2 text-sm"}><form className="flex flex-col gap-2" onSubmit={async event => {
     event.preventDefault(); if (busy || !query.trim()) return; setBusy(true); setError("");
     try { const result = await gatewayRequest("GET", `/visualization/bioicons/search?q=${encodeURIComponent(query.trim())}${author.trim() ? `&author=${encodeURIComponent(author.trim())}` : ""}`) as { assets: Asset[]; author_filter?: string; match_summary?: { exact_name: number; name_tokens: number } }; setAssets(result.assets); setSearchedQuery(query.trim()); setAppliedAuthor(result.author_filter ?? null); setPreview(null); setPartialOnly(Boolean(result.assets.length && result.match_summary && result.match_summary.exact_name + result.match_summary.name_tokens === 0)); }
     catch (cause) { setError(String(cause)); } finally { setBusy(false); }
@@ -37,5 +43,5 @@ export function BioIconsPanel({ getApi }: { getApi: () => ExcalidrawImperativeAP
         if (placement.pan) api.scrollToContent(elements, { animate: false });
       } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
     }}>插入矢量素材</Button></div></article>)}
-  </aside>;
+  </Container>;
 }

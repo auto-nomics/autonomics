@@ -1,0 +1,27 @@
+.canvas-layers { color: var(--color-on-surface, #1b1b1f); background: var(--island-bg-color, white); }
+.canvas-layers-title { font-size: 14px; font-weight: 600; }
+.canvas-layers-body { display: flex; flex: 1; min-height: 0; flex-direction: column; padding: 8px; }
+.canvas-layers-order { display: flex; align-items: center; gap: 4px; }
+.canvas-layers-order span { margin-left: auto; font-size: 12px; opacity: .65; }
+.canvas-layers button { background: transparent; color: inherit; border: 0; border-radius: 6px; cursor: pointer; }
+.canvas-layers button:disabled { opacity: .4; cursor: default; }
+.canvas-layers button:hover:not(:disabled), .canvas-layers button:focus-visible { background: var(--button-hover-bg, #ededf4); }
+.canvas-layers-order button { display: grid; place-items: center; width: 30px; height: 30px; }
+.canvas-layers-hint { font-size: 12px; opacity: .65; margin: 10px 4px; }
+.canvas-layers-list { overflow: auto; min-height: 0; }
+.canvas-layer-row { display: flex; align-items: center; gap: 2px; border-radius: 6px; padding: 4px; margin-bottom: 2px; }
+.canvas-layer-row[data-active="true"] { background: var(--color-surface-primary-container, #e2dfff); }
+.canvas-layer-row > button { display: grid; place-items: center; width: 26px; height: 28px; flex-shrink: 0; }
+.canvas-layer-row > .canvas-layer-name { display: block; flex: 1; min-width: 0; padding: 4px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 13px; }
+
+.canvas-layer-row > .canvas-layer-expand { width: 18px; }
+.canvas-layer-expand-spacer { width: 18px; flex-shrink: 0; }
+.canvas-layer-count { font-size: 11px; opacity: .65; }
+.canvas-layer-children { margin: 0 4px 6px 16px; padding-left: 8px; border-left: 1px solid var(--default-border-color, #ddd); }
+.canvas-layer-children .canvas-layer-element { display: flex; flex: 1; min-width: 0; gap: 8px; align-items: center; padding: 6px 8px; text-align: left; }
+.canvas-layer-element[aria-pressed="true"] { background: var(--color-surface-primary-container, #e2dfff); }
+.canvas-layer-element-type { flex-shrink: 0; font-size: 11px; opacity: .6; }
+.canvas-layer-element-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
+.canvas-layer-element-row { display: flex; align-items: center; gap: 2px; }
+.canvas-layer-element-rename { display: grid; place-items: center; width: 26px; height: 28px; flex-shrink: 0; }

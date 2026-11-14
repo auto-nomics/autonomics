@@ -39,8 +39,7 @@ pub(crate) fn attach(value: &mut Value, project: Option<&str>, figure: Option<&s
         return;
     };
     let mut inputs = json!({
-        "read":{"action":"read","project_id":project,"figure_id":figure},
-        "read_plan":{"action":"read_plan","project_id":project,"figure_id":figure}
+        "read":{"action":"read","project_id":project,"figure_id":figure}
     });
     let descriptor = (
         candidate
@@ -84,7 +83,7 @@ mod tests {
     use super::*;
     #[test]
     fn only_validated_scope_and_read_only_inputs_are_exposed() {
-        let mut candidate = json!({"proposal":{"id":"candidate","visualization_id":"figure","base_revision":2,"document_sha256":"hash"},"current_revision":7,"planning_version":99});
+        let mut candidate = json!({"proposal":{"id":"candidate","visualization_id":"figure","base_revision":2,"document_sha256":"hash"},"current_revision":7});
         attach(&mut candidate, Some("project"), Some("figure"));
         assert_eq!(candidate["candidate_context"]["expected_revision"], 7);
         assert_eq!(candidate["candidate_context"]["base_revision"], 2);
@@ -96,7 +95,7 @@ mod tests {
             candidate["follow_up_inputs"]["read_proposal"]["figure_id"],
             "figure"
         );
-        assert_eq!(candidate["follow_up_inputs"].as_object().unwrap().len(), 4);
+        assert_eq!(candidate["follow_up_inputs"].as_object().unwrap().len(), 3);
         let mut missing_scope = json!({"id":"candidate","visualization_id":"figure","base_revision":2,"document_sha256":"hash"});
         attach(&mut missing_scope, None, Some("figure"));
         assert!(missing_scope.get("follow_up_inputs").is_none());

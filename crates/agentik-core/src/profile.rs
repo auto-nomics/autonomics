@@ -1,9 +1,10 @@
 //! Hardcoded agent kinds and the per-agent persisted configuration.
 //!
-//! Agents come in exactly five kinds — [`AgentKind::Researcher`],
+//! Agents come in six kinds — [`AgentKind::Researcher`],
 //! [`AgentKind::Developer`], [`AgentKind::Browser`],
-//! [`AgentKind::Curator`], and [`AgentKind::HpcOps`] — whose identity,
-//! prompts, and tool capabilities are fixed in code.
+//! [`AgentKind::Curator`], [`AgentKind::Illustrator`], and
+//! [`AgentKind::HpcOps`] — whose identity, prompts, and tool
+//! capabilities are fixed in code.
 //! Per-agent state that outlives a spawn (model preference, runtime
 //! overrides) lives in [`AgentProfileConfig`], persisted in the
 //! `agents.config_json` column.
@@ -43,6 +44,8 @@ pub enum AgentKind {
     /// `literature_search` / `literature_import`) so it can feed sourced
     /// literature into the knowledge base.
     Curator,
+    /// Scientific illustration and editable canvas specialist.
+    Illustrator,
     /// HPC operations specialist. The only kind that holds the `hpc_*`
     /// tool group (`hpc_cluster`, `hpc_jobs`, `hpc_files`,
     /// `hpc_transfer`) — interactive cluster accounting, scheduler job
@@ -55,22 +58,24 @@ pub enum AgentKind {
 
 impl AgentKind {
     /// Every kind, in picker/display order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Researcher,
         Self::Developer,
         Self::Browser,
         Self::Curator,
+        Self::Illustrator,
         Self::HpcOps,
     ];
 
     /// Wire/stable name: `"researcher"`, `"developer"`, `"browser"`,
-    /// `"curator"`, or `"hpc-ops"`.
+    /// `"curator"`, `"illustrator"`, or `"hpc-ops"`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Researcher => "researcher",
             Self::Developer => "developer",
             Self::Browser => "browser",
             Self::Curator => "curator",
+            Self::Illustrator => "illustrator",
             Self::HpcOps => "hpc-ops",
         }
     }
@@ -82,6 +87,7 @@ impl AgentKind {
             "developer" => Some(Self::Developer),
             "browser" => Some(Self::Browser),
             "curator" => Some(Self::Curator),
+            "illustrator" => Some(Self::Illustrator),
             "hpc-ops" => Some(Self::HpcOps),
             _ => None,
         }
@@ -104,6 +110,8 @@ impl AgentKind {
             Self::Browser
         } else if path == "curator" || path.starts_with("curator/") {
             Self::Curator
+        } else if path == "illustrator" || path.starts_with("illustrator/") {
+            Self::Illustrator
         } else if path == "hpc-ops" || path.starts_with("hpc-ops/") {
             Self::HpcOps
         } else {
@@ -114,6 +122,9 @@ impl AgentKind {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Researcher => "Full-featured biomedical research assistant.",
+            Self::Illustrator => {
+                "Scientific illustration specialist for editable figures, diagrams, and biomedical artwork."
+            }
             Self::Developer => "Node and plugin developer for the DAG ecosystem.",
             Self::Browser => "Web-browsing specialist with a private browser session.",
             Self::Curator => {
@@ -133,6 +144,9 @@ impl AgentKind {
             }
             Self::Browser => {
                 "You are a headless web-browsing specialist. You operate a private browser session to navigate, extract, and interact with the web on behalf of a caller. Every action is mediated through the `browser_*` tool group; you do not perform direct DOM mutation, networking, or filesystem access outside the browser sandbox."
+            }
+            Self::Illustrator => {
+                "You are a scientific illustration expert. Create and refine editable biomedical figures using visualization, BioArt, and BioIcons tools. Read the active project/figure IDs and revision from the supplied canvas context; never guess IDs. Clarify missing scientific scope before drawing. Use figure_evidence and literature tools to read sources, distinguish evidence from visual convention, and preserve uncertainty. For existing figures, prefer local propose/revise_proposal edits and preserve unrelated objects, labels, files, and sources. Use insert_sketch to append a specified structure; use whole-scene sketch only for a new figure or explicitly authorized replacement. Inspect the exact candidate and its PNG preview, continue edits using the returned proposal ID/hash and current revision, and leave candidates pending for human review. Respond to the selected annotations only. Search and preview catalogue artwork before inserting it; preserve each asset's author, license, and provenance. Generic artwork is not evidence of a specific molecule or mechanism. Keep scientific labels complete and editable, maintain clear visual hierarchy and legible spacing, and explain remaining scientific or rendering limitations. Delegate research analysis or plugin development to the relevant expert when needed."
             }
             Self::Curator => {
                 "You are a knowledge-base curator. You create, structure, and maintain the shared wiki through the `wiki_*` tool group: entries, aliases, tags, `[[wiki links]]`, attachments, and version history. You also manage the shared literature library through the bibliography tools: search it with `literature_search` and `bib_search_library`, and import and organize sources with `literature_import`, collections, and `bib_export`. You are the only role that writes to the knowledge base; keep entries concise, well-titled, cross-linked, and deduplicated."
@@ -157,9 +171,14 @@ impl AgentKind {
     /// `bib_*`, unified `literature_search` / `literature_import`, and the
     /// DAG evidence channel). Researcher by default; the curator also holds
     /// it because importing and organizing literature is part of
-    /// maintaining the knowledge base.
+    /// maintaining the knowledge base. Illustrators use it to verify figure sources.
     pub const fn enable_bibliography(self) -> bool {
-        matches!(self, Self::Researcher | Self::Curator)
+        matches!(self, Self::Researcher | Self::Curator | Self::Illustrator)
+    }
+
+    /// Editable figures and scientific artwork tools.
+    pub const fn enable_visualization(self) -> bool {
+        matches!(self, Self::Researcher | Self::Illustrator)
     }
 
     pub const fn enable_writing(self) -> bool {
@@ -257,7 +276,7 @@ impl FromStr for AgentKind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_name(s).ok_or_else(|| {
             format!(
-                "unknown agent kind `{s}`; expected researcher, developer, browser, curator, or hpc-ops"
+                "unknown agent kind `{s}`; expected researcher, developer, browser, curator, illustrator, or hpc-ops"
             )
         })
     }
@@ -524,7 +543,7 @@ mod tests {
         let err = "wizard".parse::<AgentKind>().unwrap_err();
         assert_eq!(
             err,
-            "unknown agent kind `wizard`; expected researcher, developer, browser, curator, or hpc-ops"
+            "unknown agent kind `wizard`; expected researcher, developer, browser, curator, illustrator, or hpc-ops"
         );
     }
 
@@ -660,8 +679,36 @@ mod tests {
     }
 
     #[test]
+    fn illustrator_profile_round_trips_and_has_scoped_capabilities() {
+        let kind = AgentKind::Illustrator;
+        assert_eq!(AgentKind::from_name("illustrator"), Some(kind));
+        assert_eq!(
+            AgentKind::from_legacy_profile_path("illustrator/worker"),
+            kind
+        );
+        let config = AgentProfileConfig {
+            kind,
+            ..Default::default()
+        };
+        assert_eq!(AgentProfileConfig::from_json(&config.to_json()).kind, kind);
+        assert!(kind.enable_bibliography());
+        assert!(kind.enable_visualization());
+        assert!(!kind.enable_writing());
+        assert!(!kind.enable_plugin_rsi());
+        assert!(!kind.enable_wiki_write());
+        assert!(!kind.enable_opengwas());
+        for kind in AgentKind::ALL {
+            assert_eq!(
+                kind.enable_visualization(),
+                matches!(kind, AgentKind::Researcher | AgentKind::Illustrator)
+            );
+        }
+        assert!(kind.agent_identity().contains("leave candidates pending"));
+    }
+
+    #[test]
     fn all_lists_every_kind_with_matching_names() {
-        assert_eq!(AgentKind::ALL.len(), 5);
+        assert_eq!(AgentKind::ALL.len(), 6);
         for kind in AgentKind::ALL {
             assert_eq!(AgentKind::from_name(kind.name()), Some(kind));
             assert_eq!(kind.to_string(), kind.name());

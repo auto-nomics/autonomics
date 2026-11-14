@@ -37,23 +37,4 @@ async fn whole_scene_sketch_requires_explicit_replacement_and_keeps_saved_refere
     );
     assert_eq!(store.get("p", &figure.id).unwrap().revision, 1);
 
-    let brief = serde_json::from_value::<visualization::planning::Brief>(plan).unwrap();
-    store.save_planning("p", &figure.id, 1, 0, &brief).unwrap();
-    let planning = store.planning("p", &figure.id).unwrap().unwrap();
-    let mut planned = json!({"action":"sketch_plan","project_id":"p","figure_id":figure.id,"expected_revision":1,"planning_version":planning.version});
-    let error = tool
-        .implementation
-        .execute(planned.clone())
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("insert_sketch"), "{error}");
-    assert_eq!(store.proposals("p", &figure.id).unwrap().len(), 1);
-    planned["replace_existing"] = json!(true);
-    tool.implementation.execute(planned).await.unwrap();
-    assert_eq!(store.proposals("p", &figure.id).unwrap().len(), 2);
-    assert_eq!(
-        store.revision("p", &figure.id, 1).unwrap().document,
-        original
-    );
 }

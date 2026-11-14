@@ -150,7 +150,7 @@ pub enum Operation {
     },
     /// Append an explicit native graph at its top-left x/y, preserving existing
     /// objects/files/settings. Use a fresh prefix for collision-free identities.
-    /// This does not replace the scene or confirm a saved scientific plan.
+    /// This does not replace the scene.
     InsertSketch {
         plan: crate::sketch::Plan,
         id_prefix: String,

@@ -113,9 +113,6 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
         .await,
         2
     );
-    let planning = api(&gw, Method::GET, &format!("{path}/planning"), None).await;
-    assert_eq!(planning["status"], "needs_clarification");
-    assert_eq!(planning["version"], 1);
     assert!(
         api(&gw, Method::GET, &format!("{path}/proposals"), None)
             .await
@@ -129,8 +126,6 @@ async fn scientific_figure_conversation_uses_production_gateway_tools_and_review
     );
     let answer = "Show generic A, B and C, with explicit A to B and B to C relations.";
     assert_eq!(turn(&client, &agent, &mut rx, h(answer, 1)).await, 3);
-    let planning = api(&gw, Method::GET, &format!("{path}/planning"), None).await;
-    assert_eq!(planning["document"]["questions"][0]["answer"], answer);
     let candidates = api(&gw, Method::GET, &format!("{path}/proposals"), None).await;
     assert_eq!(candidates.as_array().unwrap().len(), 1);
     assert_eq!(candidates[0]["status"], "pending");

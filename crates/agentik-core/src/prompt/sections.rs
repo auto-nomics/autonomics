@@ -125,6 +125,8 @@ pub fn build_system_prompt<C: PromptCapabilities>(caps: &C) -> String {
     if caps.enable_plugin_rsi() {
         s.push_str(PROMPT_PLUGIN_RSI);
         s.push_str(PROMPT_DEVELOPER_HANDOFF);
+    } else if caps.is_illustrator() {
+        s.push_str("\n### Illustration Collaboration\nYou own editable figure composition and visual refinement. Ask the researcher for missing scientific conclusions or analysis; use delegate_to with profile_segment=\"researcher\" when appropriate. Delegate plugin implementation to profile_segment=\"developer\". Work from the active canvas context, inspect candidate previews, preserve source attribution, and leave artwork pending for human review.\n");
     } else if !caps.enable_browser() {
         // Browser agents participate in neither collaboration: they get
         // their own handoff section below instead of the

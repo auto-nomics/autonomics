@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {canvasElementName,canvasLayers,layerVisibility,layerLock} from '../src/features/canvas/canvas-layers-model.ts';
+const element=(id,type='rectangle',extra={})=>({id,type,groupIds:[],frameId:null,opacity:65,locked:false,isDeleted:false,customData:{evidence:['source']},...extra});
+const elements=[element('back'),element('node'),element('label','text',{containerId:'node',originalText:'Receptor'}),element('arrow','arrow',{startBinding:{elementId:'node'}}),element('image','image',{customData:{semanticAnchorId:'node'}}),element('front')];
+const layers=canvasLayers(elements),node=layers.find(row=>row.id==='node');
+assert.deepEqual(new Set(node.ids),new Set(['node','label','image']));
+assert.equal(node.name,'Receptor');assert.equal(layers.length,4);assert.equal(layers[0].id,'front');assert.equal(layers[1].id,'node','interleaved component follows its frontmost member');
+const original=element('cell','rectangle',{opacity:37,locked:true});
+const hidden={...original,...layerVisibility(original,true)};assert.equal(hidden.opacity,0);assert.equal(hidden.locked,true);assert.deepEqual(hidden.customData.evidence,['source']);
+const shown={...hidden,...layerVisibility(hidden,false)};assert.equal(shown.opacity,37);assert.equal(shown.locked,true);
+const unlockedHidden={...hidden,...layerLock(hidden,false)};assert.equal(unlockedHidden.locked,true,'hidden objects remain unselectable');
+assert.equal(layerVisibility(unlockedHidden,false).locked,false,'lock edits made while hidden restore correctly');
+assert.equal(layerVisibility(element('transparent','image',{opacity:0}),false).opacity,0,'intentional transparency is not changed');
+const frames=[element('frame','frame'),element('child','ellipse',{frameId:'frame'}),element('text','text',{containerId:'child'}),element('external','arrow')];
+assert.equal(canvasLayers(frames).length,2);assert.deepEqual(new Set(canvasLayers(frames).find(r=>r.id==='frame').ids),new Set(['frame','child','text']));
+const grouped=[element('a','rectangle',{groupIds:['shared']}),element('b','ellipse',{groupIds:['shared']})];assert.equal(canvasLayers(grouped).length,1);
+console.log('canvas layers: component/frame/group ownership, visibility/opacity/lock restoration and source preservation passed');
+
+const namedText=element('named','text',{text:'IL-6',originalText:'IL-6',customData:{evidence:['source'],canvasLayer:{elementName:'细胞因子标签'}}});
+assert.equal(canvasElementName(namedText),'细胞因子标签');assert.equal(namedText.text,'IL-6');assert.equal(canvasLayers([namedText])[0].name,'细胞因子标签');assert.deepEqual(namedText.customData.evidence,['source']);
