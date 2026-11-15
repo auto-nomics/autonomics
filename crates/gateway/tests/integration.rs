@@ -535,7 +535,7 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 54);
+    assert_eq!(openapi["paths"].as_object().unwrap().len(), 52);
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/state",
@@ -571,8 +571,6 @@ async fn swagger_docs_expose_the_gateway_api() {
         "/api/v1/plugins/environments/approve",
         "/api/v1/plugins/environments/{id}",
         "/api/v1/events",
-        "/api/v1/skills/library",
-        "/api/v1/skills/library/{name}",
         "/api/v1/vfs/list",
         "/api/v1/vfs/stat",
         "/api/v1/vfs/mounts",
@@ -598,6 +596,14 @@ async fn swagger_docs_expose_the_gateway_api() {
             "missing OpenAPI path: {path}"
         );
     }
+    assert!(
+        openapi["paths"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .all(|path| !path.starts_with("/api/v1/skills")),
+        "removed skill endpoints must not be advertised"
+    );
     assert_eq!(
         openapi["components"]["securitySchemes"]["bearer_auth"]["type"],
         "http"
@@ -612,6 +618,16 @@ async fn swagger_docs_expose_the_gateway_api() {
             .all(|operation| operation["security"][0]["bearer_auth"].is_array())
     );
 
+    for path in ["/api/v1/skills/library", "/api/v1/skills/library/example"] {
+        let response = http
+            .get(format!("{base}{path}"))
+            .bearer_auth(&gateway_daemon.token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 404, "removed endpoint: {path}");
+    }
+
     let swagger = http.get(format!("{base}/swagger-ui")).send().await.unwrap();
     assert!(swagger.status().is_success());
     assert!(swagger.text().await.unwrap().contains("swagger-ui"));
@@ -625,54 +641,6 @@ async fn swagger_docs_expose_the_gateway_api() {
     assert_eq!(unauthorized.status(), 401);
 
     gateway_daemon.stop().await;
-}
-
-// ── skill library endpoints ───────────────────────────────────────────
-
-#[tokio::test]
-async fn skill_library_lists_installed_tiers_with_detail() {
-    let gw = start_mock_gateway("ok").await;
-    let client = gw.client();
-    let manager = gw.infra.skills.clone();
-
-    // The builtin tier is always present; nothing else installed yet.
-    let library = client.skill_library().await.unwrap();
-    assert!(
-        library.iter().all(|s| s.installed),
-        "fresh state: only installed (builtin) rows"
-    );
-    assert!(library.iter().any(|s| s.tier == "builtin"));
-
-    // Install one skill into the global tier through the manager (the
-    // same path autonomics-skills install takes) and re-list.
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("demo-skill");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("SKILL.md"),
-        "---\nname: demo-skill\ndescription: Demo skill for library listing.\n---\nStep one.\n",
-    )
-    .unwrap();
-    manager.install_local(&dir).unwrap();
-
-    let library = client.skill_library().await.unwrap();
-    assert!(library.iter().any(|s| s.tier == "builtin"));
-    let row = library
-        .iter()
-        .find(|s| s.name == "demo-skill")
-        .expect("installed skill listed");
-    assert_eq!(row.tier, "global");
-    assert!(row.installed);
-
-    // Detail of the installed row: metadata plus the SKILL.md body.
-    let detail = client.skill_library_detail("demo-skill").await.unwrap();
-    assert!(detail.installed);
-    assert_eq!(detail.tier, "global");
-    assert!(detail.body.contains("Step one."));
-
-    // Unknown names 404 rather than fabricating a row.
-    let missing = client.skill_library_detail("no-such-skill").await;
-    assert!(missing.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

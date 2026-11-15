@@ -561,50 +561,6 @@ mod tests {
     }
 }
 
-// ── Skill library ────────────────────────────────────────────────────
-
-/// `GET /api/v1/skills/library` row — one installed skill from the
-/// tiered registry.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillLibraryView {
-    pub name: String,
-    /// builtin | global | workspace.
-    pub tier: String,
-    pub tags: Vec<String>,
-    pub description: String,
-    pub installed: bool,
-    // ── usage telemetry ──
-    pub usage_gets: u64,
-    pub usage_search_hits: u64,
-    pub usage_runs: u64,
-    pub usage_evals: u64,
-    /// Unix seconds of the last recorded use; 0 = never.
-    pub usage_last_used: i64,
-}
-
-/// `GET /api/v1/skills/library/{name}` response — one skill's full
-/// detail: metadata, usage, and the complete SKILL.md body.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct SkillLibraryDetail {
-    pub name: String,
-    pub tier: String,
-    pub tags: Vec<String>,
-    pub description: String,
-    pub installed: bool,
-    /// The full SKILL.md body below the frontmatter.
-    pub body: String,
-    /// Workflow template stems bundled with the skill (installed
-    /// rows only).
-    pub workflows: Vec<String>,
-    /// Eval file stems bundled with the skill (installed rows only).
-    pub evals: Vec<String>,
-    pub usage_gets: u64,
-    pub usage_search_hits: u64,
-    pub usage_runs: u64,
-    pub usage_evals: u64,
-    pub usage_last_used: i64,
-}
-
 // ── Plugins ──────────────────────────────────────────────────────────
 
 /// `GET /api/v1/plugins` — the manifest plugin families installed under

@@ -18,7 +18,6 @@ pub mod name_input;
 pub mod plan_popup;
 pub mod popup;
 pub mod searchable_picker;
-pub mod skill_library;
 pub mod status_bar;
 pub mod tab_bar;
 pub mod tasks_popup;

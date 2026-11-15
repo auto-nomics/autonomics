@@ -143,9 +143,6 @@ impl App {
             CommandAction::BibliographyPanel => {
                 self.open_bibliography();
             }
-            CommandAction::SkillLibraryPanel => {
-                self.open_skill_library();
-            }
             CommandAction::ToggleCollapseThinking => {
                 self.state.display_settings.toggle_thinking();
                 self.persist_display_setting(

@@ -127,11 +127,6 @@ pub(super) const LEADER_ROOT: &[LeaderNode] = &[
                 action: CommandAction::BibliographyPanel,
             },
             LeaderNode::Leaf {
-                key: 's',
-                label: "Skills",
-                action: CommandAction::SkillLibraryPanel,
-            },
-            LeaderNode::Leaf {
                 key: 't',
                 label: "Chat-only view",
                 action: CommandAction::ToggleChatOnly,

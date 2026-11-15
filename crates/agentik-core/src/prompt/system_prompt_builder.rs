@@ -6,7 +6,6 @@
 pub struct SystemPromptBuilder {
     identity: String,
     tooluse_guidance: String,
-    skill_guidance: String,
     wiki_guidance: String,
     extra_sections: Vec<String>,
 }
@@ -46,18 +45,6 @@ impl SystemPromptBuilder {
         self
     }
 
-    /// Append the skill-library guidance section: how to consume
-    /// skills (search/get/workflows), how to record lessons and gap
-    /// candidates through the memory tools, and the judgement
-    /// boundaries. Static behavioral guidance, so it belongs in the
-    /// system prompt (the per-session skill *index* is injected
-    /// separately by the runtime and stays snapshot-stable for
-    /// prompt-cache friendliness).
-    pub fn build_skill_guidance(mut self) -> Self {
-        self.skill_guidance = concat!("\n", include_str!("system_prompt/skill_guidance.md"),).to_string();
-        self
-    }
-
     /// Append the wiki knowledge-base guidance section: when to distill
     /// conversation/literature findings into the wiki and the maintenance
     /// rules. Static behavioral guidance, so it belongs in the system prompt.
@@ -76,10 +63,6 @@ impl SystemPromptBuilder {
         }
         for section in &self.extra_sections {
             system_prompt.push_str(section);
-            system_prompt.push('\n');
-        }
-        if !self.skill_guidance.is_empty() {
-            system_prompt.push_str(&self.skill_guidance);
             system_prompt.push('\n');
         }
         if !self.wiki_guidance.is_empty() {
@@ -101,37 +84,43 @@ mod tests {
 
     #[test]
     fn intelligent_ui_guidance_is_included_in_standard_guidance() {
-        let prompt = SystemPromptBuilder::default().build_tooluse_guidance().parse();
+        let prompt = SystemPromptBuilder::default()
+            .build_tooluse_guidance()
+            .parse();
         assert!(prompt.contains("## Intelligent UI"));
         assert!(prompt.contains("```generative-ui"));
         assert!(prompt.contains("jsExpressions"));
         assert!(prompt.contains("CopilotKit"));
-        assert!(!SystemPromptBuilder::default().parse().contains("## Intelligent UI"));
+        assert!(
+            !SystemPromptBuilder::default()
+                .parse()
+                .contains("## Intelligent UI")
+        );
     }
 
     #[test]
-    fn skill_guidance_renders_only_when_built() {
+    fn wiki_guidance_renders_only_when_built() {
         let plain = SystemPromptBuilder::default()
             .with_identity("id")
             .build_tooluse_guidance()
             .parse();
-        assert!(!plain.contains("Skill library"));
+        assert!(!plain.contains("Wiki knowledge base"));
 
-        let with_skills = SystemPromptBuilder::default()
+        let with_wiki = SystemPromptBuilder::default()
             .with_identity("id")
-            .build_skill_guidance()
+            .build_wiki_guidance()
             .build_tooluse_guidance()
             .parse();
-        assert!(with_skills.contains("## Skill library"));
-        assert!(with_skills.contains("memory_note"));
-        assert!(!with_skills.contains("evo_observe"));
-        // Render order: identity → extras → skill guidance → tool-use
+        assert!(with_wiki.contains("## Wiki knowledge base"));
+        assert!(with_wiki.contains("### Skills are ordinary wiki entries"));
+        assert!(!with_wiki.contains("evo_observe"));
+        // Render order: identity → extras → wiki guidance → tool-use
         // guidance, mirroring parse().
-        let skill_at = with_skills.find("## Skill library").unwrap();
-        let tool_at = with_skills.find("## Tool usage").unwrap();
+        let wiki_at = with_wiki.find("## Wiki knowledge base").unwrap();
+        let tool_at = with_wiki.find("## Tool usage").unwrap();
         assert!(
-            skill_at < tool_at,
-            "skill guidance renders before tool-use guidance"
+            wiki_at < tool_at,
+            "wiki guidance renders before tool-use guidance"
         );
     }
 }

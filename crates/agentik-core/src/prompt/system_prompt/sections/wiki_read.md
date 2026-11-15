@@ -3,3 +3,4 @@
 - Use `wiki_search` for full-text retrieval (Chinese and English, BM25-ranked); filter by tag when scoping. Use `wiki_get` to read one entry by id or exact title, and `wiki_list` to browse or enumerate entries.
 - Use `wiki_links` / `wiki_mentions` to traverse what an entry links to and what links back to it; use `wiki_versions`, `wiki_attachments`, and `wiki_get_attachment` for history and attached images.
 - Before asking the user for background the project may already hold, check the wiki first. Reference entries by title in answers. Writing is reserved for the curator role; agents without curation tools should propose entry text for a curator.
+- Reusable skills and operating procedures are ordinary wiki entries: discover and read them with these same tools, then apply them with available execution tools. There is no separate skill library or activation step.

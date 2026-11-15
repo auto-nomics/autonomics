@@ -446,17 +446,6 @@ impl App {
                     &mut self.state.agent_config,
                 );
             }
-            Overlay::SkillLibrary => {
-                use ratatui::widgets::StatefulWidget as _;
-                crate::widgets::skill_library::SkillLibraryWidget::new()
-                    .popup_width(frame.area().width * 9 / 10)
-                    .popup_height((frame.area().height * 3 / 4).max(12))
-                    .render(
-                        frame.area(),
-                        frame.buffer_mut(),
-                        &mut self.state.skill_library,
-                    );
-            }
         }
     }
 

@@ -62,10 +62,6 @@ pub enum CommandAction {
     CloseAgent,
     /// Delete the active agent permanently (removes all stored data).
     DeleteAgent,
-    /// Open the skill library dashboard (installed skills, usage,
-    /// full SKILL.md bodies).
-    SkillLibraryPanel,
-    /// Open the KMS dashboard directly on the knowledge wiki tab.
     /// Toggle collapse for thinking blocks.
     ToggleCollapseThinking,
     /// Toggle collapse for tool call blocks.
@@ -380,12 +376,6 @@ fn default_commands() -> Vec<Command> {
             keywords: "agent settings memory runtime use generate per agent".into(),
             category: "agent".into(),
             action: CommandAction::AgentConfig,
-        },
-        Command {
-            title: "Skill library".into(),
-            keywords: "skills library tiers builtin global workspace usage dashboard".into(),
-            category: "skills".into(),
-            action: CommandAction::SkillLibraryPanel,
         },
         Command {
             title: "View DAG".into(),

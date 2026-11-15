@@ -121,11 +121,6 @@ pub struct SharedInfra {
     /// opened **once** per process. Deck 是写作交付物,与 writing 同一能力门控。
     pub deck: Arc<ppt_base::DeckHandle>,
     pub visualization_db: std::path::PathBuf,
-    /// Central skill manager (tiered registry + generation counter +
-    /// change broadcast + usage telemetry). Initialized as the
-    /// process-wide singleton so every mutation path — agent tools,
-    /// gateway handlers — shares one notification invariant.
-    pub skills: Arc<skills::SkillManager>,
     /// The tokio runtime handle (for spawning agent tasks).
     pub runtime_handle: tokio::runtime::Handle,
     /// Optional host control for agent tools. Set by RuntimeHost when
@@ -187,9 +182,7 @@ impl SharedInfra {
         // Include auto-discovered vaults as well as explicitly configured ones.
         // Vault-backed OTP authentication must reuse the authenticated master:
         // a second connection may otherwise replay a just-consumed TOTP code.
-        if (config.ssh_multiplex || vault_explicit)
-            && !vfs::ssh_channel::is_configured()
-        {
+        if (config.ssh_multiplex || vault_explicit) && !vfs::ssh_channel::is_configured() {
             vfs::ssh_channel::configure(
                 &config.state_dir.join("ssh-control"),
                 &config.ssh_control_persist,
@@ -275,13 +268,6 @@ impl SharedInfra {
                 vfs::ssh_channel::configure_vault_agent(&socket);
             }
         }
-
-        // The skill manager is the process-wide singleton: every
-        // mutation path (agent tools, gateway handlers) shares one
-        // notification invariant.
-        let skills = skills::SkillManager::init(skills::SkillManager::new(&config.state_dir));
-        skills.load_usage();
-        spawn_usage_persist_timer(&skills);
 
         let (rsi, environments) = open_plugin_rsi(config).await?;
 
@@ -401,7 +387,6 @@ impl SharedInfra {
             wiki,
             deck,
             visualization_db: config.app_db_path.with_file_name("visualizations.sqlite"),
-            skills,
             runtime_handle: tokio::runtime::Handle::current(),
             host_control: None,
             browsers: Arc::new(tokio::sync::Mutex::new(BrowserPool::default())),
@@ -464,13 +449,6 @@ impl SharedInfra {
         builder = builder.with_memory_backend(Arc::clone(&memory));
 
         builder = builder.with_system_prompt_section(crate::config::build_system_prompt(&kind));
-        // Skill index: one line per visible skill; bodies load on
-        // demand via skill_get. Empty library → no section at all.
-        let skill_section = skills::prompt_section(&self.skills.registry().list());
-        if !skill_section.is_empty() {
-            builder = builder.with_system_prompt_section(skill_section);
-        }
-
         builder = builder
             .with_tools(tool_list)
             .with_cancel_token(cancel_token.clone());
@@ -604,7 +582,6 @@ impl SharedInfra {
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
-        tools.extend(skills::skill_registrations(self.skills.clone()));
         if kind.enable_plugin_rsi() {
             tools.extend(plugin_rsi::plugin_development_tool_registrations(
                 agent_path.as_str(),
@@ -651,10 +628,6 @@ impl SharedInfra {
 
         let engine_client = Arc::new(engine_client);
         tools.extend(data_engine_tools::registrations(Arc::clone(&engine_client)));
-        // The engine-bound skill workflow toolset (template DAG instantiation
-        // + evals) was removed with the node-graph run path; skill flows can
-        // be authored as stage-model flows instead.
-
         if kind.enable_bibliography() {
             let bib_shared = self.bib.clone();
             // Highlight anchoring reads/generates the SDT structure through
@@ -889,10 +862,9 @@ async fn open_environment_dev(
     // mutable state. `from_env()` here would silently fall back to the
     // host-default graphroot (~/.local/share/containers), which broke the
     // RSI build gate when that path was a dangling symlink.
-    let image_builder: Arc<dyn container_runtime::ImageBuildConnection> =
-        Arc::new(container_runtime::PodmanRuntime::new(
-            container_execution.config.clone(),
-        ));
+    let image_builder: Arc<dyn container_runtime::ImageBuildConnection> = Arc::new(
+        container_runtime::PodmanRuntime::new(container_execution.config.clone()),
+    );
     let image_publisher: plugin_rsi::SharedImagePublisher =
         Arc::new(plugin_rsi::PodmanImagePublisher::new(
             plugin_rsi::ImageRegistryConfig {
@@ -1249,24 +1221,6 @@ async fn open_deck(
     // Post-write aesthetics diagnostics (render-tier via the same exporter).
     deck.start_diagnostics_worker();
     Ok(Arc::new(ppt_base::DeckHandle::spawn(deck)))
-}
-
-/// Persist the skill usage counters periodically so telemetry survives
-/// daemon restarts. Failures are logged and never retried here — the
-/// next tick (or the next library mutation, which also persists)
-/// rewrites the table.
-fn spawn_usage_persist_timer(skills: &Arc<skills::SkillManager>) {
-    let skills = Arc::clone(skills);
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(600));
-        interval.tick().await; // the first tick fires immediately; skip it
-        loop {
-            interval.tick().await;
-            if let Err(error) = skills.persist_usage() {
-                tracing::warn!(%error, "skill usage persist failed");
-            }
-        }
-    });
 }
 
 /// Runtime adapter that lets PluginStore refresh node factories without

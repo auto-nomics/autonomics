@@ -625,21 +625,6 @@ impl GatewayClient {
             .await
     }
 
-    // ── skill library ────────────────────────────────────────────
-
-    /// The installed skill library: every skill across tiers with
-    /// usage telemetry attached per row.
-    pub async fn skill_library(&self) -> Result<Vec<SkillLibraryView>> {
-        self.get("/skills/library").await
-    }
-
-    /// One skill's full detail (metadata, usage, complete SKILL.md
-    /// body).
-    pub async fn skill_library_detail(&self, name: &str) -> Result<SkillLibraryDetail> {
-        self.get(&format!("/skills/library/{}", encode_segment(name)))
-            .await
-    }
-
     // ── compute targets and HPC jobs ─────────────────────────────
 
     /// Operator compute-registry status: targets, data sources, selection.

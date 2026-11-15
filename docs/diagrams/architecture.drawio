@@ -31,7 +31,7 @@
         <mxCell id="e_gw_rh" value="drives (single writer)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;fontSize=10;" edge="1" parent="1" source="gw" target="rh">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
-        <mxCell id="rh" value="RuntimeHost — agent tree rooted at /root, restored at daemon boot · delegation-only communication (parent to direct child) · memory · skills index injected into every prompt" style="rounded=1;html=1;whiteSpace=wrap;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;spacingTop=6;" vertex="1" parent="1">
+        <mxCell id="rh" value="RuntimeHost — agent tree rooted at /root, restored at daemon boot · delegation-only communication (parent to direct child) · memory · wiki procedural guidance in prompts" style="rounded=1;html=1;whiteSpace=wrap;verticalAlign=top;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;fontStyle=1;spacingTop=6;" vertex="1" parent="1">
           <mxGeometry x="80" y="296" width="1080" height="200" as="geometry" />
         </mxCell>
         <mxCell id="researcher" value="Researcher agents (default kind)&#10;&#10;scientific question · analysis design · DAG construction&#10;execution · interpretation · literature · writing&#10;&#10;&quot;the plugin ecosystem is dynamic — a missing node&#10;is a normal discovery, not a dead end&quot;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
@@ -79,7 +79,7 @@
         <mxCell id="sub" value="Self-improvement substrate — agents draft · gates validate · humans promote" style="rounded=1;html=1;whiteSpace=wrap;verticalAlign=top;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;fontStyle=1;spacingTop=6;" vertex="1" parent="1">
           <mxGeometry x="770" y="556" width="390" height="282" as="geometry" />
         </mxCell>
-        <mxCell id="s1" value="Skills&#10;tiered library (builtin/global/workspace)&#10;· memory_note lessons · usage telemetry" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
+        <mxCell id="s1" value="Wiki procedures&#10;ordinary linked entries&#10;· wiki_search / wiki_get · version history" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">
           <mxGeometry x="795" y="600" width="340" height="66" as="geometry" />
         </mxCell>
         <mxCell id="s2" value="Plugin RSI&#10;requests → /plugins/dev git workspaces&#10;→ validation gates → install + publish" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9673a6;fontSize=11;" vertex="1" parent="1">

@@ -89,8 +89,7 @@ the `@` alias explicitly.
 - Provider catalogue, API-key editing, and default model activation
 - Agent creation and new-session creation through the gateway
 - Bibliography collections, article search, metadata, paged full text, and notes
-- KMS skill governance, wiki browser, evidence browser, live worker status, and
-  pending proposal approval/rejection
+- Wiki browser and ordinary entry editing, search, and version history
 - Per-agent runtime overrides for memory injection, memory generation, and reasoning
   effort
 - Agent-scoped DAG snapshot browsing with status coloring, selection, and edge focus
@@ -116,9 +115,7 @@ the `@` alias explicitly.
 - Composer Up/Down prompt recall and incremental Ctrl+R history search; queued
   sends stay enabled while an agent is running
 
-On daemons that predate the dedicated `/kms/{knowledge,skills,skill-proposals,evidence}`
-routes, KMS automatically falls back to `/skills/library` and `/kms/workers`; proposal
-review remains read-only until the newer daemon endpoints are available.
+Reusable procedures are ordinary wiki entries, managed through the same knowledge browser and wiki tools. The separate skill library and its fallback endpoints have been removed.
 
 The remaining major TUI-only area is deep authoring/editing of DAG graphs; the GUI
 currently provides the same read-only runtime snapshot view.
@@ -138,7 +135,7 @@ leaving the Agent pane available. Standalone reader entry points retain their
 full-window behavior.
 
 Use **加入当前会话** on a paper, search hit, reader text selection, knowledge
-node, evidence record or skill to explicitly add a reference. The basket above
+node or evidence record to explicitly add a reference. The basket above
 the composer shows the current Agent/session and supports preview, removal,
 replacement and clear. Adding a reference reveals the assistant, including a
 previously collapsed floating shell. Each Agent/session has an independent

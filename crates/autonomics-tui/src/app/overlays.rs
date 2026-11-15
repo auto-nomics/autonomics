@@ -10,9 +10,6 @@
 //! - the command palette opened over the DAG/bibliography overlays via
 //!   the global `Ctrl+P` chord but painted beneath them (invisible
 //!   palette that swallowed every key);
-//! - the skill library dashboard was in the key-capture chain and in
-//!   `any_overlay_open` but missing from the mouse guard, so wheel
-//!   events scrolled the hidden chat underneath it.
 //!
 //! [`AppState::overlay_stack`] is now the one ordered list and all three
 //! consumers derive from it.
@@ -47,8 +44,6 @@ pub(super) enum Overlay {
     HpcPanel,
     /// Embedding model config form.
     EmbeddingConfig,
-    /// Skill library dashboard.
-    SkillLibrary,
     /// Bibliography browser.
     Bibliography,
     /// VFS browser (files, mounts, container outputs).
@@ -95,7 +90,6 @@ impl AppState {
             (ModelConfig, self.model_config_visible),
             (HpcPanel, self.hpc_panel.visible),
             (EmbeddingConfig, self.embedding_config_visible),
-            (SkillLibrary, self.skill_library.visible),
             (Bibliography, self.bibliography_visible),
             (VfsBrowser, self.vfs_browser.visible),
             (DagView, self.dag_view_visible),
@@ -130,8 +124,9 @@ mod tests {
         state.model_config_visible = true;
         state.hpc_panel.visible = true;
         state.embedding_config_visible = true;
-        state.skill_library.visible = true;
         state.bibliography_visible = true;
+        state.vfs_browser.visible = true;
+        state.flow_view_visible = true;
         state.dag_view_visible = true;
         state.message_picker.picker.visible = true;
         state.agent_effort_picker.visible = true;
@@ -163,7 +158,7 @@ mod tests {
         let mut state = AppState::default();
         all_visible(&mut state);
         let stack = state.overlay_stack();
-        assert_eq!(stack.len(), 17, "every overlay variant must be listed");
+        assert_eq!(stack.len(), 18, "every overlay variant must be listed");
         let unique: std::collections::HashSet<_> = stack.iter().collect();
         assert_eq!(unique.len(), stack.len(), "no duplicates in the stack");
     }

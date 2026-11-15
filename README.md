@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-Autonomics is a complete, self-extending research system for biomedical science built around LLM agents. Two agent roles divide the work: the **Researcher** owns the scientific question — literature, evidence, typed DataFusion DAGs, execution, interpretation, and manuscript writing — while the **Developer** owns capability: when an analysis node does not exist yet, the Researcher records the gap, spawns a Developer child agent, and the Developer drafts a new container plugin (manifest, scripts, and if needed a new OCI image), passes deterministic validation gates, and installs an immutable snapshot into the live node registry. Operational know-how is captured the same way: observations from real runs are distilled into reviewable skills. Epidemiology, statistical genetics, clinical and survey analysis, machine learning, scientific databases, reproducible execution, and now supervised self-improvement are parts of one research system rather than separate applications.
+Autonomics is a complete, self-extending research system for biomedical science built around LLM agents. Two agent roles divide the work: the **Researcher** owns the scientific question — literature, evidence, typed DataFusion DAGs, execution, interpretation, and manuscript writing — while the **Developer** owns capability: when an analysis node does not exist yet, the Researcher records the gap, spawns a Developer child agent, and the Developer drafts a new container plugin (manifest, scripts, and if needed a new OCI image), passes deterministic validation gates, and installs an immutable snapshot into the live node registry. Operational know-how is captured the same way: reusable lessons from real runs are curated as ordinary wiki entries. Epidemiology, statistical genetics, clinical and survey analysis, machine learning, scientific databases, reproducible execution, and now supervised self-improvement are parts of one research system rather than separate applications.
 
 The root Cargo workspace contains 101 crates at the time of this README update. It is an active research codebase: APIs, node contracts, and configuration paths may still change. The `dendrite/` directory is a separate nested Rust workspace for the knowledge-management system.
 
@@ -12,7 +12,7 @@ The system spans five planes plus one protocol:
 
 - **Model cockpit**: a resident gateway daemon, streaming conversations, persistent memory, and a constrained multi-agent topology with `researcher` and `developer` agent kinds.
 - **Capability registry**: JSON-schema-validated tools and typed DAG nodes addressed as `plugin/node` (built-ins live under `core/`), ranging over analysis, I/O, source, sink, and writing operations, plus manifest plugins that can be installed while the system runs.
-- **Self-improvement substrate**: plugin RSI (recursive self-improvement), skill evolution, and environment (image) development. Agents draft; deterministic gates validate; humans approve; only then does anything reach the running system.
+- **Self-improvement substrate**: plugin RSI (recursive self-improvement), and environment (image) development. Agents draft; deterministic gates validate; humans approve; only then does anything reach the running system.
 - **Evidence plane**: biomedical APIs, a unified literature gateway, bibliographic citations flowing as typed data on DAG edges, full-text storage, bibliography records, and knowledge-tree access in one runtime.
 - **Execution plane**: DataFusion, Arrow, a pluggable task-executor contract (local and remote today; SLURM/Kubernetes-shaped tomorrow), VFS, immutable data packages, Podman, and reference-panel caches.
 - **Research protocol**: DAG history, snapshots, diffs, branches, provenance export (RO-Crate / W3C PROV-JSON), and numerical cross-validation make agent work inspectable, replayable, and publishable.
@@ -72,7 +72,6 @@ Node registry + scheduler
               artifact publication to VFS
 
 Self-improvement substrate (agents draft · gates validate · humans promote):
-  skills     evo_observe → deterministic distill → proposal → human approve
   plugin RSI requests → dev workspaces → validation gates → install/publish
   environments  /environments/dev image authoring → build → smoke → catalog
 
@@ -97,17 +96,9 @@ When a Developer delivers, the handoff includes the plugin name, the full `plugi
 
 Autonomics improves itself along three supervised loops that share one safety model: agents propose, deterministic infrastructure validates, humans approve.
 
-### Skills
+### Skills in the wiki
 
-A skill is a directory with a `SKILL.md` (YAML frontmatter + operational body), following the same contract as the Anthropic `skills` ecosystem, so third-party packs install unchanged. Skills live in three tiers — `builtin` (compiled in), `global` (`~/.autonomics/skills`), and `workspace` — and every agent's system prompt carries a one-line index of the library; bodies are fetched on demand through `skill_search` / `skill_get`. Skills may bundle parameterized DAG workflow templates and eval cases.
-
-The evolution loop has no auxiliary LLM anywhere:
-
-1. **Observe** — `evo_observe` records durable failures, recipes, and caveats as content-addressed observations (duplicates are no-ops). Eval failures are captured automatically.
-2. **Route** — each observation is routed to the skill domain, the plugin domain, both, or triage, anchored on the DAG node address.
-3. **Distill** — pure code clusters anchored observations by node kind and normalized error signature; three occurrences of the same pattern synthesize a conservative skill proposal that only ever cites recorded fixes, never invents advice.
-4. **Review** — proposals stage in `~/.autonomics/skill-proposals/` and are approved or rejected from the TUI skill-evolution dashboard or the gateway API. Auto-approval is off by default, and agent-authored proposals are never auto-approved.
-5. **Measure** — tool-usage telemetry is the fitness signal, persisted across restarts.
+Skills are reusable procedures in ordinary wiki entries. Agents discover them with `wiki_search` / `wiki_get`, check applicability, and execute with existing tools; the curator maintains them through ordinary wiki edits and version history. There is no separate skill module, installation directory, skill toolset, publication workflow, or dashboard. Existing SKILL.md content can be handed to the curator for incorporation into entries; legacy directories are neither automatically imported nor deleted.
 
 ### Plugin RSI
 
@@ -134,7 +125,7 @@ Two mechanisms make the system trustworthy for biomedical work:
 | --- | --- | --- |
 | Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, agent kinds and profiles, delegation-only multi-agent topology, and a sync-to-async host. |
 | Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*` | Node traits, plugin registry, typed ports, scheduler with pluggable executors, JSON-schema specs, and agent tools. |
-| Self-improvement | `plugin-rsi`, `container-plugin`, `skills`, `evolution-core` | Plugin RSI lifecycle and tooling, manifest compile/load, skill library and no-LLM evolution loop, shared observation store and routing. |
+| Self-improvement | `plugin-rsi`, `container-plugin`, `wiki` | Plugin RSI lifecycle and tooling, manifest compile/load, wiki-hosted procedural knowledge. |
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
 | Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `crrkit`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
 | Machine learning and deep learning | `ml`, `dl` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows. Generalized random forests ship as the containerized `grf` plugin family (official R grf). |
@@ -246,7 +237,6 @@ autonomics/
 │   ├── node-bundles/             Feature-gated analysis-node plugins
 │   ├── plugin-rsi/               Recursive self-improvement substrate (plugins)
 │   ├── container-plugin/         Manifest compile, load, sync, factories
-│   ├── skills/, evolution-core/  Skill library and no-LLM evolution loop
 │   ├── vfs/                      OpenDAL-backed virtual file system and vbash tools
 │   ├── data-catalog/             Versioned data-package catalog
 │   ├── container-runtime/        Podman execution and immutable panel cache
@@ -263,7 +253,7 @@ autonomics/
 └── scripts/                      Install, panel-build, and maintenance scripts
 ```
 
-The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build. Per-user state lives under `~/.autonomics`: `plugins.toml` plus the v2 plugin tree (`plugins/dev`, `plugins/snapshots`, `plugins/runtime`), the environment catalog (`plugin-environments.toml`, `environments/dev`), the skill library and its evolution stores (`skills/`, `skill-observations/`, `skill-proposals/`, `skill-usage.toml`), panel caches (`panels/`), and the SQLite databases (`agent.db`, `knowledge.db`, `bib.db`, `writing.db`, `dag-history.db`).
+The `reference/` directory contains third-party and comparison material and is not part of the root Cargo build. Per-user state lives under `~/.autonomics`: `plugins.toml` plus the v2 plugin tree (`plugins/dev`, `plugins/snapshots`, `plugins/runtime`), the environment catalog (`plugin-environments.toml`, `environments/dev`), panel caches (`panels/`), and the SQLite databases (`agent.db`, `knowledge.db`, `bib.db`, `writing.db`, `dag-history.db`).
 
 ## Getting Started
 
@@ -342,7 +332,7 @@ curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-The API also exposes live agent control (`/api/v1/agents…`), the SSE event stream (`/api/v1/events`), plugin and environment management (`/api/v1/plugins…`), and the skill library and evolution status (`/api/v1/skills…`). The frontend development workflow is documented in [docs/api-server_zh.md](docs/api-server_zh.md).
+The API also exposes live agent control (`/api/v1/agents…`), the SSE event stream (`/api/v1/events`), plugin and environment management (`/api/v1/plugins…`). The frontend development workflow is documented in [docs/api-server_zh.md](docs/api-server_zh.md).
 
 ## Analysis Model
 
@@ -406,7 +396,6 @@ cargo test -p data-engine
 cargo test -p dag-core
 cargo test -p container-plugin
 cargo test -p plugin-rsi
-cargo test -p skills
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime

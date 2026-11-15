@@ -25,7 +25,6 @@ pub(crate) mod plugin_environments;
 mod plugins;
 mod router;
 mod settings;
-mod skills;
 mod state;
 mod storage;
 mod vfs;

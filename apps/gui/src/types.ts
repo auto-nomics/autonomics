@@ -272,41 +272,6 @@ export type KmsKnowledgeNode = {
   updated_at: number;
 };
 
-export type KmsSkillArtifact = {
-  relative_path: string;
-  content: string;
-};
-
-export type KmsSkill = {
-  id: string;
-  skill_name: string;
-  node_path: string;
-  version: number;
-  title: string;
-  description: string;
-  tags: string[];
-  tier: string;
-  source_tier: string;
-  created_at: number;
-  artifact_paths: string[];
-};
-
-export type KmsProposal = {
-  id: string;
-  skill_name: string;
-  node_path: string;
-  status: string;
-  title: string;
-  body_md: string;
-  rationale: string;
-  source_evidence_ids: string[];
-  artifacts: KmsSkillArtifact[];
-  content_hash: string;
-  approved_skill_version_id: string | null;
-  created_at: number;
-  updated_at: number;
-};
-
 export type KmsEvidence = {
   id: string;
   source_kind: string;
@@ -320,25 +285,6 @@ export type KmsEvidence = {
   occurrence_count: number;
   created_at: number;
   last_seen_at: number;
-};
-
-export type SkillLibraryRow = {
-  name: string;
-  tier: string;
-  tags: string[];
-  description: string;
-  installed: boolean;
-  usage_gets: number;
-  usage_search_hits: number;
-  usage_runs: number;
-  usage_evals: number;
-  usage_last_used: number;
-};
-
-export type SkillLibraryDetail = SkillLibraryRow & {
-  body: string;
-  workflows: string[];
-  evals: string[];
 };
 
 export type AgentRuntimeOverrides = {
@@ -404,18 +350,4 @@ export type DagSnapshot = {
   observed_at_ms?: number;
   nodes: DagNode[];
   edges: DagEdge[];
-};
-
-export type KmsRow = {
-  key: string;
-  name: string;
-  tier: string;
-  description: string;
-  tags: string[];
-  body: string;
-  version?: number;
-  installed: boolean;
-  proposal_status: string | null;
-  proposal_update: boolean;
-  proposal: KmsProposal | null;
 };

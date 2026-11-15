@@ -432,8 +432,6 @@ impl Context {
             .unwrap();
         }
 
-        self.poll_context_provider().await;
-
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Requesting);
         self.core.send_event(AgentEvent::Requesting);
         let response_message = self.request_with_retries().await?;
@@ -1030,21 +1028,9 @@ impl Context {
         self.set_lifecycle(agentik_types::AgentLifecycleStatus::Idle);
     }
 
-    async fn poll_context_provider(&mut self) {
-        if let Some(provider) = &self.core.context_provider {
-            if let Some(text) = provider.poll().await {
-                let _ = self.remember(Message::injected(text));
-            }
-        }
-    }
-
     async fn build_context(&mut self) -> Result<Vec<Message>> {
-        // Skill-library guidance is static behavioral text (how to
-        // consume skills and record lessons through the memory
-        // tools), so it lives in the system prompt; the volatile
-        // skill *index* stays out (see the notice note below for why).
         let mut builder = system_prompt_builder::SystemPromptBuilder::default()
-            .build_skill_guidance()
+            .build_wiki_guidance()
             .build_tooluse_guidance();
 
         let identity = self
@@ -1555,10 +1541,9 @@ mod tests {
         assert!(disabled.contains("## Profile\nYou are the orchestrator agent."));
     }
 
-    /// Skill 指导随 system 一起到达模型边界:静态行为文本进 system
-    /// (会话内稳定),与技能**索引**(spawn 时 extra section)互不干扰。
+    /// Wiki-hosted procedural guidance reaches the model in the system prompt.
     #[tokio::test]
-    async fn skill_guidance_ships_in_the_system_prompt() {
+    async fn wiki_guidance_ships_in_the_system_prompt() {
         use crate::testing::dummy_model_info;
         use agentik_sdk::model::Model;
         use agentik_sdk::provider::client::MockApiClient;
@@ -1578,7 +1563,7 @@ mod tests {
                     ))
                 });
         }
-        let model = Model::with_client(dummy_model_info("skill-guide"), mock);
+        let model = Model::with_client(dummy_model_info("wiki-guide"), mock);
 
         let registry = crate::tools::ToolRegistry::new();
         let shared = Arc::new(AgentCore {
@@ -1606,15 +1591,29 @@ mod tests {
         session.agent_workflow(&internal_tx, None).await.unwrap();
 
         let system = captured.lock().unwrap().clone().expect("system captured");
-        assert!(system.contains("## Skill library"), "{system}");
+        assert!(
+            system.contains("### Skills are ordinary wiki entries"),
+            "{system}"
+        );
         assert!(
             system.contains("Persistent memory is disabled for this agent."),
             "{system}"
         );
-        for tool in ["skill_search", "skill_get", "memory_note", "memory_search"] {
+        for tool in ["wiki_search", "wiki_get"] {
             assert!(system.contains(tool), "missing {tool} in guidance");
         }
         assert!(!system.contains("evo_observe"), "{system}");
+        for removed in [
+            "skill_search",
+            "skill_get",
+            "skill_workflows",
+            "skill_run_workflow",
+        ] {
+            assert!(
+                !system.contains(removed),
+                "obsolete tool in prompt: {removed}"
+            );
+        }
     }
 
     /// Skills are guidance and tool users, not tool gatekeepers. Every tool

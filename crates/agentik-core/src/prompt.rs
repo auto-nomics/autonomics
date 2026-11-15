@@ -7,7 +7,7 @@
 //! - [`sections`]: the domain section constants and
 //!   [`sections::build_system_prompt`], the capability-gated dynamic builder.
 //! - [`system_prompt_builder`]: `SystemPromptBuilder`, the layered assembler
-//!   (identity → extras → skill → wiki → tool-use guidance) used by the agent
+//!   (identity → extras → wiki → tool-use guidance) used by the agent
 //!   loop each turn.
 //! - [`compact`] / [`prompt_context`]: compaction and dynamic prompt context.
 

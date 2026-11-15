@@ -1,3 +1,5 @@
+> Historical design context: the standalone Skill module and its proposal pipeline have since been removed. Reusable procedures now live in ordinary Wiki entries; references below describe the original design baseline.
+
 # Plugin-Based RSI Design
 
 > Status: draft · 2026-10-04

@@ -5,7 +5,7 @@ use utoipa::{Modify, OpenApi};
 
 use super::{
     agents, context, events, hydration, lifecycle, model_config, plugin_environments, plugins,
-    settings, skills, storage, vfs,
+    settings, storage, vfs,
 };
 use crate::proto::*;
 
@@ -68,8 +68,6 @@ use crate::proto::*;
         plugin_environments::inspect_docker_hub_tag,
         plugin_environments::approve_environment,
         plugin_environments::delete_environment,
-        skills::list_skill_library,
-        skills::get_skill_library_detail,
         vfs::list,
         vfs::stat,
         vfs::mounts,
@@ -101,8 +99,6 @@ use crate::proto::*;
         FetchCatalogRequest,
         EmbeddingConfigView,
         SaveEmbeddingConfigRequest,
-        SkillLibraryView,
-        SkillLibraryDetail,
         ChatgptLoginStart,
         ChatgptRefreshResponse,
         SettingsMap,

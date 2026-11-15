@@ -93,16 +93,6 @@ pub(crate) enum AppEvent {
         article_id: String,
         result: std::result::Result<gateway::proto::BibliographyArticleDetail, String>,
     },
-    /// Skill library dashboard data arrived.
-    SkillLibraryLoaded {
-        library: std::result::Result<Vec<gateway::proto::SkillLibraryView>, String>,
-    },
-    /// One skill's detail document arrived (fetched on selection
-    /// move; rendered only while it matches the selected row).
-    SkillDetailLoaded {
-        name: String,
-        result: std::result::Result<gateway::proto::SkillLibraryDetail, String>,
-    },
     /// Per-agent model info arrived (render-path cache fill; render itself
     /// must never issue HTTP). The string is the `provider:model` spec.
     ModelInfoLoaded {

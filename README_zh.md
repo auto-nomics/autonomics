@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_zh.md)
 
-Autonomics 是一个以 LLM 智能体为核心、可自我扩展的完整科研系统。两种智能体角色分工协作：**Researcher** 负责科学问题本身——文献、证据、类型化 DataFusion DAG、执行与解释、稿件写作；**Developer** 负责能力建设——当某个分析节点尚不存在时，Researcher 记录能力缺口，派生一个 Developer 子智能体，由它起草新的容器插件（manifest、脚本，必要时还有新的 OCI 镜像），通过确定性校验门禁，并把不可变快照安装进实时节点注册表。操作经验也以同样的方式沉淀：真实运行中的观察会被蒸馏成可审查的 skill。流行病学、统计遗传学、临床与调查分析、机器学习、科研数据库、可复现执行，以及受监督的自我改进，被当作同一个科研系统的组成部分，而不是彼此独立的应用。
+Autonomics 是一个以 LLM 智能体为核心、可自我扩展的完整科研系统。两种智能体角色分工协作：**Researcher** 负责科学问题本身——文献、证据、类型化 DataFusion DAG、执行与解释、稿件写作；**Developer** 负责能力建设——当某个分析节点尚不存在时，Researcher 记录能力缺口，派生一个 Developer 子智能体，由它起草新的容器插件（manifest、脚本，必要时还有新的 OCI 镜像），通过确定性校验门禁，并把不可变快照安装进实时节点注册表。操作经验也以同样的方式沉淀：真实运行中的可复用经验会被整理为普通 Wiki 词条。流行病学、统计遗传学、临床与调查分析、机器学习、科研数据库、可复现执行，以及受监督的自我改进，被当作同一个科研系统的组成部分，而不是彼此独立的应用。
 
 根 Cargo 工作空间在本版 README 更新时包含 101 个 crate。这是一个活跃研究代码库，API、节点契约和配置路径仍可能调整。`dendrite/` 是独立的嵌套 Rust 工作空间，用于知识管理系统。
 
@@ -12,7 +12,7 @@ Autonomics 是一个以 LLM 智能体为核心、可自我扩展的完整科研�
 
 - **模型驾驶舱**：常驻 gateway 守护进程、流式对话、持久记忆，以及由 `researcher` / `developer` 两种智能体类别构成的受约束多智能体拓扑。
 - **能力注册表**：经 JSON Schema 校验的工具与类型化 DAG 节点，以 `plugin/node` 寻址（内置节点位于 `core/` 命名空间），覆盖分析、I/O、source、sink 与写作操作；manifest 插件可以在系统运行期间安装。
-- **自我改进基座**：插件 RSI（递归自我改进）、skill 进化与运行环境（镜像）开发。智能体起草、确定性门禁校验、人类审批——三者齐备，变更才会到达运行中的系统。
+- **自我改进基座**：插件 RSI（递归自我改进）与运行环境（镜像）开发。智能体起草、确定性门禁校验、人类审批——三者齐备，变更才会到达运行中的系统。
 - **证据面**：生物医学科研 API、统一文献网关、以类型化数据形式在 DAG 边上流动的引文、全文存储、文献库记录与知识树访问共享同一个运行时。
 - **执行面**：DataFusion、Arrow、可插拔的任务执行器契约（当前为 local 与 remote，未来可对接 SLURM/Kubernetes）、VFS、不可变数据包、Podman 和参考面板缓存。
 - **科研协议**：DAG 历史、快照、diff、分支、溯源导出（RO-Crate / W3C PROV-JSON）与数值交叉验证，让智能体的工作可检查、可重放、可发表。
@@ -71,7 +71,6 @@ Data-engine actor（每会话一个）
               artifact 发布到 VFS
 
 自我改进基座（智能体起草 · 门禁校验 · 人类晋升）:
-  skills      evo_observe → 确定性蒸馏 → 提案 → 人工审批
   plugin RSI  请求 → 开发工作区 → 校验门禁 → 安装/发布
   environments  /environments/dev 镜像编写 → 构建 → 冒烟 → 目录
 
@@ -96,17 +95,9 @@ Developer 交付时，交接物包含插件名、完整 `plugin/node` 地址、�
 
 Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型：智能体提案、确定性基础设施校验、人类审批。
 
-### Skills
+### Wiki 中的技能
 
-一个 skill 是一个含 `SKILL.md`（YAML frontmatter + 操作性正文）的目录，与 Anthropic `skills` 生态遵循同一契约，第三方技能包可以直接安装。skill 分三层——`builtin`（编译进二进制）、`global`（`~/.autonomics/skills`）与 `workspace`——每个智能体的系统提示词都会携带技能库的单行索引，正文按需经 `skill_search` / `skill_get` 获取。skill 还可捆绑带参数的 DAG 工作流模板与评测用例。
-
-进化回路中没有任何辅助 LLM：
-
-1. **观察** —— `evo_observe` 把持久的失败、配方与注意事项记录为内容寻址的观察（重复记录自动去重）。评测失败会被自动捕获。
-2. **路由** —— 每条观察按 DAG 节点地址锚定，路由到 skill 域、插件域、两者或待分诊。
-3. **蒸馏** —— 纯代码按节点类型与规范化错误签名对观察聚类；同一模式出现三次即合成一个保守的 skill 提案，提案只引用已记录的修复，绝不发明建议。
-4. **审查** —— 提案暂存于 `~/.autonomics/skill-proposals/`，在 TUI 技能进化面板或 gateway API 中批准或驳回。自动审批默认关闭，智能体署名的提案永远不自动批准。
-5. **度量** —— 工具使用遥测作为适应度信号，跨重启持久化。
+技能是普通 Wiki 词条中的可复用操作说明。智能体通过 `wiki_search` / `wiki_get` 查找方法、检查适用条件，并使用现有工具执行；curator 通过普通 Wiki 编辑和版本历史维护说明。没有独立技能模块、安装目录、技能工具、发布流程或技能面板。已有 SKILL.md 的有用内容可交给 curator 整理为词条；旧目录不会自动导入，也不会被删除。
 
 ### Plugin RSI
 
@@ -133,7 +124,7 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 | --- | --- | --- |
 | 模型编排 | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | 流式 LLM 客户端、工具 schema 与调用、持久记忆、智能体类别与 profile、仅委派的多智能体拓扑、sync-to-async 宿主。 |
 | 分析执行 | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*` | 节点 trait、插件注册表、类型化端口、带可插拔执行器的调度器、JSON schema spec、智能体工具。 |
-| 自我改进 | `plugin-rsi`, `container-plugin`, `skills`, `evolution-core` | 插件 RSI 生命周期与工具、manifest 编译/加载、skill 库与无 LLM 进化回路、共享观察存储与路由。 |
+| 自我改进 | `plugin-rsi`, `container-plugin`, `wiki` | 插件 RSI 生命周期与工具、manifest 编译/加载、Wiki 托管的操作知识。 |
 | 数据基础设施 | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL 支撑的 VFS、Hugging Face 托管的版本化数据包、Podman 执行、不可变面板缓存、生物格式 DataFusion 读取器。 |
 | 统计与流行病学 | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `crrkit`, `survey`, `mice`, `hierint` | 描述统计与回归；因果推断与中介；可组合检验与 p 值工作流；前瞻性效能与样本量设计；竞争风险；调查设计；插补；层次交互模型。 |
 | 机器学习与深度学习 | `ml`, `dl` | 预处理、特征工程、聚类、监督模型、集成、异常检测、降维；基于 Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer 与自编码器工作流。广义随机森林以容器化 `grf` 插件家族发布（官方 R grf）。 |
@@ -224,7 +215,6 @@ autonomics/
 │   ├── node-bundles/             feature 门控的分析节点插件
 │   ├── plugin-rsi/               递归自我改进基座（插件）
 │   ├── container-plugin/         manifest 编译、加载、同步、工厂
-│   ├── skills/, evolution-core/  skill 库与无 LLM 进化回路
 │   ├── vfs/                      OpenDAL 支撑的虚拟文件系统与 vbash 工具
 │   ├── data-catalog/             版本化数据包目录
 │   ├── container-runtime/        Podman 执行与不可变面板缓存
@@ -241,7 +231,7 @@ autonomics/
 └── scripts/                      安装、面板构建与维护脚本
 ```
 
-`reference/` 目录存放第三方与对比材料，不属于根 Cargo 构建。每用户状态位于 `~/.autonomics` 之下：`plugins.toml` 与 v2 插件树（`plugins/dev`、`plugins/snapshots`、`plugins/runtime`）、运行环境目录（`plugin-environments.toml`、`environments/dev`）、skill 库及其进化存储（`skills/`、`skill-observations/`、`skill-proposals/`、`skill-usage.toml`）、面板缓存（`panels/`）以及 SQLite 数据库（`agent.db`、`knowledge.db`、`bib.db`、`writing.db`、`dag-history.db`）。
+`reference/` 目录存放第三方与对比材料，不属于根 Cargo 构建。每用户状态位于 `~/.autonomics` 之下：`plugins.toml` 与 v2 插件树（`plugins/dev`、`plugins/snapshots`、`plugins/runtime`）、运行环境目录（`plugin-environments.toml`、`environments/dev`）、面板缓存（`panels/`）以及 SQLite 数据库（`agent.db`、`knowledge.db`、`bib.db`、`writing.db`、`dag-history.db`）。
 
 ## 快速开始
 
@@ -318,7 +308,7 @@ curl http://127.0.0.1:8765/api/health
 curl 'http://127.0.0.1:8765/api/v1/bib/articles?query=gwas&limit=10'
 ```
 
-API 还提供实时智能体控制（`/api/v1/agents…`）、SSE 事件流（`/api/v1/events`）、插件与运行环境管理（`/api/v1/plugins…`）以及 skill 库与进化状态（`/api/v1/skills…`）。前端开发工作流见 [docs/api-server_zh.md](docs/api-server_zh.md)。
+API 还提供实时智能体控制（`/api/v1/agents…`）、SSE 事件流（`/api/v1/events`）、插件与运行环境管理（`/api/v1/plugins…`）。前端开发工作流见 [docs/api-server_zh.md](docs/api-server_zh.md)。
 
 ## 分析模型
 
@@ -382,7 +372,6 @@ cargo test -p data-engine
 cargo test -p dag-core
 cargo test -p container-plugin
 cargo test -p plugin-rsi
-cargo test -p skills
 cargo test -p biofusion
 cargo test -p agentik-core
 cargo test -p runtime

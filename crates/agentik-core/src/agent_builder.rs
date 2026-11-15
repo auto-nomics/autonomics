@@ -100,8 +100,8 @@ impl AgentBuilder {
     }
 
     /// Append an extra system-prompt section. Sections accumulate in call
-    /// order (joined by a newline) so a later section — e.g. the volatile
-    /// skill index — supplements, never replaces, an earlier one such as
+    /// order (joined by a newline) so a later section — e.g. additional
+    /// wiki guidance — supplements, never replaces, an earlier one such as
     /// the capability prompt from `build_system_prompt`.
     pub fn with_system_prompt_section(mut self, section: impl Into<String>) -> Self {
         let section = section.into();
@@ -257,17 +257,17 @@ mod tests {
     use super::*;
 
     /// Regression: `with_system_prompt_section` used to overwrite, so the
-    /// runtime's second call (volatile skill index) silently dropped the
+    /// runtime's second call (additional wiki guidance) silently dropped the
     /// capability prompt from `build_system_prompt`. Sections must accumulate
     /// in call order.
     #[test]
     fn system_prompt_sections_accumulate() {
         let builder = AgentBuilder::new()
             .with_system_prompt_section("## Capabilities\nyou have tools")
-            .with_system_prompt_section("## Skills\n- one");
+            .with_system_prompt_section("## Knowledge\n- one");
         assert_eq!(
             builder.system_prompt_section.as_deref(),
-            Some("## Capabilities\nyou have tools\n## Skills\n- one")
+            Some("## Capabilities\nyou have tools\n## Knowledge\n- one")
         );
     }
 }

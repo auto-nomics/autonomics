@@ -269,7 +269,6 @@ impl App {
                 Overlay::DagView => self.handle_dag_view_key(key),
                 Overlay::FlowView => self.handle_flow_view_key(key),
                 Overlay::Bibliography => self.handle_bibliography_key(key),
-                Overlay::SkillLibrary => self.handle_skill_library_key(key),
                 Overlay::EmbeddingConfig => self.handle_embedding_config_key(key),
                 Overlay::ModelConfig => self.handle_model_config_key(key),
                 Overlay::HpcPanel => self.handle_hpc_panel_key(key),

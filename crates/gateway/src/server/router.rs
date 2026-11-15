@@ -14,7 +14,7 @@ use super::docs::ApiDoc;
 use super::state::GatewayState;
 use super::{
     agents, compute, context, dev_terminal, events, gui, hpc_config, hpc_jobs, hydration,
-    lifecycle, model_config, plugin_environments, plugins, settings, skills, storage, vfs,
+    lifecycle, model_config, plugin_environments, plugins, settings, storage, vfs,
 };
 
 /// Build the gateway API router. Routes are relative and mounted by the
@@ -27,7 +27,10 @@ pub fn api_router(state: GatewayState) -> Router {
         .route("/compute/enroll", post(compute::enroll))
         .route("/compute/enroll/stream", post(compute::enroll_stream))
         .route("/compute/repair-worker", post(compute::repair_worker))
-        .route("/compute/repair-worker/stream", post(compute::repair_worker_stream))
+        .route(
+            "/compute/repair-worker/stream",
+            post(compute::repair_worker_stream),
+        )
         .route("/compute/targets", put(compute::target))
         .route("/compute/targets/{id}", delete(compute::delete_target))
         .route("/compute/targets/{id}/check", post(compute::check))
@@ -252,12 +255,6 @@ pub fn api_router(state: GatewayState) -> Router {
         .route(
             "/plugins/environments/{id}",
             delete(plugin_environments::delete_environment),
-        )
-        // ── skills ──
-        .route("/skills/library", get(skills::list_skill_library))
-        .route(
-            "/skills/library/{name}",
-            get(skills::get_skill_library_detail),
         )
         // ── VFS browser ──
         // The group carries a raised body limit: uploads stream through

@@ -525,16 +525,6 @@ impl App {
                     .toasts
                     .error("Model swap failed", Some(format!("[{agent}] {error}")));
             }
-            crate::app_event::AppEvent::SkillLibraryLoaded { library } => match library {
-                Ok(library) => {
-                    self.state.skill_library.browser.set_library(library);
-                    self.fetch_skill_detail();
-                }
-                Err(error) => self.state.skill_library.browser.error = Some(error),
-            },
-            crate::app_event::AppEvent::SkillDetailLoaded { name, result } => {
-                self.state.skill_library.browser.apply_detail(name, result);
-            }
             crate::app_event::AppEvent::ProviderSaved {
                 provider_name,
                 result,

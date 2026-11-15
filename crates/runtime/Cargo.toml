@@ -40,7 +40,6 @@ opendal.workspace = true
 hpc-tools = { path = "../hpc-tools" }
 sha2.workspace = true
 text-embedding = { path = "../text-embedding" }
-skills = { path = "../skills" }
 bib-base = { path = "../bib-base" }
 writing-base = { path = "../writing-base" }
 ppt-base = { path = "../ppt-base", features = ["vfs"] }

@@ -40,7 +40,7 @@ pub struct TestGateway {
     shutdown: CancellationToken,
     _dir: Option<tempfile::TempDir>,
     /// The daemon's shared infrastructure — kept so tests can reach
-    /// deterministic handles (e.g. the skills manager) without racing
+    /// deterministic infrastructure handles without racing
     /// the process-global singleton other parallel setups swap.
     pub infra: runtime::SharedInfra,
 }
@@ -262,11 +262,7 @@ async fn start_model_gateway(
         .try_init();
 
     let mut config = RuntimeConfig::default();
-    isolate_runtime_paths(
-        &mut config,
-        root.join("data"),
-        root.join("state"),
-    );
+    isolate_runtime_paths(&mut config, root.join("data"), root.join("state"));
     config.use_memory = false;
     config.generate_memory = false;
     // Keep the embedding model (network install + ONNX session) out
