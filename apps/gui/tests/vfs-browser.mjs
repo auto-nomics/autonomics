@@ -41,6 +41,15 @@ try {
       { path: '/', backend: 'default', source: '/', read_only: false },
       { path: '/data/ldsc', domain: 'ht', backend: 'default', source: 'ldsc', read_only: true },
     ], count: 2 } });
+    if (path === '/compute') return route.fulfill({ json: {
+      deployment: {},
+      state: { version: 1, policy: { target_id: 'local' }, targets: [
+        { id: 'local', name: '本地工作区', enabled: true, backend: { type: 'local' } },
+        { id: 'ht', name: 'ht 集群', enabled: true, backend: { type: 'ssh', settings: {} },
+          data_domains: [{ id: 'ht', ssh_aliases: ['ht'], remote_root: '/srv/share', vfs_prefix: '/data/ldsc' }] },
+      ], data_sources: [] },
+      mounts: [], runs: [],
+    } });
     if (path === '/vfs/list') {
       const dir = url.searchParams.get('path') ?? '/';
       listed.push(dir);
@@ -103,8 +112,23 @@ try {
   await sidebar.waitFor();
   await page.getByRole('tree', { name: 'VFS 目录树' }).waitFor();
   await page.locator('[data-vfs-path="/notes.md"]').waitFor();
-  // Only the root is fetched initially.
-  assert.deepEqual(listed, ['/'], `root listing only, got ${JSON.stringify(listed)}`);
+  // Bootstrap fetches the local root plus each remote group root.
+  assert.deepEqual([...listed].sort(), ['/', '/data/ldsc'], `bootstrap listings, got ${JSON.stringify(listed)}`);
+
+  // ── Compute-target groups ──────────────────────────────────────────
+  const localHeader = page.locator('[data-vfs-group="local"]');
+  await localHeader.waitFor();
+  assert.equal(await localHeader.getAttribute('data-vfs-group-backend'), 'local');
+  const htHeader = page.locator('[data-vfs-group="ht"]');
+  await htHeader.waitFor();
+  assert.equal(await htHeader.getAttribute('data-vfs-group-backend'), 'ssh');
+  // The remote group's subtree is live under its own header.
+  await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').waitFor();
+  // Collapsing a group hides its slice.
+  await htHeader.click();
+  assert.equal(await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').count(), 0);
+  await htHeader.click();
+  await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').waitFor();
 
   // ── Lazy expand + read-only badge ─────────────────────────────────
   await page.locator('[data-vfs-path="/data"]').click();

@@ -8,8 +8,24 @@
  */
 
 import { listDirAll, listMounts, type VfsEntry, type VfsMount } from "./vfs-api";
+import { fetchComputeStatus } from "@/features/hpc/api";
+import type { ComputeStatus } from "@/features/hpc/types";
 
 export type TreeNode = VfsEntry & { readOnly?: boolean };
+
+/** One compute target's slice of the VFS namespace. Local targets own the
+ *  `/` root; remote targets (ssh/slurm) own the subtrees their data
+ *  domains project via `vfs_prefix` (always read-only mounts). */
+export type ComputeGroup = {
+  id: string;
+  name: string;
+  backend: "local" | "slurm" | "ssh";
+  /** VFS subtree roots rendered under this group's header. */
+  roots: string[];
+  /** Top-level VFS paths hidden from the local `/` listing because a
+   *  remote group owns them (prevents duplication between groups). */
+  hidden?: string[];
+};
 
 export type VfsTreeState = {
   /** dir path → sorted children (dirs first). */
@@ -22,9 +38,13 @@ export type VfsTreeState = {
   loading: Set<string>;
   /** Declarative mounts (read-only badge source). */
   mounts: VfsMount[];
+  /** Compute-target groups (one tree slice per target). */
+  groups: ComputeGroup[];
   /** Bumped on every mutation (useSyncExternalStore identity). */
   revision: number;
 };
+
+const LOCAL_FALLBACK: ComputeGroup = { id: "local", name: "本地", backend: "local", roots: ["/"] };
 
 let state: VfsTreeState = {
   children: new Map(),
@@ -32,6 +52,7 @@ let state: VfsTreeState = {
   errors: new Map(),
   loading: new Set(),
   mounts: [],
+  groups: [LOCAL_FALLBACK],
   revision: 0,
 };
 
@@ -151,17 +172,62 @@ export function expandDir(path: string): void {
   void loadDir(path);
 }
 
-/** Prefetch mounts (read-only badges) and the root listing. */
+/** Build compute-target groups from the compute registry. Local targets
+ *  keep the whole `/` namespace; each remote target's data domains
+ *  contribute their `vfs_prefix` (and retained prefix) as group roots,
+ *  which are hidden from the local top level to avoid duplication. */
+function buildGroups(status: ComputeStatus | null): ComputeGroup[] {
+  if (!status) return [LOCAL_FALLBACK];
+  const groups: ComputeGroup[] = [];
+  const hidden: string[] = [];
+  for (const target of status.state.targets) {
+    if (target.enabled === false) continue;
+    const backend = target.backend?.type ?? "local";
+    if (backend === "local") {
+      groups.push({ id: target.id, name: target.name || "本地", backend: "local", roots: ["/"] });
+      continue;
+    }
+    const roots: string[] = [];
+    for (const domain of target.data_domains ?? []) {
+      for (const prefix of [domain.vfs_prefix, domain.retained_vfs_prefix]) {
+        if (!prefix) continue;
+        roots.push(prefix);
+        hidden.push(prefix);
+      }
+    }
+    if (roots.length === 0) continue;
+    groups.push({ id: target.id, name: target.name || target.id, backend, roots });
+  }
+  if (groups.filter((group) => group.backend === "local").length === 0) {
+    groups.unshift(LOCAL_FALLBACK);
+  }
+  for (const group of groups) {
+    if (group.backend === "local") group.hidden = hidden;
+  }
+  return groups;
+}
+
+/** Prefetch mounts (read-only badges), compute-target groups, and the
+ *  group root listings. */
 export async function bootstrapTree(): Promise<void> {
   if (state.children.size > 0 || state.loading.size > 0) return;
+  let status: ComputeStatus | null = null;
+  try {
+    status = await fetchComputeStatus();
+  } catch {
+    /* compute registry unavailable — fall back to a plain local root */
+  }
+  const groups = buildGroups(status);
   try {
     const { mounts } = await listMounts();
-    commit({ mounts });
+    commit({ mounts, groups });
   } catch {
     /* mounts are cosmetic; the tree still loads */
+    commit({ groups });
   }
-  await loadDir("/");
-  expandDir("/");
+  const roots = new Set(groups.flatMap((group) => group.roots));
+  await Promise.all([...roots].map((root) => loadDir(root)));
+  for (const root of roots) expandDir(root);
 }
 
 export function resetTree(): void {
@@ -171,6 +237,7 @@ export function resetTree(): void {
     errors: new Map(),
     loading: new Set(),
     mounts: [],
+    groups: [LOCAL_FALLBACK],
     revision: state.revision + 1,
   };
   for (const listener of listeners) listener();

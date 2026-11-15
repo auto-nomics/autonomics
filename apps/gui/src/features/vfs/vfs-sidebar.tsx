@@ -11,14 +11,14 @@ import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 import { useEffect, useState } from "react";
 import { useSyncExternalStore } from "react";
 import {
-  ChevronDown, ChevronRight, Download, FilePlus2, Folder, FolderOpen, FolderPlus, Lock,
-  Pencil, RefreshCw, Server, Trash2, Upload,
+  ChevronDown, ChevronRight, Cpu, Download, FilePlus2, Folder, FolderOpen, FolderPlus, HardDrive,
+  Lock, Pencil, RefreshCw, Server, Terminal, Trash2, Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   bootstrapTree, getVfsTreeState, reloadSubtree,
-  resetTree, subscribeVfsTree, toggleDir, readOnlyCover, type TreeNode,
+  resetTree, subscribeVfsTree, toggleDir, readOnlyCover, type ComputeGroup, type TreeNode,
 } from "./vfs-tree";
 import {
   downloadVfsFile, formatBytes, mkdir, moveEntry, pickUploadSource,
@@ -155,15 +155,19 @@ function Branch({
   activeDir,
   onSelect,
   onMutated,
+  hidden,
 }: {
   path: string;
   depth: number;
   activeDir: string;
   onSelect: (node: TreeNode) => void;
   onMutated: (parent: string) => void;
+  /** Applied to this branch's direct children only (local group hides
+   *  subtrees owned by remote compute targets). */
+  hidden?: (node: TreeNode) => boolean;
 }) {
   const state = getVfsTreeState();
-  const children = state.children.get(path);
+  const children = state.children.get(path)?.filter((node) => !hidden?.(node));
   const error = state.errors.get(path);
   const loading = state.loading.has(path);
   if (error) {
@@ -191,8 +195,52 @@ function Branch({
   );
 }
 
+const BACKEND_ICONS = {
+  local: HardDrive,
+  slurm: Cpu,
+  ssh: Terminal,
+} as const;
+
+const BACKEND_LABELS = {
+  local: "本地",
+  slurm: "Slurm",
+  ssh: "SSH",
+} as const;
+
+function GroupHeader({
+  group,
+  collapsed,
+  onToggle,
+}: {
+  group: ComputeGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const Icon = BACKEND_ICONS[group.backend];
+  const readOnly = group.roots.some((root) => readOnlyCover(root));
+  return (
+    <button
+      type="button"
+      aria-expanded={!collapsed}
+      data-vfs-group={group.id}
+      data-vfs-group-backend={group.backend}
+      title={`${group.name} · ${BACKEND_LABELS[group.backend]}${readOnly ? " · 只读" : ""}`}
+      onClick={onToggle}
+      className="flex w-full items-center gap-1 rounded-sm px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent"
+    >
+      {collapsed ? <ChevronRight className="size-3 shrink-0" /> : <ChevronDown className="size-3 shrink-0" />}
+      <Icon className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{group.name}</span>
+      <span className="shrink-0 rounded bg-muted px-1 text-[9px] font-medium normal-case">{BACKEND_LABELS[group.backend]}</span>
+      {readOnly && <Lock className="size-3 shrink-0" aria-label="只读挂载" />}
+    </button>
+  );
+}
+
 export function VfsSidebar() {
   useSyncExternalStore(subscribeVfsTree, getVfsTreeState);
+  const treeState = getVfsTreeState();
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [activeDir, setActiveDir] = useState("/");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -291,13 +339,39 @@ export function VfsSidebar() {
       )}
       {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">{error}</div>}
       <div role="tree" aria-label="VFS 目录树" className="min-h-0 flex-1 overflow-y-auto p-1">
-        <Branch
-          path="/"
-          depth={0}
-          activeDir={activeDir}
-          onSelect={(node) => setActiveDir(node.path)}
-          onMutated={reload}
-        />
+        {treeState.groups.map((group) => {
+          const collapsed = collapsedGroups.has(group.id);
+          const hiddenPrefixes = group.hidden ?? [];
+          return (
+            <div key={group.id} className="mb-1">
+              <GroupHeader
+                group={group}
+                collapsed={collapsed}
+                onToggle={() => {
+                  setCollapsedGroups((previous) => {
+                    const next = new Set(previous);
+                    if (next.has(group.id)) next.delete(group.id);
+                    else next.add(group.id);
+                    return next;
+                  });
+                }}
+              />
+              {!collapsed && group.roots.map((root) => (
+                <Branch
+                  key={root}
+                  path={root}
+                  depth={0}
+                  activeDir={activeDir}
+                  onSelect={(node) => setActiveDir(node.path)}
+                  onMutated={reload}
+                  hidden={hiddenPrefixes.length === 0 ? undefined : (node) => hiddenPrefixes.some(
+                    (prefix) => node.path === prefix || node.path.startsWith(`${prefix}/`),
+                  )}
+                />
+              ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
