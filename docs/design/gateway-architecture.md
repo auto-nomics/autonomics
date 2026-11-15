@@ -142,7 +142,7 @@ driver 维护 session 缓存(`SessionList/SessionClosed` 事件折叠,纯函数�
 - **无自动拉起**(2026-10 起):前端只 `manager::probe` 探活,daemon 必须由操作者
   显式启动(`autonomics prepare` 预置 → `autonomics serve`);裸 `autonomics`
   打印引导(TUI/headless 未探到 daemon 即报错退出并给出命令提示)。
-- kms/bib/cache 子命令不受影响(今天已多进程共读;flock 只围 `RuntimeHost::open`)。
+- bib/cache 子命令不受影响(今天已多进程共读;flock 只围 `RuntimeHost::open`)。
 
 ## 6. TUI 瘦客户端迁移要点
 

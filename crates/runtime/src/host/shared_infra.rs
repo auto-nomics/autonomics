@@ -8,8 +8,7 @@ use std::sync::{Arc, Weak};
 use agentik_core::Agent;
 use agentik_core::TursoAgentStorage;
 use agentik_core::memory::{
-    Error as MemoryError, MemoryBackend, MemoryConfig, MemoryStore, SemanticGrounding,
-    TursoMemoryStorage,
+    Error as MemoryError, MemoryBackend, MemoryConfig, MemoryStore, TursoMemoryStorage,
 };
 use agentik_core::profile::{AgentKind, AgentProfileConfig};
 use agentik_core::storage::AgentStorage;
@@ -27,7 +26,6 @@ use wiki::service::WikiHandle;
 
 use crate::config::{PromptCapabilities, RuntimeConfig};
 use crate::error::{Error, Result};
-use crate::memory_kms::KmsMemoryGrounding;
 
 use super::bundles::build_bundle_registry;
 use super::gc::{
@@ -108,8 +106,6 @@ pub struct SharedInfra {
     /// Base persistent-memory backend. Each agent gets a clone with its own
     /// resolved runtime overrides while sharing the store and grounding sink.
     pub memory: Arc<MemoryBackend>,
-    /// Optional Turso-backed KMS knowledge service.
-    pub kms: Option<Arc<kms::KmsService>>,
     /// Wiki 知识库的 worker 控制句柄(附件 blob 落在
     /// `file_storage` 的 `wiki-attachments` 虚拟目录)。无条件启用:
     /// 每个 agent 挂读组工具,REST 端点始终可用。
@@ -319,8 +315,7 @@ impl SharedInfra {
         let turso_store = open_agent_storage(config).await?;
         let storage: Arc<dyn AgentStorage> = turso_store.clone();
         let rcsb = Arc::new(RcsbClient::new());
-        let kms = open_kms(config, &turso_store).await?;
-        let memory = open_memory(config, &kms).await?;
+        let memory = open_memory(config).await?;
         let bib = open_bibliography(config, &file_storage).await?;
         let wiki = open_wiki(config, &file_storage).await?;
         let deck = open_deck(config, &file_storage, &bib).await?;
@@ -378,7 +373,6 @@ impl SharedInfra {
             resource_downloader,
             bib,
             memory,
-            kms,
             wiki,
             deck,
             visualization_db: config.app_db_path.with_file_name("visualizations.sqlite"),
@@ -662,10 +656,6 @@ impl SharedInfra {
             tools.extend(ppt_base::tools::deck_all_registrations(
                 (*self.deck).clone(),
             ));
-        }
-
-        if let Some(kms) = self.kms.clone() {
-            tools.extend(kms_tools::kms_readonly_registrations(kms));
         }
 
         tools.extend(visualization_tools::bioart_registrations(
@@ -1049,8 +1039,6 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
     Ok(Arc::new(store))
 }
 
-/// Open the KMS knowledge db, migrate legacy rows out of agent.db,
-/// and build the service when the feature is enabled.
 /// Open the wiki knowledge db + attachment blob backend and start the
 /// wiki worker. Unconditional — the feature has no gate: the db lives at
 /// `config.wiki_db_path`, blobs under the `/wiki-attachments` VFS mount
@@ -1077,37 +1065,9 @@ async fn open_wiki(
     Ok(Arc::new(wiki::service::start(Arc::new(storage))))
 }
 
-async fn open_kms(
-    config: &RuntimeConfig,
-    _turso_store: &Arc<TursoAgentStorage>,
-) -> Result<Option<Arc<kms::KmsService>>> {
-    // Initialize the KMS schema in its own knowledge.db unconditionally;
-    // expose tools and semantic grounding only when the runtime feature
-    // is enabled.
-    let kms_db = config.kms_db_path.clone();
-    tracing::info!(
-        path = %kms_db.display(),
-        "SharedInfra::open: opening KMS knowledge db"
-    );
-    let kms_storage = match kms::Storage::new(&kms_db.to_string_lossy()).await {
-        Ok(storage) => storage,
-        Err(error) => return Err(Error::Other(format!("open KMS storage: {error}"))),
-    };
-    if !config.enable_kms {
-        return Ok(None);
-    }
-    match kms::KmsService::from_storage(kms_storage).await {
-        Ok(service) => Ok(Some(Arc::new(service))),
-        Err(error) => Err(Error::Other(format!("open KMS: {error}"))),
-    }
-}
-
 /// Open the dedicated memory knowledge database and build the process-wide
-/// backend, with KMS semantic grounding when the service is available.
-async fn open_memory(
-    config: &RuntimeConfig,
-    kms: &Option<Arc<kms::KmsService>>,
-) -> Result<Arc<MemoryBackend>> {
+/// backend.
+async fn open_memory(config: &RuntimeConfig) -> Result<Arc<MemoryBackend>> {
     let started = std::time::Instant::now();
     tracing::info!(
         path = %config.knowledge_db_path.display(),
@@ -1126,16 +1086,13 @@ async fn open_memory(
     );
 
     let memory_store: Arc<dyn MemoryStore> = Arc::new(store);
-    let grounding: Option<Arc<dyn SemanticGrounding>> = kms
-        .as_ref()
-        .map(|service| Arc::new(KmsMemoryGrounding::new(Arc::clone(service))) as Arc<_>);
     let mut memory_config = MemoryConfig::new();
     memory_config.use_memory = config.use_memory;
     memory_config.generate_memory = config.generate_memory;
     Ok(Arc::new(MemoryBackend::new(
         memory_config,
         memory_store,
-        grounding,
+        None,
     )))
 }
 

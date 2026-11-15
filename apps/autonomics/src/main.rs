@@ -121,7 +121,6 @@ fn main() -> color_eyre::Result<()> {
     match cli.command {
         None => commands::guide::run_guide(),
         Some(Command::Tui(args)) => commands::tui::run_tui(args),
-        Some(Command::Kms(args)) => commands::kms::run_kms(args),
         Some(Command::Prepare(args)) => commands::prepare::run_prepare(args),
         Some(Command::Cache(cache)) => match cache.action {
             CacheAction::RefreshOpengwas(args) => commands::cache::run_refresh_opengwas(args),

@@ -1208,7 +1208,6 @@ dependencies = [
  "data-catalog",
  "gateway",
  "headless",
- "kms",
  "manuscript-engine",
  "nodes-io",
  "opengwas",
@@ -1274,7 +1273,6 @@ dependencies = [
  "gateway",
  "ignore",
  "itertools 0.14.0",
- "kms",
  "pretty_assertions",
  "pulldown-cmark",
  "rand 0.9.5",
@@ -8354,38 +8352,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "kms"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "regex",
- "serde",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "turso",
- "uuid",
-]
-
-[[package]]
-name = "kms-tools"
-version = "0.1.0"
-dependencies = [
- "agentik-core",
- "agentik-proc",
- "agentik-sdk",
- "agentik-types",
- "async-trait",
- "kms",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "kodama"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13428,8 +13394,6 @@ dependencies = [
  "gwascatalog-sdk",
  "hpc-tools",
  "kegg",
- "kms",
- "kms-tools",
  "libc",
  "manuscript-core",
  "manuscript-engine",

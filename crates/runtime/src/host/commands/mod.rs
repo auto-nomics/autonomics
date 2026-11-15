@@ -226,7 +226,6 @@ pub(in crate::host) mod test_support {
         config.dag_history_db = dir.path().join("dag-history.db");
         config.bib_db_path = dir.path().join("bib.db");
         config.app_db_path = dir.path().join("app.db");
-        config.kms_db_path = dir.path().join("kms.db");
         config.knowledge_db_path = dir.path().join("knowledge.db");
         config.wiki_db_path = dir.path().join("wiki.db");
         // Keep the embedding model (network install + ONNX session)

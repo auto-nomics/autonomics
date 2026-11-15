@@ -255,47 +255,6 @@ export type BibDetail = {
   };
 };
 
-export type KmsWorker = {
-  worker: string;
-  state: string;
-  running: boolean;
-  last_run_at: number | null;
-  last_error: string | null;
-  total_claimed: number;
-  total_executed: number;
-  total_released: number;
-  at_ms: number;
-};
-
-export type KmsKnowledgeNode = {
-  id: string;
-  parent_id: string | null;
-  path: string;
-  title: string;
-  body_md: string;
-  status: string;
-  confidence: number;
-  source_hash: string;
-  structural: boolean;
-  created_at: number;
-  updated_at: number;
-};
-
-export type KmsEvidence = {
-  id: string;
-  source_kind: string;
-  source_id: string;
-  evidence_kind: string;
-  summary: string;
-  body: string;
-  anchor_path: string | null;
-  error: string | null;
-  status: string;
-  occurrence_count: number;
-  created_at: number;
-  last_seen_at: number;
-};
-
 export type AgentRuntimeOverrides = {
   use_memory?: boolean | null;
   generate_memory?: boolean | null;

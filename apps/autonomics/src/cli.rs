@@ -14,7 +14,6 @@
 mod bib;
 mod cache;
 mod export;
-mod kms;
 mod panels;
 mod prepare;
 mod run;
@@ -28,7 +27,6 @@ pub use bib::{
 };
 pub use cache::{CacheAction, CacheArgs, ClearOpengwasArgs, RefreshOpengwasArgs};
 pub use export::ExportRunArgs;
-pub use kms::KmsArgs;
 pub use panels::{PanelsAction, PanelsArgs};
 pub use prepare::PrepareArgs;
 pub use run::RunArgs;
@@ -46,9 +44,6 @@ pub enum Command {
     /// Launch the interactive TUI (requires a running daemon — see
     /// `autonomics serve`).
     Tui(TuiArgs),
-
-    /// Launch the dedicated KMS tree TUI.
-    Kms(KmsArgs),
 
     /// Local cache management helpers (refresh, inspect, purge).
     Cache(CacheArgs),

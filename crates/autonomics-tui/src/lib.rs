@@ -2,7 +2,7 @@
 //!
 //! Extracted from the `autonomics` binary crate: this crate owns the
 //! ratatui application (`app`), all widgets, the `xai_textarea` editor,
-//! the KMS browser TUI, and the shared UI state/event plumbing. The
+//! and the shared UI state/event plumbing. The
 //! `autonomics` binary keeps the CLI, the one-shot commands, the daemon
 //! (`serve`) and the readiness diagnostics, and calls into this crate
 //! for everything terminal-interactive.
@@ -14,7 +14,6 @@ pub mod app;
 pub mod app_event;
 pub mod app_event_sender;
 pub mod clipboard_copy;
-pub mod kms_tui;
 pub mod state;
 pub mod theme;
 pub mod widgets;

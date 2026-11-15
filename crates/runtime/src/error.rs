@@ -31,9 +31,6 @@ pub enum Error {
     #[error("slide-deck engine init failed: {0}")]
     Deck(#[from] ppt_base::Error),
 
-    #[error("knowledge store error: {0}")]
-    Kms(#[from] kms::Error),
-
     /// Another process already holds the single-writer lock for this
     /// state directory (`<state_dir>/runtime.lock`). The second instance
     /// must not open the shared databases; see [`crate::instance_lock`].

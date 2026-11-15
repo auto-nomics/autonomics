@@ -30,10 +30,6 @@ pub(crate) const DEFAULT_AGENT_DB: &str = "agent.db";
 /// Override via builder `.knowledge_db_path(…)` or env `AUTONOMICS_KNOWLEDGE_DB`.
 pub(crate) const DEFAULT_KNOWLEDGE_DB: &str = "knowledge.db";
 
-/// Default KMS database filename (relative to `state_dir`).
-///
-/// Override via builder `.kms_db_path(…)` or env `AUTONOMICS_KMS_DB`.
-pub(crate) const DEFAULT_KMS_DB: &str = "kms.db";
 /// Default file name of the wiki knowledge db under the state dir.
 pub(crate) const DEFAULT_WIKI_DB: &str = "wiki.db";
 pub(crate) const DEFAULT_DECK_DB: &str = "deck.db";
@@ -67,9 +63,6 @@ pub const ENV_BROWSER_DOWNLOAD_DIR: &str = "AUTONOMICS_BROWSER_DOWNLOAD_DIR";
 
 /// Env var overriding the bibliography DB path.
 pub const ENV_BIB_DB: &str = "AUTONOMICS_BIB_DB";
-
-/// Env var overriding the KMS knowledge DB path.
-pub const ENV_KMS_DB: &str = "AUTONOMICS_KMS_DB";
 
 /// Env var overriding the wiki knowledge DB path.
 pub const ENV_WIKI_DB: &str = "AUTONOMICS_WIKI_DB";

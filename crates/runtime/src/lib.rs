@@ -15,7 +15,6 @@ pub mod host_tools;
 pub mod hpc_monitor;
 pub mod instance_lock;
 pub mod manuscript_tools;
-pub mod memory_kms;
 pub mod model_actor;
 pub mod model_bootstrap;
 pub mod tools;

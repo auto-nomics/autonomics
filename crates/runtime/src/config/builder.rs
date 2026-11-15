@@ -26,7 +26,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
     pub(crate) knowledge_db_path: Option<PathBuf>,
-    pub(crate) kms_db_path: Option<PathBuf>,
     pub(crate) wiki_db_path: Option<PathBuf>,
     pub(crate) deck_db_path: Option<PathBuf>,
     pub(crate) opengwas_token: Option<String>,
@@ -51,7 +50,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) browser_download_dir: Option<PathBuf>,
     pub(crate) use_memory: Option<bool>,
     pub(crate) generate_memory: Option<bool>,
-    pub(crate) enable_kms: Option<bool>,
     pub(crate) embedding: Option<text_embedding::EmbeddingConfig>,
     pub(crate) agent_idle_ttl: Option<std::time::Duration>,
     pub(crate) bib_http: Option<BibHttpOptions>,
@@ -114,12 +112,6 @@ impl RuntimeConfigBuilder {
     /// Path to the persistent-memory knowledge database.
     pub fn knowledge_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.knowledge_db_path = Some(path.into());
-        self
-    }
-
-    /// Path to the KMS knowledge database (Turso/SQLite).
-    pub fn kms_db_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.kms_db_path = Some(path.into());
         self
     }
 
@@ -249,12 +241,6 @@ impl RuntimeConfigBuilder {
     /// Enable or disable startup memory generation.
     pub fn generate_memory(mut self, enabled: bool) -> Self {
         self.generate_memory = Some(enabled);
-        self
-    }
-
-    /// Enable KMS knowledge-graph tools.
-    pub fn enable_kms(mut self, enabled: bool) -> Self {
-        self.enable_kms = Some(enabled);
         self
     }
 

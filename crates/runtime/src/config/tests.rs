@@ -4,7 +4,6 @@ use bib_base::BibHttpOptions;
 use container_runtime::ImageReference;
 
 use super::defaults::*;
-use super::runtime::default_kms_db_path;
 use super::*;
 
 static BIB_HTTP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -42,7 +41,6 @@ fn defaults() {
     );
     assert_eq!(cfg.bib_db_path, expected_state_dir.join(DEFAULT_BIB_DB));
     assert_eq!(cfg.app_db_path, expected_state_dir.join(DEFAULT_APP_DB));
-    assert_eq!(cfg.kms_db_path, expected_state_dir.join(DEFAULT_KMS_DB));
     assert_eq!(cfg.browser_download_dir, None);
     assert!(cfg.enable_dag_history);
     assert!(cfg.enable_bibliography);
@@ -54,7 +52,6 @@ fn defaults() {
     assert!(cfg.enable_string);
     assert!(cfg.use_memory);
     assert!(cfg.generate_memory);
-    assert!(!cfg.enable_kms);
     // Remote Ollama embeddings are on by default.
     assert!(cfg.embedding.enabled);
 
@@ -79,7 +76,6 @@ fn builder_overrides() {
         .dag_history_db("/tmp/custom-history.db")
         .bib_db_path("/tmp/custom-bib.db")
         .app_db_path("/tmp/custom-app.db")
-        .kms_db_path("/tmp/custom-kms.db")
         .browser_download_dir("/tmp/browser-downloads")
         .opengwas_token("secret-token")
         .agent_identity("Custom agent")
@@ -89,7 +85,6 @@ fn builder_overrides() {
         .enable_rcsb(false)
         .use_memory(false)
         .generate_memory(true)
-        .enable_kms(true)
         .build();
 
     assert_eq!(cfg.name, "test-agent");
@@ -98,7 +93,6 @@ fn builder_overrides() {
     assert_eq!(cfg.dag_history_db, PathBuf::from("/tmp/custom-history.db"));
     assert_eq!(cfg.bib_db_path, PathBuf::from("/tmp/custom-bib.db"));
     assert_eq!(cfg.app_db_path, PathBuf::from("/tmp/custom-app.db"));
-    assert_eq!(cfg.kms_db_path, PathBuf::from("/tmp/custom-kms.db"));
     assert_eq!(
         cfg.browser_download_dir,
         Some(PathBuf::from("/tmp/browser-downloads"))
@@ -117,7 +111,6 @@ fn builder_overrides() {
     assert!(cfg.enable_string);
     assert!(!cfg.use_memory);
     assert!(cfg.generate_memory);
-    assert!(cfg.enable_kms);
 }
 
 #[test]
@@ -390,30 +383,6 @@ fn plugin_rsi_defaults_builder_and_backward_compatibility() {
     let config: RuntimeConfig = serde_json::from_value(legacy).unwrap();
     assert!(config.plugin_rsi.environments.get("alpine").is_some());
     assert!(config.plugin_rsi.publisher.enabled);
-}
-
-#[test]
-fn serde_tolerates_missing_kms_db_path() {
-    // A serialized config from before the dedicated knowledge database
-    // must still deserialize (the field falls back to its default).
-    let mut legacy = serde_json::to_value(RuntimeConfig::default()).unwrap();
-    legacy.as_object_mut().unwrap().remove("kms_db_path");
-    let config: RuntimeConfig = serde_json::from_value(legacy).unwrap();
-    assert_eq!(config.kms_db_path, default_kms_db_path());
-}
-
-#[test]
-fn env_kms_db_override() {
-    let _guard = DATA_DIR_ENV_LOCK.lock().unwrap();
-    // SAFETY: guarded by DATA_DIR_ENV_LOCK for tests that assert defaults.
-    unsafe {
-        std::env::set_var(ENV_KMS_DB, "/tmp/env-kms.db");
-    }
-    let cfg = RuntimeConfig::default();
-    assert_eq!(cfg.kms_db_path, PathBuf::from("/tmp/env-kms.db"));
-    unsafe {
-        std::env::remove_var(ENV_KMS_DB);
-    }
 }
 
 #[test]

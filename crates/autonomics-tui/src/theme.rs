@@ -48,7 +48,7 @@ pub struct Theme {
     pub text_dim: Color,
     /// Muted text: hints, placeholders, separators, scrollbars.
     pub text_faint: Color,
-    /// Selection markers in lists (bibliography panes, KMS tree).
+    /// Selection markers in lists (bibliography panes).
     pub highlight: Color,
     /// Marks the *active* agent in lists (bold label).
     pub active_marker: Color,

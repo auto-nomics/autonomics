@@ -45,8 +45,6 @@ text-embedding = { path = "../text-embedding" }
 bib-base = { path = "../bib-base" }
 manuscript-core = { path = "../manuscript-core" }
 ppt-base = { path = "../ppt-base", features = ["vfs"] }
-kms = { path = "../kms" }
-kms-tools = { path = "../kms-tools" }
 tokio = { workspace = true }
 tokio-util = "0.7"
 thiserror = { workspace = true }

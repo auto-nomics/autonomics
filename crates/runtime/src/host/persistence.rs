@@ -164,7 +164,6 @@ mod agent_persistence_tests {
         config.dag_history_db = dir.path().join("dag-history.db");
         config.bib_db_path = dir.path().join("bib.db");
         config.app_db_path = dir.path().join("app.db");
-        config.kms_db_path = dir.path().join("kms.db");
         config.knowledge_db_path = dir.path().join("knowledge.db");
         config.wiki_db_path = dir.path().join("wiki.db");
         // The parent (/root/researcher) is a root-level agent; without this

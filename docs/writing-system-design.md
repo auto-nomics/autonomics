@@ -1413,36 +1413,10 @@ if config.enable_writing() {
 
 ---
 
-## 13. 与 KMS 的集成
+## 13. 与 KMS 的集成（已移除）
 
-`Claim` 系统与 `kms`（知识管理系统）形成闭环：
-
-```
-阅读阶段：文献 → Annotation → KMS Entity/Knowledge
-写作阶段：KMS Knowledge → Claim 标引 → 文档段落 → 引文回链
-```
-
-具体集成点：
-
-```rust
-/// 将文档中的声明同步到 KMS。
-pub fn sync_claims_to_kms(
-    doc: &Document,
-    kms: &kms::Storage,
-) -> Result<()> {
-    for claim in doc.all_claims() {
-        // 每个声明创建/更新一个 KMS Entity
-        // 证据链（引文 + 数据）成为 Knowledge 节点
-    }
-}
-
-/// 反向：从 KMS 知识图谱推荐引文。
-pub fn recommend_citations_from_kms(
-    doc: &Document,
-    block_id: &BlockId,
-    kms: &kms::Storage,
-) -> Vec<CitationRecommendation> { ... }
-```
+原计划将 `Claim` 系统与 `kms` crate 形成知识闭环；`kms` crate 已于 2026-11
+整体移除，本节集成方案随之作废。
 
 ---
 
@@ -1502,12 +1476,11 @@ pub fn recommend_citations_from_kms(
 
 **验收标准**：DAG 输出能直接嵌入文档
 
-### Phase 6: 结构化标引 + KMS 集成
+### Phase 6: 结构化标引
 - Claim 系统 + 证据链
-- KMS 同步
 - 引文推荐
 
-**验收标准**：阅读→写作知识闭环
+**验收标准**：声明→证据链路可追溯
 
 ### Phase 7: TUI 集成
 - 文档列表视图
@@ -1599,7 +1572,6 @@ LaTeX → AST 解析器用于导入已有文档，之后全部在 AST 层操作�
 - 检查每个声明是否有引文支撑
 - 检查证据完整性（数据引用是否指向有效 DAG 输出）
 - 自动生成"声明摘要"（所有 hypothesis 是否被 result 验证）
-- 与 KMS 形成知识闭环
 
 ### D6: DAG 节点输出 JSON 而非直接修改文档
 
@@ -1628,7 +1600,6 @@ writing-base ────────► bib-base ──────► bib-type
     │                                                │
     ├──► agentik-core (ToolFunction)                 │
     ├──► agentik-proc (#[tool])                      │
-    ├──► kms (optional, Phase 6)                    │
     └──► tectonic (optional, compile backend)       │
                                                      │
 nodes-writing ──► dag-core ─────────────────────────┘

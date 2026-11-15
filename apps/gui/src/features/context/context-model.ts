@@ -1,4 +1,4 @@
-import type { BibArticle, KmsEvidence, KmsKnowledgeNode } from "@/types";
+import type { BibArticle } from "@/types";
 
 export type ContextResource = {
   kind: "article" | "evidence" | "knowledge" | "editor" | "image" | "manuscript";
@@ -17,21 +17,6 @@ export function articleContext(article: BibArticle): ContextResource {
     kind: "article", id: article.id, title: article.title,
     scope: "元数据与摘要（不含全文）", source: `bib:${article.id}`,
     content: JSON.stringify(article, null, 2),
-  };
-}
-export function knowledgeContext(node: KmsKnowledgeNode): ContextResource {
-  return {
-    kind: "knowledge", id: node.id, title: node.title, scope: "知识正文快照",
-    source: node.path, revision: `${node.updated_at}:${node.source_hash}`,
-    content: `${node.path}\n状态：${node.status}\n置信度：${node.confidence}\n\n${node.body_md}`,
-  };
-}
-export function evidenceContext(item: KmsEvidence): ContextResource {
-  return {
-    kind: "evidence", id: item.id, title: item.summary, scope: "证据正文与来源",
-    source: `${item.source_kind}:${item.source_id}${item.anchor_path ? ` · ${item.anchor_path}` : ""}`,
-    revision: String(item.last_seen_at),
-    content: `类型：${item.evidence_kind}\n状态：${item.status}\n\n${item.body}${item.error ? `\n错误：${item.error}` : ""}`,
   };
 }
 

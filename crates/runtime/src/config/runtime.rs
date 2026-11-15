@@ -51,11 +51,6 @@ pub struct RuntimeConfig {
     #[serde(default = "default_knowledge_db_path")]
     pub knowledge_db_path: PathBuf,
 
-    /// Path to the KMS knowledge database (Turso/SQLite). Legacy rows are
-    /// migrated out of `agent.db` into this file once on startup.
-    #[serde(default = "default_kms_db_path")]
-    pub kms_db_path: PathBuf,
-
     /// Path to the wiki knowledge database (Turso/SQLite).
     #[serde(default = "default_wiki_db_path")]
     pub wiki_db_path: PathBuf,
@@ -145,9 +140,6 @@ pub struct RuntimeConfig {
     /// Generate and consolidate persistent memory for root-level agents.
     #[serde(default = "default_true")]
     pub generate_memory: bool,
-    /// Expose KMS entity/knowledge/index tools backed by Turso.
-    #[serde(default)]
-    pub enable_kms: bool,
     /// Default text-embedding provider configuration, persisted via
     /// the gateway's embedding-config endpoints; per-feature consumers
     /// (bibliography semantic search) construct their own embedders
@@ -229,21 +221,6 @@ fn default_true() -> bool {
 /// Serde default for [`RuntimeConfig::agent_idle_ttl`]: 15 minutes.
 fn default_agent_idle_ttl() -> Option<std::time::Duration> {
     Some(std::time::Duration::from_secs(15 * 60))
-}
-
-/// Serde default for [`RuntimeConfig::kms_db_path`]. Defensive only —
-/// whole-`RuntimeConfig` deserialization does not occur in production
-/// (agent persistence stores `AgentProfileConfig`). A serde default fn
-/// cannot see sibling fields, so a legacy value would resolve against
-/// `$HOME` instead of a custom `state_dir`.
-pub(crate) fn default_kms_db_path() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(|h| {
-            PathBuf::from(h)
-                .join(DEFAULT_STATE_DIR)
-                .join(DEFAULT_KMS_DB)
-        })
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_KMS_DB))
 }
 
 fn default_wiki_db_path() -> PathBuf {
@@ -343,10 +320,6 @@ impl RuntimeConfig {
             .or_else(|| env_path(ENV_KNOWLEDGE_DB))
             .unwrap_or_else(|| state_dir.join(DEFAULT_KNOWLEDGE_DB));
 
-        let kms_db_path = base
-            .and_then(|b| b.kms_db_path.clone())
-            .or_else(|| env_path(ENV_KMS_DB))
-            .unwrap_or_else(|| state_dir.join(DEFAULT_KMS_DB));
         let wiki_db_path = base
             .and_then(|b| b.wiki_db_path.clone())
             .or_else(|| env_path(ENV_WIKI_DB))
@@ -402,7 +375,6 @@ impl RuntimeConfig {
             app_db_path,
             agent_db,
             knowledge_db_path,
-            kms_db_path,
             wiki_db_path,
             deck_db_path,
             opengwas_token,
@@ -429,7 +401,6 @@ impl RuntimeConfig {
                 ENV_GENERATE_MEMORY,
             )
             .unwrap_or(true),
-            enable_kms: resolve_flag(base, |b| b.enable_kms, false),
             embedding: base.and_then(|b| b.embedding.clone()).unwrap_or_default(),
             agent_idle_ttl: base
                 .and_then(|b| b.agent_idle_ttl)
@@ -462,7 +433,7 @@ impl RuntimeConfig {
     pub fn summary(&self) -> String {
         format!(
             "RuntimeConfig {{ name: {:?}, data_dir: {}, state_dir: {}, \
-             dag_history_db: {}, bib_db: {}, app_db: {}, knowledge_db: {}, kms_db: {}, \
+             dag_history_db: {}, bib_db: {}, app_db: {}, knowledge_db: {}, \
              dag_history: {}, bib: {}, opengwas: {}, \
              opentargets: {}, gwascatalog: {}, chembl: {}, rcsb: {}, string: {}, kegg: {}, \
              browser_headless: {}, browser_no_sandbox: {}, \
@@ -475,7 +446,6 @@ impl RuntimeConfig {
             self.bib_db_path.display(),
             self.app_db_path.display(),
             self.knowledge_db_path.display(),
-            self.kms_db_path.display(),
             self.enable_dag_history,
             self.enable_bibliography,
             self.enable_opengwas,

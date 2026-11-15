@@ -26,7 +26,6 @@ data-catalog = { path = "../../crates/data-catalog" }
 container-runtime = { path = "../../crates/container-runtime" }
 tokio-util = { version = "0.7", features = ["rt"] }
 headless = { path = "../../crates/headless" }
-kms = { path = "../../crates/kms" }
 dag-core = { path = "../../crates/dag-core" }
 nodes-io = { path = "../../crates/node-bundles/nodes-io" }
 opengwas = { path = "../../crates/opengwas" }

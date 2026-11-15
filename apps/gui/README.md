@@ -70,7 +70,7 @@ src/
     bibliography/        library view, search model + panels, collection tree
     discovery/           federated discovery, subscriptions, snapshots, citation exploration
     reader/              PDF/TXT readers, annotations, reading mode (opened from bibliography)
-    system/              config, KMS, DAG views
+    system/              config, DAG views
   components/ui/         shadcn-style primitives (no domain logic)
   lib/                   markdown rendering and misc utilities
   hooks/                 shared React hooks
@@ -142,9 +142,8 @@ previously collapsed floating shell. Each Agent/session has an independent
 basket, held in memory for this application lifetime (reloading clears it).
 
 References are snapshots: papers include metadata/abstract, search hits include
-matched snippets, selections include only selected text and location, and KMS
-records include their displayed body and provenance. Browsing does not change
-references. Re-adding an object updates its snapshot. Each message appends the
+matched snippets, and selections include only selected text and location.
+Browsing does not change references. Re-adding an object updates its snapshot. Each message appends the
 basket as labeled JSON reference data in the existing user-message text; no new
 backend API is required. References stay selected after sending, including on
 failure; clear or remove them to stop attaching them to subsequent messages.
