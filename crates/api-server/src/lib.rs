@@ -9,7 +9,7 @@ pub mod bib;
 mod discovery;
 mod rss;
 pub mod server;
-mod snapshots;
+mod cache_control;
 pub mod deck;
 pub mod wiki;
 
@@ -25,3 +25,5 @@ mod visualization_assets;
 
 mod bib_transfer;
 mod bib_transfer_parser;
+
+mod manuscripts;

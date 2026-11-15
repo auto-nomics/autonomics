@@ -147,6 +147,8 @@ export async function openPdfReader(options: {
    *  (mount harnesses). Workbench tabs omit this — readers coexist. */
   supersede?: boolean;
   host?: HTMLElement;
+  sidebarHost?: HTMLElement;
+  onRevealSidebar?: () => void;
   onReference?: ReaderWorkspaceOptions["onReference"];
   onClosed?: () => void;
 }): Promise<PdfReaderHandle> {
@@ -223,6 +225,7 @@ class ZoteroStylePdfReader {
   private searchResults: Array<{ page: number; count: number }> = [];
   private activePane: ReaderPane = "thumbnails";
   private sidebarOpen = true;
+  private externalSidebar: HTMLElement | null = null;
   private chromeVisible = false;
   private chromePointers = new Set<number>();
   private chromeTapStart: { x: number; y: number; time: number } | null = null;
@@ -436,6 +439,13 @@ class ZoteroStylePdfReader {
     }
 
     this.bindEvents();
+    if (this.workspace.sidebarHost) {
+      this.root.dataset.externalSidebar = "true";
+      this.root.classList.remove("sidebar-closed");
+      this.sidebarOpen = true;
+      this.externalSidebar = this.select<HTMLElement>(".reader-sidebar-shell");
+      this.workspace.sidebarHost.append(this.externalSidebar);
+    }
   }
 
   static async open(
@@ -461,7 +471,7 @@ class ZoteroStylePdfReader {
   }
 
   private select<T extends Element = HTMLElement>(selector: string): T {
-    const element = this.root.querySelector<T>(selector);
+    const element = this.root.querySelector<T>(selector) ?? this.workspace.sidebarHost?.querySelector<T>(selector);
     if (!element) throw new Error(`PDF reader element missing: ${selector}`);
     return element;
   }
@@ -862,7 +872,7 @@ class ZoteroStylePdfReader {
       .forEach((button) => {
         button.addEventListener("click", () => {
           const pane = (button.dataset.pane ?? "thumbnails") as ReaderPane;
-          if (this.activePane === pane && this.sidebarOpen) {
+          if (!this.workspace.sidebarHost && this.activePane === pane && this.sidebarOpen) {
             this.setSidebarOpen(false);
             return;
           }
@@ -1795,7 +1805,7 @@ class ZoteroStylePdfReader {
   private selectPane(name: string) {
     const pane = name as ReaderPane;
     this.activePane = pane;
-    this.root.querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
+    (this.workspace.sidebarHost ?? this.root).querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.pane === name);
     });
     this.outlinePane.hidden = name !== "outline";
@@ -1807,6 +1817,10 @@ class ZoteroStylePdfReader {
   }
 
   private setSidebarOpen(open: boolean) {
+    if (this.workspace.sidebarHost) {
+      this.workspace.onRevealSidebar?.();
+      return;
+    }
     this.sidebarOpen = open;
     this.root.classList.toggle("sidebar-closed", !open);
     window.localStorage.setItem(READER_SIDEBAR_OPEN_KEY, open ? "1" : "0");
@@ -2134,6 +2148,7 @@ class ZoteroStylePdfReader {
       view.text.replaceChildren();
     }
     this.document?.destroy().catch(() => undefined);
+    this.externalSidebar?.remove();
     this.root.remove();
   }
 }

@@ -1043,3 +1043,33 @@
 @media (prefers-reduced-motion: reduce) {
   .reader-toolbar { transition: none; }
 }
+
+/* The workbench owns sidebar placement and sizing for hosted readers. */
+.zotero-pdf-reader[data-external-sidebar] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.zotero-pdf-reader[data-external-sidebar] .reader-backdrop { display: none; }
+.reader-workbench-sidebar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.reader-workbench-sidebar .reader-sidebar-shell {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-width: none;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  transform: none;
+  box-shadow: none;
+}
+.reader-workbench-sidebar .reader-sidebar { border-right: 0; }
+.reader-workbench-sidebar .reader-sidebar-resizer,
+.reader-workbench-sidebar [data-action="close-sidebar"] { display: none; }
+
+/* Status is retained for reader updates without reserving a bottom row. */
+.reader-status { display: none; }

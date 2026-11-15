@@ -24,7 +24,7 @@ try {
     if (path === '/state') return route.fulfill({ json: { last_seq: 0, agents: [{ path: '/root/alpha', agent_id: 'a1', status: 'Idle' }], contexts: { '/root/alpha': { id: 's1', title: 'Alpha main', created_at: 1, last_active: 2 } }, display_settings: { collapse_thinking: false, collapse_tool_calls: false, collapse_tool_results: false } } });
     if (path.endsWith('/history')) return route.fulfill({ json: { messages: [] } });
     // Loose bib/wiki/system fixtures: the shell test cares about chrome, not content.
-    if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], sources: [], rules: [], items: [], snapshots: [], next: null, next_cursor: null, scheduler: {}, total: 0 } });
+    if (path.startsWith('/bib/')) return route.fulfill({ json: { collections: [], articles: [], sources: [], rules: [], items: [], next: null, next_cursor: null, scheduler: {}, total: 0 } });
     if (path === '/wiki/graph') throw new Error('Local graph must not request the global graph');
     if (path === '/wiki/entries/w1/links') return route.fulfill({ json: { entry: { id: 'w1', title: '词条甲' }, out_links: [{ id: 'w2', title: '词条乙' }], in_links: [{ id: 'w3', title: '词条丙' }] } });
     if (path === '/wiki/entries/w2/links') return route.fulfill({ json: { entry: { id: 'w2', title: '词条乙' }, out_links: [{ id: 'w4', title: '词条丁' }], in_links: ['w1'] } });
@@ -156,7 +156,7 @@ try {
 
   // Research tools open as independent tabs from the activity bar.
   const bibSidebar = page.locator('aside[data-slot=workbench-sidebar]');
-  for (const [name, title] of [['Discover', '发现'], ['Snapshots', '快照'], ['Subscriptions', '订阅']]) {
+  for (const [name, title] of [['Discover', '发现'], ['Subscriptions', '订阅']]) {
     assert.equal(await bibSidebar.getByRole('button', { name, exact: true }).count(), 0);
     await rail.getByRole('button', { name, exact: true }).click();
     await page.getByRole('tab', { name: title, exact: true }).waitFor();
@@ -164,7 +164,7 @@ try {
   await rail.getByRole('button', { name: 'Discover', exact: true }).click();
   assert.equal(await page.getByRole('tab', { name: '发现', exact: true }).getAttribute('aria-selected'), 'true');
   await page.reload({ waitUntil: "domcontentloaded" });
-  for (const title of ['发现', '快照', '订阅']) {
+  for (const title of ['发现', '订阅']) {
     const tab = page.getByRole('tab', { name: title, exact: true });
     await tab.waitFor();
     await tab.getByRole('button', { name: `关闭 ${title}` }).click();

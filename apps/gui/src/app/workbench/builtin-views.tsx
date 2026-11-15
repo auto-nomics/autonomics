@@ -1,6 +1,6 @@
 import { CanvasSidebar } from "@/features/canvas/canvas-sidebar";
 import { PencilRuler } from "lucide-react";
-import { Camera, Compass, Library, Rss, type LucideIcon } from "lucide-react";
+import { Compass, Library, FileText, Rss, type LucideIcon } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { setProjectSidebarSlot } from "@/features/projects/sidebar-slot";
 import { setBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -16,8 +16,8 @@ import { registerWorkbenchView, type WorkbenchViewProps } from "./view-registry"
 
 const BIB_VIEWS: readonly { id: BibliographyWorkspace; label: string; name: string; icon: LucideIcon }[] = [
   { id: "library", label: "文献库", name: "Bibliography library", icon: Library },
+  { id: "manuscripts", label: "LaTeX 手稿", name: "Manuscripts", icon: FileText },
   { id: "discover", label: "发现", name: "Discover", icon: Compass },
-  { id: "snapshots", label: "快照", name: "Snapshots", icon: Camera },
   { id: "subscriptions", label: "订阅", name: "Subscriptions", icon: Rss },
 ];
 

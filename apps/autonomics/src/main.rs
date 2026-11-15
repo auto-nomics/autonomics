@@ -98,6 +98,7 @@ fn init_frontend_logging(nocapture: bool) -> color_eyre::Result<()> {
 }
 
 fn main() -> color_eyre::Result<()> {
+    if manuscript_engine::run_worker_if_requested() { return Ok(()); }
     // Parse CLI first so we can read --nocapture before logging init.
     let cli = Cli::parse();
 

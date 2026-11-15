@@ -267,6 +267,13 @@ async fn api_request(
         {
             request = request.timeout(Duration::from_secs(210));
         }
+        // Tectonic may need to fetch its pinned bundle on the first compile.
+        if method.eq_ignore_ascii_case("POST")
+            && normalized_path.starts_with("bib/manuscripts/")
+            && normalized_path.ends_with("/compile")
+        {
+            request = request.timeout(Duration::from_secs(610));
+        }
         // Opening a project may pull its development image. Match the
         // gateway's 120-second startup budget instead of timing out at 30s.
         if method.eq_ignore_ascii_case("POST")
@@ -1098,4 +1105,28 @@ mod wiki_image_tests {
         assert_eq!(BASE64.decode(raw.data_base64).unwrap(), b"PNG-bytes");
         server.await.unwrap();
     }
+}
+
+#[tauri::command]
+pub async fn manuscript_artifact_raw(
+    state: State<'_, GatewayState>, project_id: String, build_id: String,
+) -> Result<BibBinaryView, String> {
+    let base = lock(&state.base).clone();
+    let token = lock(&state.token).clone();
+    let url = endpoint(&base, &format!("bib/manuscripts/{}/builds/{}/pdf", encoded_segment(&project_id), encoded_segment(&build_id)));
+    let response = state.http.get(url).bearer_auth(token.as_deref().unwrap_or_default()).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        let status = response.status().to_string();
+        let payload = response.json::<Value>().await.unwrap_or(Value::Null);
+        return Err(payload.get("error").and_then(Value::as_str).unwrap_or(&status).to_owned());
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    Ok(BibBinaryView {data_base64: BASE64.encode(bytes), content_type: "application/pdf".into()})
+}
+
+#[tauri::command]
+pub async fn save_binary_export(path: String, data_base64: String) -> Result<(), String> {
+    if path.trim().is_empty() { return Err("export path is required".into()); }
+    let bytes = BASE64.decode(data_base64).map_err(|e| e.to_string())?;
+    tokio::fs::write(path, bytes).await.map_err(|e| e.to_string())
 }

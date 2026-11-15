@@ -1,5 +1,7 @@
 # LaTeX 写作系统设计
 
+> 历史设计文档：本文中的 WritingStore、Turso 手稿存储及 AUTONOMICS_WRITING_DB 配置已退出当前运行链路。现行实现见 [VFS 手稿文件协议](engineering/manuscript-workspace.md)。
+
 > 状态：设计稿 (2026-08-09)
 > 关联：`bib-types` / `bib-base` 文献管理 · `dag-core` DAG 引擎 · `agentik-core` Agent 工具框架
 

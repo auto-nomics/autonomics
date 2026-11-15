@@ -139,6 +139,32 @@ try {
   await page.locator('.reader-annotation-list-item').first().evaluate(button => button.click());
   await page.waitForFunction(() => document.querySelector('.reader-annotation-editor textarea'));
 
+  // Workbench hosting moves the live sidebar out of the document region.
+  await page.evaluate(async () => {
+    window.reader.close();
+    const host = document.createElement('div');
+    host.style.cssText = 'position:relative;width:900px;height:800px';
+    const sidebarHost = document.createElement('div');
+    sidebarHost.className = 'reader-workbench-sidebar';
+    sidebarHost.style.cssText = 'width:280px;height:800px';
+    document.body.style.display = 'flex';
+    document.body.append(sidebarHost, host);
+    window.sidebarReveals = 0;
+    const { openTxtReader } = await import('/src/features/reader/txt-reader.ts');
+    window.reader = await openTxtReader({ articleId: 'txt-fixture', title: 'Hosted TXT', host, sidebarHost,
+      onRevealSidebar: () => { window.sidebarReveals++; } });
+  });
+  assert.equal(await page.locator('.zotero-pdf-reader .reader-sidebar-shell').count(), 0);
+  const sidebar = page.locator('.reader-workbench-sidebar');
+  await sidebar.locator('.reader-rail-button[data-pane=search]').click();
+  await sidebar.locator('.reader-search-input').fill('lactate');
+  await sidebar.locator('.reader-search-input').press('Enter');
+  await sidebar.locator('[data-output=search-results] button').first().waitFor();
+  assert.ok(await page.evaluate(() => window.sidebarReveals > 0));
+  assert.equal(await page.locator('.reader-status').isVisible(), false);
+  await page.evaluate(() => window.reader.close());
+  assert.equal(await sidebar.locator('.reader-sidebar-shell').count(), 0);
+
   assert.deepEqual(errors, []);
   await page.close();
   console.log('PASS txt reader: rendering, outline, char-anchored highlights, search, sections, appearance, annotation list');

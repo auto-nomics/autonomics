@@ -1,0 +1,25 @@
+[package]
+name = "manuscript-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs"] }
+tempfile = "3"
+tectonic = { version = "=0.17.0", default-features = false, features = ["geturl-reqwest", "external-harfbuzz"] }
+tectonic_bundles = "=0.4.2"
+tectonic_bridge_core = "=0.5.3"
+tectonic_status_base = "0.2"
+libc.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
+[[bin]]
+name = "autonomics-manuscript-worker"
+path = "src/bin/worker.rs"

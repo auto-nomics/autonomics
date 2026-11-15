@@ -692,6 +692,42 @@ impl OpendalFileStorage {
         Ok(())
     }
 
+    /// Replace a small manifest only when its bytes still match the observed value.
+    /// Coordinates writers sharing this storage handle (including its clones).
+    pub async fn compare_exchange_bytes(
+        &self,
+        virtual_path: &str,
+        expected: Option<&[u8]>,
+        content: Vec<u8>,
+    ) -> Result<bool, opendal::Error> {
+        self.check_readable(virtual_path)?;
+        self.check_writable(virtual_path)?;
+        let path = self.resolve_path(virtual_path);
+        let operator = self.resolve(virtual_path);
+        let lock = self.object_lock(&path);
+        let _guard = lock.write().await;
+        let current = match operator.read(&path).await {
+            Ok(buffer) => Some(buffer.to_vec()),
+            Err(error) if error.kind() == opendal::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        if current.as_deref() != expected {
+            return Ok(false);
+        }
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            operator
+                .create_dir(&format!("{}/", parent.to_string_lossy()))
+                .await?;
+        }
+        let staging = staging_key(&path);
+        operator.write(&staging, content).await?;
+        if let Err(error) = operator.rename(&staging, &path).await {
+            let _ = operator.delete(&staging).await;
+            return Err(error);
+        }
+        Ok(true)
+    }
+
     /// Install derived data only if the destination is absent, under the same
     /// per-object lock used by replacements. Never overwrite an existing object.
     pub async fn write_bytes_if_absent(
@@ -732,6 +768,15 @@ impl OpendalFileStorage {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Read a complete object under its replacement lock.
+    pub async fn read_bytes(&self, virtual_path: &str) -> Result<Vec<u8>, opendal::Error> {
+        self.check_readable(virtual_path)?;
+        let key = self.resolve_path(virtual_path);
+        let lock = self.object_lock(&key);
+        let _guard = lock.read().await;
+        Ok(self.resolve(virtual_path).read(&key).await?.to_vec())
     }
 
     /// Read a bounded byte range while holding the object's read lock.

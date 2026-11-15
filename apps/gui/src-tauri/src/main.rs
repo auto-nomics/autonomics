@@ -4,6 +4,7 @@ mod gateway;
 mod request_cancellation;
 
 fn main() {
+    if manuscript_engine::run_worker_if_requested() { return; }
     #[cfg(target_os = "linux")]
     {
         // NVIDIA + WebKitGTK can present an empty compositor layer unless
@@ -31,7 +32,9 @@ fn main() {
             gateway::vfs_download_raw,
             gateway::vfs_upload,
             gateway::bib_fulltext_raw,
+            gateway::manuscript_artifact_raw,
             gateway::save_bib_export,
+            gateway::save_binary_export,
             gateway::save_bib_attachment
         ])
         .setup(|app| {

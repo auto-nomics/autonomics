@@ -7,6 +7,9 @@ rust-version.workspace = true
 description = "Composable local HTTP API server hosted by the Autonomics gateway daemon."
 
 [dependencies]
+zip.workspace = true
+manuscript-engine = { path = "../manuscript-engine" }
+manuscript-core = { path = "../manuscript-core" }
 bioart = { path = "../bioart" }
 bioicons = { path = "../bioicons" }
 visualization = { path = "../visualization" }

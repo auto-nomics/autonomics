@@ -116,6 +116,8 @@ export async function openTxtReader(options: {
   /** Legacy single-window mode: close every live reader before opening. */
   supersede?: boolean;
   host?: HTMLElement;
+  sidebarHost?: HTMLElement;
+  onRevealSidebar?: () => void;
   onReference?: ReaderWorkspaceOptions["onReference"];
   onClosed?: () => void;
 }): Promise<TxtReaderHandle> {
@@ -178,6 +180,7 @@ class ZoteroStyleTxtReader {
   private fontSizeElement: HTMLSpanElement;
   private activePane: ReaderPane = "outline";
   private sidebarOpen = true;
+  private externalSidebar: HTMLElement | null = null;
 
   private constructor(
     private readonly articleId: string,
@@ -341,6 +344,13 @@ class ZoteroStyleTxtReader {
     }
 
     this.bindEvents();
+    if (this.workspace.sidebarHost) {
+      this.root.dataset.externalSidebar = "true";
+      this.root.classList.remove("sidebar-closed");
+      this.sidebarOpen = true;
+      this.externalSidebar = this.select<HTMLElement>(".reader-sidebar-shell");
+      this.workspace.sidebarHost.append(this.externalSidebar);
+    }
   }
 
   static async open(
@@ -367,7 +377,7 @@ class ZoteroStyleTxtReader {
   }
 
   private select<T extends Element = HTMLElement>(selector: string): T {
-    const element = this.root.querySelector<T>(selector);
+    const element = this.root.querySelector<T>(selector) ?? this.workspace.sidebarHost?.querySelector<T>(selector);
     if (!element) throw new Error(`Text reader element missing: ${selector}`);
     return element;
   }
@@ -579,7 +589,7 @@ class ZoteroStyleTxtReader {
       .forEach((button) => {
         button.addEventListener("click", () => {
           const pane = (button.dataset.pane ?? "outline") as ReaderPane;
-          if (this.activePane === pane && this.sidebarOpen) {
+          if (!this.workspace.sidebarHost && this.activePane === pane && this.sidebarOpen) {
             this.setSidebarOpen(false);
             return;
           }
@@ -662,7 +672,7 @@ class ZoteroStyleTxtReader {
   private selectPane(name: string) {
     const pane = name as ReaderPane;
     this.activePane = pane;
-    this.root.querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
+    (this.workspace.sidebarHost ?? this.root).querySelectorAll<HTMLButtonElement>(".reader-rail-button").forEach((button) => {
       button.classList.toggle("active", button.dataset.pane === name);
     });
     this.outlinePane.hidden = name !== "outline";
@@ -673,6 +683,10 @@ class ZoteroStyleTxtReader {
   }
 
   private setSidebarOpen(open: boolean) {
+    if (this.workspace.sidebarHost) {
+      this.workspace.onRevealSidebar?.();
+      return;
+    }
     this.sidebarOpen = open;
     this.root.classList.toggle("sidebar-closed", !open);
     window.localStorage.setItem(READER_SIDEBAR_OPEN_KEY, open ? "1" : "0");
@@ -1198,6 +1212,7 @@ class ZoteroStyleTxtReader {
     this.annotationInspector.destroy();
     this.resizeObserver?.disconnect();
     restoreReaderFocus(this.returnFocus);
+    this.externalSidebar?.remove();
     this.root.remove();
   }
 }

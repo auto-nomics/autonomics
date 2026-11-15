@@ -7,6 +7,8 @@ license.workspace = true
 description = "Sync-to-async bridge for running an agentik agent from a sync context"
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+manuscript-engine = { path = "../manuscript-engine" }
 visualization-tools = { path = "../visualization-tools" }
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
@@ -41,7 +43,7 @@ hpc-tools = { path = "../hpc-tools" }
 sha2.workspace = true
 text-embedding = { path = "../text-embedding" }
 bib-base = { path = "../bib-base" }
-writing-base = { path = "../writing-base" }
+manuscript-core = { path = "../manuscript-core" }
 ppt-base = { path = "../ppt-base", features = ["vfs"] }
 kms = { path = "../kms" }
 kms-tools = { path = "../kms-tools" }
@@ -65,7 +67,6 @@ tempfile = "3"
 workspace = true
 
 [dev-dependencies]
-chrono = { version = "0.4", features = ["serde"] }
 data-catalog = { path = "../data-catalog", features = ["test-util"] }
 # Enables `MessageStream::from_events` for mock-backed streaming tests.
 agentik-sdk = { path = "../agentik-sdk", features = ["test-util"] }

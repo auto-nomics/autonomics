@@ -57,8 +57,6 @@ pub mod search_cancellation;
 pub mod search_evidence;
 mod search_filters;
 mod search_projection;
-pub mod search_snapshot_exports;
-pub mod search_snapshots;
 pub mod semantic_index;
 pub mod semantic_limits;
 pub mod semantic_service;

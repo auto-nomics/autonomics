@@ -191,19 +191,10 @@ fn smoke_hold_source(state: tauri::State<'_, Fixture>, hold: bool) -> Value {
 }
 #[tauri::command]
 fn smoke_info(state: tauri::State<'_, Fixture>) -> Value {
-    json!({"held":state.control.held.load(Ordering::SeqCst),"dropped":state.control.dropped.load(Ordering::SeqCst),"export_path":state.root.join("native-snapshot.json"),"graph_calls":state.control.graph_calls.lock().unwrap().clone()})
+    json!({"held":state.control.held.load(Ordering::SeqCst),"dropped":state.control.dropped.load(Ordering::SeqCst),"graph_calls":state.control.graph_calls.lock().unwrap().clone()})
 }
 #[tauri::command]
 fn smoke_done(app: tauri::AppHandle, state: tauri::State<'_, Fixture>, mut result: Value) {
-    if result["ok"] == true {
-        let exported = std::fs::read_to_string(state.root.join("native-snapshot.json"));
-        if !exported.is_ok_and(|s| {
-            s.contains("User curated native title") && !s.contains("Changed after snapshot")
-        }) {
-            result["ok"] = json!(false);
-            result["error"] = json!("Native export missing or not frozen");
-        }
-    }
     result["graph_requests"] = json!(state.control.graph_calls.lock().unwrap().clone());
     result["source_future_held"] = json!(state.control.held.load(Ordering::SeqCst));
     result["source_future_dropped"] = json!(state.control.dropped.load(Ordering::SeqCst));

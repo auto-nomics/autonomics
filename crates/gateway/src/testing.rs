@@ -72,7 +72,6 @@ pub fn isolate_runtime_paths(config: &mut RuntimeConfig, data_dir: PathBuf, stat
     config.deck_db_path = state_dir.join("deck.db");
     config.dag_history_db = state_dir.join("dag_history.db");
     config.bib_db_path = state_dir.join("bib.db");
-    config.writing_db_path = state_dir.join("writing.db");
     config.app_db_path = state_dir.join("app.db");
 }
 

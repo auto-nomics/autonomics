@@ -105,9 +105,6 @@ pub struct SharedInfra {
     /// Bibliography storage + literature gateway, opened **once** per
     /// process and shared by every spawned agent.
     pub bib: Arc<bib_base::BibShared>,
-    /// LaTeX writing system (store + optional engine), opened **once** per
-    /// process. Reuses `bib` for citation resolution when available.
-    pub writing: Arc<writing_base::WritingShared>,
     /// Base persistent-memory backend. Each agent gets a clone with its own
     /// resolved runtime overrides while sharing the store and grounding sink.
     pub memory: Arc<MemoryBackend>,
@@ -325,7 +322,6 @@ impl SharedInfra {
         let kms = open_kms(config, &turso_store).await?;
         let memory = open_memory(config, &kms).await?;
         let bib = open_bibliography(config, &file_storage).await?;
-        let writing = open_writing(config, &bib).await?;
         let wiki = open_wiki(config, &file_storage).await?;
         let deck = open_deck(config, &file_storage, &bib).await?;
 
@@ -381,7 +377,6 @@ impl SharedInfra {
             rcsb,
             resource_downloader,
             bib,
-            writing,
             memory,
             kms,
             wiki,
@@ -658,13 +653,10 @@ impl SharedInfra {
         }
 
         if kind.enable_writing() {
-            let ws = self.writing.clone();
-            let writing_tools = writing_base::writing_all_registrations(
-                ws.store.clone(),
-                ws.bib.as_ref().map(|b| b.bib.clone()),
-                ws.engine.clone(),
-            );
-            tools.extend(writing_tools);
+            tools.extend(crate::manuscript_tools::registrations(
+                self.bib.manuscripts.clone(),
+                agent_path.as_str(),
+            ));
 
             // Slide decks are writing deliverables: same capability gate.
             tools.extend(ppt_base::tools::deck_all_registrations(
@@ -1159,33 +1151,16 @@ async fn open_bibliography(
         bib_db_path.display()
     );
     let bib = Arc::new(
-        bib_base::BibShared::open_with(&bib_db_path, config.bib_http.clone())
-            .await?
-            .with_file_storage(file_storage.clone()),
+        bib_base::BibShared::open_with_vfs(
+            &bib_db_path,
+            config.bib_http.clone(),
+            Some(file_storage.clone()),
+        )
+        .await?
+        .with_file_storage(file_storage.clone()),
     );
     bib_base::nodes::set_shared_bib(bib.clone());
     Ok(bib)
-}
-
-/// Open the LaTeX writing system (store + optional engine) over the
-/// bibliography store.
-async fn open_writing(
-    config: &RuntimeConfig,
-    bib: &Arc<bib_base::BibShared>,
-) -> Result<Arc<writing_base::WritingShared>> {
-    let writing_db_path = config.writing_db_path.clone();
-    tracing::info!(
-        "SharedInfra::open: opening writing db at {}",
-        writing_db_path.display()
-    );
-    let writing = Arc::new(
-        writing_base::WritingShared::open_with(
-            &writing_db_path.to_string_lossy(),
-            Some(bib.clone()),
-        )
-        .await?,
-    );
-    Ok(writing)
 }
 
 /// Open the slide-deck engine (deck.db + blob areas). Export pipeline

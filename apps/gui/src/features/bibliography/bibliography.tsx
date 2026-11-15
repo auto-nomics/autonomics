@@ -1,3 +1,4 @@
+import { ManuscriptsWorkspace } from "./manuscripts";
 import { AddToContext, useContextBasket } from "@/features/context/context-basket";
 import { articleContext } from "@/features/context/context-model";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -71,8 +72,6 @@ import {
   DiscoveryView,
   LiteratureExploration,
   RssSubscriptions,
-  SaveSnapshotButton,
-  SearchSnapshots,
 } from "@/features/discovery";
 import { hasFilters, formatExpression, quickFields, type SearchEvidence, type SearchField, type SearchExpr, type SearchRequest, type SavedSearch, type SearchFilters, type SearchFacets, type SearchHit, type SearchSort, type SearchMode, type SearchRetrieval } from "./bib-search-model";
 
@@ -382,7 +381,7 @@ function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
   );
 }
 
-export type BibliographyWorkspace = "library" | "discover" | "snapshots" | "subscriptions";
+export type BibliographyWorkspace = "library" | "discover" | "subscriptions" | "manuscripts";
 
 // The workspace tabs live in the app sidebar; this component is controlled by
 // the selected workspace and only keeps the lazy-mount bookkeeping: a panel
@@ -394,9 +393,9 @@ export function BibliographyView({ workspace = "library", active = true, sidebar
     setMounted(current => (current.has(workspace) ? current : new Set([...current, workspace])));
   }, [workspace]);
   return <div className="flex min-h-0 flex-1 flex-col">
+    {mounted.has("manuscripts") && <div hidden={workspace !== "manuscripts"} className={workspace === "manuscripts" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><ManuscriptsWorkspace active={active && workspace === "manuscripts"} sidebarSlot={workspace === "manuscripts" && active ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
     {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView sidebarSlot={workspace === "library" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
     {mounted.has("discover") && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
-    {mounted.has("snapshots") && <div hidden={workspace !== "snapshots"} className={workspace === "snapshots" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><SearchSnapshots active={active && workspace === "snapshots"} /></div>}
     {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><RssSubscriptions active={active && workspace === "subscriptions"} sidebarSlot={workspace === "subscriptions" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
   </div>;
 }
@@ -1063,7 +1062,6 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
           <label className="flex items-center gap-1" title="Positive conditions must match the same evidence object"><input type="checkbox" disabled={indexEngine === "legacy"} checked={sameChild} onChange={event => setSameChild(event.target.checked)} />Same attachment</label>
           <SearchAssist topic={mode === "hybrid"} history={history} onClear={clearHistory} onPick={text=>{if (mode === "hybrid") {setTopicDraft(text);setTopic(text);} else {setQueryDraft(text);commitQuery(text);}searchInputRef.current?.focus();}} />
           <ColumnsPicker columns={columns} onChange={setColumns} snippets={showSnippets} onSnippets={setShowSnippets} />
-          <SaveSnapshotButton execution={{ kind: "library", search: currentRequest }} disabled={indexEngine === "legacy" || loading || (mode === "hybrid" && !topic.trim())} />
           <span role="status" className="ml-auto text-muted-foreground">{loading ? "Searching…" : `${total.toLocaleString()} ${retrieval ? "candidate articles" : `article${total === 1 ? "" : "s"}`}`}</span>
           <select aria-label="Search sort" disabled={indexEngine === "legacy"} className="rounded border bg-background px-1 py-0.5" value={sort} onChange={event => setSort(event.target.value as SearchSort)}><option value="relevance">Relevance</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select>
           {searchActive && <Button size="xs" variant="ghost" onClick={clearSearch}>Clear search</Button>}

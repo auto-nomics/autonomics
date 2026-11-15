@@ -82,7 +82,7 @@ export async function gatewayRequest(
   const signal = options.signal;
   signal?.throwIfAborted();
   const id = options.requestId ?? (signal ? newGatewayRequestId() : undefined);
-  const search = /^\/bib\/(search\/(v2|export|explore|snapshots)|articles\/[^/]+\/search-evidence)$/.test(path.split("?")[0]);
+  const search = /^\/bib\/(search\/(v2|export|explore)|articles\/[^/]+\/search-evidence)$/.test(path.split("?")[0]);
   const discoveryCreate = method.toUpperCase() === "POST" && path === "/bib/search/sessions";
   const cancel = () => {
     if (!id) return;
@@ -517,4 +517,36 @@ export async function gatewayEnrollment<T>(
     throw new Error("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。");
   }
   throw new Error("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。");
+}
+
+/** Load an immutable compiler artifact through the authenticated transport. */
+export async function fetchManuscriptArtifact(projectId: string, buildId: string, kind: "pdf" = "pdf"): Promise<Uint8Array> {
+  if (isTauri) {
+    const result = await tauriInvoke<{data_base64: string}>("manuscript_artifact_raw", { projectId, buildId });
+    return Uint8Array.from(atob(result.data_base64), character => character.charCodeAt(0));
+  }
+  const response = await fetch(webApiPath(`/bib/manuscripts/${encodeURIComponent(projectId)}/builds/${encodeURIComponent(buildId)}/${kind}`), {credentials: "same-origin"});
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error ?? `Unable to load manuscript PDF (${response.status})`);
+  }
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** Save binary exports with a native file chooser on desktop. */
+export async function saveBinaryFile(defaultPath: string, bytes: Uint8Array, contentType: string): Promise<string | null> {
+  const filename = defaultPath.split(/[\\/]/).pop()?.replace(/[\x00-\x1f]/g, "_") || "export";
+  if (isTauri) {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const path = await dialog.save({title: "Save export", defaultPath: filename});
+    if (!path) return null;
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    await tauriInvoke("save_binary_export", {path, dataBase64: btoa(binary)});
+    return path;
+  }
+  const url = URL.createObjectURL(new Blob([bytes.slice()], {type: contentType}));
+  const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return filename;
 }

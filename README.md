@@ -321,7 +321,7 @@ Scientific API credentials must be present in the process environment. The repos
 - `MINERU_API_KEY` for PDF full-text extraction
 - `HUGGING_FACE_TOKEN` or `HF_TOKEN` for the data catalog; S3/OSS credentials are needed only for optional non-catalog VFS backends
 
-By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, `AUTONOMICS_WRITING_DB`, and `AUTONOMICS_KMS_DB` to relocate state.
+By default, state is stored under `~/.autonomics`, downloaded files under `~/.autonomics/data`, and VFS mounts are read from `$AUTONOMICS_STATE_DIR/vfs.toml`. Use `AUTONOMICS_STATE_DIR`, `AUTONOMICS_DATA_DIR`, `AUTONOMICS_BIB_DB`, and `AUTONOMICS_KMS_DB` to relocate state.
 
 ### Use the local HTTP API
 

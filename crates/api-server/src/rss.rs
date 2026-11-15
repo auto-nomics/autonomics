@@ -41,7 +41,7 @@ pub(crate) fn router() -> Router<Arc<BibShared>> {
         )
         .route("/rss/items", get(items))
         .layer(DefaultBodyLimit::max(64 * 1024))
-        .layer(axum::middleware::from_fn(crate::snapshots::no_cache))
+        .layer(axum::middleware::from_fn(crate::cache_control::no_cache))
 }
 async fn scheduler(shared: &BibShared) -> Result<rss::RssScheduler> {
     shared.rss_service().await.map_err(error)

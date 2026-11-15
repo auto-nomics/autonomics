@@ -297,7 +297,7 @@ cargo run -p autonomics -- run "总结最近关于 BMI 的 GWAS meta 分析。" 
 - `MINERU_API_KEY`（PDF 全文抽取）
 - 数据目录用 `HUGGING_FACE_TOKEN` 或 `HF_TOKEN`；S3/OSS 凭据仅可选的非目录 VFS 后端需要
 
-默认状态存于 `~/.autonomics`，下载文件存于 `~/.autonomics/data`，VFS 挂载从 `$AUTONOMICS_STATE_DIR/vfs.toml` 读取。用 `AUTONOMICS_STATE_DIR`、`AUTONOMICS_DATA_DIR`、`AUTONOMICS_BIB_DB`、`AUTONOMICS_WRITING_DB`、`AUTONOMICS_KMS_DB` 重定位状态。
+默认状态存于 `~/.autonomics`，下载文件存于 `~/.autonomics/data`，VFS 挂载从 `$AUTONOMICS_STATE_DIR/vfs.toml` 读取。用 `AUTONOMICS_STATE_DIR`、`AUTONOMICS_DATA_DIR`、`AUTONOMICS_BIB_DB`、`AUTONOMICS_KMS_DB` 重定位状态。
 
 ### 使用本地 HTTP API
 

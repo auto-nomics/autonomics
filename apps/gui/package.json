@@ -40,7 +40,6 @@
     "test:collections": "node tests/nested-collections.mjs",
     "test:bib-search": "node tests/bibliography-search.mjs",
     "test:bib-exploration": "node tests/literature-exploration.mjs",
-    "test:bib-snapshots": "node tests/search-snapshots.mjs",
     "test:bib-semantic": "node tests/semantic-search.mjs",
     "test:bib-semantic-native": "cargo build -p autonomics-gui --example bibliography_native_smoke --locked && node tests/native-semantic.mjs",
     "test:rss-workbench": "node tests/rss-workbench.mjs",
@@ -81,7 +80,8 @@
     "test:canvas:direct": "node tests/canvas-direct.mjs",
     "test:canvas:layers": "node tests/canvas-layers-model.mjs",
     "test:bib-management": "node tests/bibliography-menu.mjs && node tests/bibliography-transfer.mjs && node tests/zotero-bundle.mjs && node tests/zotero-bundle-gui.mjs",
-    "test:bib-management-native": "cargo build -p api-server --example bibliography_management_native --locked && node tests/bibliography-management-native.mjs"
+    "test:bib-management-native": "cargo build -p api-server --example bibliography_management_native --locked && node tests/bibliography-management-native.mjs",
+    "test:manuscripts": "node tests/manuscripts.mjs && node tests/manuscripts-shell.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

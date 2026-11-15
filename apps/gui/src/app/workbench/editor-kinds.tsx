@@ -10,7 +10,7 @@
  */
 
 import { lazy, Suspense, useCallback, useEffect } from "react";
-import { ArrowLeft, ArrowRight, Bot, Camera, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
@@ -57,13 +57,23 @@ import { useWorkbenchRuntime } from "./runtime-context";
 // ---------------------------------------------------------------------------
 
 function BibliographyEditorBody({ editor }: EditorContext) {
-  const workspace = (editor.params.workspace as BibliographyWorkspace | undefined) ?? "library";
+  const workspace: BibliographyWorkspace = ["library", "discover", "subscriptions", "manuscripts"].includes(String(editor.params.workspace))
+    ? editor.params.workspace as BibliographyWorkspace
+    : "library";
   const groups = useWorkbenchState().groups;
   const sidebarSlot = useBibliographySidebarSlot();
   const desktop = useMediaQuery("(min-width: 768px)");
   const active = allGroups(groups).some(([, group]) => group.activeId === editor.id);
   const focused = useActiveEditorContext().editor?.id === editor.id;
   const externalSidebar = desktop || workspace === "subscriptions";
+  useEffect(() => {
+    if (!focused || workspace !== "manuscripts") return;
+    const previous = getWorkbenchState().sidebar.collapsed;
+    setSidebarCollapsed(true);
+    return () => {
+      if (getWorkbenchState().sidebar.collapsed) setSidebarCollapsed(previous);
+    };
+  }, [focused, workspace]);
   useEffect(() => {
     if (!focused || (workspace !== "library" && workspace !== "subscriptions")) return;
     setContainer("bibliography");
@@ -391,9 +401,9 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "bibliography",
-    title: (editor) => ({ discover: "发现", snapshots: "快照", subscriptions: "订阅" }[String(editor.params.workspace)] ?? "文献与证据"),
-    name: (editor) => ({ discover: "Discover", snapshots: "Snapshots", subscriptions: "Subscriptions" }[String(editor.params.workspace)] ?? "Bibliography"),
-    icon: (editor) => ({ discover: Compass, snapshots: Camera, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
+    title: (editor) => ({ manuscripts: "LaTeX 手稿", discover: "发现", subscriptions: "订阅" }[String(editor.params.workspace)] ?? "文献与证据"),
+    name: (editor) => ({ manuscripts: "Manuscripts", discover: "Discover", subscriptions: "Subscriptions" }[String(editor.params.workspace)] ?? "Bibliography"),
+    icon: (editor) => ({ manuscripts: FileText, discover: Compass, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
     mount: "keep-alive",
   });

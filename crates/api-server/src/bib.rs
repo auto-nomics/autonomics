@@ -68,9 +68,9 @@ pub fn router(shared: BibShared) -> Router {
         });
     }
     Router::new()
+        .merge(crate::manuscripts::router())
         .merge(crate::discovery::router())
         .merge(crate::bib_transfer::router())
-        .merge(crate::snapshots::router())
         .merge(crate::rss::router())
         .route("/health", get(health))
         .route("/articles", get(list_articles).post(create_article))
@@ -176,7 +176,7 @@ pub fn router(shared: BibShared) -> Router {
         .route("/search/v2", post(search_local_v2))
         .route(
             "/search/explore",
-            post(explore_literature).layer(axum::middleware::from_fn(crate::snapshots::no_cache)),
+            post(explore_literature).layer(axum::middleware::from_fn(crate::cache_control::no_cache)),
         )
         .route("/search/parse", post(parse_search_query))
         .route("/search/cancel", post(cancel_search_request))

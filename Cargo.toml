@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/manuscript-core",
   "crates/agentik-sdk",
   "crates/agentik-types",
   "crates/agentik-memory",
@@ -96,6 +97,7 @@ members = [
   "stat_crates/hierint",
   "crates/writing-types",
   "crates/writing-base",
+  "crates/manuscript-engine",
   "crates/node-bundles/nodes-writing",
   "crates/crossref",
   "crates/uniprot",

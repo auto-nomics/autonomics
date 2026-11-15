@@ -28,9 +28,6 @@ pub enum Error {
     #[error("bibliography init failed: {0}")]
     Bib(#[from] bib_base::Error),
 
-    #[error("writing system init failed: {0}")]
-    Writing(#[from] writing_base::Error),
-
     #[error("slide-deck engine init failed: {0}")]
     Deck(#[from] ppt_base::Error),
 

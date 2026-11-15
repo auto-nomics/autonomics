@@ -7,6 +7,7 @@ import { useWorkbenchViews } from "../view-registry";
 import { selectPanelView, useViewLayout, workbenchViewLocation } from "../view-layout";
 import { setPanelTab, setPanelVisible, useWorkbenchState, type PanelTab } from "../workbench-store";
 import "../panel-views";
+import "@/features/bibliography/manuscripts/manuscript-log";
 import { ViewLocationMenu } from "../view-location-menu";
 
 export function BottomPanel() {

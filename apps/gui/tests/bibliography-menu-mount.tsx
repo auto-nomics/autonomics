@@ -8,7 +8,6 @@ import { BibliographyView, type BibliographyWorkspace } from "@/features/bibliog
 const workspaces: Array<[BibliographyWorkspace, string]> = [
   ["library", "Library"],
   ["discover", "Discover"],
-  ["snapshots", "Snapshots"],
   ["subscriptions", "Subscriptions"],
 ];
 

@@ -23,7 +23,6 @@ pub struct RuntimeConfigBuilder {
     pub(crate) state_dir: Option<PathBuf>,
     pub(crate) dag_history_db: Option<PathBuf>,
     pub(crate) bib_db_path: Option<PathBuf>,
-    pub(crate) writing_db_path: Option<PathBuf>,
     pub(crate) app_db_path: Option<PathBuf>,
     pub(crate) agent_db: Option<PathBuf>,
     pub(crate) knowledge_db_path: Option<PathBuf>,
@@ -100,12 +99,6 @@ impl RuntimeConfigBuilder {
         self
     }
 
-    /// Path to the writing-system SQLite database.
-    pub fn writing_db_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.writing_db_path = Some(path.into());
-        self
-    }
-
     /// Path to the TUI / application SQLite database.
     pub fn app_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.app_db_path = Some(path.into());
@@ -178,7 +171,7 @@ impl RuntimeConfigBuilder {
         self
     }
 
-    /// Enable or disable writing tools (doc_create, doc_edit, doc_compile, etc.).
+    /// Enable or disable manuscript collaboration tools (manuscript_read, manuscript_propose, etc.).
     pub fn enable_writing(mut self, enabled: bool) -> Self {
         self.enable_writing = Some(enabled);
         self

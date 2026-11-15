@@ -1,4 +1,5 @@
 import { WorkbenchViewSlot } from "../view-host";
+import { useActiveEditorContext } from "../active-editor-context";
 import type { LucideIcon } from "lucide-react";
 /**
  * Side bar: the container-scoped view switcher (desktop) / overlay drawer
@@ -166,9 +167,14 @@ export function SideBar(props: {
 }
 
 function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
+  const { editor } = useActiveEditorContext();
+  const hideBibliographyHeader = container === "bibliography" && (
+    editor?.kind === "reader" ||
+    (editor?.kind === "bibliography" && editor.params.workspace === "subscriptions")
+  );
   return (
     <>
-      {container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && container !== "decks" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
+      {!hideBibliographyHeader && container !== "wiki" && container !== "agents" && container !== "projects" && container !== "vfs" && container !== "decks" && <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3">
         <span draggable={container === "canvases"} onDragStart={event => { if (container === "canvases") startViewDrag(event, container); }} className="truncate text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {workbenchView(container)?.title}
         </span>

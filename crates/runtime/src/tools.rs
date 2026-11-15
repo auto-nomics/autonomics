@@ -7,8 +7,6 @@
 
 use std::sync::Arc;
 
-use writing_base::LatexEngine;
-
 use agentik_core::tools::ToolRegistration;
 use bib_base::{BibBase, LiteratureGateway};
 use chembl::ChEMBLClient;
@@ -122,9 +120,12 @@ pub async fn bib_tools(
     db_path: &str,
     file_storage: Arc<OpendalFileStorage>,
 ) -> Result<Vec<ToolRegistration>> {
-    let shared = bib_base::BibShared::open(db_path)
-        .await?
-        .with_file_storage(file_storage);
+    let shared = bib_base::BibShared::open_with_vfs(
+        db_path,
+        bib_base::BibHttpOptions::default(),
+        Some(file_storage),
+    )
+    .await?;
     Ok(bib_base::bib_all_registrations(Arc::new(shared)))
 }
 
@@ -134,33 +135,28 @@ pub fn resolve_bib_db_path() -> String {
     std::env::var("AUTONOMICS_BIB_DB").unwrap_or_else(|_| DEFAULT_BIB_DB.to_string())
 }
 
-/// Default on-disk location for the writing-system database.
-pub const DEFAULT_WRITING_DB: &str = "writing.db";
-
-/// Writing tools: document management (doc_create, doc_list, …), editing
-/// (doc_insert_section, doc_insert_block, …), citation management
-/// (doc_add_citation, doc_check_citations, …), and compilation (doc_compile).
-pub async fn writing_tools(db_path: &str) -> Result<Vec<ToolRegistration>> {
-    let store = Arc::new(writing_base::WritingStore::open(db_path).await?);
-    let engine: Arc<dyn writing_base::LatexEngine> = {
-        let x = writing_base::XelatexEngine::new();
-        if writing_base::LatexEngine::is_available(&x) {
-            Arc::new(x)
-        } else {
-            Arc::new(writing_base::NullEngine)
-        }
-    };
-    Ok(writing_base::writing_all_registrations(
-        store,
-        None,
-        Some(engine),
+/// Source-first manuscript tools sharing the bibliography library.
+pub async fn writing_tools(bib_db_path: &str) -> Result<Vec<ToolRegistration>> {
+    let shared = bib_base::BibShared::open(bib_db_path).await?;
+    Ok(crate::manuscript_tools::registrations(
+        shared.manuscripts,
+        "/root",
     ))
 }
-
-/// Resolves the writing DB path: the `AUTONOMICS_WRITING_DB` env var if set,
-/// otherwise [`DEFAULT_WRITING_DB`].
-pub fn resolve_writing_db_path() -> String {
-    std::env::var("AUTONOMICS_WRITING_DB").unwrap_or_else(|_| DEFAULT_WRITING_DB.to_string())
+async fn writing_tools_with_vfs(
+    bib_db_path: &str,
+    storage: Arc<OpendalFileStorage>,
+) -> Result<Vec<ToolRegistration>> {
+    let shared = bib_base::BibShared::open_with_vfs(
+        bib_db_path,
+        bib_base::BibHttpOptions::default(),
+        Some(storage),
+    )
+    .await?;
+    Ok(crate::manuscript_tools::registrations(
+        shared.manuscripts,
+        "/root",
+    ))
 }
 
 /// The complete default tool set: File + OpenGWAS + Open Targets
@@ -241,7 +237,9 @@ pub async fn tool_set_from_config(
     }
 
     if config.enable_writing {
-        match writing_tools(&config.writing_db_path.to_string_lossy()).await {
+        match writing_tools_with_vfs(&config.bib_db_path.to_string_lossy(), file_storage.clone())
+            .await
+        {
             Ok(wt) => tools.extend(wt),
             Err(e) => {
                 eprintln!("[runtime] WARNING: writing tools disabled: {e}");

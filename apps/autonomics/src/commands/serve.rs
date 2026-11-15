@@ -448,7 +448,6 @@ fn stabilize_daemon_cwd(config: &mut gateway::RuntimeConfig) -> color_eyre::Resu
     })?;
     config.dag_history_db = absolute(&config.dag_history_db);
     config.bib_db_path = absolute(&config.bib_db_path);
-    config.writing_db_path = absolute(&config.writing_db_path);
     config.app_db_path = absolute(&config.app_db_path);
     config.agent_db = absolute(&config.agent_db);
     config.kms_db_path = absolute(&config.kms_db_path);

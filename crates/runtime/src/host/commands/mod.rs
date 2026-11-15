@@ -225,7 +225,6 @@ pub(in crate::host) mod test_support {
         config.agent_db = dir.path().join("agent.db");
         config.dag_history_db = dir.path().join("dag-history.db");
         config.bib_db_path = dir.path().join("bib.db");
-        config.writing_db_path = dir.path().join("writing.db");
         config.app_db_path = dir.path().join("app.db");
         config.kms_db_path = dir.path().join("kms.db");
         config.knowledge_db_path = dir.path().join("knowledge.db");

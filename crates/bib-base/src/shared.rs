@@ -83,11 +83,11 @@ fn s2_client_from_env() -> Arc<semantic_scholar::S2Client> {
 /// (`Arc`-backed).
 #[derive(Clone)]
 pub struct BibShared {
+    /// Source-first LaTeX projects owned by this bibliography library.
+    pub manuscripts: Arc<manuscript_core::ManuscriptStore>,
     /// RSS/Atom feed subscriptions: feeds, inbox items and scheduler state.
     pub rss: crate::rss::RssStore,
     rss_scheduler: Arc<tokio::sync::OnceCell<crate::rss::RssScheduler>>,
-    /// Immutable user-owned execution captures, in the canonical DB on disk.
-    pub search_snapshots: crate::search_snapshots::SnapshotStore,
     pub discovery_acquisitions: crate::discovery_acquisition::DiscoveryAcquisitions,
     pub discovery_sessions: crate::discovery_sessions::DiscoverySessions,
     pub search_cancellations: Arc<crate::search_cancellation::SearchCancellationRegistry>,
@@ -175,11 +175,32 @@ impl BibShared {
         path: impl AsRef<std::path::Path>,
         http_opts: crate::BibHttpOptions,
     ) -> Result<Self> {
+        Self::open_with_vfs(path, http_opts, None).await
+    }
+
+    /// Open manuscript project directories on the shared VFS.
+    pub async fn open_with_vfs(
+        path: impl AsRef<std::path::Path>,
+        http_opts: crate::BibHttpOptions,
+        storage: Option<Arc<vfs::OpendalFileStorage>>,
+    ) -> Result<Self> {
         let bib = Arc::new(BibBase::open(path.as_ref().to_string_lossy().as_ref()).await?);
-        let search_snapshots =
-            crate::search_snapshots::SnapshotStore::open(path.as_ref().to_string_lossy().as_ref())
+        let manuscripts = Arc::new(if let Some(storage) = storage.as_ref() {
+            manuscript_core::ManuscriptStore::from_storage(storage.clone(), "/manuscripts")
+                .map_err(|e| crate::Error::Unknown(e.to_string()))?
+        } else if path.as_ref() == std::path::Path::new(":memory:") {
+            manuscript_core::ManuscriptStore::open_in_memory()
                 .await
-                .map_err(|error| crate::Error::Unknown(error.to_string()))?;
+                .map_err(|e| crate::Error::Unknown(e.to_string()))?
+        } else {
+            let root = path
+                .as_ref()
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."));
+            manuscript_core::ManuscriptStore::open(root.join("manuscripts-vfs").to_string_lossy())
+                .await
+                .map_err(|e| crate::Error::Unknown(e.to_string()))?
+        });
         let rss = crate::rss::RssStore::open(path.as_ref().to_string_lossy().as_ref())
             .await
             .map_err(|error| crate::Error::Unknown(error.to_string()))?;
@@ -207,14 +228,14 @@ impl BibShared {
         let gateway = Arc::new(gateway);
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            manuscripts,
             rss,
             rss_scheduler: Default::default(),
-            search_snapshots,
             discovery_acquisitions: Default::default(),
             discovery_sessions: Default::default(),
             search_cancellations: Default::default(),
             bib,
-            file_storage: None,
+            file_storage: storage,
             gateway,
             eutils,
             arxiv,
@@ -240,9 +261,11 @@ impl BibShared {
     /// HTTP options.
     pub async fn open_in_memory_with(http_opts: crate::BibHttpOptions) -> Result<Self> {
         let bib = Arc::new(BibBase::open_in_memory().await?);
-        let search_snapshots = crate::search_snapshots::SnapshotStore::open(":memory:")
-            .await
-            .map_err(|error| crate::Error::Unknown(error.to_string()))?;
+        let manuscripts = Arc::new(
+            manuscript_core::ManuscriptStore::open_in_memory()
+                .await
+                .map_err(|e| crate::Error::Unknown(e.to_string()))?,
+        );
         let rss = crate::rss::RssStore::open(":memory:")
             .await
             .map_err(|error| crate::Error::Unknown(error.to_string()))?;
@@ -263,9 +286,9 @@ impl BibShared {
         ));
         let extractor = crate::extraction::default_extractor(http.as_ref().clone());
         Ok(Self {
+            manuscripts,
             rss,
             rss_scheduler: Default::default(),
-            search_snapshots,
             discovery_acquisitions: Default::default(),
             discovery_sessions: Default::default(),
             search_cancellations: Default::default(),
@@ -290,9 +313,7 @@ impl BibShared {
     /// GUI view does not stop background checks.
     pub async fn rss_service(&self) -> crate::rss::Result<crate::rss::RssScheduler> {
         self.rss_scheduler
-            .get_or_try_init(|| async {
-                Ok(crate::rss::RssScheduler::start(self.clone(), 2))
-            })
+            .get_or_try_init(|| async { Ok(crate::rss::RssScheduler::start(self.clone(), 2)) })
             .await
             .cloned()
     }

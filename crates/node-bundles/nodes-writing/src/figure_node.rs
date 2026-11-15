@@ -1,7 +1,7 @@
-//! `figure_embed` node — wraps an image path as a LaTeX figure block JSON.
+//! `figure_embed` node — renders a LaTeX figure source fragment.
 //!
-//! This node produces a JSON string that can be consumed by the writing
-//! system's `doc_insert_block` tool to create a `FigureBlock`.
+//! The output `latex` column can be incorporated into a manuscript source
+//! proposal after the image has been uploaded as a project asset.
 
 use std::sync::Arc;
 
@@ -72,14 +72,14 @@ impl NodeFactory for FigureEmbedFactory {
     }
 
     fn desc(&self) -> &'static str {
-        "Wrap an image file path as a LaTeX figure block (JSON output)."
+        "Render a project image path as a LaTeX figure source fragment."
     }
 
     fn doc(&self) -> &'static str {
-        "Produces a JSON string representing a FigureBlock for the writing system. \
-         Pass the image path, optional caption, label, and width. The output JSON can be \
-         consumed by the `doc_insert_block` agent tool with block_type='raw_latex' or \
-         parsed to create a structured FigureBlock."
+        "Produces a single-row latex column containing figure source. \
+         Pass the project-relative image path, optional caption, label, and width. \
+         Upload the image as a manuscript project asset, then incorporate this source \
+         through manuscript_propose for human review. Requires the graphicx package."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

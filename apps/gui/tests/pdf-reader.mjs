@@ -214,6 +214,28 @@ try {
         `PDF expands workbench at ${width}px after ${action}: ${JSON.stringify(bounds)}`);
     }
   }
+  await workbenchPage.setViewportSize({ width: 1280, height: 900 });
+  const sidebar = workbenchPage.locator('[data-view-host="bibliography"] .reader-sidebar-shell');
+  await sidebar.waitFor({ state: 'visible' });
+  assert.equal(await workbenchPage.locator('[data-reader-host] .reader-sidebar-shell').count(), 0);
+  assert.equal(await workbenchPage.locator('[data-reader-host] .reader-status').isVisible(), false);
+  await sidebar.locator('.reader-rail-button[data-pane="search"]').click();
+  assert.equal(await sidebar.locator('[data-pane="search"].reader-sidebar-pane').isVisible(), true);
+  const readerId = await workbenchPage.evaluate(async () => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    const { activeEditorContext } = await import('/src/app/workbench/active-editor-context.ts');
+    const id = activeEditorContext(store.getWorkbenchState()).editor.id;
+    store.openEditor({ kind: 'reader', params: { articleId: 'second-reader', title: 'Second reader' }, activate: true });
+    return id;
+  });
+  await workbenchPage.locator('[data-reader-host="second-reader"] .reader-text-layer span').waitFor();
+  assert.equal(await sidebar.count(), 1);
+  await workbenchPage.evaluate(async id => {
+    const store = await import('/src/app/workbench/workbench-store.ts');
+    store.activateEditorById(id);
+  }, readerId);
+  await sidebar.locator('[data-pane="search"].reader-sidebar-pane').waitFor({ state: 'visible' });
+  assert.equal(await sidebar.count(), 1);
   await workbenchPage.close();
   console.log('PASS mobile PDF inside workbench: fit, zoom, sidebar, long title');
 } finally {

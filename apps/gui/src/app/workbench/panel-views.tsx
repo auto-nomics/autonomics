@@ -1,3 +1,4 @@
+import { Activity, Bell, Terminal } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { useWorkbenchRuntime } from "./runtime-context";
@@ -18,6 +19,6 @@ function NoticesView() {
     {!runtime.notices.length && <div className="p-4 text-muted-foreground">暂无通知 — 模型切换、登录结果等网关通知会显示在这里</div>}
   </ScrollArea>;
 }
-registerWorkbenchView({ id: "events", title: "事件流", defaultLocation: "panel", body: EventsView });
-registerWorkbenchView({ id: "notices", title: "通知", defaultLocation: "panel", body: NoticesView });
-registerWorkbenchView({ id: "terminal", title: "终端", defaultLocation: "panel", body: () => <TerminalView visible /> });
+registerWorkbenchView({ id: "events", title: "事件流", icon: Activity, defaultLocation: "panel", body: EventsView });
+registerWorkbenchView({ id: "notices", title: "通知", icon: Bell, defaultLocation: "panel", body: NoticesView });
+registerWorkbenchView({ id: "terminal", title: "终端", icon: Terminal, defaultLocation: "panel", body: () => <TerminalView visible /> });

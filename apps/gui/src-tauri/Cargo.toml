@@ -10,6 +10,7 @@ description = "Autonomics desktop GUI"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+manuscript-engine = { path = "../../../crates/manuscript-engine" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { workspace = true, features = ["derive"] }

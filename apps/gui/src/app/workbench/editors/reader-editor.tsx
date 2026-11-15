@@ -12,7 +12,7 @@
  * persisted reading position.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FileText, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { openPdfReader } from "@/features/reader";
@@ -22,7 +22,10 @@ import { gatewayRequest } from "@/gateway";
 import type { BibArticle } from "@/types";
 import { useContextBasket } from "@/features/context/context-basket";
 import { registerEditorKind, type EditorContext } from "../editor-registry";
-import { closeEditor, openEditor } from "../workbench-store";
+import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
+import { useActiveEditorContext } from "../active-editor-context";
+import { revealWorkbenchView } from "../view-layout";
+import { closeEditor, openEditor, setContainer, activateEditorById } from "../workbench-store";
 
 export type ReaderEditorParams = {
   articleId: string;
@@ -35,20 +38,35 @@ export type ReaderEditorParams = {
 function ReaderEditorBody({ editor }: EditorContext) {
   const params = editor.params as ReaderEditorParams;
   const basket = useContextBasket();
+  const sidebarSlot = useBibliographySidebarSlot();
+  const focused = useActiveEditorContext().editor?.id === editor.id;
+  const sidebarHost = useMemo(() => {
+    const node = document.createElement("div");
+    node.className = "reader-workbench-sidebar";
+    node.dataset.readerSidebar = editor.id;
+    return node;
+  }, [editor.id]);
+  useLayoutEffect(() => {
+    if (focused && sidebarSlot) sidebarSlot.append(sidebarHost);
+    else sidebarHost.remove();
+    return () => { sidebarHost.remove(); };
+  }, [focused, sidebarSlot, sidebarHost]);
+  useEffect(() => {
+    if (focused) setContainer("bibliography");
+  }, [focused]);
   // The open effect captures callbacks once; reads of the basket must
   // always see the CURRENT agent scope (mirrors bibliography's
   // contextBasketRef pattern).
   const basketRef = useRef(basket);
   basketRef.current = basket;
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const disposedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [reopenTick, setReopenTick] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    disposedRef.current = false;
+    let disposed = false;
     let handle: { close: () => void } | null = null;
     void (async () => {
       try {
@@ -61,7 +79,7 @@ function ReaderEditorBody({ editor }: EditorContext) {
         } catch {
           article = null;
         }
-        if (disposedRef.current) return;
+        if (disposed) return;
         handle = await openPdfReader({
           // Tabs coexist: never supersede other live readers.
           supersede: false,
@@ -72,6 +90,11 @@ function ReaderEditorBody({ editor }: EditorContext) {
           expectedHash: params.expectedHash ?? null,
           search: params.search ?? undefined,
           host,
+          sidebarHost,
+          onRevealSidebar: () => {
+            activateEditorById(editor.id);
+            revealWorkbenchView("bibliography");
+          },
           onReference: (selection) => {
             const current = basketRef.current;
             if (!current?.available) { window.alert("请先选择 Agent 会话"); return; }
@@ -86,20 +109,20 @@ function ReaderEditorBody({ editor }: EditorContext) {
           },
           // The reader destroyed while we are still mounted (its own
           // close button) → close the tab. The wrapper's own cleanup sets
-          // disposedRef first and swallows the event.
+          // disposed first and swallows the event.
           onClosed: () => {
-            if (!disposedRef.current) closeEditor(editor.id);
+            if (!disposed) closeEditor(editor.id);
           },
         });
-        if (disposedRef.current) handle.close();
+        if (disposed) handle.close();
       } catch (cause) {
         // AbortError = this tab was closed while the reader was still
         // loading — the unmount already happened, nothing to report.
-        if (!(cause instanceof DOMException && cause.name === "AbortError")) setError(String(cause));
+        if (!disposed && !(cause instanceof DOMException && cause.name === "AbortError")) setError(String(cause));
       }
     })();
     return () => {
-      disposedRef.current = true;
+      disposed = true;
       handle?.close();
       handle = null;
     };

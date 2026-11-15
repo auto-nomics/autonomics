@@ -39,9 +39,6 @@ pub struct RuntimeConfig {
     /// Path to the bibliography SQLite database.
     pub bib_db_path: PathBuf,
 
-    /// Path to the writing-system SQLite database.
-    pub writing_db_path: PathBuf,
-
     /// Path to the TUI / application SQLite database (model config, settings).
     pub app_db_path: PathBuf,
 
@@ -93,7 +90,7 @@ pub struct RuntimeConfig {
     /// Whether to enable bibliography tools (lit_search, bib_*, etc.).
     pub enable_bibliography: bool,
 
-    /// Whether to enable writing tools (doc_create, doc_edit, doc_compile, etc.).
+    /// Whether to enable manuscript collaboration tools (manuscript_read, manuscript_propose, etc.).
     pub enable_writing: bool,
 
     /// Whether to enable OpenGWAS tools. Requires a valid token.
@@ -332,11 +329,6 @@ impl RuntimeConfig {
             .or_else(|| env_path(ENV_BIB_DB))
             .unwrap_or_else(|| state_dir.join(DEFAULT_BIB_DB));
 
-        let writing_db_path = base
-            .and_then(|b| b.writing_db_path.clone())
-            .or_else(|| env_path(ENV_WRITING_DB))
-            .unwrap_or_else(|| state_dir.join(DEFAULT_WRITING_DB));
-
         let app_db_path = base
             .and_then(|b| b.app_db_path.clone())
             .or_else(|| env_path(ENV_APP_DB))
@@ -407,7 +399,6 @@ impl RuntimeConfig {
             state_dir,
             dag_history_db,
             bib_db_path,
-            writing_db_path,
             app_db_path,
             agent_db,
             knowledge_db_path,

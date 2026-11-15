@@ -43,11 +43,6 @@ pub(crate) const DEFAULT_DECK_DB: &str = "deck.db";
 /// Override via builder `.bib_db_path(…)` or env `AUTONOMICS_BIB_DB`.
 pub(crate) const DEFAULT_BIB_DB: &str = "bib.db";
 
-/// Default writing-system database path.
-///
-/// Override via builder `.writing_db_path(…)` or env `AUTONOMICS_WRITING_DB`.
-pub(crate) const DEFAULT_WRITING_DB: &str = "writing.db";
-
 /// Default TUI application database (model config, settings, etc.).
 ///
 /// Override via builder `.app_db_path(…)` or env `AUTONOMICS_APP_DB`.
@@ -84,7 +79,6 @@ pub const ENV_DECK_DB: &str = "AUTONOMICS_DECK_DB";
 pub const ENV_KNOWLEDGE_DB: &str = "AUTONOMICS_KNOWLEDGE_DB";
 
 /// Env var overriding the writing-system DB path.
-pub const ENV_WRITING_DB: &str = "AUTONOMICS_WRITING_DB";
 
 /// Env var overriding the TUI application DB path.
 pub const ENV_APP_DB: &str = "AUTONOMICS_APP_DB";

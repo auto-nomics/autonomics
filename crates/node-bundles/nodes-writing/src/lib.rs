@@ -4,7 +4,7 @@
 //! writing system:
 //!
 //! - `table_from_df` — converts a DataFrame to a LaTeX tabular string.
-//! - `figure_embed` — wraps an image file path as a LaTeX figure block JSON.
+//! - `figure_embed` — renders a project image path as a LaTeX figure source fragment.
 //! - `latex_table` — assembles a complete LaTeX table float from a DataFrame.
 
 pub mod figure_node;

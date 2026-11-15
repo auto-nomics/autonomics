@@ -1,7 +1,7 @@
 import type { BibArticle, KmsEvidence, KmsKnowledgeNode } from "@/types";
 
 export type ContextResource = {
-  kind: "article" | "evidence" | "knowledge" | "editor" | "image";
+  kind: "article" | "evidence" | "knowledge" | "editor" | "image" | "manuscript";
   id: string;
   title: string;
   scope: string;
@@ -10,7 +10,7 @@ export type ContextResource = {
   revision?: string;
 };
 export const resourceKey = (resource: ContextResource) => JSON.stringify([resource.kind, resource.id]);
-export const contextKindLabel = { article: "文献", evidence: "证据", knowledge: "知识", editor: "编辑器", image: "图片" };
+export const contextKindLabel = { article: "文献", evidence: "证据", knowledge: "知识", editor: "编辑器", image: "图片", manuscript: "手稿" };
 
 export function articleContext(article: BibArticle): ContextResource {
   return {
