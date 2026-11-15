@@ -31,7 +31,8 @@ fn main() {
             gateway::vfs_download_raw,
             gateway::vfs_upload,
             gateway::bib_fulltext_raw,
-            gateway::save_bib_export
+            gateway::save_bib_export,
+            gateway::save_bib_attachment
         ])
         .setup(|app| {
             gateway::install(app);

@@ -177,6 +177,12 @@ export type BibArticle = {
   abstract_text?: string | null;
   year?: number | null;
   journal?: string | null;
+  volume?: string | null;
+  issue?: string | null;
+  pages?: string | null;
+  language?: string | null;
+  issn?: string | null;
+  essn?: string | null;
   identifiers?: Array<{ kind: string; value: string }>;
   keywords?: string[];
   source?: string;

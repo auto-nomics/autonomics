@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! autonomics compute enroll <id> --login <alias> [--data-alias <a> --data-root <dir>]
-//!                           --worker <cluster-path> [--partition P] [--account A]
+//!                           [--backend ssh|slurm] [--worker <remote-path>] [--partition P] [--account A]
 //!                           [--ssh-command <path>] [--scratch <dir>] [--name NAME]
 //!                           [--no-select] [--gateway ADDR] [--token TOKEN]
 //! ```
@@ -79,6 +79,7 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
     let mut data_alias = None;
     let mut data_root = None;
     let mut worker = None;
+    let mut backend = runtime::compute::EnrollBackend::Slurm;
     let mut deploy = None;
     let mut partition = None;
     let mut account = None;
@@ -116,6 +117,16 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
             "--login" => login = Some(next_value(&mut values, flag)),
             "--data-alias" => data_alias = Some(next_value(&mut values, flag)),
             "--data-root" => data_root = Some(next_value(&mut values, flag)),
+            "--backend" => {
+                backend = match next_value(&mut values, flag).as_str() {
+                    "ssh" => runtime::compute::EnrollBackend::Ssh,
+                    "slurm" => runtime::compute::EnrollBackend::Slurm,
+                    _ => {
+                        eprintln!("--backend must be ssh or slurm");
+                        return 2;
+                    }
+                };
+            }
             "--worker" => worker = Some(next_value(&mut values, flag)),
             "--deploy" => deploy = Some(next_value(&mut values, flag)),
             "--partition" => partition = Some(next_value(&mut values, flag)),
@@ -134,7 +145,7 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
         }
     }
 
-    let (Some(id), Some(login), Some(worker)) = (id, login, worker) else {
+    let (Some(id), Some(login)) = (id, login) else {
         usage();
         return 2;
     };
@@ -147,12 +158,13 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
     };
     eprintln!("[gateway] 正在读取计算目标配置…");
     let request = runtime::compute::EnrollRequest {
+        backend,
         id,
         name,
         login_alias: login,
         data_alias,
         data_root,
-        worker_executable: worker,
+        worker_executable: worker.unwrap_or_default(),
         deploy_worker: deploy,
         partition,
         account,
@@ -198,7 +210,9 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
 }
 
 fn usage() {
-    eprintln!("usage: autonomics compute enroll <id> --login <ssh-alias> --worker <cluster-path>");
+    eprintln!(
+        "usage: autonomics compute enroll <id> --login <ssh-alias> [--backend ssh|slurm] [--worker <remote-path>]"
+    );
     eprintln!("       [--data-alias <a> --data-root <dir>] [--partition P] [--account A]");
     eprintln!(
         "       [--deploy <local-binary>]   # upload target/release/autonomics-worker to --worker"

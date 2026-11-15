@@ -62,10 +62,30 @@ impl EnrollProgress {
     }
 }
 
+/// Remote execution mode. Omitted by legacy clients means Slurm.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollBackend {
+    Ssh,
+    #[default]
+    Slurm,
+}
+
+impl EnrollBackend {
+    fn target(self, settings: SlurmConfig) -> ComputeBackend {
+        match self {
+            Self::Ssh => ComputeBackend::Ssh { settings },
+            Self::Slurm => ComputeBackend::Slurm { settings },
+        }
+    }
+}
+
 /// Minimal operator input for one-shot enrollment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollRequest {
+    #[serde(default)]
+    pub backend: EnrollBackend,
     pub id: String,
     /// Display name; defaults to the id.
     #[serde(default)]
@@ -77,17 +97,20 @@ pub struct EnrollRequest {
     /// read-only mount at `/data/<id>`.
     #[serde(default)]
     pub data_alias: Option<String>,
-    /// Absolute root of the shared filesystem on that alias.
+    /// Absolute root of the shared filesystem. An omitted data_alias uses login_alias.
     #[serde(default)]
     pub data_root: Option<String>,
     /// Absolute path of the worker binary on the cluster. Existence,
     /// executability and SHA256 are probed over ssh — no hand-authored
     /// worker profile is involved.
+    /// Omit to install the bundled worker under the remote home directory.
+    #[serde(default)]
     pub worker_executable: String,
     /// Local standalone `autonomics-worker` binary to deploy to `worker_executable` before probing:
     /// streamed over the login alias through the framed staged-write
     /// channel (atomic rename, no torn destination), then `chmod +x`.
-    /// When omitted the cluster path must already exist.
+    /// With an explicit remote path, omission means verify the existing worker.
+    /// With no remote path, omission selects the bundled worker.
     #[serde(default)]
     pub deploy_worker: Option<String>,
     #[serde(default)]
@@ -191,8 +214,10 @@ impl ComputeRegistry {
             return Err("target is deleted".into());
         }
         let mut settings = match &target.backend {
-            ComputeBackend::Slurm { settings } => settings.clone(),
-            _ => return Err("worker repair currently requires a Slurm target".into()),
+            ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => {
+                settings.clone()
+            }
+            _ => return Err("worker repair requires a remote target".into()),
         };
         if let Some(pinned) = target.endpoints.get(&settings.ssh_host) {
             let current = vfs::SshEndpoint::capture(&settings.ssh_command, &settings.ssh_host)?;
@@ -200,24 +225,22 @@ impl ComputeRegistry {
                 return Err("SSH endpoint changed since this target was saved; review the target configuration before repair".into());
             }
         }
-        let profile_path = settings
-            .typed_worker_config
-            .as_ref()
-            .ok_or("target has no worker profile")?;
-        let profile_bytes = read_owned(profile_path, false)?;
-        if target
-            .capsule_sha256
-            .get("worker.json")
-            .is_some_and(|expected| *expected != format!("{:x}", Sha256::digest(&profile_bytes)))
-        {
-            return Err("pinned worker profile hash mismatch".into());
-        }
-        let mut profile: serde_json::Value =
-            serde_json::from_slice(&profile_bytes).map_err(|e| e.to_string())?;
+        let mut profile = if let Some(path) = &settings.typed_worker_config {
+            let bytes = read_owned(path, false)?;
+            if target.capsule_sha256.get("worker.json")
+                != Some(&format!("{:x}", Sha256::digest(&bytes)))
+            {
+                return Err("pinned worker profile hash mismatch".into());
+            }
+            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())?
+        } else {
+            worker_profile("", "")
+        };
         let old_path = profile["worker"]["executable"]
             .as_str()
-            .ok_or("worker executable missing from profile")?;
-        if !old_path.starts_with('/') {
+            .ok_or("worker executable missing from profile")?
+            .to_owned();
+        if !old_path.is_empty() && !is_domain_absolute(&old_path) {
             return Err("worker executable must be absolute".into());
         }
         let connection = super::cluster_connection::ClusterConnection::new(
@@ -231,8 +254,11 @@ impl ComputeRegistry {
         // A healthy worker only needs a fresh connection and identity observation.
         // Repair transport failures or stale pins using the bundled worker below.
         let existing_worker = async {
-            let sha = connection.probe_worker(old_path).await?;
-            connection.verify_worker_identity(old_path, &sha).await?;
+            if old_path.is_empty() {
+                return Err("target has no worker profile".to_string());
+            }
+            let sha = connection.probe_worker(&old_path).await?;
+            connection.verify_worker_identity(&old_path, &sha).await?;
             if profile["worker"]["executable_sha256"] != sha
                 || profile["worker"]["expected_source_revision"] != dag_core::source_revision()
             {
@@ -250,9 +276,15 @@ impl ComputeRegistry {
         }
         progress.report("worker_package", "正在检查系统随附的匹配 worker");
         let package = bundled_worker().await?;
-        let parent = Path::new(old_path)
-            .parent()
-            .ok_or("worker directory missing")?;
+        let parent = if old_path.is_empty() {
+            PathBuf::from(connection.home_directory().await?)
+                .join(".local/share/autonomics/workers")
+        } else {
+            Path::new(&old_path)
+                .parent()
+                .ok_or("worker directory missing")?
+                .to_path_buf()
+        };
         let destination = parent
             .join(format!("autonomics-worker-repair-{}", uuid::Uuid::new_v4()))
             .to_string_lossy()
@@ -288,7 +320,10 @@ impl ComputeRegistry {
             id: target.id.clone(),
             name: target.name,
             enabled: target.enabled,
-            backend: ComputeBackend::Slurm { settings },
+            backend: match target.backend {
+                ComputeBackend::Ssh { .. } => ComputeBackend::Ssh { settings },
+                _ => ComputeBackend::Slurm { settings },
+            },
             data_domains: target.data_domains,
         })?;
         Ok(saved)
@@ -307,7 +342,7 @@ impl ComputeRegistry {
     #[tracing::instrument(skip_all, fields(cluster_id = %request.id, alias = %request.login_alias))]
     pub async fn enroll_with_progress(
         &self,
-        request: EnrollRequest,
+        mut request: EnrollRequest,
         progress: EnrollProgress,
     ) -> Result<ComputeRegistryState, String> {
         progress.report("validate", "正在检查注册参数");
@@ -315,6 +350,21 @@ impl ComputeRegistry {
         identifier(&request.id)?;
         if !valid_alias(&request.login_alias) {
             return Err("login_alias must be a configured ssh host alias".into());
+        }
+        if request.backend == EnrollBackend::Ssh
+            && (request.partition.is_some() || request.account.is_some())
+        {
+            return Err("partition and account require a Slurm target".into());
+        }
+        if request
+            .scratch_dir
+            .as_ref()
+            .is_some_and(|path| !is_domain_absolute(path))
+        {
+            return Err("scratch_dir must be a clean absolute path".into());
+        }
+        if request.data_root.is_some() && request.data_alias.is_none() {
+            request.data_alias = Some(request.login_alias.clone());
         }
         let data = match (&request.data_alias, &request.data_root) {
             (Some(alias), Some(root)) => {
@@ -333,7 +383,8 @@ impl ComputeRegistry {
                 );
             }
         };
-        if !request.worker_executable.starts_with('/') {
+        if !request.worker_executable.is_empty() && !is_domain_absolute(&request.worker_executable)
+        {
             return Err("worker_executable must be an absolute cluster path".into());
         }
         // The local deploy path crosses a process boundary: the daemon —
@@ -360,7 +411,18 @@ impl ComputeRegistry {
             request.python.as_deref().unwrap_or("python3"),
         )
         .with_progress(progress.clone());
+        // Resolve and validate the local package before any remote mutation.
+        if request.worker_executable.is_empty() && request.deploy_worker.is_none() {
+            request.deploy_worker = Some(bundled_worker().await?.to_string_lossy().into_owned());
+        }
         connection.authenticate().await?;
+        if request.worker_executable.is_empty() {
+            request.worker_executable = format!(
+                "{}/.local/share/autonomics/workers/{}/autonomics-worker",
+                connection.home_directory().await?,
+                uuid::Uuid::new_v4()
+            );
+        }
         if let Some(local) = &request.deploy_worker {
             connection
                 .deploy_worker(local, &request.worker_executable)
@@ -381,29 +443,18 @@ impl ComputeRegistry {
         ));
         private_dir(&staging)?;
         let profile_path = staging.join("worker.json");
-        let profile = serde_json::json!({
-            "worker": {
-                "executable": request.worker_executable,
-                "executable_sha256": sha256,
-                "expected_source_revision": dag_core::source_revision(),
-            },
-            "local_kinds": [
-                "channel", "dynamic_fanout", "table_from_df", "figure_embed",
-                "source_literature", "source_literature_fetch", "literature_fulltext",
-                "source_literature_citations", "source_s2_recommendations", "bib_save",
-                "evidence_merge", "evidence_export",
-                // Local PubMed mirror nodes run in-process (shared DuckDB
-                // handle, read-only) — no container/cluster execution.
-                "source_pubmed_local", "pubmed_mesh_analysis", "pubmed_author_network",
-            ],
-        });
+        let profile = worker_profile(&request.worker_executable, &sha256);
         write_bytes_new(&profile_path, profile.to_string().as_bytes())?;
 
-        // 3. Settings: site defaults where the operator did not speak.
+        // 3. Derive transport settings without inheriting another target's worker, data endpoint or container profile.
         let mut settings = SlurmConfig {
             ssh_host: request.login_alias.clone(),
             ssh_command,
             typed_worker_config: Some(profile_path),
+            data_ssh_host: request.data_alias.clone(),
+            pi_ssh_host: None,
+            apptainer_manifest: None,
+            account: request.account.clone(),
             ..SlurmConfig::default()
         };
         if let Some(python) = &request.python {
@@ -417,9 +468,6 @@ impl ComputeRegistry {
             settings.account = Some(account.clone());
         }
         if let Some(scratch) = &request.scratch_dir {
-            if !is_domain_absolute(scratch) {
-                return Err("scratch_dir must be a clean absolute path".into());
-            }
             settings.scratch_remote_dir = scratch.clone();
         } else if let Some((_, root)) = &data {
             settings.scratch_remote_dir = format!("{root}/scratch");
@@ -473,7 +521,7 @@ impl ComputeRegistry {
                 id: request.id.clone(),
                 name: request.name.clone().unwrap_or_else(|| request.id.clone()),
                 enabled: true,
-                backend: ComputeBackend::Slurm { settings },
+                backend: request.backend.target(settings),
                 data_domains,
             })
             .map_err(|error| format!("target save failed: {error}"))?;
@@ -526,4 +574,23 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
                 .contains("matching worker package unavailable")
         );
     }
+}
+
+fn worker_profile(executable: &str, sha256: &str) -> serde_json::Value {
+    serde_json::json!({
+        "worker": {
+            "executable": executable,
+            "executable_sha256": sha256,
+            "expected_source_revision": dag_core::source_revision(),
+        },
+        "local_kinds": [
+            "channel", "dynamic_fanout", "table_from_df", "figure_embed",
+            "source_literature", "source_literature_fetch", "literature_fulltext",
+            "source_literature_citations", "source_s2_recommendations", "bib_save",
+            "evidence_merge", "evidence_export",
+            // Local PubMed mirror nodes run in-process (shared DuckDB
+            // handle, read-only) — no container/cluster execution.
+            "source_pubmed_local", "pubmed_mesh_analysis", "pubmed_author_network",
+        ],
+    })
 }

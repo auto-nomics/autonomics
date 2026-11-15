@@ -108,7 +108,15 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
   >({});
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
   const [draft, setDraft] = useState<TargetDraft | null>(null);
-  const [enroll, setEnroll] = useState({ id: "", name: "", login: "", worker: "", dataAlias: "", dataRoot: "", partition: "", account: "", scratch: "", deploy: "", python: "python3", sshCommand: "", select: true });
+  const [enroll, setEnroll] = useState({ backend: "ssh" as "ssh" | "slurm", id: "", name: "", login: "", worker: "", dataAlias: "", dataRoot: "", partition: "", account: "", scratch: "", deploy: "", python: "python3", sshCommand: "", select: true });
+  const renderEnrollmentField = ([key, label, required, hint]: readonly [Exclude<keyof typeof enroll, "backend" | "select">, string, boolean, string]) => (
+    <FormField key={key}>
+      <FieldLabel htmlFor={`enroll-${key}`}>{label}</FieldLabel>
+      <Input id={`enroll-${key}`} required={required} value={enroll[key]}
+        onChange={(event) => setEnroll({ ...enroll, [key]: event.target.value })} />
+      {hint ? <FieldDescription>{hint}</FieldDescription> : null}
+    </FormField>
+  );
   const [showEnroll, setShowEnroll] = useState(false);
   const [sourceDraft, setSourceDraft] = useState({
     id: "",
@@ -265,37 +273,7 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
           <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
             <span className="shrink-0 text-sm font-medium">目标</span>
             <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setShowEnroll((value) => !value)}>
-              注册 Slurm 集群
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setDraft({
-                  id: "",
-                  name: "",
-                  enabled: true,
-                  dataDomains: [],
-                  remote: { kind: "slurm", settings: emptySlurmDraft() },
-                })
-              }
-            >
-              新建 Slurm 目标
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setDraft({
-                  id: "",
-                  name: "",
-                  enabled: true,
-                  dataDomains: [],
-                  remote: { kind: "ssh", settings: emptySlurmDraft() },
-                })
-              }
-            >
-              新建 SSH 目标
+              接入计算目标
             </Button>
           </div>
           <ul className="divide-y">
@@ -383,9 +361,9 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
 
         {showEnroll ? (
           <section className="rounded-lg border p-3">
-            <h3 className="mb-2 text-sm font-medium">注册 Slurm 集群</h3>
+            <h3 className="mb-2 text-sm font-medium">接入计算目标</h3>
             <p className="mb-3 text-xs text-muted-foreground">
-              检查登录连接、安装或校验 worker，然后保存计算目标。安装过程会在上方实时显示，失败时保留日志。
+              填写标识和 SSH 别名即可自动安装 worker。数据目录和其他参数可选；安装过程会在上方实时显示。
             </p>
             <form onSubmit={(event) => {
               event.preventDefault();
@@ -393,41 +371,49 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
               void run("enroll", async () => {
                 try {
                   await startEnrollment({
-                    id: enroll.id.trim(), login_alias: enroll.login.trim(),
-                    worker_executable: enroll.worker.trim(), name: enroll.name.trim() || undefined,
+                    backend: enroll.backend, id: enroll.id.trim(), login_alias: enroll.login.trim(),
+                    worker_executable: enroll.worker.trim() || undefined, name: enroll.name.trim() || undefined,
                     data_alias: enroll.dataAlias.trim() || undefined, data_root: enroll.dataRoot.trim() || undefined,
-                    partition: enroll.partition.trim() || undefined, account: enroll.account.trim() || undefined,
+                    partition: enroll.backend === "slurm" ? enroll.partition.trim() || undefined : undefined, account: enroll.backend === "slurm" ? enroll.account.trim() || undefined : undefined,
                     scratch_dir: enroll.scratch.trim() || undefined, select: enroll.select,
                     deploy_worker: enroll.deploy.trim() || undefined, python: enroll.python.trim() || undefined,
                     ssh_command: enroll.sshCommand.trim() || undefined,
                   });
                   setShowEnroll(false);
-                  setNotice({ kind: "ok", text: "集群已注册，安装记录已保留。" });
+                  setNotice({ kind: "ok", text: "计算目标已接入，安装记录已保留。" });
                 } finally { await reload(); }
               });
             }}>
               <fieldset disabled={busy !== null}>
-                <legend className="sr-only">集群连接与安装配置</legend>
+                <legend className="sr-only">远端连接与安装配置</legend>
                 <FieldGroup className="grid gap-3 sm:grid-cols-2">
+                  <FormField>
+                    <FieldLabel htmlFor="enroll-backend">执行方式</FieldLabel>
+                    <select id="enroll-backend" className={inputClass} value={enroll.backend}
+                      onChange={event => setEnroll({ ...enroll, backend: event.target.value as "ssh" | "slurm" })}>
+                      <option value="ssh">SSH 主机</option>
+                      <option value="slurm">Slurm 集群</option>
+                    </select>
+                  </FormField>
                   {([
                     ["id", "标识", true, ""], ["name", "名称", false, ""],
                     ["login", "登录节点 SSH 别名", true, ""],
-                    ["worker", "远端 worker 路径", true, "集群上的可执行文件绝对路径。"],
-                    ["deploy", "安装包路径（可选）", false, "gateway 所在主机上的 autonomics-worker 绝对路径（target/release/autonomics-worker）；留空则校验远端已有 worker。"],
-                    ["python", "远端 Python", false, "上传助手使用的 Python 3.7+；可填写集群上的解释器绝对路径。"],
-                    ["dataAlias", "数据节点 SSH 别名", false, "与共享目录同时填写。"],
-                    ["dataRoot", "共享目录绝对路径", false, ""],
+                    ["dataRoot", "共享目录绝对路径", false, "可选；默认使用登录 SSH 别名访问。"],
                     ["partition", "分区（可选）", false, ""], ["account", "账户（可选）", false, ""],
-                    ["scratch", "Scratch 绝对路径（可选）", false, ""],
-                    ["sshCommand", "SSH 程序（可选）", false, "留空使用站点配置。"],
-                  ] as const).map(([key, label, required, hint]) => (
-                    <FormField key={key}>
-                      <FieldLabel htmlFor={`enroll-${key}`}>{label}</FieldLabel>
-                      <Input id={`enroll-${key}`} required={required} value={enroll[key]}
-                        onChange={(event) => setEnroll({ ...enroll, [key]: event.target.value })} />
-                      {hint ? <FieldDescription>{hint}</FieldDescription> : null}
-                    </FormField>
-                  ))}
+                  ] as const).filter(([key]) => enroll.backend === "slurm" || (key !== "partition" && key !== "account")).map(renderEnrollmentField)}
+                  <details className="sm:col-span-2">
+                    <summary className="cursor-pointer text-sm">高级选项</summary>
+                    <FieldGroup className="mt-3 grid gap-3 sm:grid-cols-2">
+                      {([
+                        ["worker", "远端 worker 路径（可选）", false, "留空自动选择安装目录；填写则校验指定路径的 worker。"],
+                        ["deploy", "安装包路径（可选）", false, "默认使用随系统安装的 worker；可指定 gateway 主机上的安装包绝对路径。"],
+                        ["python", "远端 Python", false, "文件传输需要 Python 3.7+。"],
+                        ["dataAlias", "数据节点 SSH 别名", false, "留空使用登录 SSH 别名。"],
+                        ["scratch", "Scratch 绝对路径（可选）", false, ""],
+                        ["sshCommand", "SSH 程序（可选）", false, "留空使用站点配置。"],
+                      ] as const).map(renderEnrollmentField)}
+                    </FieldGroup>
+                  </details>
                   <FormField orientation="horizontal">
                     <input id="enroll-select" type="checkbox" checked={enroll.select}
                       onChange={(event) => setEnroll({ ...enroll, select: event.target.checked })} />
@@ -436,8 +422,8 @@ export function ComputeEditorView({ embedded = false }: { embedded?: boolean }) 
                 </FieldGroup>
               </fieldset>
               <div className="mt-3 flex gap-2">
-                <Button type="submit" size="sm" disabled={busy !== null || !enroll.id.trim() || !enroll.login.trim() || !enroll.worker.trim() || Boolean(enroll.dataAlias.trim()) !== Boolean(enroll.dataRoot.trim())}>
-                  {busy === "enroll" ? "安装进行中…" : enroll.deploy.trim() ? "安装并注册" : "校验并注册"}
+                <Button type="submit" size="sm" disabled={busy !== null || !enroll.id.trim() || !enroll.login.trim() || (Boolean(enroll.dataAlias.trim()) && !enroll.dataRoot.trim())}>
+                  {busy === "enroll" ? "安装进行中…" : !enroll.worker.trim() || enroll.deploy.trim() ? "安装并注册" : "校验并注册"}
                 </Button>
                 <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={() => setShowEnroll(false)}>取消</Button>
               </div>

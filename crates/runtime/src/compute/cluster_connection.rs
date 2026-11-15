@@ -96,6 +96,15 @@ impl ClusterConnection {
         Ok(())
     }
 
+    pub async fn home_directory(&self) -> Result<String, String> {
+        let output = self.run("remote_home", "printf '%s' \"$HOME\"").await?;
+        let home = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+        if !super::is_domain_absolute(&home) {
+            return Err("remote HOME must be a clean absolute directory".into());
+        }
+        Ok(home)
+    }
+
     pub async fn probe_worker(&self, path: &str) -> Result<String, String> {
         let output = self
             .run(

@@ -68,8 +68,10 @@ try {
   page.on("console", message => { if (message.type() === "error") console.error(message.text()); });
   await page.goto(origin);
   async function fillAndSubmit() {
-    await page.getByRole("button", { name: "注册 Slurm 集群", exact: true }).click();
-    for (const [label, value] of [["标识", "Csu"], ["登录节点 SSH 别名", "Csu"], ["远端 worker 路径", "/home/test/bin/worker"], ["安装包路径（可选）", "/opt/autonomics"], ["远端 Python", "/opt/python3.12"]])
+    await page.getByRole("button", { name: "接入计算目标", exact: true }).click();
+    await page.getByLabel("执行方式", { exact: true }).selectOption("slurm");
+    await page.getByText("高级选项", { exact: true }).click();
+    for (const [label, value] of [["标识", "Csu"], ["登录节点 SSH 别名", "Csu"], ["远端 worker 路径（可选）", "/home/test/bin/worker"], ["安装包路径（可选）", "/opt/autonomics"], ["远端 Python", "/opt/python3.12"]])
       await page.getByLabel(label, { exact: true }).fill(value);
     await page.getByRole("button", { name: "安装并注册", exact: true }).click();
   }
@@ -118,26 +120,35 @@ try {
   await panel.getByText("状态待确认", { exact: true }).waitFor();
   assert.equal(requests.length, 3, "dropped streams must not replay deployments");
   await page.setViewportSize({ width: 1100, height: 1000 });
-  await page.getByRole("button", { name: "新建 SSH 目标", exact: true }).click();
-  let targetForm = page.locator("section").filter({ has: page.getByText("新建目标", { exact: true }) });
-  await targetForm.getByLabel("标识 (id)").fill("ssh-test");
-  await targetForm.getByLabel("名称", { exact: true }).fill("SSH test");
-  await targetForm.getByLabel("SSH 主机 (别名)", { exact: true }).fill("worker");
-  await targetForm.getByRole("button", { name: "保存配置", exact: true }).click();
-  await until(() => targetWrites.length === 1);
+  // SSH uses the same automatic enrollment, with no worker paths or scheduler fields.
+  await page.getByLabel("执行方式", { exact: true }).selectOption("ssh");
+  await page.getByLabel("标识", { exact: true }).fill("ssh-test");
+  await page.getByLabel("登录节点 SSH 别名", { exact: true }).fill("worker");
+  await page.getByLabel("远端 worker 路径（可选）", { exact: true }).fill("");
+  await page.getByLabel("安装包路径（可选）", { exact: true }).fill("");
+  assert.equal(await page.getByLabel("分区（可选）", { exact: true }).count(), 0);
+  await page.getByRole("button", { name: "安装并注册", exact: true }).click();
+  await until(() => streams.length === 4);
+  assert.equal(requests[3].backend, "ssh");
+  assert.equal(requests[3].worker_executable, undefined);
+  assert.equal(requests[3].deploy_worker, undefined);
+  assert.equal(requests[3].partition, undefined);
+  state = { ...state, policy: { target_id: "ssh-test" }, targets: [...state.targets,
+    { id: "ssh-test", name: "SSH test", enabled: true, backend: { type: "ssh", settings: { ssh_host: "worker" } }, data_domains: [] }] };
+  send(3, { type: "result", state }); streams[3].end();
+  await panel.getByText("安装完成", { exact: true }).waitFor();
   const targetRow = page.locator("li").filter({ has: page.getByText("ssh-test", { exact: true }) });
-  await targetRow.getByRole("button", { name: "选择", exact: true }).click();
   await page.getByText("当前执行目标:ssh-test", { exact: true }).waitFor();
   await targetRow.getByRole("button", { name: "编辑", exact: true }).click();
-  targetForm = page.locator("section").filter({ has: page.getByText("编辑目标 ssh-test", { exact: true }) });
+  const targetForm = page.locator("section").filter({ has: page.getByText("编辑目标 ssh-test", { exact: true }) });
   await targetForm.getByLabel("名称", { exact: true }).fill("Updated SSH target");
   await targetForm.getByRole("button", { name: "保存配置", exact: true }).click();
   await targetRow.getByText("Updated SSH target", { exact: true }).waitFor();
-  assert.equal(targetWrites.length, 2);
+  assert.equal(targetWrites.length, 1);
   assert.equal(state.targets.filter(target => target.id === "ssh-test").length, 1);
   assert.equal(targetWrites[0].backend.type, "ssh");
   assert.equal(targetWrites.every(request => !("expected_revision" in request)), true);
-  assert.deepEqual(policyWrites, [{ target_id: "ssh-test" }], "editing the selected target must not require reselection");
+  assert.deepEqual(policyWrites, [], "editing the selected target must not require reselection");
   assert.deepEqual(errors, []);
   console.log("Compute installation: streaming, percentage, navigation, UTF-8/CRLF, failure and retry passed.");
 } catch (error) {

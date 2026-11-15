@@ -14,6 +14,19 @@ cargo build --release -p autonomics-worker
 
 请单独构建 worker。Cargo 在一次构建多个包时会合并共享依赖的 features；同时构建主程序会重新为 worker 带入文献与写作节点。worker 的 release 配置自动去除符号表。分析引擎仍包含 DataFusion、Arrow、统计和机器学习，因此 worker 并非只有网络通信代码。
 
+SSH 主机与 Slurm 集群共用自动接入流程。将同一构建的 `autonomics-worker` 放在 gateway 可执行文件旁边后，最小接入命令为：
+
+```sh
+autonomics compute enroll ht --backend ssh --login ht
+autonomics compute enroll Csu --backend slurm --login Csu --partition freecpuQ
+```
+
+按部署方式提供 gateway 地址和 token。省略 `--worker` 时，系统在远端 `$HOME/.local/share/autonomics/workers/<唯一目录>/autonomics-worker` 部署随附 worker，并校验身份、源码版本与 SHA256，自动生成私有 profile 和端点记录。`--deploy` 可以指定其他本地安装包；显式提供 `--worker` 且省略 `--deploy` 时，只校验该远端已有程序，兼容旧调用。省略 `--backend` 继续按 Slurm 解释，SSH 请求不接受 partition/account。
+
+只填写 `--data-root` 即可使用登录别名创建数据域及只读挂载；不同数据入口再提供 `--data-alias`。scratch 默认位于数据根下的 `scratch`，无数据根则沿用默认远端工作目录。数据源仍可独立配置。
+
+GUI 的“接入计算目标”统一选择 SSH / Slurm，路径和传输选项收在“高级选项”。TUI 新建远端目标也调用同一注册接口，不再要求手写 worker profile；现有目标仍可编辑高级配置。自动接入完成只证明连接和 worker 身份已通过校验，实际任务能力仍需 readiness 和任务执行验收。
+
 在已有 enroll 命令中，将 `--deploy` 改为 worker 的本地绝对路径，`--worker` 仍为远端安装路径：
 
 ```sh
@@ -27,11 +40,11 @@ cargo build --release -p autonomics-worker
   --token "$(cat ~/.autonomics/gateway.token)"
 ```
 
-GUI 的“安装包路径”也填写 gateway 主机上的 `target/release/autonomics-worker` 绝对路径。远端 Python 继续用于 SSH 文件传输辅助程序；Rust worker 本身不需要 Python。容器分析按原配置使用 Podman 或 Apptainer，镜像和数据包独立准备。
+需要自定义安装包时，GUI 的“安装包路径”填写 gateway 主机上的 `target/release/autonomics-worker` 绝对路径。远端 Python 继续用于 SSH 文件传输辅助程序；Rust worker 本身不需要 Python。容器分析按原配置使用 Podman 或 Apptainer，镜像和数据包独立准备。
 
 更新主程序后需重启 gateway，使安装握手生效。gateway 与 worker 的 `source_revision` 必须一致；已有 ComputeTarget 的可执行文件哈希仍然固定，替换远端文件后需更新目标配置。保留历史任务对应的旧路径时，应将新 worker 安装到另一条版本化路径。
 
-TUI 的 Compute Dashboard 中，选择 Slurm 目标后按 `w` 可直接恢复连接。系统使用已保存的 SSH、Python、worker 和站点配置重新连接并校验；远端 worker 已匹配时直接完成。需要更新时，gateway 自动读取与自身可执行文件同目录的 `autonomics-worker`，验证其身份后部署到新的远端路径，更新该目标的当前配置；正在运行的 DAG 继续使用启动时的执行器。发布和安装 gateway 时须将同一源码构建的独立 worker 一起安装到该目录；修复过程无需填写路径或重新配置目标。
+TUI 的 Compute Dashboard 中，选择 SSH 或 Slurm 目标后按 `w` 可直接恢复连接。系统使用已保存的 SSH、Python、worker 和站点配置重新连接并校验；远端 worker 已匹配时直接完成。需要更新时，gateway 自动读取与自身可执行文件同目录的 `autonomics-worker`，验证其身份后部署到新的远端路径，更新该目标的当前配置；正在运行的 DAG 继续使用启动时的执行器。发布和安装 gateway 时须将同一源码构建的独立 worker 一起安装到该目录；修复过程无需填写路径或重新配置目标；旧 SSH 目标没有 worker profile 时，也会自动补装并生成配置。
 
 恢复期间 Dashboard 右侧显示实时事件，包括 SSH 认证、stdout/stderr、worker 身份检查、上传进度及目标激活结果。显示保留最近 200 条事件，长行自动换行并跟随最新输出；失败信息保留在事件视图中。完成后按 Esc 返回目标详情。进度连接中断时不会自动重放修复请求，应先刷新检查目标状态。
 

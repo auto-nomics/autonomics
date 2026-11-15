@@ -548,6 +548,26 @@ async fn fulltext_request(
     })
 }
 
+#[tauri::command]
+pub async fn save_bib_attachment(
+    state: State<'_, GatewayState>,
+    article_id: String,
+    attachment_key: Option<String>,
+    expected_hash: Option<String>,
+    path: String,
+) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("attachment save path is required".to_string());
+    }
+    let file = fulltext_request(&state, article_id, attachment_key, expected_hash).await?;
+    let bytes = BASE64
+        .decode(file.data_base64)
+        .map_err(|error| error.to_string())?;
+    tokio::fs::write(path, bytes)
+        .await
+        .map_err(|error| format!("save attachment: {error}"))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BibExportSaveRequest {

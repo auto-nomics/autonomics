@@ -109,6 +109,33 @@ impl App {
                     event_tx.send(crate::app_event::AppEvent::HpcProfileSaved(result));
                 });
             }
+            Some(HpcPanelCommand::EnrollTarget(request)) => {
+                self.state.hpc_panel.loading = true;
+                self.state.hpc_panel.repair_show_events = true;
+                self.state.hpc_panel.repair_events.clear();
+                self.state.hpc_panel.dashboard_pending_id =
+                    request["id"].as_str().map(str::to_owned);
+                self.state.hpc_panel.status = Some("Connecting and installing worker…".into());
+                let client = self.client.clone();
+                let event_tx = self.app_event_tx.clone();
+                self.spawn_client_task("compute_enroll", move || async move {
+                    let result = async {
+                        let request =
+                            serde_json::from_value(request).map_err(|error| error.to_string())?;
+                        let state = client
+                            .compute_enroll_with_progress(&request, |stage, message| {
+                                event_tx.send(crate::app_event::AppEvent::HpcRepairProgress(
+                                    format!("[{stage}] {message}"),
+                                ));
+                            })
+                            .await
+                            .map_err(|error| error.to_string())?;
+                        serde_json::to_value(state).map_err(|error| error.to_string())
+                    }
+                    .await;
+                    event_tx.send(crate::app_event::AppEvent::HpcRepairFinished(result));
+                });
+            }
             Some(HpcPanelCommand::RepairWorker(request)) => {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.repair_show_events = true;

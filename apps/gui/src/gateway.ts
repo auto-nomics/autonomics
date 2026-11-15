@@ -367,6 +367,37 @@ export async function fetchBibFulltextRaw(
   };
 }
 
+/** Save the original attachment through the authenticated web/native transport. */
+export async function downloadBibAttachment(
+  articleId: string,
+  filename: string,
+  attachmentKey?: string | null,
+  expectedHash?: string | null,
+): Promise<string | null> {
+  // Metadata may contain a path; only suggest a filename to the save dialog.
+  const name = filename.split(/[\\/]/).pop()?.replace(/[\x00-\x1f]/g, "_") || "attachment";
+  if (isTauri) {
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const path = await dialog.save({ title: "Download attachment", defaultPath: name });
+    if (!path) return null;
+    await tauriInvoke("save_bib_attachment", {
+      articleId, attachmentKey: attachmentKey ?? null, expectedHash: expectedHash ?? null, path,
+    });
+    return path;
+  }
+  const { bytes, contentType } = await fetchBibFulltextRaw(articleId, attachmentKey, expectedHash);
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: contentType }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Allow the browser to consume the URL before releasing it.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return name;
+}
+
 export async function saveTextFile(
   defaultPath: string,
   contents: string,

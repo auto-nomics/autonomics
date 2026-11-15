@@ -14,17 +14,20 @@ import {
   FileText,
   FileX2,
   Link2,
+  LoaderCircle,
   NotebookText,
   Plus,
   PanelLeft,
   PanelRight,
+  Pencil,
   Search,
   StickyNote,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { gatewayRequest, pickUploadFile, saveTextFile, uploadBibFulltext, watchBibCollections } from "@/gateway";
+import { downloadBibAttachment, gatewayRequest, pickUploadFile, saveTextFile, uploadBibFulltext, watchBibCollections } from "@/gateway";
+import { MetadataEditor } from "./metadata-editor";
 import { CollectionTree, type CollectionAction } from "./collection-tree";
 import { collectionPath } from "./collection-tree-model";
 import { openPdfReader, openTxtReader, hasReaderOpener, openReaderEditor } from "@/features/reader";
@@ -79,6 +82,10 @@ type AttachmentEntry = {
   kind: "pdf" | "text" | "link" | "notes";
   format?: string | null;
   attachmentKey?: string | null;
+  filename?: string;
+  expectedHash?: string | null;
+  onDownload?: () => void;
+  downloading?: boolean;
   href?: string;
   onClick?: () => void;
 };
@@ -164,7 +171,8 @@ function formatFileSize(size: number | null | undefined) {
 function attachmentFileName(path?: string | null) {
   if (!path) return "Full text";
   const normalized = path.split(/[\\/]/).filter(Boolean).pop();
-  return normalized ? decodeURIComponent(normalized) : "Full text";
+  if (!normalized) return "Full text";
+  try { return decodeURIComponent(normalized); } catch { return normalized; }
 }
 
 function attachmentEntries(article: BibArticle, detail: BibDetail | null): AttachmentEntry[] {
@@ -175,13 +183,14 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
     for (const attachment of detail.attachments) {
       const format = /pdf/i.test(attachment.content_type ?? "") || /\.pdf$/i.test(attachment.original_filename ?? "") ? "pdf" : "txt";
       if (attachment.link_mode === 3 && attachment.source_url) entries.push({key:attachment.key,kind:"link",label:attachment.title || "Linked file",caption:attachment.source_url,href:attachment.source_url});
-      else entries.push({key:attachment.key,attachmentKey:attachment.key,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || "Attachment",caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
+      else entries.push({key:attachment.key,attachmentKey:attachment.key,filename:attachment.original_filename || attachmentFileName(attachment.path || attachment.vfs_path),expectedHash:attachment.storage_hash,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || "Attachment",caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
     }
   } else if (fullText) {
     const format = fullText.file_format?.toLowerCase() ?? null;
     entries.push({
       key: "fulltext",
       attachmentKey: fullText.attachment_key,
+      filename: attachmentFileName(fullText.file_path),
       kind: format === "txt" ? "text" : "pdf",
       format,
       label: attachmentFileName(fullText.file_path),
@@ -307,9 +316,19 @@ function AttachmentRow({ entry }: { entry: AttachmentEntry }) {
   }
 
   return (
-    <button type="button" onClick={entry.onClick} className={className} disabled={!entry.onClick}>
-      {content}
-    </button>
+    <div className="flex min-w-0 items-center gap-1">
+      <button type="button" onClick={entry.onClick} className={cn(className, "min-w-0 flex-1")} disabled={!entry.onClick}>
+        {content}
+      </button>
+      {entry.onDownload && (
+        <Button type="button" size="icon-sm" variant="ghost" className="shrink-0"
+          aria-label={`Download ${entry.label}`} title={entry.downloading ? "Downloading…" : `Download ${entry.filename || entry.label}`}
+          disabled={entry.downloading} aria-busy={entry.downloading}
+          onClick={entry.onDownload}>
+          {entry.downloading ? <LoaderCircle className="animate-spin" /> : <Download />}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -430,7 +449,10 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   const selectionRef=useRef(selectedArticle);selectionRef.current=selectedArticle;
   const [resultContext,setResultContext]=useState("");
   const lastResultContext=useRef("");
+  const [downloadingAttachments, setDownloadingAttachments] = useState<Set<string>>(new Set());
+  const downloadLocks = useRef(new Set<string>());
   const [attachmentsOpen, setAttachmentsOpen] = useState(true);
+  const [editingArticle, setEditingArticle] = useState<BibArticle | null>(null);
   const [detail, setDetail] = useState<BibDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -765,9 +787,26 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
     if (!selected) return;
     openReaderFor(selected, format, attachmentKey);
   };
+  const downloadAttachment = async (article: BibArticle, entry: AttachmentEntry) => {
+    const key = JSON.stringify([article.id, entry.key]);
+    if (downloadLocks.current.has(key)) return;
+    downloadLocks.current.add(key);
+    setDownloadingAttachments(new Set(downloadLocks.current));
+    setError(null);
+    try {
+      await downloadBibAttachment(article.id, entry.filename || entry.label, entry.attachmentKey, entry.expectedHash);
+    } catch (cause) {
+      setError(`Unable to download attachment: ${String(cause)}`);
+    } finally {
+      downloadLocks.current.delete(key);
+      setDownloadingAttachments(new Set(downloadLocks.current));
+    }
+  };
   const withReader = (entry: AttachmentEntry): AttachmentEntry =>
     entry.kind === "pdf" || entry.kind === "text"
-      ? { ...entry, onClick: () => readFulltext(entry.format, entry.attachmentKey) }
+      ? { ...entry, onClick: () => readFulltext(entry.format, entry.attachmentKey),
+          onDownload: selected ? () => void downloadAttachment(selected, entry) : undefined,
+          downloading: selected ? downloadingAttachments.has(JSON.stringify([selected.id, entry.key])) : false }
       : entry;
 
   const patchSummary = (articleId: string, patch: (summary: AttachmentSummary) => AttachmentSummary) => {
@@ -841,6 +880,13 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
 
   return (
     <div ref={libraryContainer} className={cn("relative isolate grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden", roomy && (externalSidebar ? "grid-cols-[minmax(0,1fr)_336px] grid-rows-1" : "grid-cols-[216px_minmax(0,1fr)_336px] grid-rows-1"))}>
+      {editingArticle && <MetadataEditor article={editingArticle} onClose={() => setEditingArticle(null)} onSaved={article => {
+        setArticles(current => current.map(value => value.id === article.id ? article : value));
+        setDetail(current => current?.article.id === article.id ? { ...current, article } : current);
+        setEditingArticle(null);
+        invalidateMetadata();
+        void loadLibrary(query);
+      }} />}
       {advancedOpen && <AdvancedSearchBuilder query={queryDraft} expression={queryDraft === query ? expression : null} onClose={() => setAdvancedOpen(false)} onApply={(expr,text) => {setExpression(expr);setQuery(text);setQueryDraft(text);setAdvancedOpen(false);}} />}
       {((!externalSidebar && libraryOpen) || detailsOpen) && (
         <button
@@ -1150,6 +1196,10 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
             {selected ? "Entry details" : "Bibliography"}
           </span>
           <div className="flex shrink-0 items-center gap-1">
+            {selected && <Button size="icon-xs" variant="ghost" aria-label="Edit metadata" title="Edit metadata"
+              disabled={detailLoading || !activeDetail} onClick={() => activeDetail && setEditingArticle(activeDetail.article)}><Pencil /></Button>}
+            {selected && <Button size="icon-xs" variant="ghost" aria-label="Upload attachment" title="Upload attachment"
+              disabled={busy === "upload"} onClick={() => void uploadForArticle(selected)}><Upload /></Button>}
             {detailLoading && <Badge variant="secondary">Loading</Badge>}
             <Button
               size="icon-xs"
@@ -1203,6 +1253,12 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
                     />
                   ))}
                   <MetadataRow label="Publication" value={selected.journal} />
+                  <MetadataRow label="Volume" value={selected.volume} />
+                  <MetadataRow label="Issue" value={selected.issue} />
+                  <MetadataRow label="Pages" value={selected.pages} />
+                  <MetadataRow label="Language" value={selected.language} />
+                  <MetadataRow label="ISSN" value={selected.issn} />
+                  <MetadataRow label="Electronic ISSN" value={selected.essn} />
                   <MetadataRow label="Date" value={selected.year} />
                   <MetadataRow label="Source" value={selected.source} />
                   {identifierRows.map(({ kind, label }) => {

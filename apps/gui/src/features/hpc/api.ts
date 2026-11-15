@@ -38,10 +38,11 @@ export async function saveComputeTarget(
 }
 
 export type EnrollComputeRequest = {
+  backend?: "ssh" | "slurm";
   id: string;
   name?: string;
   login_alias: string;
-  worker_executable: string;
+  worker_executable?: string;
   data_alias?: string;
   data_root?: string;
   partition?: string;

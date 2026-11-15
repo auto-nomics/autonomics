@@ -2063,6 +2063,7 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
     let catalog = f
         .registry
         .enroll(super::EnrollRequest {
+            backend: super::EnrollBackend::Slurm,
             id: "hpc-b".into(),
             name: None,
             login_alias: "hpc-b-login".into(),
@@ -2143,11 +2144,126 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
 }
 
 #[tokio::test]
+async fn ssh_enroll_deploys_worker_and_repairs_without_scheduler() {
+    let f = fixture();
+    // Fake ssh: answer endpoint probes, run payloads through the local sh.
+    let ssh = f.config.state_dir.join("enroll-ssh");
+    fs::write(
+        &ssh,
+        b"#!/bin/sh\nif [ \"$1\" = -G ]; then printf 'hostname toy.example\\nuser toy\\nport 22\\n'; exit 0; fi\nwhile :; do case \"$1\" in -o) shift 2;; -o*|-T) shift;; --) shift; break;; *) break;; esac; done\nshift\nexec /bin/sh -c \"$*\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    let cluster = f.config.state_dir.join("cluster-root");
+    fs::create_dir_all(&cluster).unwrap();
+    let worker = cluster.join("autonomics-worker");
+    fs::write(&worker, format!(r#"#!/bin/sh
+hash=$(sha256sum -- "$0"); hash=${{hash%% *}}
+printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","executable_sha256":"%s","capabilities":["task-worker"]}}\n' "$hash"
+"#, dag_core::source_revision())).unwrap();
+    fs::set_permissions(&worker, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Keep automatic installation isolated from the developer's real home.
+    let script = fs::read_to_string(&ssh).unwrap().replace(
+        "exec /bin/sh",
+        &format!("export HOME='{}'; exec /bin/sh", cluster.display()),
+    );
+    fs::write(&ssh, script).unwrap();
+
+    let catalog = f
+        .registry
+        .enroll(super::EnrollRequest {
+            backend: super::EnrollBackend::Ssh,
+            id: "hpc-b".into(),
+            name: None,
+            login_alias: "hpc-b-login".into(),
+            data_alias: None,
+            data_root: Some(cluster.display().to_string()),
+            worker_executable: String::new(),
+            deploy_worker: Some(worker.display().to_string()),
+            python: None,
+            partition: None,
+            account: None,
+            ssh_command: Some(ssh.display().to_string()),
+            scratch_dir: None,
+            select: true,
+        })
+        .await
+        .unwrap();
+
+    // Selected, pinned, and fully derived.
+    assert_eq!(catalog.policy.target_id, "hpc-b");
+    let target = catalog.targets.iter().find(|t| t.id == "hpc-b").unwrap();
+    assert!(target.endpoints.contains_key("hpc-b-login"));
+    assert_eq!(target.data_domains[0].ssh_aliases, vec!["hpc-b-login"]);
+    let domain = &target.data_domains[0];
+    assert_eq!(domain.vfs_prefix, "/data/hpc-b");
+    assert_eq!(domain.remote_root, cluster.display().to_string());
+    let backend = match &target.backend {
+        ComputeBackend::Ssh { settings } => settings.clone(),
+        _ => panic!("SSH enrollment must preserve its backend"),
+    };
+
+    assert_eq!(
+        backend.scratch_remote_dir,
+        format!("{}/scratch", cluster.display())
+    );
+    assert!(backend.typed_worker_config.is_some());
+    let profile: serde_json::Value =
+        serde_json::from_slice(&fs::read(backend.typed_worker_config.as_ref().unwrap()).unwrap())
+            .unwrap();
+    let installed = profile["worker"]["executable"].as_str().unwrap();
+    assert!(Path::new(installed).starts_with(cluster.join(".local/share/autonomics/workers")));
+    assert!(Path::new(installed).is_file());
+    assert_ne!(installed, worker.to_str().unwrap());
+    for kind in [
+        "source_literature",
+        "bib_save",
+        "evidence_export",
+        "table_from_df",
+        "figure_embed",
+    ] {
+        assert!(
+            profile["local_kinds"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == kind)
+        );
+    }
+
+    // The domain mount: read-only, domain-tagged, at the derived prefix.
+    let source = catalog
+        .data_sources
+        .iter()
+        .find(|s| s.id == "hpc-b")
+        .unwrap();
+    assert!(source.read_only);
+    assert_eq!(source.domain.as_deref(), Some("hpc-b"));
+    assert_eq!(source.mount_path(), "/data/hpc-b");
+
+    // One-key repair reconnects and verifies a healthy worker without a package
+    // path or unnecessary configuration changes.
+    let repaired = f
+        .registry
+        .repair_worker(super::RepairWorkerRequest {
+            target_id: "hpc-b".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&repaired).unwrap(),
+        serde_json::to_value(&catalog).unwrap()
+    );
+}
+
+#[tokio::test]
 async fn enroll_rejects_partial_data_home_inputs() {
     let f = fixture();
     let error = f
         .registry
         .enroll(super::EnrollRequest {
+            backend: super::EnrollBackend::Slurm,
             id: "broken".into(),
             name: None,
             login_alias: "alias".into(),
@@ -2356,4 +2472,26 @@ async fn connection_changes_wait_for_existing_bindings() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn enrollment_rejects_invalid_options_before_connecting() {
+    let f = fixture();
+    for input in [
+        serde_json::json!({"id":"invalid", "login_alias":"unused", "backend":"ssh", "partition":"cpu"}),
+        serde_json::json!({"id":"invalid", "login_alias":"unused", "scratch_dir":"relative"}),
+    ] {
+        let request = serde_json::from_value(input).unwrap();
+        let error = f.registry.enroll(request).await.unwrap_err();
+        assert!(
+            error.contains("require a Slurm") || error.contains("scratch_dir"),
+            "{error}"
+        );
+        assert!(!f.registry.state().targets.iter().any(|t| t.id == "invalid"));
+    }
+    let old: super::EnrollRequest = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "login_alias":"legacy", "worker_executable":"/bin/worker"
+    }))
+    .unwrap();
+    assert_eq!(old.backend, super::EnrollBackend::Slurm);
 }

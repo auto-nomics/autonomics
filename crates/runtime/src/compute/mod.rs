@@ -9,7 +9,9 @@ pub use readiness::ReadinessRequest;
 mod tests;
 pub mod tools;
 
-pub use enroll::{EnrollProgress, EnrollProgressEvent, EnrollRequest, RepairWorkerRequest};
+pub use enroll::{
+    EnrollBackend, EnrollProgress, EnrollProgressEvent, EnrollRequest, RepairWorkerRequest,
+};
 
 use crate::{RuntimeConfig, config::SlurmConfig};
 use container_runtime::{ContainerExecutionInfra, PodmanConnection};
