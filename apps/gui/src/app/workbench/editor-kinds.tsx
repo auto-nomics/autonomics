@@ -16,7 +16,7 @@ import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { WikiEntrySurface } from "@/features/wiki/wiki-editor";
-import { WikiGraph } from "@/features/wiki/wiki-graph";
+import { WikiLocalGraph } from "./wiki-local-graph";
 import {
   registerWikiOpener,
   resolveTitleCached,
@@ -41,7 +41,6 @@ import {
   setSidebarCollapsed,
   closeEditor,
   allGroups,
-  getGroup,
   openWikiEntryEditor,
   openDeckEditor,
   patchEditorState,
@@ -84,18 +83,6 @@ function BibliographyEditorBody({ editor }: EditorContext) {
       <BibliographyView workspace={workspace} active={active} sidebarSlot={focused && externalSidebar ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
     </section>
   );
-}
-
-function WikiGraphEditorBody() {
-  const state = useWorkbenchState();
-  const group = getGroup(state.groups, state.groups.active);
-  const current = group?.editors.find(item => item.id === group.activeId && item.kind === "wiki-entry");
-  const last = allGroups(state.groups).flatMap(([, group]) => group.editors).find(item => item.kind === "wiki-entry" && item.id === state.lastWikiEditorId);
-  const editor = current ?? last;
-  const wikiState = editor?.state as WikiEntryEditorState | null | undefined;
-  const location = wikiState?.stack?.[wikiState.cursor];
-  const entryId = location?.entryId ?? (editor ? String(editor.params.entryId ?? "") : "");
-  return <WikiGraph entryId={entryId} title={location?.title || wikiState?.title || ""} />;
 }
 
 function DeckEditorBodyWrapper({ editor }: EditorContext) {
@@ -146,6 +133,10 @@ function FlowEditorBody({ editor }: EditorContext) {
 
 function AgentEditorBody({ editor }: EditorContext) {
   const path = String(editor.params.path ?? "");
+  const focused = useActiveEditorContext().editor?.id === editor.id;
+  useEffect(() => {
+    if (focused) setContainer("agents");
+  }, [focused]);
   // Stable ref callback: an inline closure would detach/attach on every
   // render and emit through the registry — force-re-rendering the whole
   // shell — forever.
@@ -175,6 +166,10 @@ function stateOf(editor: EditorContext["editor"]): WikiEntryEditorState {
 
 function WikiEntryEditorBody({ editor }: EditorContext) {
   const entryId = String(editor.params.entryId ?? "");
+  const focused = useActiveEditorContext().editor?.id === editor.id;
+  useEffect(() => {
+    if (focused) setContainer("wiki");
+  }, [focused]);
   const state = stateOf(editor);
   const current = state.stack[state.cursor] ?? { kind: "entry" as const, entryId, title: state.title };
 
@@ -396,7 +391,7 @@ export function registerWorkbenchEditorKinds(): void {
     title: () => "知识图谱",
     name: () => "知识关系图谱",
     icon: () => Network,
-    body: WikiGraphEditorBody,
+    body: WikiLocalGraph,
     mount: "keep-alive",
   });
   registerEditorKind({

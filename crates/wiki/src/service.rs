@@ -383,6 +383,55 @@ impl WikiHandle {
             .await
     }
 
+    /// 元数据更新入口(工具面与 REST 面共用):改名时同步改写所有
+    /// `[[旧标题]]` 内链,保证反向链接不断链。返回被改写的词条
+    /// `(id, title)` 列表;未改名或无人引用时为空。
+    ///
+    /// 顺序刻意为先改名后改写:引用方的 `[[新标题]]` 只有在改名落库
+    /// 之后才能经标题解析命中本词条(出边由存储层在每次更新时重建)。
+    /// 逐词条失败直接向上抛 —— 已完成的写入可见,失败信息可定位。
+    pub async fn update_entry_meta(
+        &self,
+        entry: KnowledgeEntryData,
+        old_title: &str,
+    ) -> Result<Vec<(String, String)>> {
+        self.update_entry(entry.clone()).await?;
+        if entry.title == old_title {
+            return Ok(Vec::new());
+        }
+        let in_links = self
+            .get_in_links_batch(&[entry.id.clone()])
+            .await?
+            .into_iter()
+            .next()
+            .unwrap_or_default();
+        let ids: Vec<uuid::Uuid> = in_links
+            .iter()
+            .filter_map(|s| uuid::Uuid::parse_str(s).ok())
+            .collect();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let parser = crate::markdown::Parser::new();
+        let mut rewritten = Vec::new();
+        let mut updates = Vec::new();
+        for mut src in self.get_entry_batch(ids).await? {
+            let content = parser.rewrite_wiki_link_target(&src.content, old_title, &entry.title);
+            if content == src.content {
+                continue;
+            }
+            src.content = content;
+            src.mtime = now;
+            rewritten.push((src.id.clone(), src.title.clone()));
+            updates.push(src);
+        }
+        if !updates.is_empty() {
+            self.update_entry_batch(updates).await?;
+        }
+        Ok(rewritten)
+    }
+
     pub async fn update_entry_batch(&self, entries: Vec<KnowledgeEntryData>) -> Result<()> {
         self.call(|reply| WikiCommand::UpdateEntryBatch { entries, reply })
             .await

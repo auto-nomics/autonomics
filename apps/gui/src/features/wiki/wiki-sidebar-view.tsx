@@ -6,7 +6,7 @@ import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
  * the wiki opener bridge.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { FileText, FilePlus2, Folder, Network, Loader2, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import {
   useWikiRevision,
 } from "./wiki-state";
 
-export function WikiSidebarView({ onOpenGraph }: { onOpenGraph: () => void }) {
+export function WikiSidebarView({ onOpenGraph, onCloseGraph, graphActive, graph }: { onOpenGraph: () => void; onCloseGraph: () => void; graphActive: boolean; graph: ReactNode }) {
   const [entries, setEntries] = useState<EntrySummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasMore, setHasMore] = useState(false);
@@ -129,15 +129,16 @@ export function WikiSidebarView({ onOpenGraph }: { onOpenGraph: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-0.5 border-b px-2">
-        <Button size="icon-xs" variant={mode === "browse" ? "secondary" : "ghost"} aria-label="浏览词条" title="浏览词条" onClick={() => setMode("browse")}><Folder /></Button>
-        <Button size="icon-xs" variant={mode === "search" ? "secondary" : "ghost"} aria-label="搜索词条" title="搜索词条" onClick={() => { setMode("search"); requestAnimationFrame(() => inputRef.current?.focus()); }}><Search /></Button>
-        <Button size="icon-xs" variant="ghost" aria-label="打开知识图谱" title="打开知识图谱" onClick={onOpenGraph}><Network /></Button>
+        <Button size="icon-xs" variant={!graphActive && mode === "browse" ? "secondary" : "ghost"} aria-label="浏览词条" title="浏览词条" onClick={() => { onCloseGraph(); setMode("browse"); }}><Folder /></Button>
+        <Button size="icon-xs" variant={!graphActive && mode === "search" ? "secondary" : "ghost"} aria-label="搜索词条" title="搜索词条" onClick={() => { onCloseGraph(); setMode("search"); requestAnimationFrame(() => inputRef.current?.focus()); }}><Search /></Button>
+        <Button size="icon-xs" variant={graphActive ? "secondary" : "ghost"} aria-label="打开知识图谱" title="打开知识图谱" onClick={onOpenGraph}><Network /></Button>
         <span className="flex-1" />
         <Button size="icon-xs" variant="ghost" aria-label="检索(Ctrl+K)" title="检索(Ctrl+K)" onClick={openWikiSearch}><Search /></Button>
         <Button size="icon-xs" variant="ghost" aria-label="新建词条" title="新建词条" disabled={creating} onClick={() => void createNew()}>{creating ? <Loader2 className="animate-spin" /> : <FilePlus2 />}</Button>
         <Button size="icon-xs" variant="ghost" aria-label="回收站" title="回收站" onClick={() => void (async () => { setRecycleOpen(true); setRecycle(await listRecycle().catch(() => [])); })()}><Trash2 /></Button>
         <ViewLocationMenu id="wiki" primaryOnly />
       </div>
+      {graphActive ? graph : <>
       {mode === "search" && <div className="shrink-0 px-3 pt-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -161,6 +162,7 @@ export function WikiSidebarView({ onOpenGraph }: { onOpenGraph: () => void }) {
         )}
         {!searchingQuery && hasMore && !loading && <Button size="sm" variant="ghost" disabled={loadingMore} onClick={() => void loadBrowse(entries.length)}>{loadingMore && <Loader2 className="animate-spin" />}加载更多(已显示 {entries.length} 条)</Button>}
       </ScrollArea>
+      </>}
       <Dialog open={recycleOpen} onOpenChange={setRecycleOpen}>
         <DialogContent className="max-w-lg">
           <DialogHeader>

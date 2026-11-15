@@ -27,7 +27,7 @@ import { agentStatusTone, statusLabel } from "./agent";
 
 /** Reasoning-effort ladder; mirrors `ReasoningEffort` in
  *  crates/agentik-types/src/reasoning.rs — every variant must appear. */
-const EFFORT_OPTIONS = [
+export const EFFORT_OPTIONS = [
   { value: "none", label: "关闭", hint: "none" },
   { value: "minimal", label: "极简", hint: "minimal" },
   { value: "low", label: "低", hint: "low" },
@@ -38,8 +38,13 @@ const EFFORT_OPTIONS = [
   { value: "ultra", label: "极致", hint: "ultra" },
 ] as const;
 
-function effortLabel(effort: string | null | undefined) {
+export function effortLabel(effort: string | null | undefined) {
   return EFFORT_OPTIONS.find((option) => option.value === effort)?.label ?? "推理";
+}
+
+/** `provider:model` spec → display short name (last `:` segment). */
+export function modelShortLabel(spec: string | null | undefined) {
+  return spec ? (spec.split(":").filter(Boolean).pop() ?? spec) : null;
 }
 
 /** Lifecycle states that mean "no turn in flight" — anything else keeps
@@ -120,9 +125,7 @@ export function AgentComposer(props: AgentComposerProps) {
     !turnActive && (lifecycle.includes("cancel") || lifecycle.includes("abort"));
   const tone = agentStatusTone(status);
   const running = statusLabel(status);
-  const currentModelShort = props.currentModelSpec
-    ? (props.currentModelSpec.split(":").filter(Boolean).pop() ?? props.currentModelSpec)
-    : null;
+  const currentModelShort = modelShortLabel(props.currentModelSpec);
 
   const toggleModelPicker = async () => {
     if (modelPickerOpen) {

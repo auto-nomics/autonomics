@@ -96,13 +96,26 @@ try {
   await page.getByRole('button', { name: '发送', exact: true }).click();
   await queue.getByText('发送中…').waitFor();
   while (!releaseSend) await new Promise(resolve => setTimeout(resolve, 10));
+  // A new prompt must close the previous response even without an idle event.
+  sendFrame({ id: 1, event: 'agent', data: { agent: '/root/alpha', event: { TextDelta: 'Previous answer\n\n' } } });
+  await page.locator('.md').getByText('Previous answer', { exact: true }).waitFor();
+
   // An acknowledgement can beat the HTTP response; remove only one copy.
-  sendFrame({ id: 1, event: 'agent', data: { agent: '/root/alpha', event: { UserMessageAcknowledged: 'First queued message' } } });
+  sendFrame({ id: 2, event: 'agent', data: { agent: '/root/alpha', event: { UserMessageAcknowledged: 'First queued message' } } });
   await page.waitForFunction(() => document.querySelector('[aria-label="待处理消息"] ol')?.children.length === 1);
   releaseSend(); releaseSend = null;
   await queue.getByText('已排队 · 等待 Agent 接收').waitFor();
-  sendFrame({ id: 2, event: 'agent', data: { agent: '/root/alpha', event: { UserMessageAcknowledged: 'First queued message' } } });
+  sendFrame({ id: 3, event: 'agent', data: { agent: '/root/alpha', event: { UserMessageAcknowledged: 'First queued message' } } });
   await queue.waitFor({ state: 'detached' });
+  sendFrame({ id: 4, event: 'agent', data: { agent: '/root/alpha', event: { TextDelta: 'Next answer\n\n' } } });
+  await page.locator('.md').getByText('Next answer', { exact: true }).waitFor();
+  assert.equal(await page.locator('.md').getByText('Previous answer', { exact: true }).count(), 1);
+  sendFrame({ id: 5, event: 'agent', data: { agent: '/root/alpha', event: { TextDelta: 'continued\n\n' } } });
+  await page.locator('.md').getByText('continued', { exact: true }).waitFor();
+  assert.equal(await page.locator('.md').filter({ hasText: 'Next answer' }).filter({ hasText: 'continued' }).count(), 1, 'deltas within one response share a row');
+
+  sendFrame({ id: 6, event: 'agent', data: { agent: '/root/alpha', event: 'Done' } });
+  await page.getByRole('button', { name: '发送', exact: true }).waitFor();
   failNext = true;
   await composer.fill('Failed message');
   await page.getByRole('button', { name: '发送', exact: true }).click();

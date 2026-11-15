@@ -1,3 +1,4 @@
+import { WikiLocalGraph } from "./wiki-local-graph";
 import { CanvasSidebar } from "@/features/canvas/canvas-sidebar";
 import { PencilRuler } from "lucide-react";
 import { Compass, Library, FileText, Rss, type LucideIcon } from "lucide-react";
@@ -9,7 +10,7 @@ import { VfsSidebar } from "@/features/vfs";
 import { DeckSidebarView } from "@/features/deck/deck-sidebar-view";
 import { Button } from "@/components/ui/button";
 import { AgentSidebar } from "./parts/agent-sidebar";
-import { openEditor, useWorkbenchState } from "./workbench-store";
+import { openEditor, setContainerView, useWorkbenchState } from "./workbench-store";
 import { openBibliographyEditor } from "./static-commands";
 import { useActiveEditorContext } from "./active-editor-context";
 import { registerWorkbenchView, type WorkbenchViewProps } from "./view-registry";
@@ -58,10 +59,11 @@ function ProjectsView() {
 registerWorkbenchView({ id: "projects", title: "插件管理", defaultLocation: "primarySidebar", body: ProjectsView });
 
 function WikiView() {
+  const mode = useWorkbenchState().containerViews.wiki;
 
     return (
       <div role="group" aria-label="知识库工作区" className="flex min-h-0 flex-1 flex-col">
-        <WikiSidebarView onOpenGraph={() => openEditor({ kind: "wiki-graph" })} />
+        <WikiSidebarView graph={<WikiLocalGraph />} graphActive={mode === "graph"} onOpenGraph={() => setContainerView("wiki", "graph")} onCloseGraph={() => setContainerView("wiki", "browse")} />
       </div>
     );
 

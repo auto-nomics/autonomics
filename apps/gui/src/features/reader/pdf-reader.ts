@@ -1129,6 +1129,12 @@ class ZoteroStylePdfReader {
     this.document = await pdfjs.getDocument({
       data: bytes,
       useSystemFonts: true,
+      // Publisher PDFs (Elsevier etc.) ship unsorted NameTrees; pdf.js warns
+      // once per anchor ("Found s0090 at an incorrect position…"), which
+      // floods the console on every open. Destinations still resolve — the
+      // warnings are spec-pedantry about the source file, so keep only
+      // errors visible.
+      verbosity: pdfjs.VerbosityLevel.ERRORS,
     }).promise;
     if (this.destroyed) return;
 

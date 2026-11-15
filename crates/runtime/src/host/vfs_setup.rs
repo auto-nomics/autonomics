@@ -23,6 +23,15 @@ pub(super) fn browser_download_root(config: &RuntimeConfig) -> std::path::PathBu
         .unwrap_or_else(|| config.state_dir.join("browser-downloads"))
 }
 
+/// Wiki attachment blobs' own VFS mount — isolated from the root workspace so
+/// workspace turnover cannot delete them. `VfsBlobStore` in `open_wiki` writes
+/// through the `wiki-attachments` prefix, which resolves onto this mount.
+pub(super) const WIKI_ATTACHMENTS_VFS_PATH: &str = "/wiki-attachments";
+
+pub(super) fn wiki_attachments_root(config: &RuntimeConfig) -> std::path::PathBuf {
+    config.state_dir.join("wiki-attachments")
+}
+
 /// Build the bibliography VFS without opening agent or writing-system storage.
 ///
 /// CLI commands use this to ensure they follow exactly the same
@@ -98,6 +107,7 @@ pub(super) async fn build_vfs_with_catalog(
     ensure_executor_workspace_mounts(&mut manifest, config);
     ensure_environment_dev_mount(&mut manifest, config)?;
     ensure_browser_download_mount(&mut manifest, config)?;
+    ensure_wiki_attachments_mount(&mut manifest, config)?;
 
     let mut catalog_registry = dag_core::BundleRegistry::new();
     let mut catalog = None;
@@ -414,7 +424,9 @@ fn load_or_create_vfs_manifest(config: &RuntimeConfig) -> Result<VfsManifestStat
             }
             let literature_changed = ensure_literature_mount(&mut manifest, config);
             let browser_downloads_changed = ensure_browser_download_mount(&mut manifest, config)?;
-            let changed = literature_changed || browser_downloads_changed;
+            let wiki_attachments_changed =
+                ensure_wiki_attachments_mount(&mut manifest, config)?;
+            let changed = literature_changed || browser_downloads_changed || wiki_attachments_changed;
             if changed {
                 write_vfs_manifest(&manifest_path, &manifest, catalog_source.as_deref())?;
             }
@@ -574,6 +586,18 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         read_only: false,
         permissions: Default::default(),
     });
+    backend.push(BackendDefinition {
+        id: "wiki-attachments".into(),
+        config: vfs::BackendConfig::local(wiki_attachments_root(config).to_string_lossy().to_string()),
+    });
+    mount.push(MountDefinition {
+        domain: None,
+        path: WIKI_ATTACHMENTS_VFS_PATH.into(),
+        backend: "wiki-attachments".into(),
+        source: "/".into(),
+        read_only: false,
+        permissions: Default::default(),
+    });
 
     if let (Ok(bucket), Ok(ak), Ok(sk)) = (
         std::env::var("OSS_BUCKET"),
@@ -639,34 +663,31 @@ fn ensure_literature_mount(manifest: &mut VfsManifest, config: &RuntimeConfig) -
     true
 }
 
-/// Keep browser downloads mounted even for manifests created before this
-/// capability existed. A custom configured root retargets the existing mount.
-fn ensure_browser_download_mount(
+/// Keep a local directory mounted at `vfs_path` even for manifests created
+/// before the capability existed. A custom configured root retargets the
+/// existing mount (shared backends get a fresh one instead of being mutated).
+///
+/// Returns whether the manifest changed and needs persisting.
+fn ensure_local_dir_mount(
     manifest: &mut VfsManifest,
-    config: &RuntimeConfig,
+    vfs_path: &str,
+    backend_prefix: &str,
+    root: &std::path::Path,
 ) -> Result<bool> {
-    let root = browser_download_root(config);
     let root_text = root.to_string_lossy().to_string();
     let Some(mount_index) = manifest
         .mount
         .iter()
-        .position(|mount| mount.path == BROWSER_DOWNLOAD_VFS_PATH)
+        .position(|mount| mount.path == vfs_path)
     else {
-        let mut backend_id = "browser-downloads".to_owned();
-        while manifest
-            .backend
-            .iter()
-            .any(|backend| backend.id == backend_id)
-        {
-            backend_id.push('_');
-        }
+        let backend_id = unique_backend_id(manifest, backend_prefix);
         manifest.backend.push(BackendDefinition {
             id: backend_id.clone(),
             config: vfs::BackendConfig::local(root_text),
         });
         manifest.mount.push(MountDefinition {
             domain: None,
-            path: BROWSER_DOWNLOAD_VFS_PATH.into(),
+            path: vfs_path.into(),
             backend: backend_id,
             source: "/".into(),
             read_only: false,
@@ -681,9 +702,9 @@ fn ensure_browser_download_mount(
         .iter()
         .position(|backend| backend.id == existing_backend_id)
     else {
-        return Err(Error::Other(
-            "the `/browser-downloads` VFS mount has no backend".into(),
-        ));
+        return Err(Error::Other(format!(
+            "the `{vfs_path}` VFS mount has no backend"
+        )));
     };
     let backend_root = match &manifest.backend[backend_index].config {
         vfs::BackendConfig::Local { root } => Some(root.clone()),
@@ -701,14 +722,7 @@ fn ensure_browser_download_mount(
         .enumerate()
         .any(|(index, mount)| index != mount_index && mount.backend == existing_backend_id);
     if shared_backend {
-        let mut backend_id = "browser-downloads".to_owned();
-        while manifest
-            .backend
-            .iter()
-            .any(|backend| backend.id == backend_id)
-        {
-            backend_id.push('_');
-        }
+        let backend_id = unique_backend_id(manifest, backend_prefix);
         manifest.backend.push(BackendDefinition {
             id: backend_id.clone(),
             config: vfs::BackendConfig::local(root_text),
@@ -720,6 +734,48 @@ fn ensure_browser_download_mount(
     manifest.mount[mount_index].source = "/".into();
     manifest.mount[mount_index].read_only = false;
     Ok(true)
+}
+
+/// Fresh backend id for `prefix`, suffixed with `_` on collision.
+fn unique_backend_id(manifest: &VfsManifest, prefix: &str) -> String {
+    let mut backend_id = prefix.to_owned();
+    while manifest
+        .backend
+        .iter()
+        .any(|backend| backend.id == backend_id)
+    {
+        backend_id.push('_');
+    }
+    backend_id
+}
+
+/// Keep browser downloads mounted even for manifests created before this
+/// capability existed. A custom configured root retargets the existing mount.
+fn ensure_browser_download_mount(
+    manifest: &mut VfsManifest,
+    config: &RuntimeConfig,
+) -> Result<bool> {
+    ensure_local_dir_mount(
+        manifest,
+        BROWSER_DOWNLOAD_VFS_PATH,
+        "browser-downloads",
+        &browser_download_root(config),
+    )
+}
+
+/// Wiki attachment blobs live under their own VFS mount instead of the root
+/// workspace, so cleaning or rebuilding the root mount never touches them.
+/// Root: `state_dir/wiki-attachments` (see `open_wiki` for the blob writer).
+fn ensure_wiki_attachments_mount(
+    manifest: &mut VfsManifest,
+    config: &RuntimeConfig,
+) -> Result<bool> {
+    ensure_local_dir_mount(
+        manifest,
+        WIKI_ATTACHMENTS_VFS_PATH,
+        "wiki-attachments",
+        &wiki_attachments_root(config),
+    )
 }
 
 /// Ensure the container workspace tree is reachable through the VFS at its
@@ -1054,6 +1110,74 @@ mod literature_mount_tests {
                 .config,
             vfs::BackendConfig::local(moved.path().to_string_lossy().to_string())
         );
+    }
+
+    #[test]
+    fn wiki_attachments_mount_pins_state_dir_root() {
+        let state = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+
+        let mut manifest = base_manifest();
+        assert!(ensure_wiki_attachments_mount(&mut manifest, &config).unwrap());
+        let expected_root = state.path().join("wiki-attachments");
+        let mount = manifest
+            .mount
+            .iter()
+            .find(|mount| mount.path == WIKI_ATTACHMENTS_VFS_PATH)
+            .unwrap();
+        assert_eq!(mount.source, "/");
+        assert!(!mount.read_only);
+        let backend = manifest
+            .backend
+            .iter()
+            .find(|backend| backend.id == "wiki-attachments")
+            .unwrap();
+        assert_eq!(
+            backend.config,
+            vfs::BackendConfig::local(expected_root.to_string_lossy().to_string())
+        );
+        // Idempotent once pinned.
+        assert!(!ensure_wiki_attachments_mount(&mut manifest, &config).unwrap());
+    }
+
+    #[tokio::test]
+    async fn wiki_blob_prefix_resolves_onto_dedicated_mount() {
+        // 端到端:VfsBlobStore 的 `wiki-attachments/<key>` 前缀经挂载表
+        // 落到 state_dir 独立目录,不进根挂载工作区。
+        let state = tempfile::tempdir().unwrap();
+        let mut config = RuntimeConfig::default();
+        config.state_dir = state.path().to_path_buf();
+        config.data_dir = state.path().join("data");
+
+        let mut manifest = default_vfs_manifest(&config);
+        ensure_wiki_attachments_mount(&mut manifest, &config).unwrap();
+        let mounts = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
+        let storage = vfs::OpendalFileStorage::with_mounts(&config.data_dir, mounts);
+        let blobs = wiki::storage::vfs_blob::VfsBlobStore::new(storage, "wiki-attachments");
+        use wiki::storage::blob::BlobStore as _;
+
+        blobs
+            .put("attachments/e1/a1.png", b"png".to_vec())
+            .await
+            .unwrap();
+        assert!(
+            config
+                .data_dir
+                .join("wiki-attachments/attachments/e1/a1.png")
+                .exists()
+                == false
+        );
+        let expected = state
+            .path()
+            .join("wiki-attachments/attachments/e1/a1.png");
+        assert!(expected.exists());
+        assert_eq!(
+            blobs.get("attachments/e1/a1.png").await.unwrap(),
+            b"png".to_vec()
+        );
+        blobs.delete("attachments/e1/a1.png").await.unwrap();
+        assert!(!expected.exists());
     }
 
     #[test]

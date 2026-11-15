@@ -46,6 +46,7 @@ impl ToolFunction for WikiUpdateTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let mut entry = resolve_entry(&self.handle, input.id, input.title).await?;
+        let old_title = entry.title.clone();
         if let Some(new_title) = input.new_title {
             entry.title = new_title;
         }
@@ -56,14 +57,19 @@ impl ToolFunction for WikiUpdateTool {
             entry.tags = tags;
         }
         entry.mtime = unix_now();
-        self.handle
-            .update_entry(entry.clone())
+        // 改名时同步改写引用方正文里的 [[旧标题]] 内链,防断链。
+        let rewritten = self
+            .handle
+            .update_entry_meta(entry.clone(), &old_title)
             .await
             .map_err(tool_err)?;
         Ok(ToolResult::success_json(json!({
             "id": entry.id,
             "title": entry.title,
             "tags": entry.tags,
+            "rewrote_links_in": rewritten.iter()
+                .map(|(id, title)| json!({ "id": id, "title": title }))
+                .collect::<Vec<_>>(),
         })))
     }
 }

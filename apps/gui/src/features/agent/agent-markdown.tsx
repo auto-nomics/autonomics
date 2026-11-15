@@ -6,7 +6,7 @@
  * base lives in `lib/comark-markdown`. Output is sanitized through the
  * same DOMPurify profile as `lib/markdown`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createHtmlRenderer } from "@comark/html";
 import DOMPurify from "dompurify";
 import { comarkBasePlugins, comarkBaseComponents } from "@/lib/comark-markdown";
@@ -32,20 +32,37 @@ export function sanitizeAgentHtml(html: string): string {
   });
 }
 
+/** While `streaming`, re-parse at most this often (ms); each token still
+ *  re-runs the effect, but only the latest text gets parsed. Non-streaming
+ *  renders (history loads, edits) parse immediately. */
+const STREAM_PARSE_INTERVAL = 100;
+
 /**
  * Stream-friendly hook: keeps the last rendered HTML on screen while the
- * next frame renders, so streaming updates never blank the message.
+ * next frame renders, so streaming updates never blank the message. While
+ * streaming, parses are trailing-throttled — a full Comark re-parse per
+ * token (plus the innerHTML swap and its reflow) dominated the render
+ * budget on multi-agent streams.
  */
-export function useAgentMarkdown(text: string): string {
+export function useAgentMarkdown(text: string, streaming = false): string {
   const [html, setHtml] = useState("");
+  const lastParse = useRef(0);
   useEffect(() => {
     let cancelled = false;
-    renderAgentMarkdown(text).then((next) => {
-      if (!cancelled) setHtml(next);
-    });
+    const delay = streaming
+      ? Math.max(0, STREAM_PARSE_INTERVAL - (Date.now() - lastParse.current))
+      : 0;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      lastParse.current = Date.now();
+      renderAgentMarkdown(text).then((next) => {
+        if (!cancelled) setHtml(next);
+      });
+    }, delay);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [text]);
+  }, [text, streaming]);
   return html;
 }

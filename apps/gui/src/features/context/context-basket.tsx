@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { Check, Plus, X, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -25,30 +25,37 @@ export function ContextBasketProvider({ scope, contextLabel, onAdd, children }: 
 }) {
   const [revealVersion, setRevealVersion] = useState(0);
   const [baskets, setBaskets] = useState<Record<string, ContextResource[]>>({});
-  const forScope = (targetScope: string | null, label: string): Basket => {
-    const resources = targetScope ? baskets[targetScope] ?? [] : [];
-    const update = (transform: (current: ContextResource[]) => ContextResource[]) => {
-      if (targetScope) setBaskets(current => ({ ...current, [targetScope]: transform(current[targetScope] ?? []) }));
+  // `value` must be memoized: the provider sits above the whole workbench,
+  // which re-renders on every streaming token, and a fresh basket object per
+  // render would re-render every useContextBasket consumer with it.
+  const value = useMemo<Basket>(() => {
+    const forScope = (targetScope: string | null, label: string): Basket => {
+      const resources = targetScope ? baskets[targetScope] ?? [] : [];
+      const update = (transform: (current: ContextResource[]) => ContextResource[]) => {
+        if (targetScope) setBaskets(current => ({ ...current, [targetScope]: transform(current[targetScope] ?? []) }));
+      };
+      return {
+        resources, available: Boolean(targetScope), contextLabel: label, revealVersion, forScope,
+        add: resource => {
+          update(current => [...current.filter(item => resourceKey(item) !== resourceKey(resource)), resource]);
+          setRevealVersion(version => version + 1);
+          onAdd();
+        },
+        remove: resource => update(current => current.filter(item => resourceKey(item) !== resourceKey(resource))),
+        clear: () => update(() => []),
+        clearSent: sent => update(current => current.filter(item => !sent.includes(item))),
+      };
     };
-    return {
-      resources, available: Boolean(targetScope), contextLabel: label, revealVersion, forScope,
-      add: resource => {
-        update(current => [...current.filter(item => resourceKey(item) !== resourceKey(resource)), resource]);
-        setRevealVersion(version => version + 1);
-        onAdd();
-      },
-      remove: resource => update(current => current.filter(item => resourceKey(item) !== resourceKey(resource))),
-      clear: () => update(() => []),
-      clearSent: sent => update(current => current.filter(item => !sent.includes(item))),
-    };
-  };
-  return <BasketContext.Provider value={forScope(scope, contextLabel)}>{children}</BasketContext.Provider>;
+    return forScope(scope, contextLabel);
+  }, [baskets, revealVersion, scope, contextLabel, onAdd]);
+  return <BasketContext.Provider value={value}>{children}</BasketContext.Provider>;
 }
 
 /** Select another agent's basket while sharing the same underlying store. */
 export function ContextBasketScope({ scope, label, children }: { scope: string | null; label: string; children: ReactNode }) {
   const parent = useContext(BasketContext);
-  return <BasketContext.Provider value={parent?.forScope(scope, label) ?? null}>{children}</BasketContext.Provider>;
+  const value = useMemo(() => parent?.forScope(scope, label) ?? null, [parent, scope, label]);
+  return <BasketContext.Provider value={value}>{children}</BasketContext.Provider>;
 }
 
 export function AddToContext({ resource }: { resource: ContextResource }) {

@@ -395,15 +395,31 @@ export function useAgentRuntime() {
         historyEventBuffers.current[agent].events.push(frame);
         return;
       }
+      // Text deltas belong to one response only. Lifecycle notifications can
+      // be absent/delayed, so explicit prompt, turn and stream boundaries
+      // must also release the previous row before another delta arrives.
+      if (event.UserMessageAcknowledged !== undefined
+        || event.TurnStarted !== undefined
+        || event.TurnCompleted !== undefined
+        || event.StreamStart !== undefined
+        || event === "Done"
+        || event === "TurnAborted"
+        || event.Error !== undefined) {
+        streamingRef.current[agent] = null;
+        setStreaming((current) => ({ ...current, [agent]: null }));
+      }
       const appendStreamDelta = (
         role: "assistant" | "thinking",
         delta: string,
       ) => {
         const current = streamingRef.current[agent];
-        const item = current?.role === role
+        const previous = current?.role === role
           ? current
           : makeItem(role, "");
-        item.text += delta;
+        // A fresh object per delta — the transcript memoizes per-item rows,
+        // and an in-place `item.text += delta` would keep the reference (and
+        // thus the memo verdict) unchanged while the text silently moved.
+        const item: ChatItem = { ...previous, text: previous.text + delta };
         streamingRef.current[agent] = item;
         setStreaming((currentMessages) => ({ ...currentMessages, [agent]: item }));
         setMessages((currentMessages) => {
@@ -492,20 +508,17 @@ export function useAgentRuntime() {
         setStreaming((current) => {
           const item = current[agent];
           if (!item) return current;
-          item.usage = formatTokenUsage({
+          const usage = {
             input: event.UsageUpdate.input_tokens ?? 0,
             output: event.UsageUpdate.output_tokens ?? 0,
             cache: event.UsageUpdate.cache_read_input_tokens ?? 0,
-          });
-        setUsage((currentUsage) => ({
-          ...currentUsage,
-          [agent]: {
-            input: event.UsageUpdate.input_tokens ?? 0,
-            output: event.UsageUpdate.output_tokens ?? 0,
-            cache: event.UsageUpdate.cache_read_input_tokens ?? 0,
-          },
-        }));
-          return { ...current, [agent]: { ...item } };
+          };
+          // Same immutability rule as appendStreamDelta: the streamed item's
+          // reference must change so memoized rows see the usage update.
+          const withUsage: ChatItem = { ...item, usage: formatTokenUsage(usage) };
+          streamingRef.current[agent] = withUsage;
+          setUsage((currentUsage) => ({ ...currentUsage, [agent]: usage }));
+          return { ...current, [agent]: withUsage };
         });
       } else if (event.LifecycleChanged !== undefined) {
         const lifecycle = event.LifecycleChanged;

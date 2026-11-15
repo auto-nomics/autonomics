@@ -106,9 +106,41 @@ impl LockedRows {
     }
 }
 
+/// Observe long waits without timing out or cancelling database work. SQL
+/// parameters (messages, configuration, credentials) are never logged.
+async fn observe_storage_stage<T>(
+    operation: &str,
+    stage: &str,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    let started = Instant::now();
+    tracing::debug!(operation, stage, "agent storage stage started");
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            result = &mut future => {
+                tracing::debug!(operation, stage, elapsed_ms = started.elapsed().as_millis() as u64,
+                    "agent storage stage completed");
+                return result;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+                tracing::warn!(operation, stage, elapsed_ms = started.elapsed().as_millis() as u64,
+                    "agent storage stage still pending");
+            }
+        }
+    }
+}
+
 impl LockedConn {
     async fn execute(&self, sql: impl AsRef<str>, params: impl IntoParams) -> turso::Result<u64> {
-        self.0.lock().await.execute(sql, params).await
+        let operation = sql.as_ref();
+        let guard = observe_storage_stage(operation, "connection_lock", self.0.lock()).await;
+        let result =
+            observe_storage_stage(operation, "execute", guard.execute(operation, params)).await;
+        if let Err(error) = &result {
+            tracing::error!(operation, %error, "agent storage execute failed");
+        }
+        result
     }
 
     async fn query(
@@ -116,20 +148,44 @@ impl LockedConn {
         sql: impl AsRef<str>,
         params: impl IntoParams,
     ) -> turso::Result<LockedRows> {
-        let guard = self.0.lock().await;
-        let rows = guard.query(sql, params).await?;
-        let mut owned_rows = Vec::new();
-        let mut rows = rows;
-        while let Some(row) = rows.next().await? {
-            owned_rows.push(row);
+        let operation = sql.as_ref();
+        let guard = observe_storage_stage(operation, "connection_lock", self.0.lock()).await;
+        let result = async {
+            let mut rows =
+                observe_storage_stage(operation, "query", guard.query(operation, params)).await?;
+            let owned_rows = observe_storage_stage(operation, "drain_rows", async {
+                let mut owned_rows = Vec::new();
+                while let Some(row) = rows.next().await? {
+                    owned_rows.push(row);
+                }
+                Ok::<_, turso::Error>(owned_rows)
+            })
+            .await?;
+            tracing::debug!(
+                operation,
+                row_count = owned_rows.len(),
+                "agent storage query drained"
+            );
+            Ok(LockedRows {
+                rows: owned_rows.into_iter(),
+            })
         }
-        Ok(LockedRows {
-            rows: owned_rows.into_iter(),
-        })
+        .await;
+        if let Err(error) = &result {
+            tracing::error!(operation, %error, "agent storage query failed");
+        }
+        result
     }
 
     async fn execute_batch(&self, sql: impl AsRef<str>) -> turso::Result<()> {
-        self.0.lock().await.execute_batch(sql).await
+        // Schema batches can be large; record only the operation type.
+        let operation = "execute_batch";
+        let guard = observe_storage_stage(operation, "connection_lock", self.0.lock()).await;
+        let result = observe_storage_stage(operation, "execute", guard.execute_batch(sql)).await;
+        if let Err(error) = &result {
+            tracing::error!(operation, %error, "agent storage batch failed");
+        }
+        result
     }
 }
 

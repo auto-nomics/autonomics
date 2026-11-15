@@ -93,7 +93,7 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
   const select = (target: string) => { runtime.selectAgent(target); openAgentEditor(target); };
   const scope = path && contextId ? JSON.stringify([path, contextId]) : null;
   return <ContextBasketScope scope={scope} label={leafName(path)}>
-    <AgentWorkspace contextTarget={binding.control} dockedSlot={slot} agents={runtime.agents.some(agent => agent.path === path) ? runtime.agents : [...runtime.agents, { path, agent_id: null, status: "Idle", ...runtime.agentModels[path] }]} activeAgent={path} statuses={runtime.statuses}
+    <AgentWorkspace contextTarget={binding.control} dockedSlot={slot} active={visible} agents={runtime.agents.some(agent => agent.path === path) ? runtime.agents : [...runtime.agents, { path, agent_id: null, status: "Idle", ...runtime.agentModels[path] }]} activeAgent={path} statuses={runtime.statuses}
       messages={runtime.messages[path] ?? []} historyLoading={runtime.historyLoading[path] ?? false}
       queuedMessages={runtime.queuedMessages[path] ?? []}
       compaction={runtime.compactions[path]}

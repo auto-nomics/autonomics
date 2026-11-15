@@ -458,12 +458,9 @@ body {
   transition: none !important;
 }
 
-/* Keep a narrow draggable scrollbar inside the editor tab strip. */
-.editor-tabs-scroll { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-.editor-tabs-scroll:hover, .editor-tabs-scroll:focus-within { scrollbar-color: var(--muted-foreground) transparent; }
-.editor-tabs-scroll::-webkit-scrollbar { height: 4px; }
-.editor-tabs-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; }
-.editor-tabs-scroll:hover::-webkit-scrollbar-thumb, .editor-tabs-scroll:focus-within::-webkit-scrollbar-thumb { background: var(--muted-foreground); }
+/* Hide the tab strip scrollbar while preserving horizontal scrolling. */
+.editor-tabs-scroll { scrollbar-width: none; }
+.editor-tabs-scroll::-webkit-scrollbar { display: none; }
 
 .wiki-md img, .wiki-block img { height: auto; max-width: 100%; }
 .wiki-md img { cursor: zoom-in; }

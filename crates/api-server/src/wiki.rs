@@ -269,6 +269,7 @@ async fn update_entry(
     let mut entry = handle.get_entry(id).await.map_err(api_err)?;
     // 纯元数据合并(与工具面同语义):正文改动走 wiki_patch 端点链路
     // (edit/patch 属 agent 工具面;REST v1 以整篇 PUT 为准时不在此处)。
+    let old_title = entry.title.clone();
     if let Some(new_title) = body.new_title {
         entry.title = new_title;
     }
@@ -282,8 +283,23 @@ async fn update_entry(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(entry.mtime);
-    handle.update_entry(entry.clone()).await.map_err(api_err)?;
-    Ok(Json(json!(entry)))
+    // 改名时同步改写引用方正文里的 [[旧标题]] 内链,防断链。
+    let rewritten = handle
+        .update_entry_meta(entry.clone(), &old_title)
+        .await
+        .map_err(api_err)?;
+    let mut body = json!(entry);
+    // 响应保持词条字段平铺(GUI 直接当 WikiEntry 用),只追加改写报告。
+    if let Some(map) = body.as_object_mut() {
+        map.insert(
+            "rewrote_links_in".to_string(),
+            json!(rewritten
+                .iter()
+                .map(|(id, title)| json!({ "id": id, "title": title }))
+                .collect::<Vec<_>>()),
+        );
+    }
+    Ok(Json(body))
 }
 
 #[derive(Deserialize)]

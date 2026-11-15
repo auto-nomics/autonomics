@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -162,7 +162,7 @@ function TranscriptSkeleton() {
  *  While streaming, the cursor rides the tail of the last rendered block
  *  (`.md-streaming > :last-child::after`) instead of a detached span. */
 function AssistantMarkdown({ text, streaming }: { text: string; streaming: boolean }) {
-  const html = useAgentMarkdown(text);
+  const html = useAgentMarkdown(text, streaming);
   return (
     <div
       className={`md${streaming && html ? " md-streaming" : ""}`}
@@ -180,7 +180,11 @@ type MessageItemProps = {
   onCopy: (text: string) => void;
 };
 
-function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy }: MessageItemProps) {
+/** Memoized per-row: streaming deltas change only the one streaming item's
+ *  identity (see appendStreamDelta's immutability note), so every other row
+ *  bails here instead of re-running markdown/tool rendering per token. All
+ *  props must keep stable identities across renders for this to hold. */
+const MessageItem = memo(function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy }: MessageItemProps) {
   const isStreaming = message.id === streamingId;
 
   if (message.role === "user") {
@@ -339,6 +343,86 @@ function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy
   }
 
   return <div className="text-center text-[11px] text-muted-foreground">{message.text}</div>;
+});
+
+/** The transcript viewport, extracted so it can be frozen by element
+ *  identity: AgentWorkspace memoizes this element and reuses the committed
+ *  one while its host tab is occluded (see the freeze gate in
+ *  AgentWorkspace). Consumes no ambient context on purpose — a context
+ *  update inside would defeat the element-identity bailout. */
+type TranscriptAreaProps = {
+  historyLoading: boolean;
+  hiddenCount: number;
+  blocks: ReturnType<typeof groupTraceSteps>;
+  streamingId: number | null;
+  display: DisplaySettings;
+  expanded: Record<number, boolean>;
+  onToggle: (id: number, open: boolean) => void;
+  onCopy: (text: string) => void;
+  compaction?: CompactionView;
+  compactionKey: string;
+  empty: boolean;
+  loadEarlier: () => void;
+  atBottom: boolean;
+  onScrollToBottom: () => void;
+  setViewport: (node: HTMLDivElement | null) => void;
+};
+
+function TranscriptArea({ historyLoading, hiddenCount, blocks, streamingId, display, expanded, onToggle, onCopy, compaction, compactionKey, empty, loadEarlier, atBottom, onScrollToBottom, setViewport }: TranscriptAreaProps) {
+  return <div className="relative flex min-h-0 flex-1">
+    <ScrollArea viewportRef={setViewport} className="min-h-0 flex-1" contentClassName="space-y-3 p-3 sm:p-4">
+      {historyLoading ? (
+        <TranscriptSkeleton />
+      ) : (
+        <>
+          {hiddenCount > 0 && (
+            <div className="flex justify-center pb-2">
+              <Button size="xs" variant="outline" onClick={loadEarlier}>
+                <ArrowUp />
+                Load earlier messages ({hiddenCount})
+              </Button>
+            </div>
+          )}
+          {blocks.map((block) => {
+            const renderItem = (message: ChatItem) => (
+              <MessageItem
+                key={message.id}
+                message={message}
+                streamingId={streamingId}
+                display={display}
+                expanded={expanded}
+                onToggle={onToggle}
+                onCopy={onCopy}
+              />
+            );
+            return "trace" in block ? (
+              // Trace lists start at the same edge as assistant
+              // text — the avatar indent they used to clear is gone.
+              <Trace key={block.trace[0].id}>
+                {block.trace.map(renderItem)}
+              </Trace>
+            ) : (
+              renderItem(block.message)
+            );
+          })}
+          {compaction && <CompactionPanel key={compactionKey} compaction={compaction} />}
+          {empty && (
+            <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
+          )}
+        </>
+      )}
+    </ScrollArea>
+    {!atBottom && (
+      <button
+        type="button"
+        aria-label="Scroll to bottom"
+        onClick={onScrollToBottom}
+        className="absolute right-4 bottom-4 grid size-8 place-items-center rounded-full border bg-popover text-muted-foreground shadow-lg hover:bg-accent hover:text-foreground"
+      >
+        <ArrowDown className="size-4" />
+      </button>
+    )}
+  </div>;
 }
 
 export type AgentWorkspaceProps = {
@@ -349,6 +433,10 @@ export type AgentWorkspaceProps = {
   contextTarget?: ReactNode;
   agents: AgentInfo[];
   activeAgent: string;
+  /** False while the host editor tab is occluded (keep-alive hidden). The
+   *  transcript then renders from a frozen snapshot instead of tracking
+   *  every runtime tick, and catches up on reactivation. */
+  active?: boolean;
   statuses: Record<string, string>;
   messages: ChatItem[];
   queuedMessages?: QueuedMessage[];
@@ -483,6 +571,12 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     setExpanded((current) => ({ ...current, [id]: open }));
   }, []);
 
+  // Stable copy callback — MessageItem is memoized and an inline closure
+  // here would break every row's memo on every render.
+  const copyMessage = useCallback((text: string) => {
+    void copyText(text);
+  }, []);
+
   const applyWindowStart = useCallback((next: number) => {
     windowStartRef.current = next;
     setMessageWindow({ length: messages.length, start: next });
@@ -581,8 +675,47 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
   });
 
   const clampedStart = Math.min(windowStart, Math.max(0, messages.length - 1));
-  const visibleMessages = messages.slice(clampedStart, clampedStart + MAX_WINDOW);
+  // Memoized so the trace grouping can key on a stable array identity: the
+  // messages array is replaced per token, but the slice only moves when the
+  // visible window actually does.
+  const visibleMessages = useMemo(
+    () => messages.slice(clampedStart, clampedStart + MAX_WINDOW),
+    [messages, clampedStart],
+  );
   const hiddenCount = clampedStart;
+  // Trace grouping walks every visible row; without the memo it re-ran per
+  // token even though the window (and its rows) had not changed.
+  const traceBlocks = useMemo(() => groupTraceSteps(visibleMessages), [visibleMessages]);
+
+  // Freeze gate: while this workspace's editor tab is occluded (keep-alive
+  // hidden), hand React the same transcript element it already committed —
+  // an identical element reference bails out of the whole subtree, so
+  // hidden transcripts stop rendering streams entirely and catch up on
+  // reactivation. Safe because the transcript subtree consumes no ambient
+  // context; every input below is prop-fed.
+  const active = props.active !== false;
+  const liveTranscript: TranscriptAreaProps = {
+    historyLoading,
+    hiddenCount,
+    blocks: traceBlocks,
+    streamingId: streaming?.id ?? null,
+    display,
+    expanded,
+    onToggle: toggleExpand,
+    onCopy: copyMessage,
+    compaction: props.compaction,
+    compactionKey: activeAgent,
+    empty: !messages.length && !streaming && !props.compaction,
+    loadEarlier,
+    atBottom,
+    onScrollToBottom: scrollToBottom,
+    setViewport: setTranscriptViewport,
+  };
+  const frozenTranscriptRef = useRef<TranscriptAreaProps | null>(null);
+  if (active) frozenTranscriptRef.current = null;
+  else frozenTranscriptRef.current ??= liveTranscript;
+  const transcriptInputs = active ? liveTranscript : frozenTranscriptRef.current!;
+  const transcriptElement = useMemo(() => <TranscriptArea {...transcriptInputs} />, [transcriptInputs]);
 
   const searchToggle = (
     <Button
@@ -718,62 +851,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
 
       {activeAgent ? (
         <>
-          <div className="relative flex min-h-0 flex-1">
-            <ScrollArea viewportRef={setTranscriptViewport} className="min-h-0 flex-1" contentClassName="space-y-3 p-3 sm:p-4">
-              {historyLoading ? (
-                <TranscriptSkeleton />
-              ) : (
-                <>
-                  {hiddenCount > 0 && (
-                    <div className="flex justify-center pb-2">
-                      <Button size="xs" variant="outline" onClick={loadEarlier}>
-                        <ArrowUp />
-                        Load earlier messages ({hiddenCount})
-                      </Button>
-                    </div>
-                  )}
-                  {groupTraceSteps(visibleMessages).map((block) => {
-                    const renderItem = (message: ChatItem) => (
-                      <MessageItem
-                        key={message.id}
-                        message={message}
-                        streamingId={streaming?.id ?? null}
-                        display={display}
-                        expanded={expanded}
-                        onToggle={toggleExpand}
-                        onCopy={async (text) => void copyText(text)}
-                      />
-                    );
-                    return "trace" in block ? (
-                      // Trace lists start at the same edge as assistant
-                      // text — the avatar indent they used to clear is gone.
-                      <Trace key={block.trace[0].id}>
-                        {block.trace.map(renderItem)}
-                      </Trace>
-                    ) : (
-                      renderItem(block.message)
-                    );
-                  })}
-                  {props.compaction && (
-                    <CompactionPanel key={activeAgent} compaction={props.compaction} />
-                  )}
-                  {!messages.length && !streaming && !props.compaction && (
-                    <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
-                  )}
-                </>
-              )}
-            </ScrollArea>
-            {!atBottom && (
-              <button
-                type="button"
-                aria-label="Scroll to bottom"
-                onClick={scrollToBottom}
-                className="absolute right-4 bottom-4 grid size-8 place-items-center rounded-full border bg-popover text-muted-foreground shadow-lg hover:bg-accent hover:text-foreground"
-              >
-                <ArrowDown className="size-4" />
-              </button>
-            )}
-          </div>
+          {transcriptElement}
 
           {!!props.queuedMessages?.length && (
             <section aria-label="待处理消息" className="mx-3 mt-2 shrink-0 overflow-hidden rounded-lg border border-primary/20 bg-primary/5">

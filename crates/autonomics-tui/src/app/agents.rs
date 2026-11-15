@@ -243,13 +243,15 @@ impl App {
         let tx = self.app_event_tx.clone();
         let query = query.to_string();
         self.spawn_client_task("search_stored_agents", move || async move {
+            let started = std::time::Instant::now();
+            tracing::info!(has_query = !query.trim().is_empty(), limit = 100, "requesting stored agents page");
             match client.search_storage_agents(&query, 100).await {
                 Ok(records) => {
-                    tracing::info!(count = records.len(), "stored agents page loaded");
+                    tracing::info!(count = records.len(), elapsed_ms = started.elapsed().as_millis() as u64, "stored agents page loaded");
                     tx.send(crate::app_event::AppEvent::AgentRecordsLoaded { query, records });
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "failed to search stored agents");
+                    tracing::error!(error = %e, elapsed_ms = started.elapsed().as_millis() as u64, "failed to search stored agents");
                 }
             }
         });

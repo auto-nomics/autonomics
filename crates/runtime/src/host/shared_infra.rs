@@ -1053,8 +1053,9 @@ async fn open_agent_storage(config: &RuntimeConfig) -> Result<Arc<TursoAgentStor
 /// and build the service when the feature is enabled.
 /// Open the wiki knowledge db + attachment blob backend and start the
 /// wiki worker. Unconditional — the feature has no gate: the db lives at
-/// `config.wiki_db_path`, blobs under the storage's `wiki-attachments`
-/// virtual directory, every agent gets the read tool group.
+/// `config.wiki_db_path`, blobs under the `/wiki-attachments` VFS mount
+/// (rooted at `state_dir/wiki-attachments`, ensured by `vfs_setup`), every
+/// agent gets the read tool group.
 async fn open_wiki(
     config: &RuntimeConfig,
     file_storage: &Arc<OpendalFileStorage>,

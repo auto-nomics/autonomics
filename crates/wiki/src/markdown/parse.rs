@@ -117,6 +117,53 @@ impl Parser {
         }
         links
     }
+
+    /// 把正文中目标为 `from` 的内链改写为 `to`(改名时保链接不断)。
+    ///
+    /// 纯文本扫描 `[[…]]`:目标段(`|` 前、去首尾空白)等于 `from` 才
+    /// 改写,显示文本原样保留;跨行的 `[[` 不构成链接,同样跳过。与
+    /// [`Parser::extract_links`] 的差异:行内代码中的字面 `[[from]]`
+    /// 不会被解析成链接,但这里会被改写 —— 保守取舍,正文极少在行内
+    /// 代码里写完整内链。
+    pub fn rewrite_wiki_link_target(&self, content: &str, from: &str, to: &str) -> String {
+        if from.is_empty() || from == to || !content.contains("[[") {
+            return content.to_string();
+        }
+        let mut out = String::with_capacity(content.len());
+        let mut copied = 0usize; // 已拷贝到的字节偏移
+        let mut search = 0usize;
+        while let Some(rel) = content[search..].find("[[") {
+            let start = search + rel;
+            let Some(rel_close) = content[start + 2..].find("]]") else {
+                break;
+            };
+            let close = start + 2 + rel_close;
+            search = if content[start..close].contains('\n') {
+                // 跨行不是链接,从这对括号之后继续找
+                close
+            } else {
+                let inner = &content[start + 2..close];
+                let (target, tail) = match inner.find('|') {
+                    Some(p) => (&inner[..p], &inner[p..]),
+                    None => (inner, ""),
+                };
+                if self.normalize_name(target) == from {
+                    out.push_str(&content[copied..start]);
+                    out.push_str("[[");
+                    out.push_str(to);
+                    out.push_str(tail);
+                    out.push_str("]]");
+                    copied = close + 2;
+                }
+                close + 2
+            };
+        }
+        if copied == 0 {
+            return content.to_string();
+        }
+        out.push_str(&content[copied..]);
+        out
+    }
 }
 
 #[cfg(test)]
@@ -221,5 +268,44 @@ mod tests {
         );
         // 同一实例可连续使用。
         assert_eq!(parser.extract_links("[[C]]"), vec![wiki("C", None)]);
+    }
+
+    #[test]
+    fn rewrite_replaces_targets_only() {
+        let p = Parser::new();
+        assert_eq!(
+            p.rewrite_wiki_link_target("[[A]] 见 [[A|甲]] 与 [[B]]", "A", "甲乙"),
+            "[[甲乙]] 见 [[甲乙|甲]] 与 [[B]]"
+        );
+        // 首尾空白参与匹配,改写后规范化。
+        assert_eq!(
+            p.rewrite_wiki_link_target("x [[  A  |a]] y", "A", "N"),
+            "x [[N|a]] y"
+        );
+        // 其它目标的子串不受影响。
+        assert_eq!(
+            p.rewrite_wiki_link_target("[[AB]] [[BA]]", "A", "N"),
+            "[[AB]] [[BA]]"
+        );
+        // 无匹配原样返回(同一 String 内容)。
+        assert_eq!(p.rewrite_wiki_link_target("[[B]]", "A", "N"), "[[B]]");
+        assert_eq!(p.rewrite_wiki_link_target("无链接", "A", "N"), "无链接");
+    }
+
+    #[test]
+    fn rewrite_skips_crossline_and_keeps_display() {
+        let p = Parser::new();
+        // 跨行 `[[` 不是链接,不改写。
+        assert_eq!(
+            p.rewrite_wiki_link_target("a [[A\nB]] c", "A", "N"),
+            "a [[A\nB]] c"
+        );
+        // 显示文本保留原样。
+        assert_eq!(
+            p.rewrite_wiki_link_target("[[A|旧显示]]", "A", "N"),
+            "[[N|旧显示]]"
+        );
+        // from == to 直接短路。
+        assert_eq!(p.rewrite_wiki_link_target("[[A]]", "A", "A"), "[[A]]");
     }
 }

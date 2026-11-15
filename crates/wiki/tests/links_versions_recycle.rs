@@ -227,3 +227,48 @@ async fn mentions_find_unlinked_plain_text() {
         Err(Error::NotFound(_))
     ));
 }
+
+// ─────────────── 改名自动改写反向 [[旧标题]] 内链 ───────────────
+
+#[tokio::test]
+async fn rename_rewrites_backlinks() {
+    let handle = wiki::service::start(std::sync::Arc::new(storage().await));
+    let a = uuid::Uuid::new_v4();
+    let b = uuid::Uuid::new_v4();
+    handle
+        .create_entry(e(a, "旧名", &["别名"], "词条正文"))
+        .await
+        .unwrap();
+    handle
+        .create_entry(e(
+            b,
+            "B",
+            &[],
+            "见 [[旧名]]、[[旧名|显示]]、[[ 别名 ]] 与 [[其它]]。",
+        ))
+        .await
+        .unwrap();
+
+    // 未改名:零改写。
+    let mut same = e(a, "旧名", &["别名"], "词条正文");
+    same.mtime = 2_000;
+    assert!(handle.update_entry_meta(same, "旧名").await.unwrap().is_empty());
+
+    // 改名:标题内链改写,别名链接与悬空链接不动。
+    let mut renamed = e(a, "新名", &["别名"], "词条正文");
+    renamed.mtime = 3_000;
+    let rewritten = handle.update_entry_meta(renamed, "旧名").await.unwrap();
+    assert_eq!(rewritten, vec![(b.to_string(), "B".to_string())]);
+    let got = handle.get_entry(b).await.unwrap();
+    assert_eq!(
+        got.content,
+        "见 [[新名]]、[[新名|显示]]、[[ 别名 ]] 与 [[其它]]。"
+    );
+
+    // 反向链接仍指向改名后的词条(出边按新标题重建)。
+    let inn = handle.get_in_links_batch(&[a.to_string()]).await.unwrap();
+    assert_eq!(inn, vec![vec![b.to_string()]]);
+    // 旧标题不再命中(别名仍命中)。
+    assert!(handle.find_by_title("旧名").await.unwrap().is_none());
+    assert!(handle.find_by_title("新名").await.unwrap().is_some());
+}

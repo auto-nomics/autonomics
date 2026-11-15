@@ -182,16 +182,22 @@ export async function startGatewayEvents(
     onStatus: GatewayStatusHandler;
   },
 ): Promise<boolean> {
+  // Coalesce frames into one onFrame batch per animation frame. Streaming N
+  // agents delivers each token as its own SSE frame; without this, every
+  // frame triggers its own reducer pass and its own React render of the
+  // whole workbench. Batching caps renders at the display refresh rate and
+  // lets React commit all frames of a batch in a single pass.
+  const coalesced = coalesceFrameHandlers(handlers);
   if (isTauri) {
     const events = await import("@tauri-apps/api/event");
     await Promise.all([
       events.listen<GatewayFrame>(
         "gateway-frame",
-        (event) => handlers.onFrame(event.payload),
+        (event) => coalesced.onFrame(event.payload),
       ),
       events.listen<"disconnected" | "reconnected">(
         "gateway-status",
-        (event) => handlers.onStatus(event.payload),
+        (event) => coalesced.onStatus(event.payload),
       ),
     ]);
     return tauriInvoke("start_events", { lastSeq });
@@ -199,9 +205,41 @@ export async function startGatewayEvents(
 
   if (!webEventsStarted) {
     webEventsStarted = true;
-    void connectEvents(lastSeq, handlers);
+    void connectEvents(lastSeq, coalesced);
   }
   return true;
+}
+
+/** Wraps frame handlers so onFrame calls land in a buffer flushed once per
+ *  animation frame (order preserved). rAF is suspended in background tabs,
+ *  so an independent 50ms timer drains the queue there — frames still get
+ *  processed, just not aligned to paint. */
+function coalesceFrameHandlers(handlers: {
+  onFrame: GatewayFrameHandler;
+  onStatus: GatewayStatusHandler;
+}): { onFrame: GatewayFrameHandler; onStatus: GatewayStatusHandler } {
+  let pending: GatewayFrame[] = [];
+  let scheduled = false;
+  const flush = () => {
+    scheduled = false;
+    if (!pending.length) return;
+    const batch = pending;
+    pending = [];
+    for (const frame of batch) handlers.onFrame(frame);
+  };
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(flush);
+    setTimeout(flush, 50);
+  };
+  return {
+    onFrame: (frame) => {
+      pending.push(frame);
+      schedule();
+    },
+    onStatus: handlers.onStatus,
+  };
 }
 
 async function connectEvents(

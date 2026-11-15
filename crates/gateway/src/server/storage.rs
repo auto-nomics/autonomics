@@ -33,11 +33,20 @@ pub(crate) async fn list_storage_agents(
         .filter(|limit| *limit > 0)
         .unwrap_or(100)
         .min(500);
+    let started = std::time::Instant::now();
+    let request_id = Uuid::new_v4();
+    tracing::info!(%request_id, limit, has_query = query.is_some(), "stored agent search received");
     let storage = state.infra.storage.clone();
     let records = storage
         .search_agents(query.as_deref(), limit)
         .await
-        .map_err(|e| GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(%request_id, error = %e, elapsed_ms = started.elapsed().as_millis() as u64,
+                "stored agent search failed");
+            GatewayError::Status(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        })?;
+    tracing::info!(%request_id, count = records.len(), elapsed_ms = started.elapsed().as_millis() as u64,
+        "stored agent search completed");
     Ok(Json(records))
 }
 

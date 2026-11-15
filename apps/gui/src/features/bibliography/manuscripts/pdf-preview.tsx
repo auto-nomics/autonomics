@@ -47,7 +47,7 @@ export function PdfPreview({
     setPage(1);
     if (!bytes) return;
     let alive = true;
-    const task = pdfjs.getDocument({ data: bytes.slice() });
+    const task = pdfjs.getDocument({ data: bytes.slice(), verbosity: pdfjs.VerbosityLevel.ERRORS });
     void task.promise
       .then((pdf) => {
         if (alive) setDocument(pdf);

@@ -26,7 +26,7 @@ export function WikiGraph({ entryId, title }: { entryId: string; title: string }
   const [reload, setReload] = useState(0);
   const [depth, setDepth] = useState(1);
   const [query, setQuery] = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsOpenRef = useRef(settingsOpen);
   settingsOpenRef.current = settingsOpen;
   const [showLabels, setShowLabels] = useState(true);
@@ -113,6 +113,13 @@ export function WikiGraph({ entryId, title }: { entryId: string; title: string }
     svg.selectAll("*").remove();
     if (!graph || !graph.nodes.length) return;
     const width = svgElement.clientWidth || 800, height = svgElement.clientHeight || 600;
+    // d3-zoom's defaultExtent reads width/height baseVal; with no attributes
+    // those are implicit 100% lengths, whose .value throws
+    // NotSupportedError ("Could not resolve relative length") when the pane
+    // has no resolved viewport yet — e.g. a wiki link opened from an agent
+    // message mounts in a not-yet-visible editor. Absolute px attrs keep the
+    // read well-defined; CSS (w-full flex-1) still controls the real size.
+    svg.attr("width", width).attr("height", height);
     const layer = svg.append("g");
     interactedRef.current = false;
     const zoom = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.05, 5]).on("zoom", event => {
@@ -224,7 +231,7 @@ export function WikiGraph({ entryId, title }: { entryId: string; title: string }
   }, []);
 
   return <section aria-label="知识关系图谱" className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-    <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2 text-xs text-muted-foreground">
+    <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1 text-xs text-muted-foreground">
       <span className="min-w-0 flex-1 truncate">{entryId ? `局部图谱 / ${title || data?.nodes[0]?.title || entryId}` : "局部图谱"}</span>
       <Button size="icon-sm" variant="ghost" aria-label="缩小图谱" title="缩小" onClick={() => adjustZoom(0.8)}><ZoomOut /></Button>
       <Button size="icon-sm" variant="ghost" aria-label="放大图谱" title="放大" onClick={() => adjustZoom(1.25)}><ZoomIn /></Button>
