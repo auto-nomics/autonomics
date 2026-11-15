@@ -1,0 +1,35 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Autonomics save progress</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 13px/1.45 system-ui, sans-serif; width: 320px; padding: 10px 12px;
+         background: light-dark(#fff, #1c1c1e); color: light-dark(#111, #f4f4f5); }
+  h1 { font-size: 13px; margin: 0 0 8px; }
+  ul { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+  li { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+  li.done .state { color: #059669; }
+  li.warning .state { color: #b45309; }
+  .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .state { font-size: 12px; opacity: .85; }
+  .error { color: #b91c1c; white-space: pre-wrap; }
+  .selector { max-height: 300px; overflow: auto; }
+  .selector label { display: flex; gap: 6px; padding: 2px 0; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px; }
+  button { font: inherit; }
+  .hidden { display: none; }
+</style>
+<body>
+  <div id="saving">
+    <h1 id="headline">Saving to Autonomics</h1>
+    <p id="error" class="error hidden"></p>
+    <ul id="items"></ul>
+  </div>
+  <div id="selector" class="hidden">
+    <h1>Select items</h1>
+    <div class="selector" id="entries"></div>
+    <div class="actions">
+      <button id="cancel" type="button">Cancel</button>
+      <button id="ok" type="button">OK</button>
+    </div>
+  </div>
+  <script type="module" src="progress.js"></script>
+</body></html>

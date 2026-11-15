@@ -1,24 +1,48 @@
 {
   "manifest_version": 3,
   "name": "Autonomics Library Connector",
-  "version": "0.1.0",
-  "description": "Preview and save scholarly metadata from the current page to your Autonomics library.",
+  "version": "0.2.0",
+  "description": "Save scholarly items and PDFs from the current page to your Autonomics library.",
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "contextMenus"
   ],
   "optional_host_permissions": [
     "https://*/*",
+    "http://*/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "run_at": "document_idle",
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    { "resources": ["progress.html", "translators.js"], "matches": ["http://*/*", "https://*/*"] }
+  ],
+  "options_ui": {
+    "page": "popup.html?view=options",
+    "open_in_tab": true
+  },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Save to Autonomics"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Ctrl+Shift+S" }
+    }
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'"
   },
-  "minimum_chrome_version": "109"
+  "minimum_chrome_version": "116"
 }

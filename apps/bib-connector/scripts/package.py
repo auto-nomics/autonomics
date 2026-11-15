@@ -6,12 +6,17 @@ import shutil
 import zipfile
 
 root = Path(__file__).resolve().parent.parent
-files = ("client.js", "extract.js", "manifest.json", "popup.html", "popup.js", "style.css")
+files = ("background.js", "client.js", "content.js", "manifest.json", "popup.html", "popup.js",
+         "progress.html", "progress.js", "style.css", "translators.js")
 manifest = json.loads((root / "manifest.json").read_text())
 assert manifest["manifest_version"] == 3
-assert manifest["action"]["default_popup"] in files
-assert manifest["permissions"] == ["activeTab", "scripting", "storage"]
+referenced = [manifest["background"]["service_worker"], manifest["options_ui"]["page"].split("?")[0],
+              *[script for cs in manifest["content_scripts"] for script in cs["js"]],
+              *manifest["web_accessible_resources"][0]["resources"]]
+assert all(name in files for name in referenced), referenced
+assert manifest["permissions"] == ["activeTab", "scripting", "storage", "contextMenus"]
 assert "host_permissions" not in manifest
+assert "default_popup" not in manifest["action"]
 output = root / "dist"
 unpacked = output / "unpacked"
 unpacked.mkdir(parents=True, exist_ok=True)
