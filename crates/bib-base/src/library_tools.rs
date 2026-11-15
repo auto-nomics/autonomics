@@ -1348,19 +1348,15 @@ struct DeleteResult {
     error: Option<String>,
 }
 
-/// Input for [`BibDeleteTool`] — the only path that physically removes
-/// rows from the library. The `bib_save` DAG node is idempotent (matched
-/// identifiers return as `cached` and cannot overwrite or replace) and
-/// `bib_add_note` can only append annotations, so neither can be used to
-/// evict a placeholder or mis-saved entry.
+/// Input for [`BibDeleteTool`] — moves records out of the active library
+/// into recoverable trash. Existing identifiers and attachments are retained
+/// until the user explicitly chooses permanent deletion.
 ///
 /// # Safety model
 ///
-/// Deletion cascades through every FK constraint on the `articles` table:
-/// `authors`, `identifiers`, `annotations`, `collection_articles`
-/// memberships, and `fulltexts` pointer rows are removed automatically.
-/// Stored full-text *files* on disk are NOT touched — the caller's
-/// responsibility.
+/// Records move to recoverable trash. Their metadata, annotations, collection
+/// memberships and attachment files remain until explicit permanent deletion.
+/// Restore and permanent deletion are available through the bibliography API/GUI.
 ///
 /// Pass `confirm=true` to actually delete. The default `confirm=false`
 /// runs a **dry-run**: the same response shape is returned (with
@@ -1377,22 +1373,7 @@ struct DeleteResult {
 ///    `resolve_errors` rather than failing the whole batch.
 #[tool(
     name = "bib_delete",
-    description = "Delete one or more articles from the local bibliography library. \
-                  This is the only path that physically removes an article: the `bib_save` \
-                  DAG node cannot overwrite or replace an existing row (matched identifiers \
-                  are returned as `cached`), and `bib_add_note` can only append annotations. \
-                  Use this tool to clean up placeholder rows, mis-saved entries (e.g. \
-                  wrong PMID recall), or any article you no longer want in the library. \
-                  Two input modes (at least one must be non-empty): (1) `article_ids` -- \
-                  internal IDs from `bib_search_library` or `bib_get_article` (direct delete). \
-                  (2) `ids` -- typed external identifiers `{ id_type, id }` resolved via \
-                  `find_by_identifier` to internal ID; unresolved entries are returned in \
-                  `resolve_errors` without failing the batch. Deletion cascades through FK \
-                  constraints: `authors`, `identifiers`, `annotations`, `collection_articles` \
-                  memberships, and `fulltexts` pointer rows are removed automatically. \
-                  Stored full-text files on disk are NOT touched. Safety: pass \
-                  `confirm=true` to actually delete; the default `confirm=false` runs as a \
-                  dry-run that returns the same response shape without modifying the database."
+    description = "Move one or more articles to recoverable bibliography trash. Metadata, notes, attachments and collection memberships are preserved. Restore records from the GUI trash. Accepts article_ids or typed ids (id_type/id). Unresolved identifiers are reported without failing the batch. confirm=false previews; confirm=true moves records to trash. Permanent deletion is a separate explicit operation."
 )]
 pub struct BibDeleteInput {
     #[desc = "Internal article IDs to delete. Discover via `bib_search_library` or \n             `bib_get_article`. Each id is deduplicated and processed at most once."]
@@ -1485,8 +1466,8 @@ impl ToolFunction for BibDeleteTool {
         if confirm {
             for (id, title) in &previews {
                 let found = title.is_some();
-                match self.bib.delete_article(id).await.map_err(box_error) {
-                    Ok(n) if n > 0 => {
+                match self.bib.set_article_trash(id, true).await.map_err(box_error) {
+                    Ok(true) => {
                         deleted_count += 1;
                         results.push(DeleteResult {
                             article_id: id.clone(),
@@ -1519,7 +1500,7 @@ impl ToolFunction for BibDeleteTool {
                             deleted: false,
                             found,
                             title: title.clone(),
-                            error: Some(e.to_string()),
+                            error: Some(if found { e.to_string() } else { "id not found".into() }),
                         });
                     }
                 }
@@ -2170,7 +2151,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_cascade_clears_annotations_and_collections() {
+    async fn test_delete_preserves_annotations_and_restorable_collections() {
         let bib = Arc::new(BibBase::open_in_memory().await.unwrap());
 
         // Seed an article, an annotation, and a collection membership.
@@ -2212,9 +2193,9 @@ mod tests {
         };
         tool.run(input).await.unwrap();
 
-        // FK CASCADE should have wiped everything.
+        // Trash hides memberships but keeps all original data for restoration.
         assert_eq!(bib.article_count().await.unwrap(), 0);
-        assert_eq!(bib.list_annotations(&art.id, None).await.unwrap().len(), 0);
+        assert_eq!(bib.list_annotations(&art.id, None).await.unwrap().len(), 1);
         assert_eq!(
             bib.list_collection_articles(&col.id, None, None)
                 .await
@@ -2222,6 +2203,8 @@ mod tests {
                 .len(),
             0
         );
+        bib.set_article_trash(&art.id, false).await.unwrap();
+        assert_eq!(bib.list_collection_articles(&col.id, None, None).await.unwrap().len(), 1);
     }
 
     // ── bib_remove_from_collection ────────────────────────────────────────

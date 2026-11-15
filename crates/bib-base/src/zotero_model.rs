@@ -1672,6 +1672,20 @@ pub(crate) async fn delete_article_item(conn: &Connection, article_id: &str) -> 
     drop(rows);
 
     if let Some(item_id) = item_id {
+        // Include legacy annotation mappings whose attachment has already been
+        // removed; their subtype rows may have been cascaded away earlier.
+        conn.execute("DELETE FROM items WHERE itemID IN (SELECT m.itemID FROM annotationItems m JOIN annotations a ON a.id=m.annotation_id WHERE a.article_id=?1)", turso::params![article_id]).await?;
+        // Subtype foreign keys cascade their rows, not the owning `items` row.
+        // Delete children before the parent so annotation/fulltext item records
+        // do not become unreachable orphans after permanent deletion. Merge
+        // reparents preserved children before entering this function.
+        for statement in [
+            "DELETE FROM items WHERE itemID IN (SELECT itemID FROM itemAnnotations WHERE parentItemID IN (SELECT itemID FROM itemAttachments WHERE parentItemID=?1))",
+            "DELETE FROM items WHERE itemID IN (SELECT itemID FROM itemNotes WHERE parentItemID=?1)",
+            "DELETE FROM items WHERE itemID IN (SELECT itemID FROM itemAttachments WHERE parentItemID=?1)",
+        ] {
+            conn.execute(statement, turso::params![item_id]).await?;
+        }
         conn.execute(
             "DELETE FROM items WHERE itemID = ?1",
             turso::params![item_id],
@@ -1912,6 +1926,28 @@ mod tests {
     use super::*;
     use crate::BibBase;
     use bib_types::{Article, FullText, FullTextSource};
+
+    #[tokio::test]
+    async fn permanent_deletion_removes_owned_child_items_without_orphans() {
+        let core = crate::bib_base::BibCore::open(":memory:").await.unwrap();
+        core.upsert_article(&Article::new("delete", "Delete this")).await.unwrap();
+        core.upsert_article(&Article::new("keep", "Keep this")).await.unwrap();
+        let conn = core.conn();
+        for id in ["delete", "keep"] {
+            core.add_annotation(id, bib_types::AnnotationKind::Comment, "Standalone note", None, None, None, None).await.unwrap();
+            let attachment=create_attachment(&conn, &NewAttachment {
+                article_id:id.into(), title:None, filename:Some("paper.txt".into()), content_type:Some("text/plain".into()), file_format:FileFormat::Txt,
+                link_mode:LINK_MODE_IMPORTED_FILE, path:None, source_url:None, vfs_path:None, storage_hash:None, file_size:None,
+            },true).await.unwrap();
+            core.add_annotation(id, bib_types::AnnotationKind::Highlight, "Quote", None, None, None, Some(&attachment.key)).await.unwrap();
+        }
+        core.delete_article("delete").await.unwrap();
+        for (table,expected) in [("items",4),("itemAttachments",1),("itemNotes",1),("itemAnnotations",1),("fulltextItems",1)] {
+            let mut rows=conn.query(format!("SELECT COUNT(*) FROM {table}"),()).await.unwrap();
+            assert_eq!(rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),expected,"{table}");
+        }
+        assert_eq!(core.list_annotations("keep",None).await.unwrap().len(),2);
+    }
 
     #[tokio::test]
     async fn migrates_article_and_fulltext_to_zotero_items() {

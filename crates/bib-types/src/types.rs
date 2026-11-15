@@ -88,6 +88,11 @@ pub struct Article {
     #[serde(default)]
     pub source: ArticleSource,
 
+    /// Additional type-specific metadata (publisher, institution, URL, etc.).
+    /// Empty maps are omitted to keep existing evidence serialization stable.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub extra_fields: std::collections::BTreeMap<String, String>,
+
     /// Timestamps.
     ///
     /// Skipped during serialization so evidence JSON bytes are
@@ -124,6 +129,7 @@ impl Article {
             pub_types: Vec::new(),
             keywords: Vec::new(),
             source: ArticleSource::default(),
+            extra_fields: Default::default(),
             created_at: Some(now),
             updated_at: Some(now),
         }

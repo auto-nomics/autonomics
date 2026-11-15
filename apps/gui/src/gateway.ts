@@ -286,27 +286,24 @@ function parseSseEvent(raw: string): {
   }
 }
 
-export async function pickUploadFile(): Promise<File | string | null> {
+export async function pickUploadFiles(): Promise<Array<File | string>> {
   if (!isTauri) {
-    return new Promise<File | null>((resolve) => {
+    return new Promise<File[]>((resolve) => {
       const input = document.createElement("input");
       input.type = "file";
+      input.multiple = true;
       input.accept = ".pdf,.html,.htm,.txt,application/pdf,text/html,text/plain";
-      input.onchange = () => resolve(input.files?.[0] ?? null);
-      input.oncancel = () => resolve(null);
+      input.onchange = () => resolve(Array.from(input.files ?? []));
+      input.oncancel = () => resolve([]);
       input.click();
     });
   }
   const dialog = await import("@tauri-apps/plugin-dialog");
-  return dialog.open({
-    multiple: false,
-    directory: false,
-    title: "Select full text",
-    filters: [
-      { name: "Documents", extensions: ["pdf", "html", "htm", "txt"] },
-      { name: "All files", extensions: ["*"] },
-    ],
+  const result = await dialog.open({
+    multiple: true, directory: false, title: "Select attachments",
+    filters: [{ name: "Documents", extensions: ["pdf", "html", "htm", "txt"] }, { name: "All files", extensions: ["*"] }],
   });
+  return result ? (Array.isArray(result) ? result : [result]) : [];
 }
 
 export async function uploadBibFulltext(
@@ -324,6 +321,40 @@ export async function uploadBibFulltext(
   if (!(file instanceof File)) throw new Error("A browser file is required");
   const form = new FormData();
   form.append("file", file, file.name);
+  const response = await fetch(webApiPath(path), {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  const text = await response.text();
+  const payload = text ? JSON.parse(text) : null;
+  if (!response.ok) throw new Error(payload?.error ?? `Upload ${response.status}`);
+  return payload;
+}
+
+export async function uploadBibAttachment(
+  articleId: string,
+  file: File | string,
+  options: { preferred?: boolean; title?: string } = {},
+): Promise<any> {
+  const path = normalizeApiPath(
+    `/bib/articles/${encodeURIComponent(articleId)}/attachments`,
+  );
+  if (isTauri) {
+    if (file instanceof File) {
+      if (file.size > 50 * 1024 * 1024) throw new Error("Attachment exceeds 50 MiB upload limit");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const parts: string[] = [];
+      for (let offset = 0; offset < bytes.length; offset += 32768) parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 32768)));
+      return tauriInvoke("upload_bib_fulltext", { request: { articleId, filename: file.name, dataBase64: btoa(parts.join("")), append: true, ...options } });
+    }
+    return tauriInvoke("upload_bib_fulltext", { request: { articleId, path: file, append: true, ...options } });
+  }
+  if (!(file instanceof File)) throw new Error("A browser file is required");
+  const form = new FormData();
+  form.append("file", file, file.name);
+  if (options.preferred !== undefined) form.append("preferred", String(options.preferred));
+  if (options.title) form.append("title", options.title);
   const response = await fetch(webApiPath(path), {
     method: "POST",
     credentials: "same-origin",

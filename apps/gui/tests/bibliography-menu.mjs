@@ -12,8 +12,11 @@ const articles = [
 ];
 const requests = [];
 let deleted = false;
+let attachmentDeleted = false;
 let rejectMetadataSave = false;
+let revision = "initial-revision";
 const metadataUpdates = [];
+const manualCreates = [];
 
 const origin = 'http://127.0.0.1:1423';
 const server = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '1423', '--strictPort'], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -40,13 +43,21 @@ try {
     const path = url.pathname.replace(/^\/api\/v1/, '');
     requests.push(`${request.method()} ${path}${url.search}`);
     if (request.method() === 'GET' && path === '/bib/collections') return route.fulfill({ json: { collections: [] } });
+    if (request.method() === 'POST' && path === '/bib/articles/manual') {
+      const article = { ...request.postDataJSON(), id: 'manual-created' };
+      manualCreates.push(article); articles.push(article);
+      return route.fulfill({ status: 201, json: { article, revision: 'manual-revision' } });
+    }
+    if (request.method() === 'GET' && path === '/bib/articles/manual-created') return route.fulfill({ json: { article: articles.find(article => article.id === 'manual-created'), revision: 'manual-revision', fulltext: null, attachments: [], annotations: [] } });
+    if (request.method() === 'GET' && path === '/bib/articles/trash') return route.fulfill({ json: { articles: deleted ? [{article: articles[1], deleted_at:'2026-11-15'}] : [], total: deleted ? 1 : 0 } });
+    if (request.method() === 'POST' && path === '/bib/articles/a2/restore') { deleted = false; return route.fulfill({ json: { article: articles[1] } }); }
     if (request.method() === 'GET' && path === '/bib/articles') {
       return route.fulfill({
         json: {
           articles: articles.filter(article => !deleted || article.id !== 'a2'),
           total: articles.length - (deleted ? 1 : 0),
           attachment_summaries: {
-            a1: { pdf: true, snapshot: false, link: false, file: true, note: false, count: 1 },
+            a1: { pdf: !attachmentDeleted, snapshot: false, link: false, file: !attachmentDeleted, note: false, count: attachmentDeleted ? 0 : 1 },
           },
         },
       });
@@ -54,16 +65,20 @@ try {
     if (request.method() === 'PUT' && path === '/bib/articles/a1') {
       metadataUpdates.push(request.postDataJSON());
       if (rejectMetadataSave) return route.fulfill({ status: 500, json: { error: 'Storage unavailable' } });
-      articles[0] = request.postDataJSON();
-      return route.fulfill({ json: { article: articles[0] } });
+      assert.equal(request.postDataJSON().expected_revision, revision);
+      const { expected_revision, ...updated } = request.postDataJSON();
+      articles[0] = updated;
+      revision = 'saved-revision';
+      return route.fulfill({ json: { article: articles[0], revision } });
     }
     if (request.method() === 'GET' && path === '/bib/articles/a1') {
-      return route.fulfill({ json: { article: articles[0], fulltext: { file_format: 'pdf', file_path: 'vfs://bib/研究资料.pdf' }, attachments: [{ key: 'supplement', link_mode: 0, title: 'Supplementary data', original_filename: '补充资料.txt', content_type: 'text/plain', storage_hash: 'fixture-hash' }], annotations: [] } });
+      return route.fulfill({ json: { article: articles[0], revision, fulltext: attachmentDeleted ? null : { file_format: 'pdf', file_path: 'vfs://bib/研究资料.pdf' }, attachments: attachmentDeleted ? [] : [{ key: 'supplement', link_mode: 0, title: 'Supplementary data', original_filename: '补充资料.txt', content_type: 'text/plain', storage_hash: 'fixture-hash' }], annotations: [] } });
     }
-    if (request.method() === 'POST' && path.endsWith('/fulltext')) {
-      return route.fulfill({ json: { fulltext: { file_format: 'pdf' } } });
+    if (request.method() === 'POST' && path.endsWith('/attachments')) {
+      return route.fulfill({ json: { attachment: { content_type: 'application/pdf' } } });
     }
     if (request.method() === 'DELETE' && path.endsWith('/fulltext')) {
+      attachmentDeleted = true;
       return route.fulfill({ json: { deleted: true } });
     }
     if (request.method() === 'DELETE' && /^\/bib\/articles\/[^/]+$/.test(path)) {
@@ -182,7 +197,7 @@ try {
     const row = [...document.querySelectorAll('button')].find(node => node.textContent?.includes('Beta preprint'));
     return Boolean(row?.querySelector('[aria-label="Stored file"]'));
   });
-  assert.ok(requests.includes('POST /bib/articles/a2/fulltext'), requests.join(', '));
+  assert.ok(requests.includes('POST /bib/articles/a2/attachments'), requests.join(', '));
 
   // Checkboxes drive selective export.
   const waitForRequest = async (match) => {
@@ -232,6 +247,55 @@ try {
   await page.waitForFunction(() => ![...document.querySelectorAll('button')].some(node => node.textContent?.includes('Beta preprint')));
   assert.ok(requests.includes('DELETE /bib/articles/a2'), requests.join(', '));
 
+  // Article trash restores the same record to the active library.
+  await page.getByRole('button', { name: 'Article trash', exact: true }).click();
+  const trash = page.getByRole('dialog', { name: 'Article trash', exact: true });
+  await trash.getByRole('button', { name: 'Restore Beta preprint', exact: true }).click();
+  await trash.getByText('No trashed articles', { exact: true }).waitFor();
+  await trash.getByRole('button', { name: 'Close Article trash', exact: true }).click();
+  await page.locator('button[data-bib-row-primary]').filter({ hasText: 'Beta preprint' }).waitFor();
+  assert.ok(requests.includes('POST /bib/articles/a2/restore'));
+  const parsed = await page.evaluate(async () => {
+    const { parseImportIdentifier } = await import('/src/features/bibliography/import-identifier.ts');
+    return ['https://doi.org/10.1234/test', '12345678', 'https://arxiv.org/pdf/2401.12345.pdf', 'https://openalex.org/W12345', 'PMC1234'].map(parseImportIdentifier);
+  });
+  assert.deepEqual(parsed, [{ id_type:'doi', id:'10.1234/test' }, {id_type:'pmid',id:'12345678'}, {id_type:'arxiv',id:'2401.12345'}, {id_type:'openalex',id:'W12345'}, {id_type:'pmc',id:'PMC1234'}]);
+
+  // Manual creation supports records without IDs and preserves author order.
+  await page.getByRole('button', { name: 'New article', exact: true }).click();
+  const newEditor = page.getByRole('dialog', { name: 'New article', exact: true });
+  await newEditor.getByRole('textbox', { name: 'Title', exact: true }).fill('Manual book record');
+  await newEditor.getByLabel('Item type', { exact: true }).selectOption('Book');
+  await newEditor.getByLabel('Publisher', { exact: true }).fill('Research Press');
+  await newEditor.getByLabel('Edition', { exact: true }).fill('2');
+  await newEditor.getByRole('button', { name: 'Add author', exact: true }).click();
+  await newEditor.getByLabel('Author 1 family name', { exact: true }).fill('First');
+  await newEditor.getByRole('button', { name: 'Add author', exact: true }).click();
+  await newEditor.getByLabel('Author 2 family name', { exact: true }).fill('Second');
+  await newEditor.getByRole('button', { name: 'Move author 2 up', exact: true }).click();
+  await newEditor.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await newEditor.waitFor({ state: 'detached' });
+  await page.locator('button[data-bib-row-primary]').filter({ hasText: 'Manual book record' }).waitFor();
+  assert.equal(manualCreates[0].identifiers.length, 0);
+  assert.deepEqual(manualCreates[0].pub_types, ['Book']);
+  assert.deepEqual(manualCreates[0].extra_fields, { publisher: 'Research Press', edition: '2' });
+  assert.deepEqual(manualCreates[0].authors.map(author => author.last_name), ['Second', 'First']);
+
+  // Batch tags use the latest record revision and retain existing tags.
+  await page.locator('button[data-bib-row-primary]').filter({ hasText: 'Revised Alpha paper' }).click();
+  await page.getByRole('checkbox', { name: 'Select Revised Alpha paper', exact: true }).click();
+  await page.getByRole('button', { name: 'Organize (1)', exact: true }).click();
+  const batch = page.getByRole('dialog', { name: 'Organize selected articles', exact: true });
+  await batch.getByLabel('Batch tags', { exact: true }).fill('batch-tag');
+  await batch.getByRole('button', { name: 'Apply', exact: true }).click();
+  await batch.getByText('All selected articles updated.', { exact: true }).waitFor();
+  assert.deepEqual(articles[0].keywords, ['genetics', 'review', 'batch-tag']);
+  await batch.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit metadata', exact: true }).click();
+  const refreshedEditor = page.getByRole('dialog', { name: 'Edit metadata', exact: true });
+  assert.match(await refreshedEditor.getByLabel('Tags (one per line)', { exact: true }).inputValue(), /batch-tag/);
+  await refreshedEditor.getByRole('button', { name: 'Cancel', exact: true }).click();
+
   // The desktop path uses the native save dialog and preserves attachment identity.
   const desktop = await browser.newPage();
   await desktop.addInitScript(() => {
@@ -241,17 +305,20 @@ try {
       window.nativeCalls.push({ command, args });
       if (command === 'plugin:dialog|save') return window.savePath;
       if (command === 'save_bib_attachment') return;
+      if (command === 'upload_bib_fulltext') return { attachment: { key: 'native-file' } };
       throw new Error(`Unexpected command: ${command}`);
     } };
   });
   await desktop.goto(origin);
   const nativeResult = await desktop.evaluate(async () => {
-    const { downloadBibAttachment } = await import('/src/gateway.ts');
+    const { downloadBibAttachment, uploadBibAttachment } = await import('/src/gateway.ts');
+    await uploadBibAttachment('a1', new File([new Uint8Array([0, 1, 255])], '附件.pdf', { type: 'application/pdf' }));
     const saved = await downloadBibAttachment('a1', '补充资料.txt', 'supplement', 'fixture-hash');
     window.savePath = null;
     const cancelled = await downloadBibAttachment('a1', '补充资料.txt', 'supplement');
     return { saved, cancelled, calls: window.nativeCalls };
   });
+  assert.deepEqual(nativeResult.calls.find(call => call.command === 'upload_bib_fulltext').args.request, { articleId: 'a1', filename: '附件.pdf', dataBase64: 'AAH/', append: true });
   assert.equal(nativeResult.saved, '/tmp/补充资料.txt');
   assert.equal(nativeResult.cancelled, null);
   assert.deepEqual(nativeResult.calls.filter(call => call.command === 'save_bib_attachment'), [{

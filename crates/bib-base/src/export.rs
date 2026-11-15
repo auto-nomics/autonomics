@@ -20,6 +20,10 @@ pub fn render(article: &Article, format: ExportFormat) -> String {
 
 /// Render a collection of articles as a single export string.
 pub fn render_all(articles: &[Article], format: ExportFormat) -> String {
+    if matches!(format, ExportFormat::CslJson) {
+        return serde_json::to_string_pretty(&articles.iter().map(to_csl_json).collect::<Vec<_>>())
+            .unwrap_or_else(|_| "[]".into());
+    }
     articles
         .iter()
         .map(|a| render(a, format))
@@ -27,16 +31,74 @@ pub fn render_all(articles: &[Article], format: ExportFormat) -> String {
         .join("\n\n")
 }
 
+fn article_isbn(article: &Article) -> Option<&str> {
+    article
+        .identifiers
+        .iter()
+        .find(|id| {
+            matches!(id.kind, bib_types::IdKind::Other)
+                && id
+                    .value
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || matches!(c, 'X' | 'x' | '-' | ' '))
+                && matches!(
+                    id.value
+                        .chars()
+                        .filter(|c| c.is_ascii_alphanumeric())
+                        .count(),
+                    10 | 13
+                )
+        })
+        .map(|id| id.value.as_str())
+}
+fn article_url(article: &Article) -> Option<&str> {
+    if let Some(url) = article
+        .extra_fields
+        .get("url")
+        .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+    {
+        return Some(url);
+    }
+    article
+        .identifiers
+        .iter()
+        .find(|id| {
+            matches!(id.kind, bib_types::IdKind::Other)
+                && (id.value.starts_with("https://") || id.value.starts_with("http://"))
+        })
+        .map(|id| id.value.as_str())
+}
+fn entry_type(article: &Article) -> (&'static str, &'static str, &'static str) {
+    let kind = article
+        .pub_types
+        .first()
+        .map(|v| v.to_ascii_lowercase().replace([' ', '_', '-'], ""))
+        .unwrap_or_default();
+    match kind.as_str() {
+        "book" => ("book", "BOOK", "book"),
+        "booksection" | "incollection" | "chap" => ("incollection", "CHAP", "chapter"),
+        "thesis" | "phdthesis" | "mastersthesis" | "thes" => ("phdthesis", "THES", "thesis"),
+        "report" | "techreport" | "rprt" => ("techreport", "RPRT", "report"),
+        "patent" | "pat" => ("misc", "PAT", "patent"),
+        "webpage" | "web" | "elec" => ("misc", "ELEC", "webpage"),
+        "conferencepaper" | "inproceedings" | "cpaper" => {
+            ("inproceedings", "CPAPER", "paper-conference")
+        }
+        "dataset" | "data" => ("misc", "DATA", "dataset"),
+        _ => ("article", "JOUR", "article-journal"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BibTeX
 // ---------------------------------------------------------------------------
 
-/// Generate a BibTeX `@article` entry.
+/// Generate a BibTeX entry using the stored publication type.
 pub fn to_bibtex(article: &Article) -> String {
     let key = cite_key(article);
     let mut lines = Vec::new();
 
-    lines.push(format!("@article{{{key},"));
+    lines.push(format!("@{}{{{key},", entry_type(article).0));
 
     if !article.title.is_empty() {
         lines.push(format!("  title = {{{}}},", escape_bibtex(&article.title)));
@@ -47,9 +109,9 @@ pub fn to_bibtex(article: &Article) -> String {
             .authors
             .iter()
             .map(|a| match (&a.fore_name, &a.initials) {
-                (Some(f), _) => format!("{} {}", escape_bibtex(f), escape_bibtex(&a.last_name)),
-                (None, Some(i)) => format!("{} {}", escape_bibtex(&a.last_name), escape_bibtex(i)),
-                (None, None) => escape_bibtex(&a.last_name),
+                (Some(f), _) => format!("{}, {}", escape_bibtex(&a.last_name), escape_bibtex(f)),
+                (None, Some(i)) => format!("{}, {}", escape_bibtex(&a.last_name), escape_bibtex(i)),
+                (None, None) => format!("{{{}}}", escape_bibtex(&a.last_name)),
             })
             .collect();
         lines.push(format!("  author = {{{}}},", names.join(" and ")));
@@ -78,6 +140,27 @@ pub fn to_bibtex(article: &Article) -> String {
         lines.push(format!("  pmid = {{{}}},", escape_bibtex(pmid)));
     }
 
+    if let Some(isbn) = article_isbn(article) {
+        lines.push(format!("  isbn = {{{}}},", escape_bibtex(isbn)));
+    }
+    if let Some(url) = article_url(article) {
+        lines.push(format!("  url = {{{}}},", escape_bibtex(url)));
+    }
+    for (key, field) in [
+        ("publisher", "publisher"),
+        ("place", "address"),
+        ("edition", "edition"),
+        ("book_title", "booktitle"),
+        ("university", "school"),
+        ("institution", "institution"),
+        ("report_type", "type"),
+        ("patent_number", "patentnumber"),
+        ("access_date", "urldate"),
+    ] {
+        if let Some(value) = article.extra_fields.get(key) {
+            lines.push(format!("  {field} = {{{}}},", escape_bibtex(value)));
+        }
+    }
     // Remove trailing comma from last field.
     if let Some(last) = lines.last_mut() {
         if last.ends_with(',') {
@@ -124,12 +207,12 @@ fn escape_bibtex(s: &str) -> String {
 
 /// Generate an RIS entry.
 pub fn to_ris(article: &Article) -> String {
-    let mut lines = vec!["TY  - JOUR".to_string()];
+    let mut lines = vec![format!("TY  - {}", entry_type(article).1)];
 
     for author in &article.authors {
         let name = match (&author.fore_name, &author.initials) {
-            (Some(f), _) => format!("{} {}", author.last_name, f),
-            (None, Some(i)) => format!("{} {}", author.last_name, i),
+            (Some(f), _) => format!("{}, {}", author.last_name, f),
+            (None, Some(i)) => format!("{}, {}", author.last_name, i),
             (None, None) => author.last_name.clone(),
         };
         lines.push(format!("AU  - {name}"));
@@ -164,6 +247,25 @@ pub fn to_ris(article: &Article) -> String {
         lines.push(format!("AB  - {abs}"));
     }
 
+    if let Some(url) = article_url(article) {
+        lines.push(format!("UR  - {url}"));
+    }
+    for keyword in &article.keywords {
+        lines.push(format!("KW  - {keyword}"));
+    }
+    for (key, tag) in [
+        ("publisher", "PB"),
+        ("place", "CY"),
+        ("edition", "ET"),
+        ("book_title", "T2"),
+        ("university", "PB"),
+        ("institution", "PB"),
+        ("access_date", "Y2"),
+    ] {
+        if let Some(value) = article.extra_fields.get(key) {
+            lines.push(format!("{tag}  - {value}"));
+        }
+    }
     lines.push("ER  -".into());
     lines.join("\n")
 }
@@ -227,18 +329,27 @@ pub fn to_csl_json(article: &Article) -> serde_json::Value {
 
     serde_json::json!({
         "id": article.id,
-        "type": "article-journal",
+        "type": entry_type(article).2,
         "title": article.title,
         "author": authors,
         "issued": article.year.map(|y| {
-            serde_json::json!({ "date-parts": [[y, article.month.unwrap_or(0)]] })
+            serde_json::json!({ "date-parts": [article.month.filter(|m| (1..=12).contains(m)).map(|m| vec![y, u16::from(m)]).unwrap_or_else(|| vec![y])] })
         }),
-        "container-title": article.journal,
+        "container-title": article.extra_fields.get("book_title").or_else(|| article.extra_fields.get("website_title")).map(String::as_str).or(article.journal.as_deref()),
+        "publisher": article.extra_fields.get("publisher").or_else(||article.extra_fields.get("university")).or_else(||article.extra_fields.get("institution")),
+        "publisher-place": article.extra_fields.get("place"),
+        "edition": article.extra_fields.get("edition"),
+        "genre": article.extra_fields.get("report_type"),
+        "number": article.extra_fields.get("patent_number"),
+        "accessed": article.extra_fields.get("access_date").map(|value|serde_json::json!({"raw":value})),
         "volume": article.volume,
         "issue": article.issue,
         "page": article.pages,
         "DOI": article.doi(),
+        "URL": article_url(article),
+        "keyword": article.keywords.join(", "),
         "PMID": article.pmid(),
+        "ISBN": article_isbn(article),
         "abstract": article.abstract_text,
     })
 }
@@ -288,7 +399,7 @@ mod tests {
         let bib = to_bibtex(&sample());
         assert!(bib.starts_with("@article{smith2024a,"));
         assert!(bib.contains("title = {A breakthrough in CRISPR off-target detection}"));
-        assert!(bib.contains("author = {John A Smith and Jones B}"));
+        assert!(bib.contains("author = {Smith, John A and Jones, B}"));
         assert!(bib.contains("journal = {Nature Genetics}"));
         assert!(bib.contains("year = {2024}"));
         assert!(bib.contains("volume = {56}"));
@@ -317,7 +428,7 @@ mod tests {
 
         assert!(bib.contains("title = {R\\&D at 100\\%: A\\_B \\{C\\} \\#1, \\$2, C\\textasciicircum{}D \\textasciitilde{}E, F\\textbackslash{}G},"));
         assert!(bib.contains("journal = {Journal of R\\&D Systems}"));
-        assert!(bib.contains("author = {John A O'Neill \\& Co and Jones B}"));
+        assert!(bib.contains("author = {O'Neill \\& Co, John A and Jones, B}"));
         assert!(bib.contains("volume = {10\\_20}"));
         assert!(bib.contains("number = {Issue \\#3}"));
         assert!(bib.contains("pages = {1\\&2--3\\_4}"));
@@ -328,7 +439,7 @@ mod tests {
     fn ris_contains_fields() {
         let ris = to_ris(&sample());
         assert!(ris.starts_with("TY  - JOUR"));
-        assert!(ris.contains("AU  - Smith John A"));
+        assert!(ris.contains("AU  - Smith, John A"));
         assert!(ris.contains("TI  - A breakthrough"));
         assert!(ris.contains("DO  - 10.1000/test"));
         assert!(ris.contains("ER  -"));
@@ -363,6 +474,31 @@ mod tests {
         });
         titled.year = Some(2020);
         assert_eq!(cite_key(&titled), "choi2020tutorial");
+    }
+
+    #[test]
+    fn csl_collection_is_valid_array_with_precise_dates_and_types() {
+        let mut article = Article::new("book", "A Book");
+        article.pub_types = vec!["Book".into()];
+        article.year = Some(2024);
+        article.identifiers.push(bib_types::Identifier::new(
+            bib_types::IdKind::Other,
+            "https://example.org/book",
+        ));
+        let output = render_all(
+            &[article.clone(), Article::new("two", "Second")],
+            ExportFormat::CslJson,
+        );
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(value.as_array().unwrap().len(), 2);
+        assert_eq!(
+            value[0]["issued"]["date-parts"][0],
+            serde_json::json!([2024])
+        );
+        assert_eq!(value[0]["type"], "book");
+        assert_eq!(value[0]["URL"], "https://example.org/book");
+        assert!(to_bibtex(&article).starts_with("@book{"));
+        assert!(to_ris(&article).starts_with("TY  - BOOK"));
     }
 
     #[test]

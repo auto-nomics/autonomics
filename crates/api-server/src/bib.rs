@@ -69,10 +69,15 @@ pub fn router(shared: BibShared) -> Router {
     }
     Router::new()
         .merge(crate::discovery::router())
+        .merge(crate::bib_transfer::router())
         .merge(crate::snapshots::router())
         .merge(crate::rss::router())
         .route("/health", get(health))
         .route("/articles", get(list_articles).post(create_article))
+        .route("/articles/manual", post(create_manual_article))
+        .route("/articles/trash", get(list_article_trash))
+        .route("/articles/{id}/restore", post(restore_article))
+        .route("/articles/{id}/permanent", delete(permanently_delete_article))
         .route("/articles/unfiled", get(list_unfiled_articles))
         .route("/articles/import", post(import_article))
         .route(
@@ -705,23 +710,17 @@ fn article_from_input(
     if let Some(arxiv) = normalize_optional(input.arxiv.as_deref()) {
         identifiers.push(Identifier::new(IdKind::Arxiv, arxiv));
     }
-    if identifiers.is_empty() {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "at least one of doi, pmid, or arxiv is required",
-        ));
-    }
 
     let authors = input
         .authors
         .iter()
         .filter_map(|display| parse_display_author(display))
         .collect::<Vec<_>>();
-    let primary = &identifiers[0];
+    let id = identifiers.first().map(|primary| format!("{}:{}", primary.kind.as_str(), primary.value)).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let now = Utc::now();
 
     Ok(Article {
-        id: format!("{}:{}", primary.kind.as_str(), primary.value),
+        id,
         title: input.title.trim().to_owned(),
         authors,
         identifiers,
@@ -738,6 +737,7 @@ fn article_from_input(
         pub_types: input.pub_types,
         keywords: input.keywords,
         source: parse_article_source(input.source.as_deref()),
+        extra_fields: Default::default(),
         created_at: Some(now),
         updated_at: Some(now),
     })
@@ -948,6 +948,7 @@ async fn get_article(
 
     let attachments = shared.bib.zotero_attachments(&id).await.map_err(internal)?;
     Ok(Json(json!({
+        "revision": bib_base::article_revision(&article),
         "article": article,
         "attachments":attachments,
         "fulltext": fulltext,
@@ -956,52 +957,101 @@ async fn get_article(
     })))
 }
 
+#[derive(Deserialize)]
+struct UpdateArticleRequest {
+    #[serde(flatten)]
+    article: Article,
+    expected_revision: Option<String>,
+}
+
+fn reliability_error(failure: bib_base::Error) -> (StatusCode, Json<ApiError>) {
+    let status = match &failure {
+        bib_base::Error::MetadataConflict(_) => StatusCode::CONFLICT,
+        bib_base::Error::NotFound(_) => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    error(status, failure.to_string())
+}
+
+fn validate_edited_article(article: &mut Article) -> Result<(), (StatusCode, Json<ApiError>)> {
+    article.title = article.title.trim().to_owned();
+    if article.title.is_empty() { return Err(error(StatusCode::BAD_REQUEST,"title cannot be empty")); }
+    if article.year.is_some_and(|year| year == 0 || year > 9999) { return Err(error(StatusCode::BAD_REQUEST,"year must be between 1 and 9999")); }
+    if article.month.is_some_and(|month| month == 0 || month > 12) { return Err(error(StatusCode::BAD_REQUEST,"month must be between 1 and 12")); }
+    for author in &mut article.authors { author.last_name=author.last_name.trim().to_owned(); if author.last_name.is_empty() { return Err(error(StatusCode::BAD_REQUEST,"author family or organization name cannot be empty")); } }
+    let mut kinds=std::collections::HashSet::new();
+    for identifier in &mut article.identifiers {
+        identifier.value=identifier.value.trim().to_owned();
+        if identifier.value.is_empty() || !kinds.insert(identifier.kind.as_str()) { return Err(error(StatusCode::BAD_REQUEST,"identifier values must be nonempty and each identifier type may occur only once")); }
+    }
+    Ok(())
+}
+async fn create_manual_article(
+    State(shared): State<Arc<BibShared>>,
+    Json(mut article): Json<Article>,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    validate_edited_article(&mut article)?;
+    let article=shared.bib.create_manual_article_checked(article).await.map_err(reliability_error)?;
+    Ok((StatusCode::CREATED, Json(json!({"revision":bib_base::article_revision(&article),"article":article}))))
+}
+
 async fn update_article(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
-    Json(mut article): Json<Article>,
+    Json(mut input): Json<UpdateArticleRequest>,
 ) -> ApiResult {
-    let existing = shared
-        .bib
-        .get_article(&id)
-        .await
-        .map_err(internal)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
-
-    if article.title.trim().is_empty() {
-        return Err(error(StatusCode::BAD_REQUEST, "title cannot be empty"));
-    }
-    article.id = id;
-    article.created_at = existing.created_at;
-    article.updated_at = Some(Utc::now());
-    shared
-        .bib
-        .upsert_article(&article)
-        .await
-        .map_err(internal)?;
-    Ok(Json(json!({ "article": article })))
+    validate_edited_article(&mut input.article)?;
+    input.article.id = id;
+    let article = shared.bib.update_article_checked(input.article,input.expected_revision).await.map_err(reliability_error)?;
+    Ok(Json(json!({ "revision":bib_base::article_revision(&article), "article": article })))
 }
 
+#[derive(Deserialize)]
+struct ArticleTrashQuery { limit: Option<usize>, offset: Option<usize> }
+async fn list_article_trash(State(shared): State<Arc<BibShared>>, Query(input): Query<ArticleTrashQuery>) -> ApiResult {
+    let (articles,total) = shared.bib.list_article_trash(input.limit.unwrap_or(50).clamp(1,500),input.offset.unwrap_or(0)).await.map_err(internal)?;
+    Ok(Json(json!({"articles":articles,"total":total})))
+}
+async fn restore_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
+    let restored = shared.bib.set_article_trash(&id,false).await.map_err(reliability_error)?;
+    Ok(Json(json!({"restored":restored,"id":id})))
+}
 async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
-    let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
-    let removed = shared.bib.delete_article(&id).await.map_err(internal)?;
-    if removed > 0 {
-        if let Some(fulltext) = fulltext {
-            if let Some(path) = vfs_virtual_path(&fulltext.file_path) {
-                if let Err(cleanup_error) = delete_stored_file(&shared, &path).await {
-                    tracing::warn!(
-                        path = %path,
-                        error = %cleanup_error.1.error,
-                        "article was removed but its full-text original file remains"
-                    );
-                }
-            }
-            delete_article_figures(&shared, &fulltext).await;
+    let deleted = shared.bib.set_article_trash(&id,true).await.map_err(reliability_error)?;
+    Ok(Json(json!({"deleted":deleted,"trashed":true,"id":id})))
+}
+async fn permanently_delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
+    let attachments = shared.bib.zotero_attachments(&id).await.map_err(internal)?;
+    let mut files = Vec::new();
+    for attachment in &attachments {
+        if let Some(fulltext) = shared.bib.get_attachment_fulltext(&id,&attachment.key).await.map_err(internal)? {
+            files.push((attachment.key.clone(),fulltext));
         }
     }
-    Ok(Json(
-        json!({ "deleted": removed > 0, "id": id, "rows_removed": removed }),
-    ))
+    let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
+    let removed = shared.bib.erase_trashed_article(&id).await.map_err(reliability_error)?;
+    if removed > 0 {
+        for (key,file) in files { delete_attachment_figures(&shared,&id,&key,&file).await; }
+        if let Some(ref file) = fulltext { delete_article_figures(&shared,file).await; }
+        let mut paths = std::collections::HashSet::new();
+        for attachment in attachments { if let Some(path) = attachment.vfs_path { paths.insert(path); } }
+        if let Some(file) = fulltext { paths.insert(file.file_path); }
+        for path in paths {
+            if let Some(path) = vfs_virtual_path(&path) {
+                if let Err(failure) = delete_stored_file(&shared,&path).await {
+                    tracing::warn!(path=%path,error=%failure.1.error,"article removed but stored object remains");
+                }
+            }
+        }
+    }
+    Ok(Json(json!({"deleted":removed>0,"id":id,"rows_removed":removed})))
+}
+
+async fn require_active_article(shared: &BibShared, id: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if shared.bib.get_article(id).await.map_err(internal)?.is_none() {
+        return Err(error(StatusCode::NOT_FOUND, "Article is missing or in trash; restore it before accessing attachments."));
+    }
+    Ok(())
 }
 
 async fn structure_response(
@@ -1010,6 +1060,7 @@ async fn structure_response(
     key: Option<&str>,
     generate: bool,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let fulltext = match key {
         Some(key) => shared.bib.get_attachment_fulltext(id, key).await,
         None => shared.bib.get_fulltext(id).await,
@@ -1068,6 +1119,7 @@ async fn get_fulltext(
     Path(id): Path<String>,
     Query(page_query): Query<FulltextPageQuery>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let (offset, limit) = page_query.normalized();
     let page = shared
         .bib
@@ -1096,6 +1148,7 @@ async fn list_attachments(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let attachments = shared.bib.zotero_attachments(&id).await.map_err(internal)?;
     Ok(Json(json!({ "attachments": attachments })))
 }
@@ -1313,6 +1366,7 @@ async fn get_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let attachment = shared
         .bib
         .zotero_attachment_by_key(&id, &key)
@@ -1331,6 +1385,7 @@ async fn download_attachment(
     Path((id, key)): Path<(String, String)>,
     Query(query): Query<AttachmentDownloadQuery>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    require_active_article(&shared, &id).await?;
     if let Some(ft) = shared
         .bib
         .get_attachment_fulltext(&id, &key)
@@ -1413,6 +1468,7 @@ async fn set_preferred_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let attachment = shared
         .bib
         .zotero_attachment_by_key(&id, &key)
@@ -1477,6 +1533,7 @@ async fn delete_attachment_by_key(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let existing_fulltext = shared
         .bib
         .get_attachment_fulltext(&id, &key)
@@ -1525,6 +1582,7 @@ async fn get_attachment_fulltext(
     Path((id, key)): Path<(String, String)>,
     Query(page_query): Query<FulltextPageQuery>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let (offset, limit) = page_query.normalized();
     let fulltext = shared
         .bib
@@ -1560,6 +1618,7 @@ async fn reextract_attachment_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let attachment = shared
         .bib
         .zotero_attachment_by_key(&id, &key)
@@ -1738,6 +1797,7 @@ async fn reextract_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let existing = shared
         .bib
         .get_fulltext(&id)
@@ -1791,6 +1851,7 @@ async fn download_fulltext(
     method: Method,
     headers: HeaderMap,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    require_active_article(&shared, &id).await?;
     let fulltext = shared
         .bib
         .get_fulltext(&id)
@@ -1916,6 +1977,7 @@ async fn download_figure(
     State(shared): State<Arc<BibShared>>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    require_active_article(&shared, &id).await?;
     let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
     if fulltext.is_none() {
         return Err(error(
@@ -2005,6 +2067,7 @@ async fn delete_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let existing = shared.bib.get_fulltext(&id).await.map_err(internal)?;
     shared.bib.delete_fulltext(&id).await.map_err(internal)?;
     if let Some(existing) = existing {
@@ -2026,6 +2089,7 @@ async fn list_annotations(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     let annotations = shared
         .bib
         .list_annotations(&id, None)
@@ -2049,6 +2113,7 @@ async fn add_annotation(
     Path(id): Path<String>,
     Json(input): Json<AddAnnotationRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    require_active_article(&shared, &id).await?;
     if input.content.trim().is_empty() {
         return Err(error(StatusCode::BAD_REQUEST, "content is required"));
     }
@@ -2136,6 +2201,7 @@ async fn list_attachment_annotations(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
 ) -> ApiResult {
+    require_active_article(&shared, &id).await?;
     shared
         .bib
         .zotero_attachment_by_key(&id, &key)
@@ -2155,6 +2221,7 @@ async fn add_attachment_annotation(
     Path((id, key)): Path<(String, String)>,
     Json(input): Json<AddAnnotationRequest>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
+    require_active_article(&shared, &id).await?;
     shared
         .bib
         .zotero_attachment_by_key(&id, &key)

@@ -405,6 +405,9 @@ impl BibCore {
         )
         .await?;
 
+        conn.execute_batch(crate::reliability::SCHEMA).await?;
+        self.conn().execute_batch(crate::reliability::SCHEMA).await?;
+
         crate::saved_searches::ensure(&conn).await?;
         crate::saved_searches::ensure(&self.conn()).await?;
         crate::discovery_import::ensure(&conn).await?;
@@ -454,14 +457,14 @@ impl BibCore {
             .transpose()?
             .is_some_and(|token| uuid::Uuid::parse_str(&token).is_ok());
         drop(rows);
-        if version != "11" || !token_valid {
+        if version != "12" || !token_valid {
             let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
             let result = async {
                 crate::search_projection::ensure(&tx,true).await?;
                 tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(bib_meta.value AS INTEGER)+1",()).await?;
                 tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_revision_token',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",turso::params![uuid::Uuid::new_v4().to_string()]).await?;
                 tx.execute("INSERT INTO searchOutbox(articleID,revision) SELECT id,(SELECT CAST(value AS INTEGER) FROM bib_meta WHERE key='search_revision') FROM articles WHERE 1=1 ON CONFLICT(articleID) DO UPDATE SET revision=excluded.revision",()).await?;
-                tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_index_version','11') ON CONFLICT(key) DO UPDATE SET value=excluded.value",()).await?;
+                tx.execute("INSERT INTO bib_meta(key,value) VALUES ('search_index_version','12') ON CONFLICT(key) DO UPDATE SET value=excluded.value",()).await?;
                 Ok::<_,Error>(())
             }.await;
             if let Err(error) = result {
@@ -643,16 +646,26 @@ impl BibCore {
             conn.execute(sql, turso::params_from_iter(params)).await?;
         }
 
+        if article.extra_fields.is_empty() {
+            conn.execute("DELETE FROM articleExtraFields WHERE articleID=?1", turso::params![article.id.as_str()]).await?;
+        } else {
+            conn.execute("INSERT INTO articleExtraFields(articleID,data) VALUES (?1,?2) ON CONFLICT(articleID) DO UPDATE SET data=excluded.data", turso::params![article.id.as_str(),serde_json::to_string(&article.extra_fields)?]).await?;
+        }
         Ok(())
     }
 
     /// Look up a single article by its internal ID.
     pub async fn get_article(&self, id: &str) -> Result<Option<Article>> {
         let conn = self.conn();
+        if crate::reliability::is_trashed(&conn, id).await? { return Ok(None); }
+        Self::get_article_on(&conn, id).await
+    }
+
+    pub(crate) async fn get_article_on(conn: &Connection, id: &str) -> Result<Option<Article>> {
         let mut rows = conn
             .query(
                 "SELECT id, title, abstract, year, month, journal, volume, issue, pages, \
-                 issn, essn, language, pub_types, keywords, source, created_at, updated_at \
+                 issn, essn, language, pub_types, keywords, source, created_at, updated_at, COALESCE((SELECT data FROM articleExtraFields e WHERE e.articleID=articles.id),'{}') \
                  FROM articles WHERE id = ?1",
                 turso::params![id],
             )
@@ -680,6 +693,10 @@ impl BibCore {
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default();
+
+        article.extra_fields = serde_json::from_str(&row.get::<String>(17)?)?;
+        article.created_at = opt_string(row.get_value(15)?).and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|d| d.with_timezone(&chrono::Utc));
+        article.updated_at = opt_string(row.get_value(16)?).and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|d| d.with_timezone(&chrono::Utc));
 
         // Close the header cursor before issuing the child-row queries —
         // an open turso cursor keeps the connection's statement state
@@ -719,6 +736,8 @@ impl BibCore {
                 "doi" => IdKind::Doi,
                 "pmid" => IdKind::Pmid,
                 "pmc" => IdKind::Pmc,
+                "embase" => IdKind::Embase,
+                "biorxiv" => IdKind::Biorxiv,
                 "arxiv" => IdKind::Arxiv,
                 "s2" => IdKind::S2,
                 "openalex" => IdKind::OpenAlex,
@@ -737,7 +756,7 @@ impl BibCore {
         let conn = self.conn();
         let mut rows = conn
             .query(
-                "SELECT article_id FROM identifiers WHERE kind = ?1 AND value = ?2 LIMIT 1",
+                "SELECT article_id FROM identifiers WHERE kind = ?1 AND value = ?2 AND article_id NOT IN (SELECT articleID FROM articleTrash) LIMIT 1",
                 turso::params![kind.as_str(), value],
             )
             .await?;
@@ -761,9 +780,15 @@ impl BibCore {
     /// `delete_article` handler in `api-server` for the on-disk cleanup
     /// pattern).
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
+        self.erase_article(id, false).await
+    }
+    pub(crate) async fn erase_article(&self, id: &str, require_trash: bool) -> Result<u64> {
         let conn = self.write_conn();
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let result = async {
+            if require_trash && !crate::reliability::is_trashed(&tx, id).await? {
+                return Err(Error::MetadataConflict("Move the article to trash before permanently deleting it.".into()));
+            }
             crate::zotero_model::delete_article_item(&tx, id).await?;
             let n = tx
                 .execute("DELETE FROM articles WHERE id = ?1", turso::params![id])
@@ -797,7 +822,7 @@ impl BibCore {
     pub async fn article_count(&self) -> Result<i64> {
         let conn = self.conn();
         let mut rows = conn
-            .query("SELECT COUNT(*) FROM articles", turso::params![])
+            .query("SELECT COUNT(*) FROM articles WHERE id NOT IN (SELECT articleID FROM articleTrash)", turso::params![])
             .await?;
         let row = rows
             .next()
@@ -813,7 +838,7 @@ impl BibCore {
     pub async fn list_article_ids(&self) -> Result<Vec<String>> {
         let conn = self.conn();
         let mut rows = conn
-            .query("SELECT id FROM articles ORDER BY id", turso::params![])
+            .query("SELECT id FROM articles WHERE id NOT IN (SELECT articleID FROM articleTrash) ORDER BY id", turso::params![])
             .await?;
         let mut ids = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -1085,7 +1110,7 @@ pub(crate) async fn sync_legacy_search_terms(conn: &Connection, article_id: &str
 
     let mut article_rows = conn
         .query(
-            "SELECT a.title, COALESCE(a.abstract,''), I.key FROM articles a JOIN articleItems MAP ON MAP.article_id=a.id JOIN items I ON I.itemID=MAP.itemID WHERE a.id=?1",
+            "SELECT a.title, COALESCE(a.abstract,''), I.key FROM articles a JOIN articleItems MAP ON MAP.article_id=a.id JOIN items I ON I.itemID=MAP.itemID WHERE a.id=?1 AND a.id NOT IN (SELECT articleID FROM articleTrash)",
             turso::params![article_id],
         )
         .await?;

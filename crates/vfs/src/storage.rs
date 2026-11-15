@@ -692,6 +692,48 @@ impl OpendalFileStorage {
         Ok(())
     }
 
+    /// Install derived data only if the destination is absent, under the same
+    /// per-object lock used by replacements. Never overwrite an existing object.
+    pub async fn write_bytes_if_absent(
+        &self,
+        virtual_path: &str,
+        content: Vec<u8>,
+    ) -> Result<(), opendal::Error> {
+        self.check_writable(virtual_path)?;
+        let path = self.resolve_path(virtual_path);
+        let operator = self.resolve(virtual_path);
+        let staging_path = staging_key(&path);
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            operator
+                .create_dir(&format!("{}/", parent.to_string_lossy()))
+                .await?;
+        }
+        operator
+            .write(&staging_path, opendal::Buffer::from(content))
+            .await?;
+        let lock = self.object_lock(&path);
+        let _guard = lock.write().await;
+        match operator.stat(&path).await {
+            Ok(_) => {
+                let _ = operator.delete(&staging_path).await;
+                return Err(opendal::Error::new(
+                    opendal::ErrorKind::AlreadyExists,
+                    "destination already exists",
+                ));
+            }
+            Err(error) if error.kind() == opendal::ErrorKind::NotFound => {}
+            Err(error) => {
+                let _ = operator.delete(&staging_path).await;
+                return Err(error);
+            }
+        }
+        if let Err(error) = operator.rename(&staging_path, &path).await {
+            let _ = operator.delete(&staging_path).await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Read a bounded byte range while holding the object's read lock.
     pub async fn read_range(
         &self,

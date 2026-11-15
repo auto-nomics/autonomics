@@ -185,6 +185,8 @@ export type BibArticle = {
   essn?: string | null;
   identifiers?: Array<{ kind: string; value: string }>;
   keywords?: string[];
+  pub_types?: string[];
+  extra_fields?: Record<string, string>;
   source?: string;
 };
 
@@ -239,6 +241,7 @@ export type BibRequest = {
 };
 
 export type BibDetail = {
+  revision?: string;
   article: BibArticle;
   attachments?: BibAttachment[];
   fulltext: BibFullText | null;

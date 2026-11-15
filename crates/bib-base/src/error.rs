@@ -34,6 +34,8 @@ pub enum Error {
     SearchConflict(String),
     #[error("collection conflict: {0}")]
     CollectionConflict(String),
+    #[error("metadata conflict: {0}")]
+    MetadataConflict(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("quote anchor failed: {0}")]

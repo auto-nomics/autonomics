@@ -568,7 +568,7 @@ impl BibCore {
             return Ok(Vec::new());
         }
         if terms.is_empty() {
-            let mut rows = conn.query("SELECT a.id,a.title,a.year,i.key FROM articles a JOIN articleItems m ON m.article_id=a.id JOIN items i ON i.itemID=m.itemID ORDER BY a.title COLLATE NOCASE,a.id", ()).await?;
+            let mut rows = conn.query("SELECT a.id,a.title,a.year,i.key FROM articles a JOIN articleItems m ON m.article_id=a.id JOIN items i ON i.itemID=m.itemID WHERE a.id NOT IN (SELECT articleID FROM articleTrash) ORDER BY a.title COLLATE NOCASE,a.id", ()).await?;
             let mut hits = Vec::new();
             while let Some(row) = rows.next().await? {
                 let anchor_key = row.get::<String>(3)?;
@@ -591,7 +591,7 @@ impl BibCore {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT s.articleID,s.anchorKey,s.field,a.title,a.year FROM searchTerms s JOIN articles a ON a.id=s.articleID WHERE s.term IN ({placeholders}) AND s.articleID IN (SELECT articleID FROM searchTerms WHERE term IN ({placeholders}) GROUP BY articleID HAVING COUNT(DISTINCT term)=?{}) GROUP BY s.articleID,s.anchorKey,s.field,a.title,a.year ORDER BY CASE s.field WHEN 'title' THEN 0 WHEN 'abstract' THEN 1 WHEN 'annotation' THEN 2 ELSE 3 END,COUNT(*) DESC,a.id,s.anchorKey",
+            "SELECT s.articleID,s.anchorKey,s.field,a.title,a.year FROM searchTerms s JOIN articles a ON a.id=s.articleID WHERE a.id NOT IN (SELECT articleID FROM articleTrash) AND s.term IN ({placeholders}) AND s.articleID IN (SELECT articleID FROM searchTerms WHERE term IN ({placeholders}) GROUP BY articleID HAVING COUNT(DISTINCT term)=?{}) GROUP BY s.articleID,s.anchorKey,s.field,a.title,a.year ORDER BY CASE s.field WHEN 'title' THEN 0 WHEN 'abstract' THEN 1 WHEN 'annotation' THEN 2 ELSE 3 END,COUNT(*) DESC,a.id,s.anchorKey",
             terms.len() + 1
         );
         let mut params = terms.into_iter().map(Value::Text).collect::<Vec<_>>();

@@ -586,6 +586,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_bib_refreshes_edited_metadata_without_restarting_resolver() {
+        let bib = setup_bib().await;
+        let resolver = CitationResolver::new(bib.clone());
+        let doc = make_doc_with_citations();
+        let before = resolver.generate_bib(&doc).await;
+        assert!(!before.contains("Updated Publication"));
+        let mut article = bib.get_article("art-1").await.unwrap().unwrap();
+        article.journal = Some("Updated Publication".into());
+        article.volume = Some("42".into());
+        bib.upsert_article(&article).await.unwrap();
+        let after = resolver.generate_bib(&doc).await;
+        assert!(after.contains("Updated Publication"));
+        assert!(after.contains("volume = {42}"));
+    }
+
+    #[tokio::test]
     async fn generate_bib_resolved_only() {
         let bib = setup_bib().await;
         let resolver = CitationResolver::new(bib);

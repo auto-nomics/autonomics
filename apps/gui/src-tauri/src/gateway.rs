@@ -422,7 +422,13 @@ pub async fn start_events(
 #[serde(rename_all = "camelCase")]
 pub struct BibUploadRequest {
     pub article_id: String,
-    pub path: String,
+    pub path: Option<String>,
+    pub data_base64: Option<String>,
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub append: bool,
+    pub preferred: Option<bool>,
+    pub title: Option<String>,
 }
 
 #[tauri::command]
@@ -430,37 +436,65 @@ pub async fn upload_bib_fulltext(
     state: State<'_, GatewayState>,
     request: BibUploadRequest,
 ) -> Result<Value, String> {
-    let path = PathBuf::from(request.path);
-    let metadata = std::fs::metadata(&path).map_err(|error| error.to_string())?;
-    if !metadata.is_file() {
-        return Err("selected full text is not a file".to_string());
-    }
-    if metadata.len() > MAX_BIB_UPLOAD_BYTES {
-        return Err(format!(
-            "selected file exceeds the {} MiB upload limit",
-            MAX_BIB_UPLOAD_BYTES / (1024 * 1024)
-        ));
-    }
-    let filename = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("selected file has an invalid name")?
-        .to_owned();
+    let part = if let Some(encoded) = request.data_base64 {
+        if request.path.is_some() {
+            return Err("choose file bytes or path, not both".into());
+        }
+        if encoded.len() > (MAX_BIB_UPLOAD_BYTES as usize).div_ceil(3) * 4 {
+            return Err("attachment exceeds 50 MiB upload limit".into());
+        }
+        let bytes = BASE64.decode(encoded).map_err(|error| error.to_string())?;
+        if bytes.len() > MAX_BIB_UPLOAD_BYTES as usize {
+            return Err("attachment exceeds 50 MiB upload limit".into());
+        }
+        let filename = request
+            .filename
+            .filter(|name| !name.trim().is_empty())
+            .ok_or("attachment filename is required")?;
+        reqwest::multipart::Part::bytes(bytes).file_name(filename)
+    } else {
+        let path = PathBuf::from(request.path.ok_or("attachment path is required")?);
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err("selected attachment is not a file".into());
+        }
+        if metadata.len() > MAX_BIB_UPLOAD_BYTES {
+            return Err("attachment exceeds 50 MiB upload limit".into());
+        }
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("selected file has an invalid name")?
+            .to_owned();
+        reqwest::multipart::Part::file(&path)
+            .await
+            .map_err(|error| format!("read selected file: {error}"))?
+            .file_name(filename)
+    };
 
     let base = lock(&state.base).clone();
     let token = lock(&state.token).clone();
     let url = endpoint(
         &base,
         &format!(
-            "bib/articles/{}/fulltext",
-            encoded_segment(&request.article_id)
+            "bib/articles/{}/{}",
+            encoded_segment(&request.article_id),
+            if request.append {
+                "attachments"
+            } else {
+                "fulltext"
+            }
         ),
     );
-    let part = reqwest::multipart::Part::file(&path)
-        .await
-        .map_err(|error| format!("read selected file: {error}"))?
-        .file_name(filename);
-    let form = reqwest::multipart::Form::new().part("file", part);
+    let mut form = reqwest::multipart::Form::new().part("file", part);
+    if let Some(preferred) = request.preferred {
+        form = form.text("preferred", preferred.to_string());
+    }
+    if let Some(title) = request.title {
+        form = form.text("title", title);
+    }
     let response = state
         .http
         .post(url)

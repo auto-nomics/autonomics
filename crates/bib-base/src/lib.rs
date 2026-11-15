@@ -113,3 +113,8 @@ pub fn default_gateway() -> LiteratureGateway {
 // Re-export bib-types for convenience so downstream code can import
 // types and storage from a single crate.
 pub use bib_types::*;
+
+mod reliability;
+pub use reliability::{article_revision, TrashedArticle};
+
+pub mod library_merge;

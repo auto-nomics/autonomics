@@ -302,7 +302,7 @@ impl BibCore {
         let mut counts = std::collections::HashMap::new();
         let mut rows = conn
             .query(
-                "SELECT collectionID,COUNT(*) FROM collectionItems GROUP BY collectionID",
+                "SELECT collectionID,COUNT(*) FROM collectionItems JOIN articleItems USING(itemID) WHERE article_id NOT IN (SELECT articleID FROM articleTrash) GROUP BY collectionID",
                 (),
             )
             .await?;
@@ -357,7 +357,7 @@ impl BibCore {
             .enumerate()
             .map(|(i, c)| (c.id.clone(), i))
             .collect();
-        let mut rows=conn.query("SELECT c.id,a.article_id FROM collectionItems ci JOIN collections c USING(collectionID) JOIN articleItems a USING(itemID) ORDER BY c.id,ci.orderIndex",()).await?;
+        let mut rows=conn.query("SELECT c.id,a.article_id FROM collectionItems ci JOIN collections c USING(collectionID) JOIN articleItems a USING(itemID) WHERE a.article_id NOT IN (SELECT articleID FROM articleTrash) ORDER BY c.id,ci.orderIndex",()).await?;
         while let Some(row) = rows.next().await? {
             if let Some(&i) = index.get(&row.get::<String>(0)?) {
                 out[i].article_ids.push(row.get(1)?);
@@ -681,7 +681,7 @@ impl BibCore {
                 let mut pos_rows = conn
                     .query(
                         "SELECT COALESCE(MAX(position), -1) + 1 \
-                         FROM collection_articles WHERE collection_id = ?1",
+                         FROM collection_articles WHERE collection_id = ?1 AND article_id NOT IN (SELECT articleID FROM articleTrash)",
                         turso::params![collection_id],
                     )
                     .await?;
@@ -753,7 +753,7 @@ impl BibCore {
         let mut sql = String::from(
             "SELECT collection_id, article_id, position, role, fetch_status, \
                     added_by, note, added_at \
-             FROM collection_articles WHERE collection_id = ?1",
+             FROM collection_articles WHERE collection_id = ?1 AND article_id NOT IN (SELECT articleID FROM articleTrash)",
         );
         let mut params: Vec<Value> = vec![collection_id.into()];
         let mut param_idx = 2u8;
@@ -880,8 +880,8 @@ impl BibCore {
                 .query(
                     &format!(
                         "SELECT id, title, abstract, year, month, journal, volume, issue, pages, \
-                         issn, essn, language, pub_types, keywords, source \
-                         FROM articles WHERE id IN ({placeholders})"
+                         issn, essn, language, pub_types, keywords, source, COALESCE((SELECT data FROM articleExtraFields e WHERE e.articleID=articles.id),'{{}}') \
+                         FROM articles WHERE id IN ({placeholders}) AND id NOT IN (SELECT articleID FROM articleTrash)"
                     ),
                     turso::params_from_iter(params),
                 )
@@ -909,6 +909,7 @@ impl BibCore {
                     .as_deref()
                     .and_then(|source| serde_json::from_str(source).ok())
                     .unwrap_or_default();
+                article.extra_fields=serde_json::from_str(&row.get::<String>(15)?)?;
                 articles_by_id.insert(article.id.clone(), article);
             }
         }
@@ -962,6 +963,8 @@ impl BibCore {
                     "doi" => IdKind::Doi,
                     "pmid" => IdKind::Pmid,
                     "pmc" => IdKind::Pmc,
+                    "embase" => IdKind::Embase,
+                    "biorxiv" => IdKind::Biorxiv,
                     "arxiv" => IdKind::Arxiv,
                     "s2" => IdKind::S2,
                     "openalex" => IdKind::OpenAlex,
@@ -1031,6 +1034,7 @@ impl BibCore {
         } else {
             "1=1".to_owned()
         };
+        let scope = format!("({scope}) AND a.id NOT IN (SELECT articleID FROM articleTrash)");
         let (ids, total) = if input.query.trim().is_empty() {
             let mut rows = conn
                 .query(format!("SELECT COUNT(*) FROM articles a WHERE {scope}"), ())
@@ -1107,7 +1111,7 @@ impl BibCore {
                     "SELECT collection_id, article_id, position, role, fetch_status, \
                             added_by, note, added_at \
                      FROM collection_articles \
-                     WHERE collection_id = ?1 AND fetch_status = 'fulltext_requested' \
+                     WHERE collection_id = ?1 AND fetch_status = 'fulltext_requested' AND article_id NOT IN (SELECT articleID FROM articleTrash) \
                      ORDER BY added_at DESC",
                     turso::params![cid],
                 )
@@ -1118,7 +1122,7 @@ impl BibCore {
                     "SELECT collection_id, article_id, position, role, fetch_status, \
                             added_by, note, added_at \
                      FROM collection_articles \
-                     WHERE fetch_status = 'fulltext_requested' \
+                     WHERE fetch_status = 'fulltext_requested' AND article_id NOT IN (SELECT articleID FROM articleTrash) \
                      ORDER BY added_at DESC",
                     turso::params![],
                 )
@@ -1152,7 +1156,7 @@ impl BibCore {
         let mut rows = conn
             .query(
                 "SELECT article_id FROM collection_articles \
-                 WHERE collection_id = ?1 ORDER BY position",
+                 WHERE collection_id = ?1 AND article_id NOT IN (SELECT articleID FROM articleTrash) ORDER BY position",
                 turso::params![collection_id],
             )
             .await?;

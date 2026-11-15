@@ -7,6 +7,8 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Copy,
+  Quote,
   ExternalLink,
   Camera,
   File,
@@ -22,12 +24,20 @@ import {
   Pencil,
   Search,
   StickyNote,
+  Star,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { downloadBibAttachment, gatewayRequest, pickUploadFile, saveTextFile, uploadBibFulltext, watchBibCollections } from "@/gateway";
-import { MetadataEditor } from "./metadata-editor";
+import { downloadBibAttachment, gatewayRequest, pickUploadFiles, saveTextFile, uploadBibAttachment, watchBibCollections } from "@/gateway";
+import { parseImportIdentifier } from "./import-identifier";
+import { ZoteroBundleImport } from "./zotero-bundle-import";
+import { BrowserConnectorHelp } from "./browser-connector-help";
+import { LibraryTransferDialog } from "./library-transfer-dialog";
+import { DuplicateReview } from "./duplicate-review";
+import { BatchOrganize } from "./batch-organize";
+import { ArticleTrash } from "./article-trash";
+import { MetadataEditor, extraFieldLabels } from "./metadata-editor";
 import { CollectionTree, type CollectionAction } from "./collection-tree";
 import { collectionPath } from "./collection-tree-model";
 import { openPdfReader, openTxtReader, hasReaderOpener, openReaderEditor } from "@/features/reader";
@@ -86,6 +96,10 @@ type AttachmentEntry = {
   expectedHash?: string | null;
   onDownload?: () => void;
   downloading?: boolean;
+  onRemove?: () => void;
+  onPrefer?: () => void;
+  preferred?: boolean;
+  mutating?: boolean;
   href?: string;
   onClick?: () => void;
 };
@@ -183,7 +197,7 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
     for (const attachment of detail.attachments) {
       const format = /pdf/i.test(attachment.content_type ?? "") || /\.pdf$/i.test(attachment.original_filename ?? "") ? "pdf" : "txt";
       if (attachment.link_mode === 3 && attachment.source_url) entries.push({key:attachment.key,kind:"link",label:attachment.title || "Linked file",caption:attachment.source_url,href:attachment.source_url});
-      else entries.push({key:attachment.key,attachmentKey:attachment.key,filename:attachment.original_filename || attachmentFileName(attachment.path || attachment.vfs_path),expectedHash:attachment.storage_hash,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || "Attachment",caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
+      else entries.push({key:attachment.key,attachmentKey:attachment.key,preferred:attachment.key === fullText?.attachment_key,filename:attachment.original_filename || attachmentFileName(attachment.path || attachment.vfs_path),expectedHash:attachment.storage_hash,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || "Attachment",caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
     }
   } else if (fullText) {
     const format = fullText.file_format?.toLowerCase() ?? null;
@@ -320,6 +334,9 @@ function AttachmentRow({ entry }: { entry: AttachmentEntry }) {
       <button type="button" onClick={entry.onClick} className={cn(className, "min-w-0 flex-1")} disabled={!entry.onClick}>
         {content}
       </button>
+      {entry.onPrefer && <Button type="button" size="icon-xs" variant="ghost" className="shrink-0"
+        aria-label={`Set ${entry.label} as preferred`} title={entry.preferred ? "Preferred attachment" : "Set as preferred attachment"}
+        disabled={entry.mutating || entry.preferred} onClick={entry.onPrefer}><Star className={entry.preferred ? "fill-current" : ""} /></Button>}
       {entry.onDownload && (
         <Button type="button" size="icon-sm" variant="ghost" className="shrink-0"
           aria-label={`Download ${entry.label}`} title={entry.downloading ? "Downloading…" : `Download ${entry.filename || entry.label}`}
@@ -328,6 +345,8 @@ function AttachmentRow({ entry }: { entry: AttachmentEntry }) {
           {entry.downloading ? <LoaderCircle className="animate-spin" /> : <Download />}
         </Button>
       )}
+      {entry.onRemove && <Button type="button" size="icon-xs" variant="ghost" className="shrink-0"
+        aria-label={`Delete ${entry.label}`} title="Delete this attachment" disabled={entry.mutating} onClick={entry.onRemove}><Trash2 /></Button>}
     </div>
   );
 }
@@ -453,6 +472,13 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   const downloadLocks = useRef(new Set<string>());
   const [attachmentsOpen, setAttachmentsOpen] = useState(true);
   const [editingArticle, setEditingArticle] = useState<BibArticle | null>(null);
+  const [editingRevision, setEditingRevision] = useState<string | undefined>();
+  const [creatingArticle, setCreatingArticle] = useState(false);
+  const [transferMode, setTransferMode] = useState<"import" | "export" | null>(null);
+  const [exportIds, setExportIds] = useState<string[]>([]);
+  const [duplicatesOpen, setDuplicatesOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [organizingIds, setOrganizingIds] = useState<string[] | null>(null);
   const [detail, setDetail] = useState<BibDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -638,6 +664,7 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
     detailAbort.current?.abort();
     const abort = new AbortController();
     detailAbort.current = abort;
+    selectionRef.current = articleId;
     setSelectedArticle(articleId);
     setAttachmentsOpen(true);
     setDetail(null);
@@ -701,14 +728,13 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   ];
 
   const importArticle = async () => {
-    const identifier = window.prompt("DOI, PMID, arXiv, or OpenAlex ID");
+    const identifier = window.prompt("DOI, PMID, PMCID, arXiv, or OpenAlex ID (or URL)");
     if (!identifier) return;
     setBusy("import");
     setError(null);
     try {
       const response = await gatewayRequest("POST", "/bib/articles/import", {
-        id_type: "doi",
-        id: identifier,
+        ...parseImportIdentifier(identifier),
         source: null,
         fetch_fulltext: true,
         collection_id: selectedCollection && selectedCollection !== "@unfiled" ? selectedCollection : null,
@@ -802,10 +828,24 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
       setDownloadingAttachments(new Set(downloadLocks.current));
     }
   };
+  const changeAttachment = async (article: BibArticle, entry: AttachmentEntry, remove: boolean) => {
+    if (!entry.attachmentKey) return;
+    if (remove && !window.confirm(`Delete attachment “${entry.label}”? This cannot be undone.`)) return;
+    setBusy("attachment"); setError(null);
+    try {
+      await gatewayRequest(remove ? "DELETE" : "PUT", `/bib/articles/${encodeURIComponent(article.id)}/attachments/${encodeURIComponent(entry.attachmentKey)}${remove ? "" : "/preferred"}`);
+      if (selectionRef.current === article.id) selectArticle(article.id);
+      invalidateMetadata(); void loadLibrary(query);
+    } catch (failure) { setError(String(failure)); }
+    finally { setBusy(null); }
+  };
   const withReader = (entry: AttachmentEntry): AttachmentEntry =>
     entry.kind === "pdf" || entry.kind === "text"
       ? { ...entry, onClick: () => readFulltext(entry.format, entry.attachmentKey),
           onDownload: selected ? () => void downloadAttachment(selected, entry) : undefined,
+          onRemove: selected && entry.attachmentKey ? () => void changeAttachment(selected, entry, true) : undefined,
+          onPrefer: selected && entry.attachmentKey ? () => void changeAttachment(selected, entry, false) : undefined,
+          mutating: busy === "attachment",
           downloading: selected ? downloadingAttachments.has(JSON.stringify([selected.id, entry.key])) : false }
       : entry;
 
@@ -817,39 +857,35 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   };
 
   const uploadForArticle = async (article: BibArticle) => {
-    const file = await pickUploadFile();
-    if (!file) return;
-    setBusy("upload");
-    setError(null);
+    setBusy("upload"); setError(null);
     try {
-      const response = await uploadBibFulltext(article.id, file);
-      const format = String(response?.fulltext?.file_format ?? "").toLowerCase();
-      patchSummary(article.id, (summary) => ({
-        ...summary,
-        pdf: summary.pdf || format === "pdf",
-        file: true,
-        count: Math.max(summary.count, 1),
-      }));
-      if (selectedArticle === article.id) selectArticle(article.id);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setBusy(null);
-    }
+      const files = await pickUploadFiles();
+      if (!files.length) return;
+      const failures: string[] = [];
+      let hasPreferred = article.id === activeDetail?.article.id ? Boolean(activeDetail.fulltext) : Boolean((await gatewayRequest("GET", `/bib/articles/${encodeURIComponent(article.id)}`)).fulltext);
+      for (const file of files) {
+        try {
+          const response = await uploadBibAttachment(article.id, file, { preferred: !hasPreferred });
+          hasPreferred = true;
+          const pdf = /pdf/i.test(response?.attachment?.content_type ?? "");
+          patchSummary(article.id, summary => ({ ...summary, pdf: summary.pdf || pdf, file: true, count: summary.count + 1 }));
+        } catch (failure) { failures.push(`${typeof file === "string" ? file.split(/[\\/]/).pop() : file.name}: ${String(failure)}`); }
+      }
+      if (files.length && selectionRef.current === article.id) selectArticle(article.id);
+      if (failures.length) setError(`Some attachments could not be uploaded: ${failures.join("; ")}`);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(null); }
   };
 
   const deleteFulltextFor = async (article: BibArticle) => {
+    if (!window.confirm(`Delete the preferred attachment for “${article.title}”? This cannot be undone.`)) return;
     setBusy("delete-attachment");
     setError(null);
     try {
       await gatewayRequest("DELETE", `/bib/articles/${encodeURIComponent(article.id)}/fulltext`);
-      patchSummary(article.id, (summary) => ({
-        ...summary,
-        pdf: false,
-        file: false,
-        count: Math.max(0, summary.count - 1),
-      }));
-      if (selectedArticle === article.id) selectArticle(article.id);
+      if (selectionRef.current === article.id) selectArticle(article.id);
+      invalidateMetadata();
+      await loadLibrary(query);
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -858,17 +894,15 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   };
 
   const deleteArticleFor = async (article: BibArticle) => {
-    if (!window.confirm(`Delete “${article.title}”? Its attachments and notes are removed too.`)) return;
+    if (!window.confirm(`Move “${article.title}” to article trash? Its attachments and notes can be restored.`)) return;
     setBusy("delete-article");
     setError(null);
     readerRef.current?.close();
     readerRef.current = null;
     try {
       await gatewayRequest("DELETE", `/bib/articles/${encodeURIComponent(article.id)}`);
-      if (selectedArticle === article.id) {
-        setSelectedArticle(null);
-        setDetail(null);
-      }
+      if (selectionRef.current === article.id) selectArticle(null);
+      setCheckedIds(current => current.filter(id => id !== article.id));
       invalidateMetadata();
       await loadLibrary(query);
     } catch (cause) {
@@ -880,12 +914,26 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
 
   return (
     <div ref={libraryContainer} className={cn("relative isolate grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden", roomy && (externalSidebar ? "grid-cols-[minmax(0,1fr)_336px] grid-rows-1" : "grid-cols-[216px_minmax(0,1fr)_336px] grid-rows-1"))}>
-      {editingArticle && <MetadataEditor article={editingArticle} onClose={() => setEditingArticle(null)} onSaved={article => {
+      {transferMode && <LibraryTransferDialog mode={transferMode} articleIds={exportIds} collectionId={selectedCollection === "@unfiled" ? null : selectedCollection} onClose={() => setTransferMode(null)} onImported={() => { invalidateMetadata(); void loadLibrary(query); }} />}
+      {duplicatesOpen && <DuplicateReview onClose={() => setDuplicatesOpen(false)} onMerged={() => { selectArticle(null); setCheckedIds([]); invalidateMetadata(); void loadLibrary(query); }} />}
+      {organizingIds && <BatchOrganize ids={organizingIds} collections={collections} onClose={() => setOrganizingIds(null)} onChanged={() => { if (selectionRef.current && organizingIds.includes(selectionRef.current)) selectArticle(selectionRef.current); invalidateMetadata(); void loadLibrary(query); }} />}
+      {trashOpen && <ArticleTrash onClose={() => setTrashOpen(false)} onChanged={() => { invalidateMetadata(); void loadLibrary(query); }} />}
+      {(editingArticle || creatingArticle) && <MetadataEditor article={editingArticle ?? {id:"", title:"", authors:[], identifiers:[], keywords:[], pub_types:["Journal Article"], source:"manual"}} revision={editingRevision} create={creatingArticle} onClose={() => { setEditingArticle(null); setCreatingArticle(false); }} onSaved={async (article, revision) => {
         setArticles(current => current.map(value => value.id === article.id ? article : value));
-        setDetail(current => current?.article.id === article.id ? { ...current, article } : current);
+        setDetail(current => current?.article.id === article.id ? { ...current, article, revision } : current);
         setEditingArticle(null);
+        setCreatingArticle(false);
+        let membershipFailure: string | null = null;
+        if (creatingArticle) {
+          if (selectedCollection && selectedCollection !== "@unfiled") {
+            try { await gatewayRequest("POST", `/bib/collections/${encodeURIComponent(selectedCollection)}/articles`, { article_id: article.id }); }
+            catch (failure) { membershipFailure = `Article created, but could not add it to the collection: ${String(failure)}`; }
+          }
+          selectArticle(article.id);
+        }
         invalidateMetadata();
-        void loadLibrary(query);
+        await loadLibrary(query);
+        if (membershipFailure) setError(membershipFailure);
       }} />}
       {advancedOpen && <AdvancedSearchBuilder query={queryDraft} expression={queryDraft === query ? expression : null} onClose={() => setAdvancedOpen(false)} onApply={(expr,text) => {setExpression(expr);setQuery(text);setQueryDraft(text);setAdvancedOpen(false);}} />}
       {((!externalSidebar && libraryOpen) || detailsOpen) && (
@@ -980,8 +1028,10 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
           {mode === "hybrid" && <Button size="xs" variant="secondary" disabled={!topicDraft.trim() || isComposing} onClick={commitMainQuery}>Search topic</Button>}
           {mode === "hybrid" && loading && <Button size="xs" variant="ghost" aria-label="Cancel search" onClick={() => {requestSequence.current++;listAbort.current?.abort();setLoading(false);setError(null);setSearchCancelled(true);}}>Cancel</Button>}
           <Button size="xs" variant="ghost" disabled={indexEngine === "legacy"} onClick={() => setAdvancedOpen(true)}>Advanced</Button>
+          <Button size="icon-sm" variant="ghost" aria-label="New article" title="New article" onClick={() => { setEditingRevision(undefined); setCreatingArticle(true); }}><Plus /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label="Article trash" title="Article trash" onClick={() => setTrashOpen(true)}><Trash2 /></Button>
           <Button size="icon-sm" variant="ghost" aria-label="Import article" title="Import article" onClick={() => void importArticle()} disabled={busy === "import"}>
-            <Plus />
+            <Link2 />
           </Button>
           <Button
             size="icon-sm"
@@ -997,6 +1047,14 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
           </Button>
         </div>
 
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1" aria-label="Library actions">
+          <BrowserConnectorHelp />
+          <ZoteroBundleImport onImported={() => { invalidateMetadata(); void loadLibrary(query); }} />
+          <Button size="xs" variant="ghost" onClick={() => setTransferMode("import")}><Upload />Import file</Button>
+          <Button size="xs" variant="ghost" disabled={!checkedIds.length && !selected} title="Format the checked records, or the selected record" onClick={() => { setExportIds(checkedIds.length ? [...checkedIds] : selected ? [selected.id] : []); setTransferMode("export"); }}><Quote />Export and cite</Button>
+          <Button size="xs" variant="ghost" onClick={() => setDuplicatesOpen(true)}><Copy />Find duplicates</Button>
+          {checkedIds.length > 0 && <Button size="xs" variant="secondary" onClick={() => setOrganizingIds([...checkedIds])}>Organize ({checkedIds.length})</Button>}
+        </div>
         <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
           <select aria-label="Search mode" className="rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={mode} onChange={event => {setLocationError("");setMode(event.target.value as SearchMode);}}><option value="lexical">Keywords</option><option value="hybrid">Topic · experimental</option></select>
           <span className="min-w-0 truncate text-muted-foreground">{scopeLabel}{selectedCollection && includeDescendants ? " · including subcollections" : ""}</span>
@@ -1197,7 +1255,7 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
           </span>
           <div className="flex shrink-0 items-center gap-1">
             {selected && <Button size="icon-xs" variant="ghost" aria-label="Edit metadata" title="Edit metadata"
-              disabled={detailLoading || !activeDetail} onClick={() => activeDetail && setEditingArticle(activeDetail.article)}><Pencil /></Button>}
+              disabled={detailLoading || !activeDetail} onClick={() => { if (activeDetail) { setEditingRevision(activeDetail.revision); setEditingArticle(activeDetail.article); } }}><Pencil /></Button>}
             {selected && <Button size="icon-xs" variant="ghost" aria-label="Upload attachment" title="Upload attachment"
               disabled={busy === "upload"} onClick={() => void uploadForArticle(selected)}><Upload /></Button>}
             {detailLoading && <Badge variant="secondary">Loading</Badge>}
@@ -1252,6 +1310,7 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
                       value={authorName(author)}
                     />
                   ))}
+                  <MetadataRow label="Item type" value={selected.pub_types?.join(", ")} />
                   <MetadataRow label="Publication" value={selected.journal} />
                   <MetadataRow label="Volume" value={selected.volume} />
                   <MetadataRow label="Issue" value={selected.issue} />
@@ -1272,6 +1331,8 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
                       />
                     );
                   })}
+                  {(selected.identifiers ?? []).filter(identifier => identifier.kind === "other" && /^https?:\/\//i.test(identifier.value)).map(identifier => <MetadataRow key={identifier.value} label="URL" value={identifier.value} href={identifier.value} />)}
+                  {Object.entries(selected.extra_fields ?? {}).map(([key, value]) => <MetadataRow key={`extra-${key}`} label={extraFieldLabels[key] ?? key} value={value} href={key === "url" && /^https?:\/\//i.test(value) ? value : null} />)}
                   <MetadataRow label="Abstract" value={selected.abstract_text} />
                   <MetadataRow label="Record" value={selected.id} />
                 </MetadataTable>

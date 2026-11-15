@@ -1,0 +1,27 @@
+[
+  {
+    "file": "apa.csl",
+    "source": "https://raw.githubusercontent.com/citation-style-language/styles/3c3995baaa0c4fe1e5c6328027ff6d985c07bfde/apa.csl",
+    "sha256": "3917def5fc951b104d64216c3373096042368b9704ba269ca83c14ebaba889fc"
+  },
+  {
+    "file": "nlm-citation-sequence.csl",
+    "source": "https://raw.githubusercontent.com/citation-style-language/styles/3c3995baaa0c4fe1e5c6328027ff6d985c07bfde/nlm-citation-sequence.csl",
+    "sha256": "492f7935df42054b33d515f7275122f419780df990ea35925dcbbff0fecf1137"
+  },
+  {
+    "file": "locales-en-US.xml",
+    "source": "https://raw.githubusercontent.com/citation-style-language/locales/14940e56f7c783e4173cafbd92e0f5856f2caa14/locales-en-US.xml",
+    "sha256": "ac864c7c21166b4390d82c31792cdc509400727fa0060b43d8aa17e07f9cb079"
+  },
+  {
+    "file": "china-national-standard-gb-t-7714-2015-numeric.csl",
+    "source": "https://raw.githubusercontent.com/citation-style-language/styles/3c3995baaa0c4fe1e5c6328027ff6d985c07bfde/china-national-standard-gb-t-7714-2015-numeric.csl",
+    "sha256": "d9cd04f94bc21a99dc320d0a2230d5a1fb47e3634c17c5820cf975c40db3c0c7"
+  },
+  {
+    "file": "locales-zh-CN.xml",
+    "source": "https://raw.githubusercontent.com/citation-style-language/locales/14940e56f7c783e4173cafbd92e0f5856f2caa14/locales-zh-CN.xml",
+    "sha256": "95cebc667f2da8fb5b9864e49941e3f867d59f79feba929bc58e8ed6bfd4d582"
+  }
+]

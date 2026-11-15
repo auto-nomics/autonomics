@@ -202,6 +202,7 @@ mod tests {
             pub_types: Vec::new(),
             keywords: Vec::new(),
             source: Default::default(),
+            extra_fields: Default::default(),
             created_at: None,
             updated_at: None,
         };

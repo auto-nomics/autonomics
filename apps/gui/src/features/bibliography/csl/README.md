@@ -1,0 +1,1 @@
+CSL styles and locale bundled from the official Citation Style Language repositories. Exact revisions and hashes are recorded in sources.json. Styles are CC BY-SA 3.0; locale files are CC BY-SA 3.0. Each XML file retains its upstream attribution/license metadata. https://creativecommons.org/licenses/by-sa/3.0/

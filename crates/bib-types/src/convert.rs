@@ -174,6 +174,7 @@ pub fn build_article(
         pub_types: Vec::new(),
         keywords: Vec::new(),
         source,
+        extra_fields: Default::default(),
         created_at: Some(chrono::Utc::now()),
         updated_at: Some(chrono::Utc::now()),
     }
