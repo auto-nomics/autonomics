@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { newId } from "@/lib/utils";
 import { BlockEditor } from "./block-editor";
 import { ModeSwitch, type WikiMode } from "./reading-view";
 import { putEntryContent, updateEntryMeta, type WikiEntry } from "./wiki-api";
@@ -32,7 +33,7 @@ export function EditorView({
   const setTags = (tags: string) => model.update({ tags });
   const setContent = (content: string) => model.update({ content });
   const setSaving = (saving: boolean) => model.update({ saving });
-  const [uploadSource] = useState(() => crypto.randomUUID());
+  const [uploadSource] = useState(newId);
   const setUploading = useCallback((pending: boolean) => model.setUploading(uploadSource, pending), [model, uploadSource]);
   const uploading = pendingImages > 0;
   const [attrsOpen, setAttrsOpen] = useState(false);

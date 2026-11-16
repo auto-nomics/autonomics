@@ -42,6 +42,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { newId } from "@/lib/utils";
 import {
   joinMarkdownBlocks,
   newMarkdownBlock,
@@ -371,7 +372,7 @@ export function BlockEditor({
   };
   const uploadImages = (files: File[]) => {
     if (!files.length) return;
-    const jobs: Upload[] = files.map(file => ({ token: crypto.randomUUID(), file, status: "uploading" }));
+    const jobs: Upload[] = files.map(file => ({ token: newId(), file, status: "uploading" }));
     jobs.forEach(job => pendingTokens.current.add(job.token));
     insertImageText(jobs.map(job => `<!--wiki-image-upload:${job.token}-->`).join("\n\n"));
     setUploads(items => [...items, ...jobs]);
