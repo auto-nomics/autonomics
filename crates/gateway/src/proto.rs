@@ -364,6 +364,30 @@ pub struct SetAgentModelRequest {
     pub spec: String,
 }
 
+/// One open tab in an agent's browser session.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BrowserTabView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+/// `GET /agents/{name}/browser` — live monitoring snapshot of the agent's
+/// browser session. `live` is false (and everything else empty) when the
+/// agent has no live session, e.g. it is not a browser-kind agent or its
+/// previous session has shut down.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct BrowserMonitorView {
+    pub live: bool,
+    pub active_index: usize,
+    pub tabs: Vec<BrowserTabView>,
+    /// PNG screenshot of the active tab's viewport, standard base64.
+    /// Absent when `live` is false or the capture failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screenshot: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AgentModelInfoView {
     /// The agent's current model as a `provider:model` spec.

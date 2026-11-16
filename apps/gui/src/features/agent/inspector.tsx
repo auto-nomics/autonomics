@@ -5,6 +5,7 @@
  */
 
 import { DagMinimap } from "@/features/system/dag-minimap";
+import { BrowserMonitor } from "./browser-monitor";
 import { Fragment } from "react";
 import { Check, Circle, CircleDashed, Copy, History, RefreshCw, X } from "lucide-react";
 import type { AgentInfo, ChatItem } from "@/types";
@@ -86,6 +87,11 @@ export function AgentInspector(props: AgentInspectorProps) {
           </div>
         </div>
         {inspectorOpen && activeAgent ? <DagMinimap key={activeAgent} activeAgent={activeAgent} /> : <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No agent selected</div>}
+      </section>
+
+      <section>
+        <h2 className="mb-1.5 text-[10px] font-medium tracking-widest text-muted-foreground uppercase">Browser</h2>
+        {inspectorOpen && activeAgent ? <BrowserMonitor activeAgent={activeAgent} open={inspectorOpen} /> : <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No agent selected</div>}
       </section>
 
       <section>

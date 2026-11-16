@@ -261,6 +261,58 @@ pub(crate) async fn get_agent_flow(
     Ok(Json(view))
 }
 
+/// Live browser monitor snapshot for an agent. Returns 200 with
+/// `live: false` when no session is up (non-browser agent, or the session
+/// dropped) — polling clients prefer that over 404 churn.
+#[utoipa::path(
+    get,
+    path = "/api/v1/agents/{name}/browser",
+    tag = "agents",
+    responses((status = 200, body = BrowserMonitorView))
+)]
+pub(crate) async fn get_agent_browser(
+    State(state): State<GatewayState>,
+    Path(name): Path<String>,
+) -> GatewayResult<Json<BrowserMonitorView>> {
+    use base64::Engine as _;
+
+    let Some(session) = state.infra.live_browser_session(&name).await else {
+        return Ok(Json(BrowserMonitorView {
+            live: false,
+            active_index: 0,
+            tabs: Vec::new(),
+            screenshot: None,
+        }));
+    };
+    let tabs = session
+        .list_tabs()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tab| BrowserTabView {
+            url: tab.url,
+            title: tab.title,
+        })
+        .collect();
+    let active_index = session.active_index().await;
+    // Best-effort capture: a tab navigating or closing mid-capture just
+    // yields a frame-less snapshot rather than an error.
+    let screenshot = match session.tab(None).await {
+        Ok(tab) => tab
+            .screenshot()
+            .await
+            .ok()
+            .map(|png| base64::engine::general_purpose::STANDARD.encode(png)),
+        Err(_) => None,
+    };
+    Ok(Json(BrowserMonitorView {
+        live: true,
+        active_index,
+        tabs,
+        screenshot,
+    }))
+}
+
 #[utoipa::path(get, path = "/api/v1/agents/{name}/dag", tag = "agents", responses((status = 200, body = Object), (status = 500, description = "DAG snapshot failed")))]
 pub(crate) async fn get_agent_dag(
     State(state): State<GatewayState>,
