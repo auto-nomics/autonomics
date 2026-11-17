@@ -253,11 +253,7 @@ async fn dataframe_to_file_output_flows_through_container_command() {
     );
     let dataframe = ctx.session().read_batch(sample_batch()).unwrap();
     let written = write_input
-        .execute(
-            &ctx,
-            &[NodeInput::new_dataframe(0, dataframe)],
-            &reporter,
-        )
+        .execute(&ctx, &[NodeInput::new_dataframe(0, dataframe)], &reporter)
         .await
         .unwrap();
     let input_file = written.get(&0).unwrap().as_file().unwrap().clone();

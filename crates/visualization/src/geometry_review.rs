@@ -5,9 +5,9 @@ mod caption_overlap;
 pub use caption_overlap::{CaptionOverlap, CaptionWarning};
 #[path = "geometry_text_overlap.rs"]
 mod text_overlap;
-pub use text_overlap::{TextRectangleOverlap, TextPair};
 use serde::Serialize;
 use serde_json::Value;
+pub use text_overlap::{TextPair, TextRectangleOverlap};
 const MAX_ELEMENTS: usize = 5000;
 #[derive(Debug, Clone, Serialize)]
 pub struct Bounds {

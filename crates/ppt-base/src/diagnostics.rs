@@ -80,7 +80,13 @@ pub struct Finding {
 
 impl Finding {
     fn summary(&self) -> String {
-        format!("[{}] slide {} · {} · {}", self.severity.as_str(), self.slide, self.rule, self.message)
+        format!(
+            "[{}] slide {} · {} · {}",
+            self.severity.as_str(),
+            self.slide,
+            self.rule,
+            self.message
+        )
     }
 }
 
@@ -89,9 +95,21 @@ pub type Report = DiagnosticsRow;
 
 impl Report {
     pub fn counts(&self) -> (u64, u64, u64) {
-        let errors = self.findings.iter().filter(|f| f.severity == Severity::Error).count() as u64;
-        let warnings = self.findings.iter().filter(|f| f.severity == Severity::Warning).count() as u64;
-        let infos = self.findings.iter().filter(|f| f.severity == Severity::Info).count() as u64;
+        let errors = self
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
+            .count() as u64;
+        let warnings = self
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Warning)
+            .count() as u64;
+        let infos = self
+            .findings
+            .iter()
+            .filter(|f| f.severity == Severity::Info)
+            .count() as u64;
         (errors, warnings, infos)
     }
 
@@ -109,7 +127,9 @@ impl Report {
 pub fn static_findings(deck: &crate::deck::Deck) -> Vec<Finding> {
     let mut out = Vec::new();
     for no in 1..=deck.len() {
-        let Some(slide) = deck.slide(no) else { continue };
+        let Some(slide) = deck.slide(no) else {
+            continue;
+        };
         let content = slide.content.trim();
         let has_image = slide.frontmatter.image.is_some() || content.contains("![");
         if content.is_empty() && !has_image {
@@ -151,11 +171,7 @@ struct RenderFinding {
     details: Option<Value>,
 }
 
-fn merge_render_findings(
-    findings: &mut Vec<Finding>,
-    rendered: &Value,
-    targets: &[(u32, u32)],
-) {
+fn merge_render_findings(findings: &mut Vec<Finding>, rendered: &Value, targets: &[(u32, u32)]) {
     let mut from_render = Vec::new();
     for (no, _) in targets {
         let Some(items) = rendered.get(no.to_string()).and_then(Value::as_array) else {
@@ -304,9 +320,7 @@ async fn render_findings(
         shared.exporter.diagnose_slides(&job, targets),
     )
     .await
-    .unwrap_or_else(|_| {
-        Err(Error::Export("diagnostics render pass timed out".into()))
-    });
+    .unwrap_or_else(|_| Err(Error::Export("diagnostics render pass timed out".into())));
     // The ephemeral token dies with the run either way.
     let _ = shared.store.delete_export(&export_id).await;
     result
@@ -318,7 +332,11 @@ pub fn render_report_text(report: &Report) -> String {
     if report.findings.is_empty() {
         return format!(
             "diagnostics: no issues found ({})",
-            if report.rendered { "including render-tier checks" } else { "static checks only" }
+            if report.rendered {
+                "including render-tier checks"
+            } else {
+                "static checks only"
+            }
         );
     }
     let mut text = format!(
@@ -326,7 +344,11 @@ pub fn render_report_text(report: &Report) -> String {
         errors,
         warnings,
         infos,
-        if report.rendered { "including render-tier checks" } else { "static checks only" }
+        if report.rendered {
+            "including render-tier checks"
+        } else {
+            "static checks only"
+        }
     );
     for finding in &report.findings {
         text.push_str("  ");
@@ -349,9 +371,18 @@ pub fn write_hook(shared: &DeckShared, deck: &crate::deck::Deck) -> serde_json::
         "unavailable"
     };
     let (errors, warnings, infos) = (
-        findings.iter().filter(|f| f.severity == Severity::Error).count(),
-        findings.iter().filter(|f| f.severity == Severity::Warning).count(),
-        findings.iter().filter(|f| f.severity == Severity::Info).count(),
+        findings
+            .iter()
+            .filter(|f| f.severity == Severity::Error)
+            .count(),
+        findings
+            .iter()
+            .filter(|f| f.severity == Severity::Warning)
+            .count(),
+        findings
+            .iter()
+            .filter(|f| f.severity == Severity::Info)
+            .count(),
     );
     serde_json::json!({
         "renderTier": render_tier,
@@ -416,14 +447,22 @@ mod tests {
     fn static_rules_flag_empty_and_dense_slides() {
         let dense = "很大的一段文字".repeat(400); // 2400 chars
         let deck = deck_with(&[
-            "# 标题\n\n- 要点",           // healthy
-            "",                            // empty
-            &format!("# 密\n\n{dense}"),   // too long
+            "# 标题\n\n- 要点",          // healthy
+            "",                          // empty
+            &format!("# 密\n\n{dense}"), // too long
         ]);
         let findings = static_findings(&deck);
         assert_eq!(findings.len(), 2, "{findings:?}");
-        assert!(findings.iter().any(|f| f.slide == 2 && f.rule == "empty-slide" && f.severity == Severity::Info));
-        assert!(findings.iter().any(|f| f.slide == 3 && f.rule == "text-density" && f.severity == Severity::Warning));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.slide == 2 && f.rule == "empty-slide" && f.severity == Severity::Info)
+        );
+        assert!(
+            findings.iter().any(|f| f.slide == 3
+                && f.rule == "text-density"
+                && f.severity == Severity::Warning)
+        );
     }
 
     #[test]
@@ -453,9 +492,23 @@ mod tests {
         });
         merge_render_findings(&mut findings, &rendered, &[(1, 0), (2, 0), (3, 0)]);
         // static text-density on slide 2 replaced by the render one
-        assert_eq!(findings.iter().filter(|f| f.slide == 2 && f.rule == "text-density").count(), 1);
-        assert!(findings.iter().any(|f| f.rule == "text-overflow-canvas" && f.severity == Severity::Error));
-        assert!(findings.iter().any(|f| f.slide == 3 && f.rule == "low-contrast"));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|f| f.slide == 2 && f.rule == "text-density")
+                .count(),
+            1
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule == "text-overflow-canvas" && f.severity == Severity::Error)
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.slide == 3 && f.rule == "low-contrast")
+        );
         assert!(!findings.iter().any(|f| f.message == "static"));
     }
 }

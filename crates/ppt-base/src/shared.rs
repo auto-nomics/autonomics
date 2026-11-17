@@ -8,8 +8,8 @@ use ppt_types::new_deck_id;
 use crate::assets::BlobArea;
 use crate::deck::Deck;
 use crate::error::Result;
-use crate::store::{DeckRow, DeckStore, ExportFormat, ExportRecord, ExportStatus};
 use crate::export::DeckExporter;
+use crate::store::{DeckRow, DeckStore, ExportFormat, ExportRecord, ExportStatus};
 
 /// Enqueue sender; `None` when the worker was never spawned (tests).
 pub type ExportQueueHandle = Option<tokio::sync::mpsc::Sender<crate::export::ExportJob>>;
@@ -216,25 +216,51 @@ impl DeckShared {
     /// Per-deck CSS file, separate from the Markdown source.
     pub async fn theme_css(&self, id: &str) -> Result<String> {
         self.store.get_deck_row(id).await?;
-        let bytes = self.assets.get_optional(&format!("themes/{id}/theme.css")).await?.unwrap_or_default();
-        String::from_utf8(bytes).map_err(|e| crate::Error::Asset(format!("theme CSS is not UTF-8: {e}")))
+        let bytes = self
+            .assets
+            .get_optional(&format!("themes/{id}/theme.css"))
+            .await?
+            .unwrap_or_default();
+        String::from_utf8(bytes)
+            .map_err(|e| crate::Error::Asset(format!("theme CSS is not UTF-8: {e}")))
     }
 
     pub async fn save_theme_css(&self, id: &str, css: &str, expected: &str) -> Result<String> {
         let current = self.theme_css(id).await?;
         let actual = css_revision(&current);
         if actual != expected {
-            return Err(crate::Error::RevisionConflict { expected: actual, actual: expected.to_string() });
+            return Err(crate::Error::RevisionConflict {
+                expected: actual,
+                actual: expected.to_string(),
+            });
         }
-        crate::theme::canvas_size(css, crate::theme::CanvasSize { width: 980, height: 551 })?;
-        self.assets.put(&format!("themes/{id}/theme.css"), css.as_bytes().to_vec()).await?;
+        crate::theme::canvas_size(
+            css,
+            crate::theme::CanvasSize {
+                width: 980,
+                height: 551,
+            },
+        )?;
+        self.assets
+            .put(&format!("themes/{id}/theme.css"), css.as_bytes().to_vec())
+            .await?;
         self.notify_diagnostics(id);
         Ok(css_revision(css))
     }
 
-    pub async fn canvas_size(&self, id: &str, meta: &ppt_types::DeckMeta) -> Result<crate::theme::CanvasSize> {
+    pub async fn canvas_size(
+        &self,
+        id: &str,
+        meta: &ppt_types::DeckMeta,
+    ) -> Result<crate::theme::CanvasSize> {
         let theme = self.theme_css(id).await?;
-        crate::theme::canvas_size(&theme, crate::theme::CanvasSize { width: meta.canvas(), height: meta.canvas_height() })
+        crate::theme::canvas_size(
+            &theme,
+            crate::theme::CanvasSize {
+                width: meta.canvas(),
+                height: meta.canvas_height(),
+            },
+        )
     }
 
     /// Load a deck: parsed-cache fast path keyed by revision, assemble
@@ -243,7 +269,9 @@ impl DeckShared {
         let row: DeckRow = self.store.get_deck_row(id).await?;
         if !row.parsed_cache.is_empty() {
             if let Ok(cached) = serde_json::from_str::<CachedDeck>(&row.parsed_cache) {
-                if cached.meta.revision == row.revision && cached.meta.slide_count == cached.slides.len() {
+                if cached.meta.revision == row.revision
+                    && cached.meta.slide_count == cached.slides.len()
+                {
                     return Ok(Deck {
                         meta: cached.meta,
                         slides: cached.slides,
@@ -266,11 +294,7 @@ impl DeckShared {
     }
 
     /// Create a deck from a template.
-    pub async fn create_deck(
-        &self,
-        title: &str,
-        template: Option<&str>,
-    ) -> Result<Deck> {
+    pub async fn create_deck(&self, title: &str, template: Option<&str>) -> Result<Deck> {
         let markdown = crate::deck::templates::starter_markdown(template, title);
         let id = new_deck_id();
         let deck = crate::deck::assemble(&markdown, &id, "", "");
@@ -284,7 +308,14 @@ impl DeckShared {
             .await?;
         // Every new presentation owns an independent theme file. Legacy
         // decks without one still read as an empty theme.
-        if let Err(error) = self.assets.put(&format!("themes/{id}/theme.css"), crate::theme::starter_css(&deck.meta).into_bytes()).await {
+        if let Err(error) = self
+            .assets
+            .put(
+                &format!("themes/{id}/theme.css"),
+                crate::theme::starter_css(&deck.meta).into_bytes(),
+            )
+            .await
+        {
             let _ = self.store.delete_deck(&id).await;
             return Err(error);
         }
@@ -318,7 +349,13 @@ impl DeckShared {
             })?;
 
         let theme_css = self.theme_css(deck_id).await?;
-        let canvas_size = crate::theme::canvas_size(&theme_css, crate::theme::CanvasSize { width: deck.meta.canvas(), height: deck.meta.canvas_height() })?;
+        let canvas_size = crate::theme::canvas_size(
+            &theme_css,
+            crate::theme::CanvasSize {
+                width: deck.meta.canvas(),
+                height: deck.meta.canvas_height(),
+            },
+        )?;
         let raw_token = uuid::Uuid::new_v4().simple().to_string();
         let token_hash = {
             use sha2::{Digest, Sha256};
@@ -374,12 +411,7 @@ impl DeckShared {
     }
 
     /// Replace canonical markdown and return the re-assembled deck.
-    pub async fn save_markdown(
-        &self,
-        id: &str,
-        markdown: &str,
-        message: &str,
-    ) -> Result<Deck> {
+    pub async fn save_markdown(&self, id: &str, markdown: &str, message: &str) -> Result<Deck> {
         let row = self.store.get_deck_row(id).await?;
         let deck = crate::deck::assemble(markdown, id, &row.created_at, "");
         let cache = serde_json::to_string(&CachedDeck {

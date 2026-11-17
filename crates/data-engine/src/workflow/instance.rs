@@ -389,7 +389,6 @@ pub fn instance_fingerprint_of(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     fn item_process() -> Process {
         Process::new(

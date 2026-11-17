@@ -7,11 +7,22 @@ fn wire_encoders_preserve_the_complete_registered_visualization_schema() {
     for definition in visualization_tools::registrations("unused.sqlite".into())
         .into_iter()
         .chain(visualization_tools::evidence_registrations())
-        .chain(visualization_tools::bioicons_registrations("unused.sqlite".into()))
+        .chain(visualization_tools::bioicons_registrations(
+            "unused.sqlite".into(),
+        ))
         .filter(|tool| {
             matches!(
                 tool.definition.name.as_str(),
-                "visualization" | "visualization_fit_svg_group_preview" | "visualization_crop_image" | "visualization_fit_svg_preview" | "bioicons" | "visualization_move_text" | "visualization_add_text" | "visualization_reflow_text" | "visualization_find_space" | "figure_evidence"
+                "visualization"
+                    | "visualization_fit_svg_group_preview"
+                    | "visualization_crop_image"
+                    | "visualization_fit_svg_preview"
+                    | "bioicons"
+                    | "visualization_move_text"
+                    | "visualization_add_text"
+                    | "visualization_reflow_text"
+                    | "visualization_find_space"
+                    | "figure_evidence"
             )
         })
         .map(|tool| tool.definition)

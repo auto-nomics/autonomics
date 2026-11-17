@@ -909,7 +909,7 @@ impl BibCore {
                     .as_deref()
                     .and_then(|source| serde_json::from_str(source).ok())
                     .unwrap_or_default();
-                article.extra_fields=serde_json::from_str(&row.get::<String>(15)?)?;
+                article.extra_fields = serde_json::from_str(&row.get::<String>(15)?)?;
                 articles_by_id.insert(article.id.clone(), article);
             }
         }

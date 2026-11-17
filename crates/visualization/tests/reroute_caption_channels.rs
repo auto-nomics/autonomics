@@ -199,44 +199,115 @@ fn endpoint_clearance_has_local_turning_points_instead_of_a_return_loop() {
 
 #[test]
 fn locked_connector_or_caption_rejects_reroute_without_mutation() {
-    let original: Value = serde_json::from_str(include_str!("fixtures/ifng-three-column-routes.json")).unwrap();
-    let arrow = original["elements"].as_array().unwrap().iter().find(|e| e["type"] == "arrow" && e["customData"]["crossPanel"] == true).unwrap();
+    let original: Value =
+        serde_json::from_str(include_str!("fixtures/ifng-three-column-routes.json")).unwrap();
+    let arrow = original["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "arrow" && e["customData"]["crossPanel"] == true)
+        .unwrap();
     let arrow_id = arrow["id"].as_str().unwrap().to_owned();
-    let caption_id = original["elements"].as_array().unwrap().iter().find(|e| e["type"] == "text" && e["containerId"] == arrow_id).unwrap()["id"].as_str().unwrap().to_owned();
+    let caption_id = original["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "text" && e["containerId"] == arrow_id)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     for id in [&arrow_id, &caption_id] {
         let mut locked = original.clone();
-        locked["elements"].as_array_mut().unwrap().iter_mut().find(|e| e["id"] == *id).unwrap()["locked"] = json!(true);
+        locked["elements"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["id"] == *id)
+            .unwrap()["locked"] = json!(true);
         let before = locked.clone();
-        assert!(scene::apply(&locked, &[Operation::Reroute { id: arrow_id.clone() }]).is_err());
+        assert!(
+            scene::apply(
+                &locked,
+                &[Operation::Reroute {
+                    id: arrow_id.clone()
+                }]
+            )
+            .is_err()
+        );
         assert_eq!(locked, before);
     }
 }
 
 #[test]
 fn translating_a_frame_rigidly_moves_contents_and_reroutes_cross_panel_connections() {
-    let original: Value = serde_json::from_str(include_str!("fixtures/ifng-three-column-routes.json")).unwrap();
-    let changed = visualization::arrange::translate(&original, &["panel-1".into()], 30., 20.).unwrap();
-    let cross_ids: Vec<_> = original["elements"].as_array().unwrap().iter()
+    let original: Value =
+        serde_json::from_str(include_str!("fixtures/ifng-three-column-routes.json")).unwrap();
+    let changed =
+        visualization::arrange::translate(&original, &["panel-1".into()], 30., 20.).unwrap();
+    let cross_ids: Vec<_> = original["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
         .filter(|e| e["type"] == "arrow" && e["customData"]["crossPanel"] == true)
-        .map(|e| e["id"].clone()).collect();
+        .map(|e| e["id"].clone())
+        .collect();
 
-    let find = |doc: &Value, id: &Value| doc["elements"].as_array().unwrap().iter().find(|e| e["id"] == *id).unwrap().clone();
+    let find = |doc: &Value, id: &Value| {
+        doc["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == *id)
+            .unwrap()
+            .clone()
+    };
     for old in original["elements"].as_array().unwrap() {
         let next = find(&changed, &old["id"]);
         if old["id"] == "panel-1" || old["frameId"] == "panel-1" {
-            assert_eq!(next["x"].as_f64().unwrap(), old["x"].as_f64().unwrap() + 30.);
-            assert_eq!(next["y"].as_f64().unwrap(), old["y"].as_f64().unwrap() + 20.);
+            assert_eq!(
+                next["x"].as_f64().unwrap(),
+                old["x"].as_f64().unwrap() + 30.
+            );
+            assert_eq!(
+                next["y"].as_f64().unwrap(),
+                old["y"].as_f64().unwrap() + 20.
+            );
         }
-        if old["id"] != "panel-1" && old["frameId"] != "panel-1"
-            && !cross_ids.contains(&old["id"]) && !cross_ids.contains(&old["containerId"]) {
+        if old["id"] != "panel-1"
+            && old["frameId"] != "panel-1"
+            && !cross_ids.contains(&old["id"])
+            && !cross_ids.contains(&old["containerId"])
+        {
             assert_eq!(next, *old, "unrelated object moved: {}", old["id"]);
         }
-        for key in ["type", "frameId", "text", "originalText", "fontSize", "fontFamily", "customData", "width", "height"] {
-            if old["type"] != "arrow" { assert_eq!(next[key], old[key], "{} {key}", old["id"]); }
+        for key in [
+            "type",
+            "frameId",
+            "text",
+            "originalText",
+            "fontSize",
+            "fontFamily",
+            "customData",
+            "width",
+            "height",
+        ] {
+            if old["type"] != "arrow" {
+                assert_eq!(next[key], old[key], "{} {key}", old["id"]);
+            }
         }
         if old["type"] == "arrow" {
-            for key in ["customData", "startArrowhead", "endArrowhead", "strokeStyle"] { assert_eq!(next[key], old[key]); }
-            for key in ["startBinding", "endBinding"] { assert_eq!(next[key]["elementId"], old[key]["elementId"]); }
+            for key in [
+                "customData",
+                "startArrowhead",
+                "endArrowhead",
+                "strokeStyle",
+            ] {
+                assert_eq!(next[key], old[key]);
+            }
+            for key in ["startBinding", "endBinding"] {
+                assert_eq!(next[key]["elementId"], old[key]["elementId"]);
+            }
         }
     }
     assert_eq!(changed["files"], original["files"]);
@@ -250,10 +321,22 @@ fn translating_owned_artwork_updates_only_derived_fit_position_metadata() {
         {"id":"art","type":"image","fileId":"f","x":10,"y":0,"width":100,"height":100,"angle":0,"customData":{"semanticAnchorId":"anchor"}}
     ],"files":{}});
     let changed = visualization::arrange::translate(&original, &["anchor".into()], 7., 9.).unwrap();
-    assert_eq!(changed["elements"][0]["customData"]["visualAnchorFit"]["imageBounds"],json!([17.,9.,100,100]));
-    assert_eq!(changed["elements"][0]["customData"]["visualAnchorFit"]["normalizedBounds"],original["elements"][0]["customData"]["visualAnchorFit"]["normalizedBounds"]);
-    assert_eq!(changed["elements"][0]["customData"]["evidence"],original["elements"][0]["customData"]["evidence"]);
-    assert_eq!(changed["elements"][1]["x"],17.);
-    assert_eq!(changed["elements"][1]["y"],9.);
-    assert_eq!(changed["elements"][1]["customData"],original["elements"][1]["customData"]);
+    assert_eq!(
+        changed["elements"][0]["customData"]["visualAnchorFit"]["imageBounds"],
+        json!([17., 9., 100, 100])
+    );
+    assert_eq!(
+        changed["elements"][0]["customData"]["visualAnchorFit"]["normalizedBounds"],
+        original["elements"][0]["customData"]["visualAnchorFit"]["normalizedBounds"]
+    );
+    assert_eq!(
+        changed["elements"][0]["customData"]["evidence"],
+        original["elements"][0]["customData"]["evidence"]
+    );
+    assert_eq!(changed["elements"][1]["x"], 17.);
+    assert_eq!(changed["elements"][1]["y"], 9.);
+    assert_eq!(
+        changed["elements"][1]["customData"],
+        original["elements"][1]["customData"]
+    );
 }

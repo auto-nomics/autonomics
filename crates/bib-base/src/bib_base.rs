@@ -406,7 +406,9 @@ impl BibCore {
         .await?;
 
         conn.execute_batch(crate::reliability::SCHEMA).await?;
-        self.conn().execute_batch(crate::reliability::SCHEMA).await?;
+        self.conn()
+            .execute_batch(crate::reliability::SCHEMA)
+            .await?;
 
         crate::saved_searches::ensure(&conn).await?;
         crate::saved_searches::ensure(&self.conn()).await?;
@@ -647,7 +649,11 @@ impl BibCore {
         }
 
         if article.extra_fields.is_empty() {
-            conn.execute("DELETE FROM articleExtraFields WHERE articleID=?1", turso::params![article.id.as_str()]).await?;
+            conn.execute(
+                "DELETE FROM articleExtraFields WHERE articleID=?1",
+                turso::params![article.id.as_str()],
+            )
+            .await?;
         } else {
             conn.execute("INSERT INTO articleExtraFields(articleID,data) VALUES (?1,?2) ON CONFLICT(articleID) DO UPDATE SET data=excluded.data", turso::params![article.id.as_str(),serde_json::to_string(&article.extra_fields)?]).await?;
         }
@@ -657,7 +663,9 @@ impl BibCore {
     /// Look up a single article by its internal ID.
     pub async fn get_article(&self, id: &str) -> Result<Option<Article>> {
         let conn = self.conn();
-        if crate::reliability::is_trashed(&conn, id).await? { return Ok(None); }
+        if crate::reliability::is_trashed(&conn, id).await? {
+            return Ok(None);
+        }
         Self::get_article_on(&conn, id).await
     }
 
@@ -695,8 +703,12 @@ impl BibCore {
             .unwrap_or_default();
 
         article.extra_fields = serde_json::from_str(&row.get::<String>(17)?)?;
-        article.created_at = opt_string(row.get_value(15)?).and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|d| d.with_timezone(&chrono::Utc));
-        article.updated_at = opt_string(row.get_value(16)?).and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok()).map(|d| d.with_timezone(&chrono::Utc));
+        article.created_at = opt_string(row.get_value(15)?)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|d| d.with_timezone(&chrono::Utc));
+        article.updated_at = opt_string(row.get_value(16)?)
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|d| d.with_timezone(&chrono::Utc));
 
         // Close the header cursor before issuing the child-row queries —
         // an open turso cursor keeps the connection's statement state
@@ -787,7 +799,9 @@ impl BibCore {
         let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).await?;
         let result = async {
             if require_trash && !crate::reliability::is_trashed(&tx, id).await? {
-                return Err(Error::MetadataConflict("Move the article to trash before permanently deleting it.".into()));
+                return Err(Error::MetadataConflict(
+                    "Move the article to trash before permanently deleting it.".into(),
+                ));
             }
             crate::zotero_model::delete_article_item(&tx, id).await?;
             let n = tx

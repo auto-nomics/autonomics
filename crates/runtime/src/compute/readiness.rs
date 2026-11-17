@@ -75,10 +75,7 @@ impl ComputeRegistry {
             let node = found[0];
             if remote
                 && node.resident_plugin.is_none()
-                && matches!(
-                    node.kind.as_str(),
-                    "file_download" | "http_head"
-                )
+                && matches!(node.kind.as_str(), "file_download" | "http_head")
             {
                 match &target.network_policy_sha256 {
                     Some(pin) => checks.push(json!({"node":address,"network_policy_sha256":pin,

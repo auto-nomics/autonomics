@@ -446,7 +446,10 @@ mod tests {
         ] {
             assert_eq!(wire_protocol(&p), WireProtocolKind::Anthropic, "{p}");
         }
-        assert_eq!(wire_protocol(&ProviderType::Minimax),WireProtocolKind::MinimaxAnthropic);
+        assert_eq!(
+            wire_protocol(&ProviderType::Minimax),
+            WireProtocolKind::MinimaxAnthropic
+        );
         // Custom providers default to the Anthropic-compatible wire.
         assert_eq!(
             wire_protocol(&ProviderType::Custom("any-openai".into())),

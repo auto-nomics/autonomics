@@ -402,25 +402,43 @@ fn frame_borders(elements: &[Value]) -> Vec<Rect> {
 fn connector_caption_obstacles(elements: &[Value], excluded: &str) -> Vec<Rect> {
     let mut barriers = Vec::new();
     for arrow in elements.iter().filter(|e| {
-        e["type"] == "arrow" && e["isDeleted"] != true && e["id"] != excluded
+        e["type"] == "arrow"
+            && e["isDeleted"] != true
+            && e["id"] != excluded
             && e["angle"].as_f64().unwrap_or(0.) == 0.
-            && e["elbowed"] != true && e["roundness"].is_null()
+            && e["elbowed"] != true
+            && e["roundness"].is_null()
     }) {
-        let (Some(x), Some(y), Some(points)) =
-            (arrow["x"].as_f64(), arrow["y"].as_f64(), arrow["points"].as_array()) else { continue; };
-        if !x.is_finite() || !y.is_finite() { continue; }
+        let (Some(x), Some(y), Some(points)) = (
+            arrow["x"].as_f64(),
+            arrow["y"].as_f64(),
+            arrow["points"].as_array(),
+        ) else {
+            continue;
+        };
+        if !x.is_finite() || !y.is_finite() {
+            continue;
+        }
         for pair in points.windows(2) {
             let read = |v: &Value| -> Option<[f64; 2]> {
                 let p = v.as_array().filter(|p| p.len() == 2)?;
                 let p = [x + p[0].as_f64()?, y + p[1].as_f64()?];
                 p.iter().all(|v| v.is_finite()).then_some(p)
             };
-            let (Some(a), Some(b)) = (read(&pair[0]), read(&pair[1])) else { continue; };
+            let (Some(a), Some(b)) = (read(&pair[0]), read(&pair[1])) else {
+                continue;
+            };
             // A diagonal segment's enclosing box would falsely block empty space.
             // Curves/diagonals are outside this rectilinear placement check.
-            if (a[0] != b[0] && a[1] != b[1]) || a == b { continue; }
-            barriers.push(Rect { l: a[0].min(b[0]) - 2., r: a[0].max(b[0]) + 2.,
-                t: a[1].min(b[1]) - 2., b: a[1].max(b[1]) + 2. });
+            if (a[0] != b[0] && a[1] != b[1]) || a == b {
+                continue;
+            }
+            barriers.push(Rect {
+                l: a[0].min(b[0]) - 2.,
+                r: a[0].max(b[0]) + 2.,
+                t: a[1].min(b[1]) - 2.,
+                b: a[1].max(b[1]) + 2.,
+            });
         }
     }
     barriers
@@ -593,17 +611,32 @@ fn route_between_ports(
             let right = *grid.xs.last().unwrap();
             let mut best = None;
             let mut best_cost = f64::INFINITY;
-            let middle = (source.l+source.r+target.l+target.r)/4.;
+            let middle = (source.l + source.r + target.l + target.r) / 4.;
             let expanded = Grid::with_points(obstacles, &grid.ys, left, right, &[[middle, lane]]);
             for x in [left, right, middle] {
                 let waypoint = [[x, lane]];
-                let Ok(mut first) = expanded.route(&source.ports(), &waypoint, Some(ports.0), None) else { continue; };
-                let Ok(second) = expanded.route(&waypoint, &target.ports(), None, Some(ports.1)) else { continue; };
+                let Ok(mut first) = expanded.route(&source.ports(), &waypoint, Some(ports.0), None)
+                else {
+                    continue;
+                };
+                let Ok(second) = expanded.route(&waypoint, &target.ports(), None, Some(ports.1))
+                else {
+                    continue;
+                };
                 first.extend(second.into_iter().skip(1));
                 let candidate = simplify_route(first);
-                let Some(center) = label_position(&candidate, width, height, &label_obstacles) else { continue; };
-                let cost = candidate.windows(2).map(|p| (p[0][0]-p[1][0]).abs()+(p[0][1]-p[1][1]).abs()).sum::<f64>();
-                if cost < best_cost { best_cost = cost; best = Some((candidate, center)); }
+                let Some(center) = label_position(&candidate, width, height, &label_obstacles)
+                else {
+                    continue;
+                };
+                let cost = candidate
+                    .windows(2)
+                    .map(|p| (p[0][0] - p[1][0]).abs() + (p[0][1] - p[1][1]).abs())
+                    .sum::<f64>();
+                if cost < best_cost {
+                    best_cost = cost;
+                    best = Some((candidate, center));
+                }
             }
             let (candidate, center) = best.ok_or_else(|| InvalidPlan("no clear caption position; reposition the panels or shorten the caption explicitly".into()))?;
             route = candidate;
@@ -745,7 +778,10 @@ fn fitted_endpoint_visual(image: &Value, nodes: [&Value; 2]) -> bool {
 /// Explicit geometry edit: reads current bindings and current label bounds,
 /// never regenerates the figure from its potentially stale scientific plan.
 pub(crate) fn reroute(elements: &mut [Value], id: &str) -> Result<(), InvalidPlan> {
-    if elements.iter().any(|e| e["id"] == id && e["customData"]["crossPanel"] != true) {
+    if elements
+        .iter()
+        .any(|e| e["id"] == id && e["customData"]["crossPanel"] != true)
+    {
         return reroute_local(elements, id);
     }
 
@@ -802,7 +838,10 @@ pub(crate) fn reroute(elements: &mut [Value], id: &str) -> Result<(), InvalidPla
     }
     let label_index = labels.first().copied();
     let label_size = if let Some(i) = label_index {
-        if elements[i]["locked"] == true || !valid_box(&elements[i]) || elements[i]["angle"].as_f64().unwrap_or(0.) != 0. {
+        if elements[i]["locked"] == true
+            || !valid_box(&elements[i])
+            || elements[i]["angle"].as_f64().unwrap_or(0.) != 0.
+        {
             return Err(fail("label must have valid unrotated geometry"));
         }
         Some([
@@ -833,7 +872,8 @@ pub(crate) fn reroute(elements: &mut [Value], id: &str) -> Result<(), InvalidPla
     let lane = top - label_size.map_or(160., |s| s[1] / 2. + 100.);
     let mut grid = Grid::new(&obstacles, &[lane], left, right);
     grid.caption_borders = frame_borders(elements);
-    grid.caption_borders.extend(connector_caption_obstacles(elements, id));
+    grid.caption_borders
+        .extend(connector_caption_obstacles(elements, id));
     let (route, center) = route_between(
         source,
         target,
@@ -930,7 +970,10 @@ pub(crate) fn connect(plan: &Plan, elements: &mut Vec<Value>) -> Result<(), Inva
     grid.caption_borders = frame_borders(elements);
     for ((index, edge), lane) in cross.into_iter().zip(lanes) {
         grid.caption_borders = frame_borders(elements);
-        grid.caption_borders.extend(connector_caption_obstacles(elements, &format!("edge-{index}")));
+        grid.caption_borders.extend(connector_caption_obstacles(
+            elements,
+            &format!("edge-{index}"),
+        ));
         if edge.label.chars().count() > 120 {
             return Err(InvalidPlan(
                 "edge labels support at most 120 characters".into(),
@@ -1251,26 +1294,56 @@ fn reroute_local_impl(
 mod terminal_clearance_tests {
     #[test]
     fn group_viewport_exclusion_requires_current_member_geometry_and_file() {
-        let mut image=serde_json::json!({"id":"image","type":"image","x":0,"y":0,"width":100,"height":100,"angle":0,"scale":[1,1],"fileId":"f","customData":{"semanticBadgeAnchorId":"anchor"}});
-        let anchor=serde_json::json!({"id":"anchor","x":20,"y":20,"width":60,"height":60,"angle":0,"customData":{"visualAssetElementId":"primary","visualBadgeIds":["image"],"visualAnchorFit":{"scope":"illustration_group","members":[{"elementId":"image","fileId":"f","normalizedBounds":[0.2,0.2,0.6,0.6],"imageBounds":[0,0,100,100],"imageTransform":{"angle":0,"scale":[1,1],"crop":null}}]}}});
-        assert!(super::fitted_endpoint_visual(&image,[&anchor,&anchor]));
-        image["fileId"]=serde_json::json!("changed");assert!(!super::fitted_endpoint_visual(&image,[&anchor,&anchor]));
-        image["fileId"]=serde_json::json!("f");image["width"]=serde_json::json!(99);assert!(!super::fitted_endpoint_visual(&image,[&anchor,&anchor]));
+        let mut image = serde_json::json!({"id":"image","type":"image","x":0,"y":0,"width":100,"height":100,"angle":0,"scale":[1,1],"fileId":"f","customData":{"semanticBadgeAnchorId":"anchor"}});
+        let anchor = serde_json::json!({"id":"anchor","x":20,"y":20,"width":60,"height":60,"angle":0,"customData":{"visualAssetElementId":"primary","visualBadgeIds":["image"],"visualAnchorFit":{"scope":"illustration_group","members":[{"elementId":"image","fileId":"f","normalizedBounds":[0.2,0.2,0.6,0.6],"imageBounds":[0,0,100,100],"imageTransform":{"angle":0,"scale":[1,1],"crop":null}}]}}});
+        assert!(super::fitted_endpoint_visual(&image, [&anchor, &anchor]));
+        image["fileId"] = serde_json::json!("changed");
+        assert!(!super::fitted_endpoint_visual(&image, [&anchor, &anchor]));
+        image["fileId"] = serde_json::json!("f");
+        image["width"] = serde_json::json!(99);
+        assert!(!super::fitted_endpoint_visual(&image, [&anchor, &anchor]));
     }
 
     use super::*;
 
     #[test]
     fn outer_caption_lane_does_not_force_a_full_figure_width_crossing() {
-        let source = Rect { l:0., r:100., t:200., b:300. };
-        let target = Rect { l:400., r:500., t:200., b:300. };
-        let obstacles = [source,target];
+        let source = Rect {
+            l: 0.,
+            r: 100.,
+            t: 200.,
+            b: 300.,
+        };
+        let target = Rect {
+            l: 400.,
+            r: 500.,
+            t: 200.,
+            b: 300.,
+        };
+        let obstacles = [source, target];
         let mut grid = Grid::new(&obstacles, &[-100.], -200., 700.);
         // Keep the caption outside the central region while leaving routing
         // legal there. This exercises the outer-lane fallback specifically.
-        grid.caption_borders.push(Rect { l:-1000., r:1000., t:0., b:1000. });
-        let (route,center) = route_between_ports(source,target,&grid,&obstacles,-100.,Some([150.,40.]),([true;4],[true;4])).unwrap();
-        let length = route.windows(2).map(|p|(p[0][0]-p[1][0]).abs()+(p[0][1]-p[1][1]).abs()).sum::<f64>();
+        grid.caption_borders.push(Rect {
+            l: -1000.,
+            r: 1000.,
+            t: 0.,
+            b: 1000.,
+        });
+        let (route, center) = route_between_ports(
+            source,
+            target,
+            &grid,
+            &obstacles,
+            -100.,
+            Some([150., 40.]),
+            ([true; 4], [true; 4]),
+        )
+        .unwrap();
+        let length = route
+            .windows(2)
+            .map(|p| (p[0][0] - p[1][0]).abs() + (p[0][1] - p[1][1]).abs())
+            .sum::<f64>();
         assert!(length < 1500., "unnecessary full-width detour: {length}");
         assert!(center[1] < 0.);
     }
@@ -1300,4 +1373,3 @@ mod terminal_clearance_tests {
         assert_eq!(path.len(), 3);
     }
 }
-

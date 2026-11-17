@@ -400,7 +400,7 @@ impl WikiHandle {
             return Ok(Vec::new());
         }
         let in_links = self
-            .get_in_links_batch(&[entry.id.clone()])
+            .get_in_links_batch(std::slice::from_ref(&entry.id))
             .await?
             .into_iter()
             .next()

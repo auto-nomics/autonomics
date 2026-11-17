@@ -15,7 +15,10 @@ pub struct CanvasSize {
 
 /// Starter file reflects the deck's initial Markdown dimensions.
 pub fn starter_css(meta: &ppt_types::DeckMeta) -> String {
-    css_for_size(CanvasSize { width: meta.canvas(), height: meta.canvas_height() })
+    css_for_size(CanvasSize {
+        width: meta.canvas(),
+        height: meta.canvas_height(),
+    })
 }
 
 /// Default design with the caller's existing physical page dimensions.
@@ -140,10 +143,28 @@ mod tests {
     use super::*;
     #[test]
     fn starter_theme_has_design_and_respects_canvas_dimensions() {
-        let deck = crate::deck::assemble("---\ntitle: Test\naspectRatio: 4/3\ncanvasWidth: 1200\n---\n\n# Test", "d", "", "");
+        let deck = crate::deck::assemble(
+            "---\ntitle: Test\naspectRatio: 4/3\ncanvasWidth: 1200\n---\n\n# Test",
+            "d",
+            "",
+            "",
+        );
         let css = starter_css(&deck.meta);
         assert!(css.contains("--bio-accent"));
-        assert_eq!(canvas_size(&css, CanvasSize { width: 1, height: 1 }).unwrap(), CanvasSize { width: 1200, height: 900 });
+        assert_eq!(
+            canvas_size(
+                &css,
+                CanvasSize {
+                    width: 1,
+                    height: 1
+                }
+            )
+            .unwrap(),
+            CanvasSize {
+                width: 1200,
+                height: 900
+            }
+        );
     }
     #[test]
     fn root_dimensions_respect_comments_cascade_and_ignore_slide_css() {

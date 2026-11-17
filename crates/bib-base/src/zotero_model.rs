@@ -1930,23 +1930,75 @@ mod tests {
     #[tokio::test]
     async fn permanent_deletion_removes_owned_child_items_without_orphans() {
         let core = crate::bib_base::BibCore::open(":memory:").await.unwrap();
-        core.upsert_article(&Article::new("delete", "Delete this")).await.unwrap();
-        core.upsert_article(&Article::new("keep", "Keep this")).await.unwrap();
+        core.upsert_article(&Article::new("delete", "Delete this"))
+            .await
+            .unwrap();
+        core.upsert_article(&Article::new("keep", "Keep this"))
+            .await
+            .unwrap();
         let conn = core.conn();
         for id in ["delete", "keep"] {
-            core.add_annotation(id, bib_types::AnnotationKind::Comment, "Standalone note", None, None, None, None).await.unwrap();
-            let attachment=create_attachment(&conn, &NewAttachment {
-                article_id:id.into(), title:None, filename:Some("paper.txt".into()), content_type:Some("text/plain".into()), file_format:FileFormat::Txt,
-                link_mode:LINK_MODE_IMPORTED_FILE, path:None, source_url:None, vfs_path:None, storage_hash:None, file_size:None,
-            },true).await.unwrap();
-            core.add_annotation(id, bib_types::AnnotationKind::Highlight, "Quote", None, None, None, Some(&attachment.key)).await.unwrap();
+            core.add_annotation(
+                id,
+                bib_types::AnnotationKind::Comment,
+                "Standalone note",
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let attachment = create_attachment(
+                &conn,
+                &NewAttachment {
+                    article_id: id.into(),
+                    title: None,
+                    filename: Some("paper.txt".into()),
+                    content_type: Some("text/plain".into()),
+                    file_format: FileFormat::Txt,
+                    link_mode: LINK_MODE_IMPORTED_FILE,
+                    path: None,
+                    source_url: None,
+                    vfs_path: None,
+                    storage_hash: None,
+                    file_size: None,
+                },
+                true,
+            )
+            .await
+            .unwrap();
+            core.add_annotation(
+                id,
+                bib_types::AnnotationKind::Highlight,
+                "Quote",
+                None,
+                None,
+                None,
+                Some(&attachment.key),
+            )
+            .await
+            .unwrap();
         }
         core.delete_article("delete").await.unwrap();
-        for (table,expected) in [("items",4),("itemAttachments",1),("itemNotes",1),("itemAnnotations",1),("fulltextItems",1)] {
-            let mut rows=conn.query(format!("SELECT COUNT(*) FROM {table}"),()).await.unwrap();
-            assert_eq!(rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),expected,"{table}");
+        for (table, expected) in [
+            ("items", 4),
+            ("itemAttachments", 1),
+            ("itemNotes", 1),
+            ("itemAnnotations", 1),
+            ("fulltextItems", 1),
+        ] {
+            let mut rows = conn
+                .query(format!("SELECT COUNT(*) FROM {table}"), ())
+                .await
+                .unwrap();
+            assert_eq!(
+                rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+                expected,
+                "{table}"
+            );
         }
-        assert_eq!(core.list_annotations("keep",None).await.unwrap().len(),2);
+        assert_eq!(core.list_annotations("keep", None).await.unwrap().len(), 2);
     }
 
     #[tokio::test]

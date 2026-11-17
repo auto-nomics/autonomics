@@ -18,16 +18,16 @@
 pub mod actor;
 pub mod assets;
 pub mod citation;
+pub mod deck;
 pub mod diagnostics;
 pub mod export;
-pub mod shared;
-pub mod theme;
-pub mod tools;
-pub mod deck;
 pub mod operations;
 pub mod outline;
 pub mod parser;
+pub mod shared;
 pub mod store;
+pub mod theme;
+pub mod tools;
 
 pub use actor::DeckHandle;
 pub use assets::BlobArea;

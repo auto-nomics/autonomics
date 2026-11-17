@@ -5,8 +5,8 @@
 //! and leading/trailing blank regions), and untouched slides keep their
 //! `raw` verbatim — only patched slides go through [`prettify_slide`].
 
-use crate::parser::matter::FrontmatterStyle;
 use crate::parser::SourceSlide;
+use crate::parser::matter::FrontmatterStyle;
 
 /// Serialize slides back to deck markdown (Slidev `stringify`).
 pub fn stringify(slides: &[SourceSlide]) -> String {
@@ -110,9 +110,14 @@ mod tests {
 
     #[test]
     fn prettify_normalizes_content_and_note() {
-        let mut s = parse("---\nfm: 1\n---\n\nmessy   content\n\n<!--\nN\n-->").slides.remove(0);
+        let mut s = parse("---\nfm: 1\n---\n\nmessy   content\n\n<!--\nN\n-->")
+            .slides
+            .remove(0);
         prettify_slide(&mut s);
-        assert_eq!(s.raw, "---\nfm: 1\n---\n\nmessy   content\n\n<!--\nN\n-->\n");
+        assert_eq!(
+            s.raw,
+            "---\nfm: 1\n---\n\nmessy   content\n\n<!--\nN\n-->\n"
+        );
     }
 
     #[test]

@@ -6,7 +6,7 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use super::{tool_err, DeckToolState};
+use super::{DeckToolState, tool_err};
 use crate::DeckHandle;
 
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {

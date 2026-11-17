@@ -6,11 +6,11 @@
 //! mounted without changing startup behavior.
 
 pub mod bib;
+mod cache_control;
+pub mod deck;
 mod discovery;
 mod rss;
 pub mod server;
-mod cache_control;
-pub mod deck;
 pub mod wiki;
 
 pub use server::{

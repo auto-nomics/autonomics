@@ -100,25 +100,51 @@ fn frontmatter_raw_nonempty(raw: &Option<String>) -> Option<&str> {
 pub fn set_slide_css(markdown: &str, deck_id: &str, no: usize, css: &str) -> Result<String> {
     let mut deck = parse(markdown);
     let head = crate::parser::headmatter(&deck);
-    let defaults = head.get("defaults").map(crate::deck::typed_frontmatter).unwrap_or_default();
-    let indices: Vec<usize> = deck.slides.iter().enumerate().filter_map(|(i, slide)| {
-        let fm = crate::deck::typed_frontmatter(&serde_json::Value::Object(slide.frontmatter.clone()));
-        let effective = ppt_types::SlideFrontmatter::merged(&defaults, &fm);
-        let disabled = slide.frontmatter.get("disabled").and_then(serde_json::Value::as_bool).unwrap_or(false);
-        (!effective.hide.unwrap_or(false) && !disabled).then_some(i)
-    }).collect();
-    let index = *indices.get(no.checked_sub(1).unwrap_or(usize::MAX)).ok_or_else(|| Error::SlideOutOfRange { deck: deck_id.to_string(), no, total: indices.len() })?;
+    let defaults = head
+        .get("defaults")
+        .map(crate::deck::typed_frontmatter)
+        .unwrap_or_default();
+    let indices: Vec<usize> = deck
+        .slides
+        .iter()
+        .enumerate()
+        .filter_map(|(i, slide)| {
+            let fm = crate::deck::typed_frontmatter(&serde_json::Value::Object(
+                slide.frontmatter.clone(),
+            ));
+            let effective = ppt_types::SlideFrontmatter::merged(&defaults, &fm);
+            let disabled = slide
+                .frontmatter
+                .get("disabled")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            (!effective.hide.unwrap_or(false) && !disabled).then_some(i)
+        })
+        .collect();
+    let index = *indices
+        .get(no.checked_sub(1).unwrap_or(usize::MAX))
+        .ok_or_else(|| Error::SlideOutOfRange {
+            deck: deck_id.to_string(),
+            no,
+            total: indices.len(),
+        })?;
     let slide = &mut deck.slides[index];
     let raw = slide.frontmatter_raw.as_deref().unwrap_or("");
     // Validate before editing. Never re-serialize the other YAML fields:
     // that would silently discard comments, tags and author formatting.
-    let value: serde_yaml_ng::Value = if raw.trim().is_empty() { serde_yaml_ng::Value::Null } else {
+    let value: serde_yaml_ng::Value = if raw.trim().is_empty() {
+        serde_yaml_ng::Value::Null
+    } else {
         serde_yaml_ng::from_str(raw).map_err(|e| Error::BadFrontmatter(e.to_string()))?
     };
     let mapping = match value {
         serde_yaml_ng::Value::Null => serde_yaml_ng::Mapping::new(),
         serde_yaml_ng::Value::Mapping(m) => m,
-        _ => return Err(Error::BadFrontmatter("frontmatter must be a mapping".into())),
+        _ => {
+            return Err(Error::BadFrontmatter(
+                "frontmatter must be a mapping".into(),
+            ));
+        }
     };
     let key = serde_yaml_ng::Value::String("slideCss".into());
     let key_pattern = regex::Regex::new(r#"^(?:slideCss|\"slideCss\"|'slideCss')\s*:"#).unwrap();
@@ -129,44 +155,60 @@ pub fn set_slide_css(markdown: &str, deck_id: &str, no: usize, css: &str) -> Res
     }
     let mut updated = String::new();
     if let Some(start) = start {
-        for line in &lines[..start] { updated.push_str(line); }
+        for line in &lines[..start] {
+            updated.push_str(line);
+        }
         let mut end = start + 1;
         while end < lines.len() {
             let line = lines[end];
-            if !line.trim().is_empty() && !line.starts_with(' ') && !line.starts_with('\t') { break; }
+            if !line.trim().is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+                break;
+            }
             end += 1;
         }
         // Preserve separator blank lines after the old value.
-        while end > start + 1 && lines[end - 1].trim().is_empty() { end -= 1; }
+        while end > start + 1 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
         if !css.is_empty() {
             updated.push_str("slideCss: ");
             updated.push_str(&serde_json::to_string(css)?);
             updated.push('\n');
         }
-        for line in &lines[end..] { updated.push_str(line); }
+        for line in &lines[end..] {
+            updated.push_str(line);
+        }
     } else {
         updated.push_str(raw);
         if !css.is_empty() {
-            if !updated.is_empty() && !updated.ends_with('\n') { updated.push('\n'); }
+            if !updated.is_empty() && !updated.ends_with('\n') {
+                updated.push('\n');
+            }
             updated.push_str("slideCss: ");
             updated.push_str(&serde_json::to_string(css)?);
             updated.push('\n');
         }
     }
     if !updated.trim().is_empty() {
-        let checked: serde_yaml_ng::Value = serde_yaml_ng::from_str(&updated).map_err(|e| Error::BadFrontmatter(format!("cannot safely update CSS: {e}")))?;
+        let checked: serde_yaml_ng::Value = serde_yaml_ng::from_str(&updated)
+            .map_err(|e| Error::BadFrontmatter(format!("cannot safely update CSS: {e}")))?;
         if !matches!(checked, serde_yaml_ng::Value::Mapping(_)) {
-            return Err(Error::BadFrontmatter("cannot safely update CSS in this frontmatter".into()));
+            return Err(Error::BadFrontmatter(
+                "cannot safely update CSS in this frontmatter".into(),
+            ));
         }
     }
     if slide.frontmatter_raw.is_some() {
         let start = match slide.frontmatter_style {
             crate::parser::FrontmatterStyle::Frontmatter => slide.raw.find('\n').map(|n| n + 1),
             crate::parser::FrontmatterStyle::YamlCodeblock => slide.raw.find('\n'),
-        }.ok_or_else(|| Error::BadFrontmatter("cannot locate frontmatter boundary".into()))?;
+        }
+        .ok_or_else(|| Error::BadFrontmatter("cannot locate frontmatter boundary".into()))?;
         let end = start + raw.len();
         if slide.raw.get(start..end) != Some(raw) {
-            return Err(Error::BadFrontmatter("cannot locate original frontmatter".into()));
+            return Err(Error::BadFrontmatter(
+                "cannot locate original frontmatter".into(),
+            ));
         }
         slide.raw.replace_range(start..end, &updated);
     } else if !css.is_empty() {
@@ -403,7 +445,14 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(matches!(err, Error::SlideOutOfRange { no: 9, total: 3, .. }));
+        assert!(matches!(
+            err,
+            Error::SlideOutOfRange {
+                no: 9,
+                total: 3,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -427,7 +476,11 @@ mod tests {
         // insert past the end is an error
         assert!(matches!(
             insert_slide(DECK, "d", 9, "x", None, None).unwrap_err(),
-            Error::SlideOutOfRange { no: 9, total: 3, .. }
+            Error::SlideOutOfRange {
+                no: 9,
+                total: 3,
+                ..
+            }
         ));
     }
 
@@ -509,10 +562,17 @@ mod tests {
         assert!(changed.contains("# trailing comment\ntitle: Original"));
         assert!(changed.contains("title: T # keep title comment"));
         let parsed = parse(&changed);
-        assert_eq!(parsed.slides[1].frontmatter["slideCss"], ".x { color: blue; } /* --- */\n");
+        assert_eq!(
+            parsed.slides[1].frontmatter["slideCss"],
+            ".x { color: blue; } /* --- */\n"
+        );
         assert_eq!(parsed.slides[1].note.as_deref(), Some("notes"));
         let cleared = set_slide_css(&changed, "d", 2, "").unwrap();
-        assert!(!parse(&cleared).slides[1].frontmatter.contains_key("slideCss"));
+        assert!(
+            !parse(&cleared).slides[1]
+                .frontmatter
+                .contains_key("slideCss")
+        );
         assert!(cleared.contains("# trailing comment\ntitle: Original"));
     }
 }

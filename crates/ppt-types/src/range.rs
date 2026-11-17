@@ -33,10 +33,7 @@ pub fn parse_range_pages(raw: &str, total: usize) -> Result<Vec<usize>, ParseRan
                 return Err(ParseRangeError::InvertedRange(part.to_string()));
             }
             if b > total {
-                return Err(ParseRangeError::OutOfRange {
-                    page: b,
-                    total,
-                });
+                return Err(ParseRangeError::OutOfRange { page: b, total });
             }
             for p in a..=b {
                 if seen.insert(p) {

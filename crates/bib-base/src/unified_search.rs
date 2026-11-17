@@ -53,7 +53,8 @@ fn has_pubmed_local(gateway: &Arc<LiteratureGateway>) -> bool {
     #[cfg(feature = "pubmed_local")]
     {
         gateway
-            .source_names().contains(&crate::pubmed_local::UNIFIED_SOURCE)
+            .source_names()
+            .contains(&crate::pubmed_local::UNIFIED_SOURCE)
     }
     #[cfg(not(feature = "pubmed_local"))]
     {
@@ -73,8 +74,8 @@ async fn run_pubmed_local(
 ) -> std::result::Result<LocalOutcome, String> {
     use chrono::Utc;
 
-    let search = crate::pubmed_local::structured_from_request(request)
-        .map_err(|e| e.to_string())?;
+    let search =
+        crate::pubmed_local::structured_from_request(request).map_err(|e| e.to_string())?;
     let batch = gateway
         .search_from(crate::pubmed_local::UNIFIED_SOURCE, &search, limit)
         .await
@@ -84,13 +85,7 @@ async fn run_pubmed_local(
         let mut hasher = Sha256::new();
         hasher.update(crate::pubmed_local::UNIFIED_SOURCE.as_bytes());
         hasher.update(search.keywords.clone().unwrap_or_default().join("\n"));
-        hasher.update(
-            search
-                .mesh
-                .clone()
-                .unwrap_or_default()
-                .join("\n"),
-        );
+        hasher.update(search.mesh.clone().unwrap_or_default().join("\n"));
         format!("sha256:{:x}", hasher.finalize())
     };
     let retrieved_at = Utc::now().to_rfc3339();
@@ -365,13 +360,19 @@ pub async fn unified_search(
         let mirror = has_pubmed_local(gateway);
         sources = vec![
             LOCAL_SOURCE.to_string(),
-            if mirror { "pubmed_local".to_string() } else { "pubmed".to_string() },
+            if mirror {
+                "pubmed_local".to_string()
+            } else {
+                "pubmed".to_string()
+            },
             "openalex".to_string(),
         ];
     }
     let want_local = sources.iter().any(|name| name == LOCAL_SOURCE);
     #[cfg(feature = "pubmed_local")]
-    let want_mirror = sources.iter().any(|name| name == crate::pubmed_local::UNIFIED_SOURCE);
+    let want_mirror = sources
+        .iter()
+        .any(|name| name == crate::pubmed_local::UNIFIED_SOURCE);
     #[cfg(not(feature = "pubmed_local"))]
     let want_mirror = false;
     let externals: Vec<String> = sources

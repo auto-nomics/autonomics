@@ -8,18 +8,28 @@ use agentik_proc::tool;
 use agentik_sdk::types::ToolResult as AgentToolResult;
 use async_trait::async_trait;
 
-use super::{tool_err, DeckToolState};
+use super::{DeckToolState, tool_err};
 use crate::actor::DeckHandle;
 use crate::shared::DeckShared;
 
 /// Build deck-management tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(DeckCreateTool { handle: state.handle.clone() }),
-        ToolRegistration::from(DeckListTool { handle: state.handle.clone() }),
-        ToolRegistration::from(DeckGetTool { handle: state.handle.clone() }),
-        ToolRegistration::from(DeckOutlineTool { handle: state.handle.clone() }),
-        ToolRegistration::from(DeckDeleteTool { handle: state.handle }),
+        ToolRegistration::from(DeckCreateTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(DeckListTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(DeckGetTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(DeckOutlineTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(DeckDeleteTool {
+            handle: state.handle,
+        }),
     ]
 }
 
@@ -72,11 +82,21 @@ impl ToolFunction for DeckCreateTool {
                         if let Some(ar) = aspect.as_deref() {
                             // Aspect change = headmatter edit; rebuild the source.
                             let row = s.store.get_deck_row(&deck.meta.id).await?;
-                            let md =
-                                row.markdown.replacen("aspectRatio: 16/9", &format!("aspectRatio: {ar}"), 1);
-                            deck = s.save_markdown(&deck.meta.id, &md, "set aspect ratio").await?;
+                            let md = row.markdown.replacen(
+                                "aspectRatio: 16/9",
+                                &format!("aspectRatio: {ar}"),
+                                1,
+                            );
+                            deck = s
+                                .save_markdown(&deck.meta.id, &md, "set aspect ratio")
+                                .await?;
                             let initial = s.theme_css(&deck.meta.id).await?;
-                            s.save_theme_css(&deck.meta.id, &crate::theme::starter_css(&deck.meta), &crate::shared::css_revision(&initial)).await?;
+                            s.save_theme_css(
+                                &deck.meta.id,
+                                &crate::theme::starter_css(&deck.meta),
+                                &crate::shared::css_revision(&initial),
+                            )
+                            .await?;
                         }
                         Ok(deck)
                     })
@@ -337,7 +357,10 @@ impl ToolFunction for DeckDeleteTool {
                             let _ = s.exports.delete(key).await;
                         }
                     }
-                    let _ = s.assets.delete(&format!("themes/{deck_id}/theme.css")).await;
+                    let _ = s
+                        .assets
+                        .delete(&format!("themes/{deck_id}/theme.css"))
+                        .await;
                     s.store.delete_deck(&deck_id).await?;
                     Ok(())
                 })

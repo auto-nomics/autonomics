@@ -16,6 +16,7 @@
 mod actor;
 pub mod anchor;
 pub mod annotations;
+mod attach_tool;
 pub mod bib_base;
 mod collection_schema;
 pub mod collections;
@@ -113,6 +114,6 @@ pub fn default_gateway() -> LiteratureGateway {
 pub use bib_types::*;
 
 mod reliability;
-pub use reliability::{article_revision, TrashedArticle};
+pub use reliability::{TrashedArticle, article_revision};
 
 pub mod library_merge;

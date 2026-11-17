@@ -66,7 +66,9 @@ impl BlobArea {
                     .map_err(|e| Error::Asset(format!("blob write {key}: {e}")))
             }
             Backend::Memory(map) => {
-                map.lock().expect("blob map poisoned").insert(self.vpath(key), data);
+                map.lock()
+                    .expect("blob map poisoned")
+                    .insert(self.vpath(key), data);
                 Ok(())
             }
         }
@@ -86,7 +88,11 @@ impl BlobArea {
                     Err(e) => Err(Error::Asset(format!("blob read {key}: {e}"))),
                 }
             }
-            Backend::Memory(map) => Ok(map.lock().expect("blob map poisoned").get(&self.vpath(key)).cloned()),
+            Backend::Memory(map) => Ok(map
+                .lock()
+                .expect("blob map poisoned")
+                .get(&self.vpath(key))
+                .cloned()),
         }
     }
 
@@ -128,7 +134,9 @@ impl BlobArea {
                 }
             }
             Backend::Memory(map) => {
-                map.lock().expect("blob map poisoned").remove(&self.vpath(key));
+                map.lock()
+                    .expect("blob map poisoned")
+                    .remove(&self.vpath(key));
                 Ok(())
             }
         }
@@ -160,7 +168,9 @@ mod tests {
     #[tokio::test]
     async fn memory_backend_roundtrip() {
         let area = BlobArea::in_memory("deck-assets");
-        area.put("assets/d1/a.png", b"bytes".to_vec()).await.unwrap();
+        area.put("assets/d1/a.png", b"bytes".to_vec())
+            .await
+            .unwrap();
         assert_eq!(area.get("assets/d1/a.png").await.unwrap(), b"bytes");
         assert!(area.get("assets/d1/missing").await.is_err());
         area.delete("assets/d1/a.png").await.unwrap();
@@ -198,9 +208,6 @@ mod tests {
             "assets/d1/a1.tiff"
         );
         assert_eq!(asset_blob_key("d1", "a2", "noext"), "assets/d1/a2");
-        assert_eq!(
-            export_blob_key("d1", "e1", "pdf"),
-            "exports/d1/e1.pdf"
-        );
+        assert_eq!(export_blob_key("d1", "e1", "pdf"), "exports/d1/e1.pdf");
     }
 }

@@ -66,7 +66,10 @@ impl SlideFrontmatter {
             hide_in_toc: over.hide_in_toc.or(base.hide_in_toc),
             title: over.title.clone().or_else(|| base.title.clone()),
             level: over.level.or(base.level),
-            route_alias: over.route_alias.clone().or_else(|| base.route_alias.clone()),
+            route_alias: over
+                .route_alias
+                .clone()
+                .or_else(|| base.route_alias.clone()),
             zoom: over.zoom.or(base.zoom),
             image: over.image.clone().or_else(|| base.image.clone()),
             background: over.background.clone().or_else(|| base.background.clone()),
@@ -201,7 +204,8 @@ mod tests {
         assert_eq!(fm.layout, Some(Layout::TwoCols));
         assert_eq!(fm.extras.get("custom"), Some(&json!({"a": 1})));
         // Round-trip keeps the extra key
-        let rt: SlideFrontmatter = serde_json::from_value(serde_json::to_value(&fm).unwrap()).unwrap();
+        let rt: SlideFrontmatter =
+            serde_json::from_value(serde_json::to_value(&fm).unwrap()).unwrap();
         assert_eq!(rt, fm);
     }
 
@@ -227,9 +231,10 @@ mod tests {
 
     #[test]
     fn frontmatter_aliases_snake_case() {
-        let fm: SlideFrontmatter =
-            serde_json::from_value(json!({"hideInToc": true, "clicksStart": 2, "backgroundImage": "x"}))
-                .unwrap();
+        let fm: SlideFrontmatter = serde_json::from_value(
+            json!({"hideInToc": true, "clicksStart": 2, "backgroundImage": "x"}),
+        )
+        .unwrap();
         assert!(fm.hide_in_toc.unwrap());
         assert_eq!(fm.clicks_start, Some(2));
         assert_eq!(fm.background_image.as_deref(), Some("x"));

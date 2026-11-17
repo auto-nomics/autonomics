@@ -55,12 +55,7 @@ pub trait DeckExporter: Send + Sync {
 
     /// Render ONE slide to PNG bytes for agent preview (synchronous —
     /// unlike export jobs this is not queued). Default: unsupported.
-    async fn preview_png(
-        &self,
-        _job: &ExportJob,
-        _slide_no: u32,
-        _clicks: u32,
-    ) -> Result<Vec<u8>> {
+    async fn preview_png(&self, _job: &ExportJob, _slide_no: u32, _clicks: u32) -> Result<Vec<u8>> {
         Err(Error::Export(
             "this backend does not support slide preview".into(),
         ))
@@ -93,7 +88,8 @@ impl DeckExporter for NullExporter {
 
     async fn export(&self, _job: ExportJob) -> Result<ExportOutput> {
         Err(Error::Export(
-            "no export backend available (headless Chromium exporter not enabled in this build)".into(),
+            "no export backend available (headless Chromium exporter not enabled in this build)"
+                .into(),
         ))
     }
 }

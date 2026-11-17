@@ -622,17 +622,40 @@ fn centered_scale_rejects_missing_stale_or_wrong_file_fit_and_invalid_factors() 
     );
 }
 
-
 #[test]
 fn refit_accepts_only_sub_hundredth_saved_endpoint_drift_and_keeps_bindings() {
-    for (drift,accepted) in [(0.0043,true),(-0.0043,true),(0.02,false),(-0.02,false)] {
-        let mut doc=fixture();
-        let arrow=doc["elements"].as_array_mut().unwrap().iter_mut().find(|e|e["id"]=="edge-0").unwrap();
-        let n=arrow["points"].as_array().unwrap().len();
-        arrow["points"][n-1][0]=json!(arrow["points"][n-1][0].as_f64().unwrap()+drift);
-        arrow["width"]=json!(arrow["width"].as_f64().unwrap()+drift);
-        let baseline=doc.clone();let result=scene::apply(&doc,&[fit()]);assert_eq!(result.is_ok(),accepted,"drift {drift}: {result:?}");
-        assert_eq!(doc,baseline);
-        if let Ok(next)=result {for id in ["edge-0","edge-1"]{for key in ["startBinding","endBinding","startArrowhead","endArrowhead","customData"]{assert_eq!(element(&next,id)[key],element(&doc,id)[key]);}}}
+    for (drift, accepted) in [
+        (0.0043, true),
+        (-0.0043, true),
+        (0.02, false),
+        (-0.02, false),
+    ] {
+        let mut doc = fixture();
+        let arrow = doc["elements"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["id"] == "edge-0")
+            .unwrap();
+        let n = arrow["points"].as_array().unwrap().len();
+        arrow["points"][n - 1][0] = json!(arrow["points"][n - 1][0].as_f64().unwrap() + drift);
+        arrow["width"] = json!(arrow["width"].as_f64().unwrap() + drift);
+        let baseline = doc.clone();
+        let result = scene::apply(&doc, &[fit()]);
+        assert_eq!(result.is_ok(), accepted, "drift {drift}: {result:?}");
+        assert_eq!(doc, baseline);
+        if let Ok(next) = result {
+            for id in ["edge-0", "edge-1"] {
+                for key in [
+                    "startBinding",
+                    "endBinding",
+                    "startArrowhead",
+                    "endArrowhead",
+                    "customData",
+                ] {
+                    assert_eq!(element(&next, id)[key], element(&doc, id)[key]);
+                }
+            }
+        }
     }
 }

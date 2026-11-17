@@ -143,10 +143,7 @@ async fn output(config: &PodmanConfig, args: &[&str]) -> Result<std::process::Ou
     // is killed instead of orphaning while still holding the container store's
     // locks (orphaned holders block every subsequent podman invocation).
     let mut command = config.async_command();
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
+    command.args(args).stdin(Stdio::null()).kill_on_drop(true);
     tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
         .await
         .map_err(|_| "container ownership command timed out".to_string())?

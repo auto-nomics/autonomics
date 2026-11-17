@@ -4,7 +4,9 @@ mod gateway;
 mod request_cancellation;
 
 fn main() {
-    if manuscript_engine::run_worker_if_requested() { return; }
+    if manuscript_engine::run_worker_if_requested() {
+        return;
+    }
     #[cfg(target_os = "linux")]
     {
         // NVIDIA + WebKitGTK can present an empty compositor layer unless

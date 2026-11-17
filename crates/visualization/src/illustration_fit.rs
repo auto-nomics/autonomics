@@ -223,9 +223,12 @@ pub(crate) fn scale(
             "requires the exact reciprocal illustration and its reviewed file fit",
         ));
     }
-    if fit["scope"]=="illustration_group" {
-        let anchor_id=anchor["id"].as_str().ok_or_else(||fail("missing group identity"))?.to_owned();
-        return scale_group(elements,&anchor_id,factor);
+    if fit["scope"] == "illustration_group" {
+        let anchor_id = anchor["id"]
+            .as_str()
+            .ok_or_else(|| fail("missing group identity"))?
+            .to_owned();
+        return scale_group(elements, &anchor_id, factor);
     }
     let normalized: [f64; 4] = serde_json::from_value(fit["normalizedBounds"].clone())
         .map_err(|_| fail("review source bounds with fit_illustration_anchor before scaling"))?;
@@ -515,8 +518,7 @@ pub(crate) fn adjust_connected(
                 // Saved/native coordinates may be rounded to hundredths. Accept
                 // only sub-hundredth drift at the existing centered port; the
                 // new endpoint still uses the exact fitted port and same binding.
-                (port[0] - endpoint[0]).abs() <= 0.01
-                    && (port[1] - endpoint[1]).abs() <= 0.01
+                (port[0] - endpoint[0]).abs() <= 0.01 && (port[1] - endpoint[1]).abs() <= 0.01
             })
             .ok_or_else(|| fail("connector endpoint does not match the existing anchor port"))?;
         let port = ports(fitted, gap)[side];

@@ -7,18 +7,26 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 
-use super::{box_write, tool_err, DeckToolState};
+use super::{DeckToolState, box_write, tool_err};
 use crate::actor::DeckHandle;
-use crate::shared::DeckShared;
 use crate::operations::SlidePatch;
+use crate::shared::DeckShared;
 
 /// Build slide-operation tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(SlidePatchTool { handle: state.handle.clone() }),
-        ToolRegistration::from(SlideInsertTool { handle: state.handle.clone() }),
-        ToolRegistration::from(SlideRemoveTool { handle: state.handle.clone() }),
-        ToolRegistration::from(SlideMoveTool { handle: state.handle }),
+        ToolRegistration::from(SlidePatchTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(SlideInsertTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(SlideRemoveTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(SlideMoveTool {
+            handle: state.handle,
+        }),
     ]
 }
 
@@ -93,7 +101,8 @@ impl ToolFunction for SlidePatchTool {
                             note: input.note,
                         },
                     )?;
-                    s.save_markdown(&deck_id, &md, &format!("patch slide {patch_no}")).await?;
+                    s.save_markdown(&deck_id, &md, &format!("patch slide {patch_no}"))
+                        .await?;
                     outline_delta(&s, &deck_id).await
                 })
             })
@@ -153,7 +162,8 @@ impl ToolFunction for SlideInsertTool {
                         input.frontmatter_raw.as_deref(),
                         input.note.as_deref(),
                     )?;
-                    s.save_markdown(&deck_id, &md, &format!("insert after {after}")).await?;
+                    s.save_markdown(&deck_id, &md, &format!("insert after {after}"))
+                        .await?;
                     let mut out = outline_delta(&s, &deck_id).await?;
                     out["inserted_no"] = serde_json::json!(after as usize + 1);
                     Ok(out)
@@ -200,7 +210,8 @@ impl ToolFunction for SlideRemoveTool {
                 box_write(async move {
                     let row = s.store.get_deck_row(&deck_id).await?;
                     let md = crate::operations::remove_slide(&row.markdown, &deck_id, no as usize)?;
-                    s.save_markdown(&deck_id, &md, &format!("remove slide {no}")).await?;
+                    s.save_markdown(&deck_id, &md, &format!("remove slide {no}"))
+                        .await?;
                     let mut out = outline_delta(&s, &deck_id).await?;
                     out["removed"] = serde_json::json!(no);
                     Ok(out)
@@ -248,8 +259,14 @@ impl ToolFunction for SlideMoveTool {
             .write(move |s: Arc<DeckShared>| {
                 box_write(async move {
                     let row = s.store.get_deck_row(&deck_id).await?;
-                    let md = crate::operations::move_slide(&row.markdown, &deck_id, from as usize, to as usize)?;
-                    s.save_markdown(&deck_id, &md, &format!("move {from} -> {to}")).await?;
+                    let md = crate::operations::move_slide(
+                        &row.markdown,
+                        &deck_id,
+                        from as usize,
+                        to as usize,
+                    )?;
+                    s.save_markdown(&deck_id, &md, &format!("move {from} -> {to}"))
+                        .await?;
                     let mut out = outline_delta(&s, &deck_id).await?;
                     out["moved"] = serde_json::json!({"from": from, "to": to});
                     Ok(out)

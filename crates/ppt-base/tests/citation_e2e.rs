@@ -7,7 +7,7 @@ use bib_types::Article;
 use ppt_base::DeckHandle;
 use ppt_base::shared::DeckShared;
 use ppt_base::tools::deck_all_registrations;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 async fn call_tool(regs: &[ToolRegistration], name: &str, input: Value) -> Value {

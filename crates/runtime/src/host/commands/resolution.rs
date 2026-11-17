@@ -2,8 +2,8 @@
 //! references (full path or short name) to registry keys, from both the
 //! operator's global viewpoint and a caller's scoped viewpoint.
 
-use super::super::relay::AgentCommand;
 use super::super::RuntimeHost;
+use super::super::relay::AgentCommand;
 
 impl RuntimeHost {
     /// Resolve an agent reference to its full path key in the registry.

@@ -216,7 +216,11 @@ pub(crate) fn apply(
                 .map(|g| &group_map[*g])
                 .collect::<Vec<_>>()
         );
-        for key in ["semanticAnchorId", "semanticBadgeAnchorId", "visualAssetElementId"] {
+        for key in [
+            "semanticAnchorId",
+            "semanticBadgeAnchorId",
+            "visualAssetElementId",
+        ] {
             if !data[key].is_null() {
                 let id = data[key]
                     .as_str()
@@ -225,40 +229,71 @@ pub(crate) fn apply(
                 copy["customData"][key] = json!(id);
             }
         }
-        for group_field in ["visualAssetGroupId","visualBadgeGroupId"] {
-        if !data[group_field].is_null() {
-            let group = data[group_field]
-                .as_str()
-                .and_then(|g| group_map.get(g))
-                .ok_or_else(|| fail("semantic group is missing"))?;
-            copy["customData"][group_field] = json!(group);
-        }
-        }
-        for member_field in ["visualLabelIds","visualBadgeIds"] {
-        if !data[member_field].is_null() {
-            let labels = data[member_field]
-                .as_array()
-                .ok_or_else(|| fail("invalid semantic label identities"))?
-                .iter()
-                .map(|v| {
-                    v.as_str()
-                        .and_then(|id| mapping.get(id))
-                        .cloned()
-                        .ok_or_else(|| fail("semantic label is missing"))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            copy["customData"][member_field] = json!(labels);
-        }
-        }
-        if let Some(bounds)=copy.get_mut("customData").and_then(|d|d.get_mut("visualAnchorFit")).and_then(|f|f.get_mut("imageBounds")).and_then(Value::as_array_mut){
-            if bounds.len()==4&&bounds.iter().all(|v|v.as_f64().is_some_and(f64::is_finite)){
-                bounds[0]=json!(bounds[0].as_f64().unwrap()+dx);bounds[1]=json!(bounds[1].as_f64().unwrap()+dy);
+        for group_field in ["visualAssetGroupId", "visualBadgeGroupId"] {
+            if !data[group_field].is_null() {
+                let group = data[group_field]
+                    .as_str()
+                    .and_then(|g| group_map.get(g))
+                    .ok_or_else(|| fail("semantic group is missing"))?;
+                copy["customData"][group_field] = json!(group);
             }
         }
-        if let Some(fit)=copy.get_mut("customData").and_then(|d|d.get_mut("visualAnchorFit")).filter(|f|f["scope"]=="illustration_group"){
-            crate::illustration_fit::translate_group_record(fit,dx,dy);
-            if let Some(id)=fit["elementId"].as_str(){fit["elementId"]=json!(mapping.get(id).ok_or_else(||fail("group fit primary is missing"))?);}
-            if let Some(members)=fit["members"].as_array_mut(){for member in members{let id=member["elementId"].as_str().ok_or_else(||fail("invalid group fit member"))?;member["elementId"]=json!(mapping.get(id).ok_or_else(||fail("group fit member is missing"))?);}}
+        for member_field in ["visualLabelIds", "visualBadgeIds"] {
+            if !data[member_field].is_null() {
+                let labels = data[member_field]
+                    .as_array()
+                    .ok_or_else(|| fail("invalid semantic label identities"))?
+                    .iter()
+                    .map(|v| {
+                        v.as_str()
+                            .and_then(|id| mapping.get(id))
+                            .cloned()
+                            .ok_or_else(|| fail("semantic label is missing"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                copy["customData"][member_field] = json!(labels);
+            }
+        }
+        if let Some(bounds) = copy
+            .get_mut("customData")
+            .and_then(|d| d.get_mut("visualAnchorFit"))
+            .and_then(|f| f.get_mut("imageBounds"))
+            .and_then(Value::as_array_mut)
+        {
+            if bounds.len() == 4
+                && bounds
+                    .iter()
+                    .all(|v| v.as_f64().is_some_and(f64::is_finite))
+            {
+                bounds[0] = json!(bounds[0].as_f64().unwrap() + dx);
+                bounds[1] = json!(bounds[1].as_f64().unwrap() + dy);
+            }
+        }
+        if let Some(fit) = copy
+            .get_mut("customData")
+            .and_then(|d| d.get_mut("visualAnchorFit"))
+            .filter(|f| f["scope"] == "illustration_group")
+        {
+            crate::illustration_fit::translate_group_record(fit, dx, dy);
+            if let Some(id) = fit["elementId"].as_str() {
+                fit["elementId"] = json!(
+                    mapping
+                        .get(id)
+                        .ok_or_else(|| fail("group fit primary is missing"))?
+                );
+            }
+            if let Some(members) = fit["members"].as_array_mut() {
+                for member in members {
+                    let id = member["elementId"]
+                        .as_str()
+                        .ok_or_else(|| fail("invalid group fit member"))?;
+                    member["elementId"] = json!(
+                        mapping
+                            .get(id)
+                            .ok_or_else(|| fail("group fit member is missing"))?
+                    );
+                }
+            }
         }
         copy["index"] = Value::Null;
         copy["version"] = json!(0);

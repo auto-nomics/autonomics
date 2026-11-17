@@ -31,7 +31,9 @@ fn long_relation_gets_space_and_short_relations_stay_bounded_without_losing_text
     let short = element(&scene, "edge-label-1");
     assert_eq!(short["text"], "enters nucleus");
     assert!(short["x"].as_f64().unwrap() > b["x"].as_f64().unwrap() + b["width"].as_f64().unwrap());
-    assert!(short["x"].as_f64().unwrap() + short["width"].as_f64().unwrap() < c["x"].as_f64().unwrap());
+    assert!(
+        short["x"].as_f64().unwrap() + short["width"].as_f64().unwrap() < c["x"].as_f64().unwrap()
+    );
     let label = element(&scene, "edge-label-0");
     let text = label["text"].as_str().unwrap();
     let original = label["originalText"].as_str().unwrap();

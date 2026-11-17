@@ -516,10 +516,7 @@ impl SharedInfra {
     /// if any — read-only monitoring access (gateway browser monitor).
     /// Never launches a browser: a non-browser agent, or a browser agent
     /// whose previous session has dropped (dangling `Weak`), yields `None`.
-    pub async fn live_browser_session(
-        &self,
-        agent_path: &str,
-    ) -> Option<Arc<BrowserSession>> {
+    pub async fn live_browser_session(&self, agent_path: &str) -> Option<Arc<BrowserSession>> {
         let pool = self.browsers.lock().await;
         pool.by_path.get(agent_path).and_then(Weak::upgrade)
     }

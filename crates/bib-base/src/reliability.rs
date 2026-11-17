@@ -35,7 +35,10 @@ pub(crate) async fn is_trashed(conn: &Connection, id: &str) -> Result<bool> {
     Ok(rows.next().await?.is_some())
 }
 
-pub(crate) async fn ensure_identifiers_available(conn: &Connection, article: &Article) -> Result<()> {
+pub(crate) async fn ensure_identifiers_available(
+    conn: &Connection,
+    article: &Article,
+) -> Result<()> {
     for identifier in &article.identifiers {
         // Arbitrary identifiers include URLs whose path components are case-sensitive.
         let collation = if identifier.kind == bib_types::IdKind::Other {

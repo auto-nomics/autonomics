@@ -54,13 +54,12 @@ fn api_err(e: ppt_base::Error) -> ApiErr {
             StatusCode::NOT_FOUND,
             format!("deck {deck} has {total} slides (1-{total}); got slide {no}"),
         ),
-        ppt_base::Error::BadFrontmatter(m) => {
-            error(StatusCode::BAD_REQUEST, format!("invalid frontmatter YAML: {m}"))
-        }
+        ppt_base::Error::BadFrontmatter(m) => error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid frontmatter YAML: {m}"),
+        ),
         ppt_base::Error::InvalidThemeCss(m) => error(StatusCode::BAD_REQUEST, m),
-        ppt_base::Error::BadAspectRatio(e) => {
-            error(StatusCode::BAD_REQUEST, e.to_string())
-        }
+        ppt_base::Error::BadAspectRatio(e) => error(StatusCode::BAD_REQUEST, e.to_string()),
         ppt_base::Error::BadRange(e) => error(StatusCode::BAD_REQUEST, e.to_string()),
         ppt_base::Error::HeadmatterGuard => error(
             StatusCode::CONFLICT,
@@ -70,20 +69,22 @@ fn api_err(e: ppt_base::Error) -> ApiErr {
             StatusCode::CONFLICT,
             format!("revision conflict: deck is at {expected}, request was based on {actual}"),
         ),
-        ppt_base::Error::Export(m) => error(StatusCode::INTERNAL_SERVER_ERROR, format!("export: {m}")),
+        ppt_base::Error::Export(m) => {
+            error(StatusCode::INTERNAL_SERVER_ERROR, format!("export: {m}"))
+        }
         ppt_base::Error::Asset(m) => error(StatusCode::NOT_FOUND, format!("asset: {m}")),
         ppt_base::Error::Storage(m) => {
             error(StatusCode::INTERNAL_SERVER_ERROR, format!("storage: {m}"))
         }
-        ppt_base::Error::Serde(e) => {
-            error(StatusCode::BAD_REQUEST, format!("serialization: {e}"))
-        }
+        ppt_base::Error::Serde(e) => error(StatusCode::BAD_REQUEST, format!("serialization: {e}")),
     }
 }
 
 /// Box a write-closure future into the shape [`DeckHandle::write`]
 /// expects, keeping call sites free of pin/cast noise.
-fn box_w<T, F>(f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = ppt_base::Result<T>> + Send>>
+fn box_w<T, F>(
+    f: F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ppt_base::Result<T>> + Send>>
 where
     T: Send + 'static,
     F: std::future::Future<Output = ppt_base::Result<T>> + Send + 'static,
@@ -100,12 +101,12 @@ pub fn router(handle: Arc<DeckHandle>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/decks", get(list_decks).post(create_deck))
-        .route(
-            "/decks/{id}",
-            get(get_deck).delete(delete_deck),
-        )
+        .route("/decks/{id}", get(get_deck).delete(delete_deck))
         .route("/decks/{id}/source", get(get_source).put(put_source))
-        .route("/decks/{id}/theme.css", get(get_theme_css).put(put_theme_css))
+        .route(
+            "/decks/{id}/theme.css",
+            get(get_theme_css).put(put_theme_css),
+        )
         .route("/decks/{id}/default-theme.css", get(get_default_theme_css))
         .route("/decks/{id}/slides/{no}/css", put(put_slide_css))
         .route(
@@ -118,22 +119,10 @@ pub fn router(handle: Arc<DeckHandle>) -> Router {
             get(get_slide).patch(patch_slide).delete(delete_slide),
         )
         .route("/decks/{id}/slides/{no}/move", post(move_slide_route))
-        .route(
-            "/decks/{id}/assets",
-            get(list_assets).post(upload_asset),
-        )
-        .route(
-            "/decks/{id}/assets/{aid}/raw",
-            get(download_asset),
-        )
-        .route(
-            "/decks/{id}/assets/{aid}",
-            rdelete(delete_asset),
-        )
-        .route(
-            "/decks/{id}/exports",
-            get(list_exports).post(create_export),
-        )
+        .route("/decks/{id}/assets", get(list_assets).post(upload_asset))
+        .route("/decks/{id}/assets/{aid}/raw", get(download_asset))
+        .route("/decks/{id}/assets/{aid}", rdelete(delete_asset))
+        .route("/decks/{id}/exports", get(list_exports).post(create_export))
         .route("/exports/{eid}", get(get_export))
         .route("/exports/{eid}/download", get(download_export))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
@@ -255,8 +244,7 @@ async fn create_deck(
             move |s: Arc<ppt_base::shared::DeckShared>| {
                 box_w(async move {
                     if let Some(md) = markdown {
-                        let deck =
-                            ppt_base::deck::assemble(&md, &ppt_types::new_deck_id(), "", "");
+                        let deck = ppt_base::deck::assemble(&md, &ppt_types::new_deck_id(), "", "");
                         let cache = serde_json::to_string(&ppt_base::CachedDeck {
                             meta: deck.meta.clone(),
                             slides: deck.slides.clone(),
@@ -265,7 +253,14 @@ async fn create_deck(
                         s.store
                             .create_deck(&deck.meta.id, &title, &md, &deck.meta.revision, &cache)
                             .await?;
-                        if let Err(error) = s.assets.put(&format!("themes/{}/theme.css", deck.meta.id), ppt_base::theme::starter_css(&deck.meta).into_bytes()).await {
+                        if let Err(error) = s
+                            .assets
+                            .put(
+                                &format!("themes/{}/theme.css", deck.meta.id),
+                                ppt_base::theme::starter_css(&deck.meta).into_bytes(),
+                            )
+                            .await
+                        {
                             let _ = s.store.delete_deck(&deck.meta.id).await;
                             return Err(error);
                         }
@@ -303,14 +298,18 @@ async fn get_deck(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>)
     }
 }
 
-async fn deck_payload(
-    handle: &Arc<DeckHandle>,
-    deck: ppt_base::deck::Deck,
-) -> ApiResult {
+async fn deck_payload(handle: &Arc<DeckHandle>, deck: ppt_base::deck::Deck) -> ApiResult {
     let shared = handle.shared();
     let theme_css = shared.theme_css(&deck.meta.id).await.map_err(api_err)?;
     let theme_revision = ppt_base::shared::css_revision(&theme_css);
-    let canvas_size = ppt_base::theme::canvas_size(&theme_css, ppt_base::theme::CanvasSize { width: deck.meta.canvas(), height: deck.meta.canvas_height() }).map_err(api_err)?;
+    let canvas_size = ppt_base::theme::canvas_size(
+        &theme_css,
+        ppt_base::theme::CanvasSize {
+            width: deck.meta.canvas(),
+            height: deck.meta.canvas_height(),
+        },
+    )
+    .map_err(api_err)?;
     let diagnostics = shared
         .latest_diagnostics(&deck.meta.id)
         .await
@@ -366,45 +365,81 @@ struct PutCssBody {
 
 async fn get_theme_css(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
     let css = handle.shared().theme_css(&id).await.map_err(api_err)?;
-    Ok(Json(json!({ "revision": ppt_base::shared::css_revision(&css), "css": css })))
+    Ok(Json(
+        json!({ "revision": ppt_base::shared::css_revision(&css), "css": css }),
+    ))
 }
 
-async fn get_default_theme_css(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
-    let deck = handle.shared().load_deck(&id).await.map_err(api_err)?;
-    let size = handle.shared().canvas_size(&id, &deck.meta).await.map_err(api_err)?;
-    Ok(Json(json!({ "css": ppt_base::theme::css_for_size(size) })))
-}
-
-async fn put_theme_css(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>, Json(body): Json<PutCssBody>) -> ApiResult {
-    let revision = handle.write(move |s| box_w(async move {
-        s.save_theme_css(&id, &body.css, &body.revision).await
-    })).await.map_err(api_err)?;
-    Ok(Json(json!({ "revision": revision })))
-}
-
-async fn put_slide_css(State(handle): State<Arc<DeckHandle>>, Path((id, no)): Path<(String, usize)>, Json(body): Json<PutCssBody>) -> ApiResult {
-    let deck = handle.write(move |s| box_w(async move {
-        let row = s.store.get_deck_row(&id).await?;
-        if row.revision != body.revision {
-            return Err(ppt_base::Error::RevisionConflict { expected: row.revision, actual: body.revision });
-        }
-        let markdown = ppt_base::operations::set_slide_css(&row.markdown, &id, no, &body.css)?;
-        s.save_markdown(&id, &markdown, "set slide CSS").await
-    })).await.map_err(api_err)?;
-    Ok(Json(json!({ "revision": deck.meta.revision })))
-}
-
-async fn get_source(
+async fn get_default_theme_css(
     State(handle): State<Arc<DeckHandle>>,
     Path(id): Path<String>,
 ) -> ApiResult {
-    let row = handle.shared().store.get_deck_row(&id).await.map_err(api_err)?;
-    Ok(Json(json!({ "markdown": row.markdown, "revision": row.revision })))
+    let deck = handle.shared().load_deck(&id).await.map_err(api_err)?;
+    let size = handle
+        .shared()
+        .canvas_size(&id, &deck.meta)
+        .await
+        .map_err(api_err)?;
+    Ok(Json(json!({ "css": ppt_base::theme::css_for_size(size) })))
+}
+
+async fn put_theme_css(
+    State(handle): State<Arc<DeckHandle>>,
+    Path(id): Path<String>,
+    Json(body): Json<PutCssBody>,
+) -> ApiResult {
+    let revision = handle
+        .write(move |s| {
+            box_w(async move { s.save_theme_css(&id, &body.css, &body.revision).await })
+        })
+        .await
+        .map_err(api_err)?;
+    Ok(Json(json!({ "revision": revision })))
+}
+
+async fn put_slide_css(
+    State(handle): State<Arc<DeckHandle>>,
+    Path((id, no)): Path<(String, usize)>,
+    Json(body): Json<PutCssBody>,
+) -> ApiResult {
+    let deck = handle
+        .write(move |s| {
+            box_w(async move {
+                let row = s.store.get_deck_row(&id).await?;
+                if row.revision != body.revision {
+                    return Err(ppt_base::Error::RevisionConflict {
+                        expected: row.revision,
+                        actual: body.revision,
+                    });
+                }
+                let markdown =
+                    ppt_base::operations::set_slide_css(&row.markdown, &id, no, &body.css)?;
+                s.save_markdown(&id, &markdown, "set slide CSS").await
+            })
+        })
+        .await
+        .map_err(api_err)?;
+    Ok(Json(json!({ "revision": deck.meta.revision })))
+}
+
+async fn get_source(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
+    let row = handle
+        .shared()
+        .store
+        .get_deck_row(&id)
+        .await
+        .map_err(api_err)?;
+    Ok(Json(
+        json!({ "markdown": row.markdown, "revision": row.revision }),
+    ))
 }
 
 /// Latest stored diagnostics report (post-write background run), plus a
 /// freshness flag against the current markdown + theme revisions.
-async fn get_diagnostics(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
+async fn get_diagnostics(
+    State(handle): State<Arc<DeckHandle>>,
+    Path(id): Path<String>,
+) -> ApiResult {
     let shared = handle.shared();
     let deck = shared.load_deck(&id).await.map_err(api_err)?;
     let theme_revision = shared
@@ -423,7 +458,10 @@ async fn get_diagnostics(State(handle): State<Arc<DeckHandle>>, Path(id): Path<S
 }
 
 /// Force a synchronous diagnostics run (heavy: renders every slide).
-async fn run_diagnostics(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
+async fn run_diagnostics(
+    State(handle): State<Arc<DeckHandle>>,
+    Path(id): Path<String>,
+) -> ApiResult {
     let report = ppt_base::diagnostics::run_diagnostics(handle.shared(), &id)
         .await
         .map_err(api_err)?;
@@ -436,25 +474,37 @@ async fn put_source(
     Query(q): Query<std::collections::HashMap<String, String>>,
     Json(body): Json<PutSourceBody>,
 ) -> WriteResult {
-    let expected = q.get("rev").cloned().or(body.revision).filter(|s| !s.is_empty());
-    let deck = handle.write(move |s: Arc<ppt_base::shared::DeckShared>| {
-        box_w(async move {
-            let row = s.store.get_deck_row(&id).await?;
-            if let Some(expected) = expected {
-                if expected != row.revision {
-                    return Err(ppt_base::Error::RevisionConflict { expected: row.revision, actual: expected });
+    let expected = q
+        .get("rev")
+        .cloned()
+        .or(body.revision)
+        .filter(|s| !s.is_empty());
+    let deck = handle
+        .write(move |s: Arc<ppt_base::shared::DeckShared>| {
+            box_w(async move {
+                let row = s.store.get_deck_row(&id).await?;
+                if let Some(expected) = expected {
+                    if expected != row.revision {
+                        return Err(ppt_base::Error::RevisionConflict {
+                            expected: row.revision,
+                            actual: expected,
+                        });
+                    }
                 }
-            }
-            s.save_markdown(&id, &body.markdown, body.message.as_deref().unwrap_or("set source")).await
+                s.save_markdown(
+                    &id,
+                    &body.markdown,
+                    body.message.as_deref().unwrap_or("set source"),
+                )
+                .await
+            })
         })
-    }).await.map_err(api_err)?;
+        .await
+        .map_err(api_err)?;
     Ok(Json(json!({ "deck": deck.meta, "slideCount": deck.len() })).into_response())
 }
 
-async fn delete_deck(
-    State(handle): State<Arc<DeckHandle>>,
-    Path(id): Path<String>,
-) -> ApiResult {
+async fn delete_deck(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
     let deleted = id.clone();
     handle
         .write(move |s: Arc<ppt_base::shared::DeckShared>| {
@@ -468,7 +518,10 @@ async fn delete_deck(
                         let _ = s.exports.delete(&key).await;
                     }
                 }
-                let _ = s.assets.delete(&format!("themes/{deleted}/theme.css")).await;
+                let _ = s
+                    .assets
+                    .delete(&format!("themes/{deleted}/theme.css"))
+                    .await;
                 s.store.delete_deck(&deleted).await
             })
         })
@@ -517,7 +570,8 @@ async fn patch_slide(
                             note: body.note,
                         },
                     )?;
-                    s.save_markdown(&id, &md, &format!("patch slide {no}")).await
+                    s.save_markdown(&id, &md, &format!("patch slide {no}"))
+                        .await
                 })
             }
         })
@@ -578,7 +632,8 @@ async fn delete_slide(
                 box_w(async move {
                     let row = s.store.get_deck_row(&id).await?;
                     let md = remove_slide(&row.markdown, &id, no as usize)?;
-                    s.save_markdown(&id, &md, &format!("remove slide {no}")).await
+                    s.save_markdown(&id, &md, &format!("remove slide {no}"))
+                        .await
                 })
             }
         })
@@ -600,7 +655,8 @@ async fn move_slide_route(
                 box_w(async move {
                     let row = s.store.get_deck_row(&id).await?;
                     let md = move_slide(&row.markdown, &id, no as usize, to as usize)?;
-                    s.save_markdown(&id, &md, &format!("move {no} -> {to}")).await
+                    s.save_markdown(&id, &md, &format!("move {no} -> {to}"))
+                        .await
                 })
             }
         })
@@ -668,10 +724,7 @@ async fn upload_asset(
     {
         match field.name().unwrap_or_default() {
             "file" => {
-                filename = field
-                    .file_name()
-                    .unwrap_or("asset.bin")
-                    .to_string();
+                filename = field.file_name().unwrap_or("asset.bin").to_string();
                 bytes = Some(
                     field
                         .bytes()
@@ -681,19 +734,15 @@ async fn upload_asset(
                 );
             }
             "caption" => {
-                caption = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| error(StatusCode::BAD_REQUEST, format!("read caption: {e}")))?,
-                );
+                caption =
+                    Some(field.text().await.map_err(|e| {
+                        error(StatusCode::BAD_REQUEST, format!("read caption: {e}"))
+                    })?);
             }
             "provenance" => {
-                provenance = Some(
-                    field.text().await.map_err(|e| {
-                        error(StatusCode::BAD_REQUEST, format!("read provenance: {e}"))
-                    })?,
-                );
+                provenance = Some(field.text().await.map_err(|e| {
+                    error(StatusCode::BAD_REQUEST, format!("read provenance: {e}"))
+                })?);
             }
             _ => {}
         }
@@ -769,8 +818,7 @@ async fn print_asset(
         Some(token) if validate_print_token(&handle, &id, token).await.is_ok() => {
             serve_asset(&handle, &id, &aid).await
         }
-        _ => error(StatusCode::UNAUTHORIZED, "invalid or expired print token")
-            .into_response(),
+        _ => error(StatusCode::UNAUTHORIZED, "invalid or expired print token").into_response(),
     }
 }
 
@@ -815,10 +863,7 @@ async fn delete_asset(
 // Export endpoints
 // ---------------------------------------------------------------------------
 
-async fn list_exports(
-    State(handle): State<Arc<DeckHandle>>,
-    Path(id): Path<String>,
-) -> ApiResult {
+async fn list_exports(State(handle): State<Arc<DeckHandle>>, Path(id): Path<String>) -> ApiResult {
     let exports = handle
         .shared()
         .store
@@ -905,10 +950,7 @@ async fn create_export(
         .into_response())
 }
 
-async fn get_export(
-    State(handle): State<Arc<DeckHandle>>,
-    Path(eid): Path<String>,
-) -> ApiResult {
+async fn get_export(State(handle): State<Arc<DeckHandle>>, Path(eid): Path<String>) -> ApiResult {
     let record = handle
         .shared()
         .store
@@ -1008,9 +1050,24 @@ async fn print_data(
         Some(css) => css.to_string(),
         None => shared.theme_css(&id).await.map_err(api_err)?,
     };
-    let canvas_size = match (params["canvasWidth"].as_u64(), params["canvasHeight"].as_u64()) {
-        (Some(w), Some(h)) if (16..=8192).contains(&w) && (16..=8192).contains(&h) => ppt_base::theme::CanvasSize { width: w as u32, height: h as u32 },
-        _ => ppt_base::theme::canvas_size(&theme_css, ppt_base::theme::CanvasSize { width: deck.meta.canvas(), height: deck.meta.canvas_height() }).map_err(api_err)?,
+    let canvas_size = match (
+        params["canvasWidth"].as_u64(),
+        params["canvasHeight"].as_u64(),
+    ) {
+        (Some(w), Some(h)) if (16..=8192).contains(&w) && (16..=8192).contains(&h) => {
+            ppt_base::theme::CanvasSize {
+                width: w as u32,
+                height: h as u32,
+            }
+        }
+        _ => ppt_base::theme::canvas_size(
+            &theme_css,
+            ppt_base::theme::CanvasSize {
+                width: deck.meta.canvas(),
+                height: deck.meta.canvas_height(),
+            },
+        )
+        .map_err(api_err)?,
     };
     let asset_rows: Vec<Value> = assets
         .iter()

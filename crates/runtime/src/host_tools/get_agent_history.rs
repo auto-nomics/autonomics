@@ -152,14 +152,22 @@ mod tests {
     }
     #[test]
     fn optional_saved_history_is_bounded_without_replaying_private_blocks() {
-        let Ok(source)=std::env::var("AGENT_HISTORY_SUMMARY_SOURCE") else{return;};
-        let messages:serde_json::Value=serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
-        let summary=history_summary(json!({"agent_path":"/root/figure","messages":messages}),0,40);
-        let encoded=serde_json::to_string_pretty(&summary).unwrap();
-        assert!(summary.to_string().len()<=64000);
+        let Ok(source) = std::env::var("AGENT_HISTORY_SUMMARY_SOURCE") else {
+            return;
+        };
+        let messages: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+        let summary = history_summary(
+            json!({"agent_path":"/root/figure","messages":messages}),
+            0,
+            40,
+        );
+        let encoded = serde_json::to_string_pretty(&summary).unwrap();
+        assert!(summary.to_string().len() <= 64000);
         assert!(!encoded.contains("\"type\": \"thinking\""));
         assert!(!encoded.contains("data:image/"));
-        if let Ok(output)=std::env::var("AGENT_HISTORY_SUMMARY_OUTPUT"){std::fs::write(output,encoded).unwrap();}
+        if let Ok(output) = std::env::var("AGENT_HISTORY_SUMMARY_OUTPUT") {
+            std::fs::write(output, encoded).unwrap();
+        }
     }
-
 }

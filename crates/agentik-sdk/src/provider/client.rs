@@ -264,9 +264,14 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
     // none/minimal effort disables it unless a numeric budget was provided.
     if !model_info.thinking_required
         && model_info.thinking_budget.is_none()
-        && matches!(model_info.reasoning_effort, Some(agentik_types::ReasoningEffort::None | agentik_types::ReasoningEffort::Minimal))
+        && matches!(
+            model_info.reasoning_effort,
+            Some(agentik_types::ReasoningEffort::None | agentik_types::ReasoningEffort::Minimal)
+        )
     {
-        return builder.thinking(agentik_types::ThinkingConfig::disabled()).reasoning_effort(effort);
+        return builder
+            .thinking(agentik_types::ThinkingConfig::disabled())
+            .reasoning_effort(effort);
     }
     // GLM-5.3 accepts the enabled thinking type but does not document a token
     // budget. Preserve output capacity and send only the supported fields.
@@ -281,7 +286,8 @@ fn inject_thinking(builder: MessageCreateBuilder, model_info: &ModelInfo) -> Mes
             // The agent's explicit effort must affect budget-style endpoints too.
             // Keep the historical half-output default when no effort is set;
             // an explicit model thinking_budget still takes precedence above.
-            let requested = model_info.reasoning_effort
+            let requested = model_info
+                .reasoning_effort
                 .and_then(agentik_types::reasoning::anthropic_budget_for_effort)
                 .unwrap_or(half);
             // Ensure budget stays below max_tokens to satisfy Anthropic's API
@@ -409,46 +415,72 @@ mod tests {
     fn explicit_effort_controls_budget_style_thinking_without_changing_defaults() {
         use agentik_types::ReasoningEffort;
         let mut model = OpenaiProvider::preset_models().into_iter().next().unwrap();
-        model.max_output_tokens=32768;
-        model.thinking_required=false;
-        model.thinking_budget=None;
-        model.reasoning_effort=None;
-        let build=|model:&ModelInfo|inject_thinking(MessageCreateBuilder::new(model.model_name.clone(),model.max_output_tokens as u32),model).build();
-        assert_eq!(build(&model).thinking.unwrap().budget_tokens,Some(16384));
-        for (effort,budget) in [(ReasoningEffort::Low,2048),(ReasoningEffort::Medium,8192),(ReasoningEffort::High,16384),(ReasoningEffort::Xhigh,24576),(ReasoningEffort::Max,32767)] {
-            model.reasoning_effort=Some(effort);
-            let params=build(&model);
-            assert_eq!(params.thinking.unwrap().budget_tokens,Some(budget));
-            assert_eq!(params.reasoning,Some(ReasoningConfig::from_effort(effort)));
+        model.max_output_tokens = 32768;
+        model.thinking_required = false;
+        model.thinking_budget = None;
+        model.reasoning_effort = None;
+        let build = |model: &ModelInfo| {
+            inject_thinking(
+                MessageCreateBuilder::new(model.model_name.clone(), model.max_output_tokens as u32),
+                model,
+            )
+            .build()
+        };
+        assert_eq!(build(&model).thinking.unwrap().budget_tokens, Some(16384));
+        for (effort, budget) in [
+            (ReasoningEffort::Low, 2048),
+            (ReasoningEffort::Medium, 8192),
+            (ReasoningEffort::High, 16384),
+            (ReasoningEffort::Xhigh, 24576),
+            (ReasoningEffort::Max, 32767),
+        ] {
+            model.reasoning_effort = Some(effort);
+            let params = build(&model);
+            assert_eq!(params.thinking.unwrap().budget_tokens, Some(budget));
+            assert_eq!(params.reasoning, Some(ReasoningConfig::from_effort(effort)));
         }
-        model.max_output_tokens=4096;
-        model.reasoning_effort=Some(ReasoningEffort::High);
-        assert_eq!(build(&model).thinking.unwrap().budget_tokens,Some(4095));
-        model.max_output_tokens=32768;
-        model.reasoning_effort=Some(ReasoningEffort::Low);
-        model.thinking_budget=Some(4096);
-        assert_eq!(build(&model).thinking.unwrap().budget_tokens,Some(4096));
-        model.thinking_required=true;
-        assert_eq!(build(&model).thinking.unwrap().budget_tokens,None);
+        model.max_output_tokens = 4096;
+        model.reasoning_effort = Some(ReasoningEffort::High);
+        assert_eq!(build(&model).thinking.unwrap().budget_tokens, Some(4095));
+        model.max_output_tokens = 32768;
+        model.reasoning_effort = Some(ReasoningEffort::Low);
+        model.thinking_budget = Some(4096);
+        assert_eq!(build(&model).thinking.unwrap().budget_tokens, Some(4096));
+        model.thinking_required = true;
+        assert_eq!(build(&model).thinking.unwrap().budget_tokens, None);
     }
 
     #[test]
     fn none_or_minimal_explicitly_disables_optional_budget_thinking_only() {
-        use agentik_types::{ReasoningEffort,ThinkingKind};
-        let mut model=OpenaiProvider::preset_models().into_iter().next().unwrap();
-        model.max_output_tokens=32768;model.thinking_required=false;model.thinking_budget=None;
-        for effort in [ReasoningEffort::None,ReasoningEffort::Minimal] {
-            model.reasoning_effort=Some(effort);
-            let params=inject_thinking(MessageCreateBuilder::new(model.model_name.clone(),32768),&model).build();
-            assert_eq!(params.thinking.unwrap().kind,ThinkingKind::Disabled);
-            assert_eq!(params.reasoning,Some(ReasoningConfig::from_effort(effort)));
+        use agentik_types::{ReasoningEffort, ThinkingKind};
+        let mut model = OpenaiProvider::preset_models().into_iter().next().unwrap();
+        model.max_output_tokens = 32768;
+        model.thinking_required = false;
+        model.thinking_budget = None;
+        for effort in [ReasoningEffort::None, ReasoningEffort::Minimal] {
+            model.reasoning_effort = Some(effort);
+            let params = inject_thinking(
+                MessageCreateBuilder::new(model.model_name.clone(), 32768),
+                &model,
+            )
+            .build();
+            assert_eq!(params.thinking.unwrap().kind, ThinkingKind::Disabled);
+            assert_eq!(params.reasoning, Some(ReasoningConfig::from_effort(effort)));
         }
-        model.thinking_required=true;
-        let params=inject_thinking(MessageCreateBuilder::new(model.model_name.clone(),32768),&model).build();
-        assert_eq!(params.thinking.unwrap().kind,ThinkingKind::Enabled);
-        model.thinking_required=false;model.thinking_budget=Some(4096);
-        let params=inject_thinking(MessageCreateBuilder::new(model.model_name.clone(),32768),&model).build();
-        assert_eq!(params.thinking.unwrap().budget_tokens,Some(4096));
+        model.thinking_required = true;
+        let params = inject_thinking(
+            MessageCreateBuilder::new(model.model_name.clone(), 32768),
+            &model,
+        )
+        .build();
+        assert_eq!(params.thinking.unwrap().kind, ThinkingKind::Enabled);
+        model.thinking_required = false;
+        model.thinking_budget = Some(4096);
+        let params = inject_thinking(
+            MessageCreateBuilder::new(model.model_name.clone(), 32768),
+            &model,
+        )
+        .build();
+        assert_eq!(params.thinking.unwrap().budget_tokens, Some(4096));
     }
-
 }

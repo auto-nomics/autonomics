@@ -342,18 +342,28 @@ impl SshTarget {
             let mut chunk = [0u8; 4096];
             loop {
                 let count = pipe.read(&mut chunk).await?;
-                if count == 0 { return Ok(bytes); }
+                if count == 0 {
+                    return Ok(bytes);
+                }
                 if bytes.len() + count > 1024 * 1024 {
-                    return Err(std::io::Error::other("connection output exceeds 1 MiB limit"));
+                    return Err(std::io::Error::other(
+                        "connection output exceeds 1 MiB limit",
+                    ));
                 }
                 bytes.extend_from_slice(&chunk[..count]);
                 observe(stream, &String::from_utf8_lossy(&chunk[..count]));
             }
         }
         let mut command = self.command()?;
-        command.args(["bash", "-s"]).stdin(Stdio::piped())
-            .stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-        let mut child = command.spawn().map_err(|e| DagError::Schedule(format!("cannot start SSH: {e}")))?;
+        command
+            .args(["bash", "-s"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = command
+            .spawn()
+            .map_err(|e| DagError::Schedule(format!("cannot start SSH: {e}")))?;
         let mut stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
         let stderr = child.stderr.take().expect("piped stderr");
@@ -368,15 +378,33 @@ impl SshTarget {
                 Ok::<_, std::io::Error>(result.err())
             };
             let (stdin_error, stdout, stderr, status) = tokio::try_join!(
-                writer, collect(stdout, "stdout", observe), collect(stderr, "stderr", observe), child.wait()
+                writer,
+                collect(stdout, "stdout", observe),
+                collect(stderr, "stderr", observe),
+                child.wait()
             )?;
-            if let Some(error) = stdin_error && status.success() {
-                return Err(std::io::Error::other(format!("cannot pipe ssh stdin: {error}; complete payload was not confirmed; stdout: {}; stderr: {}", String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr))));
+            if let Some(error) = stdin_error
+                && status.success()
+            {
+                return Err(std::io::Error::other(format!(
+                    "cannot pipe ssh stdin: {error}; complete payload was not confirmed; stdout: {}; stderr: {}",
+                    String::from_utf8_lossy(&stdout),
+                    String::from_utf8_lossy(&stderr)
+                )));
             }
-            Ok::<_, std::io::Error>(Output { status, stdout, stderr })
+            Ok::<_, std::io::Error>(Output {
+                status,
+                stdout,
+                stderr,
+            })
         };
-        tokio::time::timeout(self.command_timeout, operation).await
-            .map_err(|_| DagError::Schedule("SSH connection command timed out; remote outcome UNKNOWN".into()))?
+        tokio::time::timeout(self.command_timeout, operation)
+            .await
+            .map_err(|_| {
+                DagError::Schedule(
+                    "SSH connection command timed out; remote outcome UNKNOWN".into(),
+                )
+            })?
             .map_err(|e| DagError::Schedule(format!("SSH connection command failed: {e}")))
     }
     /// Authenticate the actual submission connection before recording an intent.

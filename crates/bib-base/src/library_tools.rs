@@ -1466,7 +1466,12 @@ impl ToolFunction for BibDeleteTool {
         if confirm {
             for (id, title) in &previews {
                 let found = title.is_some();
-                match self.bib.set_article_trash(id, true).await.map_err(box_error) {
+                match self
+                    .bib
+                    .set_article_trash(id, true)
+                    .await
+                    .map_err(box_error)
+                {
                     Ok(true) => {
                         deleted_count += 1;
                         results.push(DeleteResult {
@@ -1500,7 +1505,11 @@ impl ToolFunction for BibDeleteTool {
                             deleted: false,
                             found,
                             title: title.clone(),
-                            error: Some(if found { e.to_string() } else { "id not found".into() }),
+                            error: Some(if found {
+                                e.to_string()
+                            } else {
+                                "id not found".into()
+                            }),
                         });
                     }
                 }
@@ -2204,7 +2213,13 @@ mod tests {
             0
         );
         bib.set_article_trash(&art.id, false).await.unwrap();
-        assert_eq!(bib.list_collection_articles(&col.id, None, None).await.unwrap().len(), 1);
+        assert_eq!(
+            bib.list_collection_articles(&col.id, None, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     // ── bib_remove_from_collection ────────────────────────────────────────

@@ -106,9 +106,7 @@ pub fn yaml_to_json(v: &serde_yaml_ng::Value) -> Value {
             serde_json::to_value(n).unwrap_or(Value::Null)
         }
         serde_yaml_ng::Value::String(s) => Value::String(s.clone()),
-        serde_yaml_ng::Value::Sequence(seq) => {
-            Value::Array(seq.iter().map(yaml_to_json).collect())
-        }
+        serde_yaml_ng::Value::Sequence(seq) => Value::Array(seq.iter().map(yaml_to_json).collect()),
         serde_yaml_ng::Value::Mapping(map) => {
             let mut out = Map::new();
             for (k, v) in map {
@@ -149,7 +147,10 @@ mod tests {
         assert_eq!(m.frontmatter.get("title"), Some(&json!("Hello")));
         // Matter.content is NOT trimmed (parse_slide_raw trims).
         assert_eq!(m.content, "\n\n# Body\n");
-        assert_eq!(m.frontmatter_raw.as_deref(), Some("layout: cover\ntitle: Hello\n"));
+        assert_eq!(
+            m.frontmatter_raw.as_deref(),
+            Some("layout: cover\ntitle: Hello\n")
+        );
     }
 
     #[test]
@@ -170,7 +171,9 @@ mod tests {
 
     #[test]
     fn yaml_types_coerce_to_json() {
-        let m = matter("---\ncount: 3\nenabled: true\nratio: 16.5\nnested:\n  a: [1, 2]\n  b: null\n1: numeric-key\n---\nx");
+        let m = matter(
+            "---\ncount: 3\nenabled: true\nratio: 16.5\nnested:\n  a: [1, 2]\n  b: null\n1: numeric-key\n---\nx",
+        );
         assert_eq!(m.frontmatter.get("count"), Some(&json!(3)));
         assert_eq!(m.frontmatter.get("enabled"), Some(&json!(true)));
         assert_eq!(m.frontmatter.get("ratio"), Some(&json!(16.5)));

@@ -130,11 +130,7 @@ fn is_one(v: &u32) -> bool {
 
 impl ClickDirective {
     pub fn new(order: usize, at: Value) -> Self {
-        Self {
-            order,
-            at,
-            size: 1,
-        }
+        Self { order, at, size: 1 }
     }
 
     pub fn with_size(mut self, size: u32) -> Self {
@@ -410,16 +406,19 @@ mod tests {
         assert_eq!(starts, [1, 2, 3]);
         // All stay visible after reveal (end = ∞)
         assert!(p.elements.iter().all(|e| e.end.is_none()));
-        assert_eq!(p.elements.iter().map(|e| e.delta).collect::<Vec<_>>(), [1, 1, 1]);
+        assert_eq!(
+            p.elements.iter().map(|e| e.delta).collect::<Vec<_>>(),
+            [1, 1, 1]
+        );
     }
 
     #[test]
     fn absolute_does_not_advance_offset() {
         // v-click, then v-click[5] (absolute), then v-click
         let p = plan(&[
-            d(0, Value::Null),      // start 1, offset → 1
-            d(1, json!(5)),         // start 5, delta 0
-            d(2, Value::Null),      // start 1+1 = 2, offset → 2
+            d(0, Value::Null), // start 1, offset → 1
+            d(1, json!(5)),    // start 5, delta 0
+            d(2, Value::Null), // start 1+1 = 2, offset → 2
         ]);
         assert_eq!(p.total, 5); // max of element maxima
         assert_eq!(p.elements[1].start, 5);

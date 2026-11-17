@@ -4,13 +4,11 @@
 
 use agentik_core::tools::{ToolError, ToolFunction, ToolRegistration};
 use agentik_proc::tool;
-use agentik_sdk::types::{
-    ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent,
-};
+use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock, ToolResultContent};
 use async_trait::async_trait;
 use base64::Engine as _;
 
-use super::{tool_err, DeckToolState};
+use super::{DeckToolState, tool_err};
 use crate::actor::DeckHandle;
 
 /// Build preview tool registrations.

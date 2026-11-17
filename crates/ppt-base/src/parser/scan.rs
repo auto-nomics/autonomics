@@ -41,13 +41,10 @@ pub fn scan_spans(lines: &[String]) -> Vec<SlideSpan> {
         if line.starts_with("---") {
             slice_span(&mut spans, &mut start, &mut content_start, i);
 
-            let next_non_empty = lines
-                .get(i + 1)
-                .is_some_and(|l| !l.trim().is_empty());
+            let next_non_empty = lines.get(i + 1).is_some_and(|l| !l.trim().is_empty());
             // `line[3] !== '-'` in JS — a line of exactly `---` has no 4th
             // char, which counts as "not '-'".
-            let opens_frontmatter =
-                line.as_bytes().get(3) != Some(&b'-') && next_non_empty;
+            let opens_frontmatter = line.as_bytes().get(3) != Some(&b'-') && next_non_empty;
             if opens_frontmatter {
                 start = i;
                 i += 1;
@@ -182,14 +179,7 @@ mod tests {
             .collect();
         assert_eq!(
             contents,
-            [
-                "a",
-                "b",
-                "---\nlayout: z\n---\nc",
-                "d",
-                "e",
-                "f"
-            ]
+            ["a", "b", "---\nlayout: z\n---\nc", "d", "e", "f"]
         );
     }
 
@@ -208,14 +198,7 @@ mod tests {
             .collect();
         assert_eq!(
             contents,
-            [
-                "a",
-                "b",
-                "---section2\nlayout: z\n---\nc",
-                "d",
-                "e",
-                "f"
-            ]
+            ["a", "b", "---section2\nlayout: z\n---\nc", "d", "e", "f"]
         );
     }
 

@@ -3,11 +3,11 @@
 //! print-token row must be deleted afterwards (token dies with it).
 
 use agentik_core::tools::ToolRegistration;
+use base64::Engine as _;
 use ppt_base::DeckHandle;
 use ppt_base::export::{DeckExporter, ExportJob, ExportOutput};
 use ppt_base::shared::DeckShared;
 use ppt_base::tools::deck_all_registrations;
-use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -35,7 +35,11 @@ impl DeckExporter for StubPreviewExporter {
     }
 }
 
-async fn call_tool(regs: &[ToolRegistration], name: &str, input: serde_json::Value) -> agentik_sdk::types::ToolResult {
+async fn call_tool(
+    regs: &[ToolRegistration],
+    name: &str,
+    input: serde_json::Value,
+) -> agentik_sdk::types::ToolResult {
     let reg = regs
         .iter()
         .find(|r| r.definition.name == name)
@@ -57,7 +61,12 @@ async fn preview_returns_image_block_and_cleans_up() {
     let handle = DeckHandle::spawn(shared.clone());
     let regs = deck_all_registrations(handle.clone());
 
-    let created = call_tool(&regs, "deck_create", json!({"title": "预览", "template": "defense"})).await;
+    let created = call_tool(
+        &regs,
+        "deck_create",
+        json!({"title": "预览", "template": "defense"}),
+    )
+    .await;
     // deck_create returns Json content — extract id
     let deck_id = match &created.content {
         agentik_sdk::types::ToolResultContent::Json(v) => {
@@ -94,7 +103,10 @@ async fn preview_returns_image_block_and_cleans_up() {
     match &blocks[0] {
         agentik_sdk::types::ToolResultBlock::Text { text } => {
             assert!(text.contains(&format!("slide {}/", no)), "{text}");
-            assert!(text.contains(&format!("clicks {}/{}", total, total)), "{text}");
+            assert!(
+                text.contains(&format!("clicks {}/{}", total, total)),
+                "{text}"
+            );
         }
         other => panic!("expected text block, got {other:?}"),
     }

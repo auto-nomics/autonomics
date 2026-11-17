@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentik_core::tools::ToolRegistration;
+use ppt_base::DeckHandle;
 use ppt_base::export::{DeckExporter, ExportJob, ExportOutput};
 use ppt_base::shared::DeckShared;
 use ppt_base::tools::deck_all_registrations;
-use ppt_base::DeckHandle;
 use serde_json::{Value, json};
 
 /// Render backend stub: succeeds with canned per-slide findings.
@@ -25,7 +25,11 @@ impl DeckExporter for StubBackend {
         Err(ppt_base::Error::Export("not needed in this test".into()))
     }
 
-    async fn diagnose_slides(&self, _job: &ExportJob, targets: &[(u32, u32)]) -> ppt_base::Result<Value> {
+    async fn diagnose_slides(
+        &self,
+        _job: &ExportJob,
+        targets: &[(u32, u32)],
+    ) -> ppt_base::Result<Value> {
         let mut map = serde_json::Map::new();
         for (no, _) in targets {
             map.insert(
@@ -73,7 +77,10 @@ async fn write_triggers_worker_and_merges_tiers() {
     let shared = stub_shared().await;
     shared.start_diagnostics_worker();
     let handle = DeckHandle::spawn(shared.clone());
-    let deck = shared.create_deck("诊断测试", Some("meeting")).await.unwrap();
+    let deck = shared
+        .create_deck("诊断测试", Some("meeting"))
+        .await
+        .unwrap();
     let id = deck.meta.id.clone();
 
     // Several rapid writes — the worker must collapse them and still
@@ -83,20 +90,28 @@ async fn write_triggers_worker_and_merges_tiers() {
         let deck_id = id.clone();
         handle
             .write(move |s| {
-                Box::pin(async move { s.save_markdown(&deck_id, &markdown, "edit").await.map(|_| ()) })
+                Box::pin(async move {
+                    s.save_markdown(&deck_id, &markdown, "edit")
+                        .await
+                        .map(|_| ())
+                })
             })
             .await
             .unwrap();
     }
 
     let report = await_fresh(&shared, &deck.meta.id).await;
-    assert!(report.rendered, "stub backend should have run the render tier");
+    assert!(
+        report.rendered,
+        "stub backend should have run the render tier"
+    );
     // Render finding present (slide 1 of 2 flagged by the stub).
     assert!(
         report
             .findings
             .iter()
-            .any(|f| f.rule == "text-overflow-canvas" && f.severity == ppt_base::diagnostics::Severity::Error),
+            .any(|f| f.rule == "text-overflow-canvas"
+                && f.severity == ppt_base::diagnostics::Severity::Error),
         "{:?}",
         report.findings
     );
@@ -111,7 +126,11 @@ async fn theme_css_write_also_triggers() {
 
     let current = shared.theme_css(&id).await.unwrap();
     shared
-        .save_theme_css(&id, ":root { --deck-width: 1280px; --deck-height: 720px; }", &ppt_base::shared::css_revision(&current))
+        .save_theme_css(
+            &id,
+            ":root { --deck-width: 1280px; --deck-height: 720px; }",
+            &ppt_base::shared::css_revision(&current),
+        )
         .await
         .unwrap();
 
@@ -146,25 +165,44 @@ async fn deck_diagnose_tool_serves_fresh_then_reruns() {
     };
     // No worker armed: the tool ran the synchronous path (stub backend).
     assert_eq!(payload["rendered"], json!(true));
-    assert_eq!(payload["errors"].as_u64().unwrap(), payload["findings"].as_array().unwrap().len() as u64);
+    assert_eq!(
+        payload["errors"].as_u64().unwrap(),
+        payload["findings"].as_array().unwrap().len() as u64
+    );
 }
 
 #[tokio::test]
 async fn null_backend_degrades_to_static_tier() {
     // In-memory shared (NullExporter): render tier unavailable → static-only.
     let shared = DeckShared::open_in_memory().await.unwrap();
-    let report = ppt_base::diagnostics::run_diagnostics(&shared, "does-not-exist")
-        .await;
-    assert!(report.is_err(), "unknown deck must error, not fabricate a report");
+    let report = ppt_base::diagnostics::run_diagnostics(&shared, "does-not-exist").await;
+    assert!(
+        report.is_err(),
+        "unknown deck must error, not fabricate a report"
+    );
 
     let deck = shared.create_deck("静态", None).await.unwrap();
     let markdown = "# 标题\n\n---\n\n\n\n---\n\n# 三\n";
-    shared.save_markdown(&deck.meta.id, markdown, "x").await.unwrap();
-    let report = ppt_base::diagnostics::run_diagnostics(&shared, &deck.meta.id).await.unwrap();
+    shared
+        .save_markdown(&deck.meta.id, markdown, "x")
+        .await
+        .unwrap();
+    let report = ppt_base::diagnostics::run_diagnostics(&shared, &deck.meta.id)
+        .await
+        .unwrap();
     assert!(!report.rendered);
-    assert!(report.findings.iter().any(|f| f.rule == "empty-slide" && f.slide == 2));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.rule == "empty-slide" && f.slide == 2)
+    );
     // Report is stored and fresh.
-    let stored = shared.latest_diagnostics(&deck.meta.id).await.unwrap().unwrap();
+    let stored = shared
+        .latest_diagnostics(&deck.meta.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(stored.is_fresh(&report.revision, &report.theme_revision));
 }
 
@@ -174,10 +212,17 @@ async fn write_results_report_scheduled_render_tier_when_worker_armed() {
     shared.start_diagnostics_worker();
     let handle = DeckHandle::spawn(shared.clone());
     let regs: Vec<ToolRegistration> = deck_all_registrations(handle.clone());
-    let deck = shared.create_deck("scheduled", Some("meeting")).await.unwrap();
+    let deck = shared
+        .create_deck("scheduled", Some("meeting"))
+        .await
+        .unwrap();
     let id = deck.meta.id.clone();
 
-    let tool = regs.iter().find(|r| r.definition.name == "slide_patch").unwrap().clone();
+    let tool = regs
+        .iter()
+        .find(|r| r.definition.name == "slide_patch")
+        .unwrap()
+        .clone();
     let result = tool
         .implementation
         .execute(json!({ "deck_id": id, "no": 2, "content": "# Updated\n\n- point" }))
@@ -188,6 +233,15 @@ async fn write_results_report_scheduled_render_tier_when_worker_armed() {
         agentik_sdk::types::ToolResultContent::Text(t) => serde_json::from_str(t).unwrap(),
         _ => panic!("unexpected content"),
     };
-    assert_eq!(payload["diagnostics"]["renderTier"], json!("scheduled"), "{payload}");
-    assert!(payload["diagnostics"]["note"].as_str().unwrap().contains("deck_diagnose"));
+    assert_eq!(
+        payload["diagnostics"]["renderTier"],
+        json!("scheduled"),
+        "{payload}"
+    );
+    assert!(
+        payload["diagnostics"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("deck_diagnose")
+    );
 }

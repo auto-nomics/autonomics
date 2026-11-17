@@ -61,7 +61,12 @@ pub(crate) fn select(article_predicate: Option<&str>) -> String {
             "n.content || ' ' || n.comment || ' ' || n.tags"
         )
     );
-    let predicate = format!(" WHERE a.id NOT IN (SELECT articleID FROM articleTrash){}", article_predicate.map(|predicate| format!(" AND ({predicate})")).unwrap_or_default());
+    let predicate = format!(
+        " WHERE a.id NOT IN (SELECT articleID FROM articleTrash){}",
+        article_predicate
+            .map(|predicate| format!(" AND ({predicate})"))
+            .unwrap_or_default()
+    );
     format!(
         "{parent}{predicate} UNION ALL {attachment}{predicate} UNION ALL {annotation}{predicate}"
     )

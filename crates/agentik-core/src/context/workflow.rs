@@ -424,6 +424,12 @@ impl Context {
         internal_event_tx: &UnboundedSender<InternalEvent>,
         retry_feedback: Option<String>,
     ) -> Result<()> {
+        if let Some(provider) = &self.core.context_provider
+            && let Some(text) = provider.poll().await
+        {
+            self.remember(Message::injected(text))?;
+        }
+
         if let Some(feedback) = retry_feedback {
             self.inject_message(
                 vec![ContentBlock::Text { text: feedback }],
@@ -1197,6 +1203,38 @@ mod tests {
     use super::super::AgentCore;
     use super::*;
     use crate::agent::AgentConfig;
+
+    #[tokio::test]
+    async fn context_provider_is_polled_before_each_request() {
+        struct Provider(std::sync::atomic::AtomicUsize);
+
+        #[async_trait::async_trait]
+        impl ContextProvider for Provider {
+            async fn poll(&self) -> Option<String> {
+                (self.0.fetch_add(1, Ordering::SeqCst) == 0).then(|| "dynamic context".to_owned())
+            }
+        }
+
+        let provider = Arc::new(Provider(std::sync::atomic::AtomicUsize::new(0)));
+        let mut core = AgentCore::new_for_tests();
+        Arc::get_mut(&mut core).unwrap().context_provider = Some(provider.clone());
+        let mut context = Context::new_for_tests(core, agentik_types::AgentPath::root());
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+
+        for _ in 0..2 {
+            assert!(matches!(
+                context.agent_workflow(&tx, None).await,
+                Err(AgentError::MissingConfig(_))
+            ));
+        }
+
+        assert_eq!(provider.0.load(Ordering::SeqCst), 2);
+        assert_eq!(context.messages.len(), 1);
+        assert!(matches!(
+            &context.messages[0].content[0],
+            ContentBlock::Text { text } if text == "dynamic context"
+        ));
+    }
 
     // ── System prompt per-turn hashing (cache prefix stability) ─────
 

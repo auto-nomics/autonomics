@@ -219,7 +219,11 @@ fn system_prompt_advertises_central_downloads_for_researcher_only() {
 fn system_prompt_advertises_literature_for_researcher_and_curator_only() {
     use agentik_core::AgentKind;
 
-    for kind in [AgentKind::Researcher, AgentKind::Curator, AgentKind::Illustrator] {
+    for kind in [
+        AgentKind::Researcher,
+        AgentKind::Curator,
+        AgentKind::Illustrator,
+    ] {
         let prompt = build_system_prompt(&kind);
         assert!(
             prompt.contains("### Literature & Evidence"),

@@ -8,7 +8,11 @@ use ppt_base::tools::deck_all_registrations;
 use serde_json::json;
 use std::sync::Arc;
 
-async fn call_tool(regs: &[ToolRegistration], name: &str, input: serde_json::Value) -> serde_json::Value {
+async fn call_tool(
+    regs: &[ToolRegistration],
+    name: &str,
+    input: serde_json::Value,
+) -> serde_json::Value {
     let reg = regs
         .iter()
         .find(|r| r.definition.name == name)
@@ -62,7 +66,12 @@ async fn concurrent_slide_inserts_all_land() {
         );
     }
 
-    let got = call_tool(&regs, "deck_get", json!({"deck_id": deck_id, "include_markdown": true})).await;
+    let got = call_tool(
+        &regs,
+        "deck_get",
+        json!({"deck_id": deck_id, "include_markdown": true}),
+    )
+    .await;
     let md = got["markdown"].as_str().unwrap();
     // deck grew by exactly 8: no lost update, no duplicated version base
     for i in 0..8 {
@@ -73,7 +82,11 @@ async fn concurrent_slide_inserts_all_land() {
     }
     let slide_count = got["slides"].as_array().unwrap().len();
     let initial = created["slide_count"].as_u64().unwrap() as usize;
-    assert_eq!(slide_count, initial + 8, "expected {initial}+8 slides, got {slide_count}");
+    assert_eq!(
+        slide_count,
+        initial + 8,
+        "expected {initial}+8 slides, got {slide_count}"
+    );
 }
 
 #[tokio::test]

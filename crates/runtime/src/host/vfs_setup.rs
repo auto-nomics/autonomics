@@ -424,9 +424,9 @@ fn load_or_create_vfs_manifest(config: &RuntimeConfig) -> Result<VfsManifestStat
             }
             let literature_changed = ensure_literature_mount(&mut manifest, config);
             let browser_downloads_changed = ensure_browser_download_mount(&mut manifest, config)?;
-            let wiki_attachments_changed =
-                ensure_wiki_attachments_mount(&mut manifest, config)?;
-            let changed = literature_changed || browser_downloads_changed || wiki_attachments_changed;
+            let wiki_attachments_changed = ensure_wiki_attachments_mount(&mut manifest, config)?;
+            let changed =
+                literature_changed || browser_downloads_changed || wiki_attachments_changed;
             if changed {
                 write_vfs_manifest(&manifest_path, &manifest, catalog_source.as_deref())?;
             }
@@ -588,7 +588,9 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
     });
     backend.push(BackendDefinition {
         id: "wiki-attachments".into(),
-        config: vfs::BackendConfig::local(wiki_attachments_root(config).to_string_lossy().to_string()),
+        config: vfs::BackendConfig::local(
+            wiki_attachments_root(config).to_string_lossy().to_string(),
+        ),
     });
     mount.push(MountDefinition {
         domain: None,
@@ -1168,9 +1170,7 @@ mod literature_mount_tests {
                 .exists()
                 == false
         );
-        let expected = state
-            .path()
-            .join("wiki-attachments/attachments/e1/a1.png");
+        let expected = state.path().join("wiki-attachments/attachments/e1/a1.png");
         assert!(expected.exists());
         assert_eq!(
             blobs.get("attachments/e1/a1.png").await.unwrap(),

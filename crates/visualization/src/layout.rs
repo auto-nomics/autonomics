@@ -841,7 +841,15 @@ mod relation_caption_tests {
     fn long_relations_retain_bounded_width_and_explicit_newlines() {
         let label = "A long source-qualified relation label that must retain its full scientific wording and wrap inside a bounded caption";
         assert!(edge_label_width(label) <= 240.);
-        assert_eq!(wrap(label, edge_label_width(label), 16.).split_whitespace().collect::<Vec<_>>(), label.split_whitespace().collect::<Vec<_>>());
-        assert_eq!(wrap("激活\nMEK", edge_label_width("激活\nMEK"), 16.), "激活\nMEK");
+        assert_eq!(
+            wrap(label, edge_label_width(label), 16.)
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            label.split_whitespace().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            wrap("激活\nMEK", edge_label_width("激活\nMEK"), 16.),
+            "激活\nMEK"
+        );
     }
 }

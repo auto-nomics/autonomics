@@ -18,7 +18,9 @@ pub enum Error {
     #[error("invalid frontmatter YAML: {0}")]
     BadFrontmatter(String),
 
-    #[error("slide 1 frontmatter is the deck headmatter and cannot be replaced here; patch the deck headmatter instead")]
+    #[error(
+        "slide 1 frontmatter is the deck headmatter and cannot be replaced here; patch the deck headmatter instead"
+    )]
     HeadmatterGuard,
 
     #[error("invalid theme CSS: {0}")]

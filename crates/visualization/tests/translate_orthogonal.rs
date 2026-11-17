@@ -164,22 +164,40 @@ fn optional_real_saved_component_translation_preserves_science_and_files() {
     assert_eq!(element(&next, "node-2"), element(doc, "node-2"));
     for old in doc["elements"].as_array().unwrap() {
         let new = element(&next, old["id"].as_str().unwrap());
-        if old["id"] != "node-1" { assert_eq!(new["customData"], old["customData"], "metadata for {}", old["id"]); }
+        if old["id"] != "node-1" {
+            assert_eq!(
+                new["customData"], old["customData"],
+                "metadata for {}",
+                old["id"]
+            );
+        }
         if old["type"] == "text" {
             for key in ["text", "originalText", "fontSize", "fontFamily"] {
                 assert_eq!(new[key], old[key]);
             }
         }
         if old["type"] == "arrow" {
-            for key in ["startBinding", "endBinding", "startArrowhead", "endArrowhead", "strokeColor", "strokeStyle", "strokeWidth"] {
+            for key in [
+                "startBinding",
+                "endBinding",
+                "startArrowhead",
+                "endArrowhead",
+                "strokeColor",
+                "strokeStyle",
+                "strokeWidth",
+            ] {
                 assert_eq!(new[key], old[key]);
             }
             for (field, start) in [("startBinding", true), ("endBinding", false)] {
                 let a = world_endpoint(old, start);
                 let b = world_endpoint(new, start);
-                let dy = if old[field]["elementId"] == "node-1" { -30. } else { 0. };
-                assert!((b[0]-a[0]).abs() < 1e-6);
-                assert!((b[1]-a[1]-dy).abs() < 1e-6);
+                let dy = if old[field]["elementId"] == "node-1" {
+                    -30.
+                } else {
+                    0.
+                };
+                assert!((b[0] - a[0]).abs() < 1e-6);
+                assert!((b[1] - a[1] - dy).abs() < 1e-6);
             }
         }
     }

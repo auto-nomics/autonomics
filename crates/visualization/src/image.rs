@@ -417,7 +417,9 @@ pub fn illustrate(
         );
         labels::keep_in_frame(elements, target_id, &visual_id, &label_ids);
         if !labels::contained_in_frames(elements, &label_ids) {
-            return Err(InvalidImage("illustration label cannot fit inside its frame; explicitly enlarge the frame or revise the component layout before replacement; nothing changed"));
+            return Err(InvalidImage(
+                "illustration label cannot fit inside its frame; explicitly enlarge the frame or revise the component layout before replacement; nothing changed",
+            ));
         }
     }
     Ok((result, visual_id))

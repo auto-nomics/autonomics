@@ -42,11 +42,20 @@ pub fn extract_note(content: &str) -> (String, Option<String>) {
     let mut last: Option<(usize, usize, String)> = None;
     for caps in RE_HTML_COMMENT.captures_iter(content) {
         let m = caps.get(0).unwrap();
-        last = Some((m.start(), m.end(), caps.get(1).map(|c| c.as_str().to_string()).unwrap_or_default()));
+        last = Some((
+            m.start(),
+            m.end(),
+            caps.get(1)
+                .map(|c| c.as_str().to_string())
+                .unwrap_or_default(),
+        ));
     }
     if let Some((start, end, body)) = last {
         if end >= content.len() {
-            return (content[..start].trim().to_string(), Some(body.trim().to_string()));
+            return (
+                content[..start].trim().to_string(),
+                Some(body.trim().to_string()),
+            );
         }
     }
     (content.to_string(), None)
@@ -71,16 +80,22 @@ pub fn extract_title_level(
         });
     let stripped = strip_code_blocks(content);
     if let Some(t) = fm_title {
-        let level = frontmatter.get("level").and_then(Value::as_u64).map(|l| l as u8)
-            .or_else(|| RE_HEADING.captures(&stripped).and_then(|caps| caps.get(1)).and_then(|m| m.as_str().len().try_into().ok()));
+        let level = frontmatter
+            .get("level")
+            .and_then(Value::as_u64)
+            .map(|l| l as u8)
+            .or_else(|| {
+                RE_HEADING
+                    .captures(&stripped)
+                    .and_then(|caps| caps.get(1))
+                    .and_then(|m| m.as_str().len().try_into().ok())
+            });
         return (Some(t), level);
     }
     match RE_HEADING.captures(&stripped) {
         Some(caps) => {
             let title = caps.get(2).map(|m| m.as_str().trim().to_string());
-            let level = caps
-                .get(1)
-                .and_then(|m| m.as_str().len().try_into().ok());
+            let level = caps.get(1).and_then(|m| m.as_str().len().try_into().ok());
             let level = frontmatter
                 .get("level")
                 .and_then(Value::as_u64)
@@ -89,7 +104,10 @@ pub fn extract_title_level(
             (title, level)
         }
         None => {
-            let level = frontmatter.get("level").and_then(Value::as_u64).map(|l| l as u8);
+            let level = frontmatter
+                .get("level")
+                .and_then(Value::as_u64)
+                .map(|l| l as u8);
             (None, level)
         }
     }
@@ -100,9 +118,8 @@ static RE_IMAGE_EXT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::ne
     regex::Regex::new(r"(?i)\.(?:png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?)$").expect("valid regex")
 });
 
-static RE_MD_IMAGE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").expect("valid regex")
-});
+static RE_MD_IMAGE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").expect("valid regex"));
 
 static RE_MD_IMAGE_TITLE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r#"\s+(?:"[^"]*"|'[^']*')\s*$"#).expect("valid regex")
@@ -126,12 +143,13 @@ static RE_CSS_URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(
 pub fn extract_images(content: &str, frontmatter: &Map<String, Value>) -> Vec<String> {
     let mut images: Vec<String> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let push = |url: &str, images: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
-        let url = url.trim().to_string();
-        if !url.is_empty() && seen.insert(url.clone()) {
-            images.push(url);
-        }
-    };
+    let push =
+        |url: &str, images: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            let url = url.trim().to_string();
+            if !url.is_empty() && seen.insert(url.clone()) {
+                images.push(url);
+            }
+        };
 
     for key in ["image", "backgroundImage", "background"] {
         if let Some(Value::String(val)) = frontmatter.get(key) {
@@ -162,10 +180,7 @@ pub fn extract_images(content: &str, frontmatter: &Map<String, Value>) -> Vec<St
     // Component props src=/image=
     for caps in RE_PROP.captures_iter(&stripped) {
         if let Some(url) = caps.get(1).map(|m| m.as_str()) {
-            if !url.starts_with("data:")
-                && !url.contains("{{")
-                && RE_IMAGE_EXT.is_match(url)
-            {
+            if !url.starts_with("data:") && !url.contains("{{") && RE_IMAGE_EXT.is_match(url) {
                 push(url, &mut images, &mut seen);
             }
         }
@@ -195,7 +210,10 @@ pub fn extract_images(content: &str, frontmatter: &Map<String, Value>) -> Vec<St
 /// Strip the optional CommonMark title and angle-bracket form:
 /// `![a](/x.png "Title")` → `/x.png`.
 fn normalize_markdown_image_target(target: &str) -> String {
-    let url = RE_MD_IMAGE_TITLE.replace(target.trim(), "").trim().to_string();
+    let url = RE_MD_IMAGE_TITLE
+        .replace(target.trim(), "")
+        .trim()
+        .to_string();
     if url.starts_with('<') && url.ends_with('>') && url.len() >= 2 {
         url[1..url.len() - 1].trim().to_string()
     } else {
@@ -232,8 +250,8 @@ pub fn detect_features(code: &str) -> DetectedFeatures {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use Map as JM;
+    use serde_json::json;
 
     fn fm(pairs: serde_json::Value) -> JM<String, Value> {
         pairs.as_object().cloned().unwrap_or_default()
@@ -257,8 +275,7 @@ mod tests {
 
     #[test]
     fn only_last_comment_extending_to_end_is_note() {
-        let (content, note) =
-            extract_note("<!-- a -->\nbody\n<!-- b -->");
+        let (content, note) = extract_note("<!-- a -->\nbody\n<!-- b -->");
         assert_eq!(content, "<!-- a -->\nbody");
         assert_eq!(note.as_deref(), Some("b"));
     }
@@ -293,7 +310,8 @@ mod tests {
 
     #[test]
     fn frontmatter_title_keeps_heading_depth_when_level_is_absent() {
-        let (title, level) = extract_title_level("## Heading\n", &fm(json!({"title": "Short title"})));
+        let (title, level) =
+            extract_title_level("## Heading\n", &fm(json!({"title": "Short title"})));
         assert_eq!(title.as_deref(), Some("Short title"));
         assert_eq!(level, Some(2));
     }
@@ -315,7 +333,10 @@ mod tests {
             ["/path/to/image.png"]
         );
         assert_eq!(
-            extract_images("", &fm(json!({"backgroundImage": "https://example.com/bg.jpg"}))),
+            extract_images(
+                "",
+                &fm(json!({"backgroundImage": "https://example.com/bg.jpg"}))
+            ),
             ["https://example.com/bg.jpg"]
         );
         assert_eq!(
@@ -323,7 +344,10 @@ mod tests {
             ["/assets/bg.webp"]
         );
         // background without image-ish value is ignored
-        assert_eq!(extract_images("", &fm(json!({"background": "gradient-to-r"}))), Vec::<String>::new());
+        assert_eq!(
+            extract_images("", &fm(json!({"background": "gradient-to-r"}))),
+            Vec::<String>::new()
+        );
         // data URLs ignored
         assert_eq!(
             extract_images("", &fm(json!({"image": "data:image/png;base64,abc"}))),
@@ -393,7 +417,10 @@ mod tests {
             ["/bg/image.png", "/another/image.jpg"]
         );
         assert_eq!(
-            extract_images(r#"<div style="background: url(/fonts/font.woff2)">"#, &fm(json!({}))),
+            extract_images(
+                r#"<div style="background: url(/fonts/font.woff2)">"#,
+                &fm(json!({}))
+            ),
             Vec::<String>::new()
         );
     }

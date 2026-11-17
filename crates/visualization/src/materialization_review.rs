@@ -1,5 +1,5 @@
 //! Bounded ownership/fit snapshot diagnostics, never a scientific or paint review.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 fn id(v: &Value) -> bool {
     v.as_str()

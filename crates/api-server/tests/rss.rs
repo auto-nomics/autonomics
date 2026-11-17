@@ -49,11 +49,23 @@ async fn feed_lifecycle_inbox_and_import_flow() {
     let app = api_server::bib::router((*shared).clone());
 
     // Create + duplicate rejection.
-    let (status, result) = call(&app, "POST", "/rss/feeds", Some(spec("http://127.0.0.1:9/feed"))).await;
+    let (status, result) = call(
+        &app,
+        "POST",
+        "/rss/feeds",
+        Some(spec("http://127.0.0.1:9/feed")),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{result}");
     let feed = result["feed"].clone();
     assert_eq!(feed["version"], 0);
-    let (status, _) = call(&app, "POST", "/rss/feeds", Some(spec("http://127.0.0.1:9/feed"))).await;
+    let (status, _) = call(
+        &app,
+        "POST",
+        "/rss/feeds",
+        Some(spec("http://127.0.0.1:9/feed")),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT);
     // Invalid spec.
     let (status, _) = call(&app, "POST", "/rss/feeds", Some(json!({"name":"x","url":"ftp://nope","enabled":true,"interval_seconds":3600,"max_items_per_feed":100}))).await;
@@ -69,16 +81,43 @@ async fn feed_lifecycle_inbox_and_import_flow() {
     assert_eq!(result["outcome"]["status"], "error");
     // Optimistic-concurrency replace/pause/delete.
     let version = feed["version"].as_u64().unwrap();
-    let (status, _) = call(&app, "PUT", &format!("/rss/feeds/{id}"), Some(json!({"version": 99, "spec": spec("http://127.0.0.1:9/feed")}))).await;
+    let (status, _) = call(
+        &app,
+        "PUT",
+        &format!("/rss/feeds/{id}"),
+        Some(json!({"version": 99, "spec": spec("http://127.0.0.1:9/feed")})),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (status, updated) = call(&app, "PUT", &format!("/rss/feeds/{id}"), Some(json!({"version": version, "spec": spec("http://127.0.0.1:9/feed2")}))).await;
+    let (status, updated) = call(
+        &app,
+        "PUT",
+        &format!("/rss/feeds/{id}"),
+        Some(json!({"version": version, "spec": spec("http://127.0.0.1:9/feed2")})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["feed"]["spec"]["url"], "http://127.0.0.1:9/feed2");
     let version = updated["feed"]["version"].as_u64().unwrap();
-    let (status, paused) = call(&app, "POST", &format!("/rss/feeds/{id}/enabled"), Some(json!({"version": version, "enabled": false}))).await;
+    let (status, paused) = call(
+        &app,
+        "POST",
+        &format!("/rss/feeds/{id}/enabled"),
+        Some(json!({"version": version, "enabled": false})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(paused["feed"]["spec"]["enabled"], false);
-    let (status, _) = call(&app, "DELETE", &format!("/rss/feeds/{id}?version={}", paused["feed"]["version"].as_u64().unwrap()), None).await;
+    let (status, _) = call(
+        &app,
+        "DELETE",
+        &format!(
+            "/rss/feeds/{id}?version={}",
+            paused["feed"]["version"].as_u64().unwrap()
+        ),
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (status, _) = call(&app, "GET", &format!("/rss/feeds/{id}"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -124,19 +163,42 @@ async fn inbox_items_support_read_delete_and_library_import() {
     let item_id = item["id"].as_str().unwrap().to_owned();
 
     // Mark read, then unread.
-    let (status, _) = call(&app, "PUT", &format!("/rss/items/{item_id}"), Some(json!({"read": true}))).await;
+    let (status, _) = call(
+        &app,
+        "PUT",
+        &format!("/rss/items/{item_id}"),
+        Some(json!({"read": true})),
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, result) = call(&app, "GET", &format!("/rss/items/{item_id}"), None).await;
     assert_eq!(result["item"]["read"], true);
 
     // Import into the library; a DOI is extracted from the link.
-    let (status, result) = call(&app, "POST", &format!("/rss/items/{item_id}"), Some(json!({}))).await;
+    let (status, result) = call(
+        &app,
+        "POST",
+        &format!("/rss/items/{item_id}"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{result}");
     let article_id = result["article_id"].as_str().unwrap().to_owned();
     let article = shared.bib.get_article(&article_id).await.unwrap().unwrap();
-    assert!(article.identifiers.iter().any(|i| i.value == "10.1000/rss-one"));
+    assert!(
+        article
+            .identifiers
+            .iter()
+            .any(|i| i.value == "10.1000/rss-one")
+    );
     // Import is idempotent.
-    let (_, again) = call(&app, "POST", &format!("/rss/items/{item_id}"), Some(json!({}))).await;
+    let (_, again) = call(
+        &app,
+        "POST",
+        &format!("/rss/items/{item_id}"),
+        Some(json!({})),
+    )
+    .await;
     assert_eq!(again["article_id"], article_id.as_str());
     assert_eq!(again["already_imported"], true);
 

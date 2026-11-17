@@ -30,8 +30,9 @@ static RE_ATTR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| 
 });
 
 /// `at="…"` inside a tag opening.
-static RE_AT_ATTR: std::sync::LazyLock<regex::Regex> =
-    std::sync::LazyLock::new(|| regex::Regex::new(r#"\bat\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("valid regex"));
+static RE_AT_ATTR: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#"\bat\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("valid regex")
+});
 
 /// Collect click directives in document order (0-based `order` fields).
 pub fn extract_click_directives(content: &str) -> Vec<ClickDirective> {
@@ -110,7 +111,7 @@ fn attr_to_value(v: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ppt_types::clicks::{compute_plan, SingleAt};
+    use ppt_types::clicks::{SingleAt, compute_plan};
 
     #[test]
     fn component_form_in_order() {
@@ -154,7 +155,8 @@ mod tests {
 
     #[test]
     fn plan_integration() {
-        let content = "<v-click>1</v-click>\n\n<v-click at=\"3\">2</v-click>\n\n<v-click>3</v-click>";
+        let content =
+            "<v-click>1</v-click>\n\n<v-click at=\"3\">2</v-click>\n\n<v-click>3</v-click>";
         let d = extract_click_directives(content);
         let plan = compute_plan(&d, None, 0);
         // total = max over element maxima = max(1, 3, 2) = 3

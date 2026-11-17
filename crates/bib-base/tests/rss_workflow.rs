@@ -1,7 +1,7 @@
 //! RSS subscription workflows: parsing, store CRUD/versioning, conditional
 //! fetch against a local HTTP fixture, and item import article mapping.
-use bib_base::rss::{self, FeedSpec, RssStore};
 use bib_base::BibShared;
+use bib_base::rss::{self, FeedSpec, RssStore};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt};
 
 fn spec(url: &str) -> FeedSpec {
@@ -59,7 +59,10 @@ fn parses_rss2_and_atom_items() {
 #[tokio::test]
 async fn feed_crud_uses_optimistic_versions() {
     let store = RssStore::open(":memory:").await.unwrap();
-    let feed = store.create_feed(spec("https://example.org/feed.xml")).await.unwrap();
+    let feed = store
+        .create_feed(spec("https://example.org/feed.xml"))
+        .await
+        .unwrap();
     assert_eq!(feed.version, 0);
     assert_eq!(feed.item_count, 0);
 
@@ -76,7 +79,14 @@ async fn feed_crud_uses_optimistic_versions() {
     assert!(matches!(err, rss::RssError::Conflict(_)));
 
     let updated = store
-        .replace_feed(&feed.id, 0, FeedSpec { name: "Renamed".into(), ..spec("https://example.org/feed.xml") })
+        .replace_feed(
+            &feed.id,
+            0,
+            FeedSpec {
+                name: "Renamed".into(),
+                ..spec("https://example.org/feed.xml")
+            },
+        )
         .await
         .unwrap();
     assert_eq!(updated.version, 1);
@@ -107,7 +117,10 @@ async fn serve(status: &'static str, headers: &'static str, body: &'static str) 
             }
             seen.extend_from_slice(&buf[..n]);
         }
-        let response = format!("HTTP/1.1 {status}\r\n{headers}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+        let response = format!(
+            "HTTP/1.1 {status}\r\n{headers}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
         write.write_all(response.as_bytes()).await.unwrap();
     });
     origin
@@ -121,7 +134,11 @@ async fn check_feed_dedups_and_supports_not_modified() {
     </channel></rss>"#;
     let origin = serve("200 OK", "ETag: \"v1\"", body).await;
     let shared = BibShared::open_in_memory().await.unwrap();
-    let feed = shared.rss.create_feed(spec(&format!("{origin}/feed"))).await.unwrap();
+    let feed = shared
+        .rss
+        .create_feed(spec(&format!("{origin}/feed")))
+        .await
+        .unwrap();
 
     let outcome = rss::check_feed(&shared, &feed.id).await.unwrap();
     assert_eq!(outcome.status, "fetched");
@@ -159,29 +176,45 @@ async fn check_feed_dedups_and_supports_not_modified() {
     // Import maps identifiers: DOI from the link, arXiv from the abs URL.
     let first = items.iter().find(|i| i.guid == "g1").unwrap();
     let article = rss::article_from_item(first);
-    assert!(article.identifiers.iter().any(|id| {
-        id.kind == bib_types::IdKind::Doi && id.value == "10.1000/first"
-    }));
+    assert!(
+        article
+            .identifiers
+            .iter()
+            .any(|id| { id.kind == bib_types::IdKind::Doi && id.value == "10.1000/first" })
+    );
     let second = items.iter().find(|i| i.guid == "g2").unwrap();
     let article = rss::article_from_item(second);
-    assert!(article.identifiers.iter().any(|id| {
-        id.kind == bib_types::IdKind::Arxiv && id.value == "2601.99999"
-    }));
+    assert!(
+        article
+            .identifiers
+            .iter()
+            .any(|id| { id.kind == bib_types::IdKind::Arxiv && id.value == "2601.99999" })
+    );
     shared.bib.upsert_article(&article).await.unwrap();
-    shared.rss.mark_imported(&second.id, &article.id).await.unwrap();
+    shared
+        .rss
+        .mark_imported(&second.id, &article.id)
+        .await
+        .unwrap();
     let (after, _) = shared.rss.items(None, None, 50).await.unwrap();
-    assert!(after
-        .iter()
-        .find(|i| i.id == second.id)
-        .unwrap()
-        .imported_article_id
-        .is_some());
+    assert!(
+        after
+            .iter()
+            .find(|i| i.id == second.id)
+            .unwrap()
+            .imported_article_id
+            .is_some()
+    );
 
     // A failing origin is recorded on the feed without losing items.
     let origin4 = serve("500 Internal Server Error", "", "").await;
     shared
         .rss
-        .replace_feed(&feed.id, shared.rss.get_feed(&feed.id).await.unwrap().version, spec(&format!("{origin4}/feed")))
+        .replace_feed(
+            &feed.id,
+            shared.rss.get_feed(&feed.id).await.unwrap().version,
+            spec(&format!("{origin4}/feed")),
+        )
         .await
         .unwrap();
     assert!(rss::check_feed(&shared, &feed.id).await.is_err());
@@ -195,7 +228,11 @@ async fn check_feed_dedups_and_supports_not_modified() {
 async fn scheduler_keeps_http_errors_on_the_feed_and_manual_success_clears_them() {
     let shared = BibShared::open_in_memory().await.unwrap();
     let origin = serve("404 Not Found", "", "").await;
-    let feed = shared.rss.create_feed(spec(&format!("{origin}/missing"))).await.unwrap();
+    let feed = shared
+        .rss
+        .create_feed(spec(&format!("{origin}/missing")))
+        .await
+        .unwrap();
     let scheduler = rss::RssScheduler::start(shared.clone(), 1);
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
@@ -205,15 +242,43 @@ async fn scheduler_keeps_http_errors_on_the_feed_and_manual_success_clears_them(
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-    }).await.unwrap();
-    assert!(shared.rss.get_feed(&feed.id).await.unwrap().last_error.unwrap().contains("404"));
+    })
+    .await
+    .unwrap();
+    assert!(
+        shared
+            .rss
+            .get_feed(&feed.id)
+            .await
+            .unwrap()
+            .last_error
+            .unwrap()
+            .contains("404")
+    );
     assert!(scheduler.status().running);
     assert!(scheduler.status().last_error.is_none());
 
-    let origin = serve("200 OK", "", "<rss version=\"2.0\"><channel><title>Recovered</title></channel></rss>").await;
-    shared.rss.replace_feed(&feed.id, feed.version, spec(&format!("{origin}/feed"))).await.unwrap();
+    let origin = serve(
+        "200 OK",
+        "",
+        "<rss version=\"2.0\"><channel><title>Recovered</title></channel></rss>",
+    )
+    .await;
+    shared
+        .rss
+        .replace_feed(&feed.id, feed.version, spec(&format!("{origin}/feed")))
+        .await
+        .unwrap();
     rss::check_feed(&shared, &feed.id).await.unwrap();
-    assert!(shared.rss.get_feed(&feed.id).await.unwrap().last_error.is_none());
+    assert!(
+        shared
+            .rss
+            .get_feed(&feed.id)
+            .await
+            .unwrap()
+            .last_error
+            .is_none()
+    );
     assert!(scheduler.status().last_error.is_none());
     scheduler.shutdown().await;
 }

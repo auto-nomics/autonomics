@@ -47,10 +47,14 @@ async fn scheduler(shared: &BibShared) -> Result<rss::RssScheduler> {
     shared.rss_service().await.map_err(error)
 }
 async fn list_feeds(State(shared): State<Arc<BibShared>>) -> Result<Json<Value>> {
-    Ok(Json(json!({"feeds": shared.rss.list_feeds().await.map_err(error)?})))
+    Ok(Json(
+        json!({"feeds": shared.rss.list_feeds().await.map_err(error)?}),
+    ))
 }
 async fn status(State(shared): State<Arc<BibShared>>) -> Result<Json<Value>> {
-    Ok(Json(json!({"scheduler": scheduler(&shared).await?.status()})))
+    Ok(Json(
+        json!({"scheduler": scheduler(&shared).await?.status()}),
+    ))
 }
 async fn create_feed(
     State(shared): State<Arc<BibShared>>,
@@ -60,8 +64,13 @@ async fn create_feed(
     scheduler(&shared).await?;
     Ok((StatusCode::CREATED, Json(json!({"feed": feed}))))
 }
-async fn read_feed(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> Result<Json<Value>> {
-    Ok(Json(json!({"feed": shared.rss.get_feed(&id).await.map_err(error)?})))
+async fn read_feed(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        json!({"feed": shared.rss.get_feed(&id).await.map_err(error)?}),
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,7 +148,11 @@ struct ItemPage {
 }
 impl Default for ItemPage {
     fn default() -> Self {
-        Self { feed: None, before: None, limit: 50 }
+        Self {
+            feed: None,
+            before: None,
+            limit: 50,
+        }
     }
 }
 async fn items(
@@ -153,8 +166,13 @@ async fn items(
         .map_err(error)?;
     Ok(Json(json!({"items": items, "next": next})))
 }
-async fn read_item(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> Result<Json<Value>> {
-    Ok(Json(json!({"item": shared.rss.get_item(&id).await.map_err(error)?})))
+async fn read_item(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>> {
+    Ok(Json(
+        json!({"item": shared.rss.get_item(&id).await.map_err(error)?}),
+    ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,7 +211,9 @@ async fn import_item(
 ) -> Result<Json<Value>> {
     let item = shared.rss.get_item(&id).await.map_err(error)?;
     if let Some(article_id) = &item.imported_article_id {
-        return Ok(Json(json!({"article_id": article_id, "already_imported": true})));
+        return Ok(Json(
+            json!({"article_id": article_id, "already_imported": true}),
+        ));
     }
     let article = rss::article_from_item(&item);
     match &input.collection_id {
@@ -226,5 +246,7 @@ async fn import_item(
         .mark_imported(&id, &article.id)
         .await
         .map_err(error)?;
-    Ok(Json(json!({"article_id": article.id, "already_imported": false})))
+    Ok(Json(
+        json!({"article_id": article.id, "already_imported": false}),
+    ))
 }

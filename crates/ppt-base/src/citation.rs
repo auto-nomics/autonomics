@@ -113,7 +113,10 @@ pub fn format_slide_reference(article: &Article) -> String {
         .find(|i| matches!(i.kind, bib_types::IdKind::Doi))
         .map(|i| format!(" doi:{}", i.value))
         .unwrap_or_default();
-    format!("{} {}{}{}{}", author_part, article.title, journal, year, doi)
+    format!(
+        "{} {}{}{}{}",
+        author_part, article.title, journal, year, doi
+    )
 }
 
 fn initials(fore_name: &str) -> String {
@@ -141,10 +144,7 @@ mod tests {
     #[test]
     fn extracts_keys_in_order_and_dedups() {
         let md = "a {{cite:smith2024}} b {{cite:wayne1939}} again {{cite:smith2024}} {{cite:x\ny}}";
-        assert_eq!(
-            extract_cite_keys(md),
-            ["smith2024", "wayne1939", "x\ny"]
-        );
+        assert_eq!(extract_cite_keys(md), ["smith2024", "wayne1939", "x\ny"]);
         assert!(extract_cite_keys("no markers").is_empty());
         assert!(extract_cite_keys("dangling {{cite:open").is_empty());
     }
@@ -188,7 +188,10 @@ mod tests {
                     corresponding: false,
                 },
             ],
-            identifiers: vec![bib_types::Identifier::new(bib_types::IdKind::Doi, "10.1234/x")],
+            identifiers: vec![bib_types::Identifier::new(
+                bib_types::IdKind::Doi,
+                "10.1234/x",
+            )],
             year: Some(2024),
             journal: Some("Nature".into()),
             abstract_text: None,

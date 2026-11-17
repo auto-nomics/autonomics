@@ -12,9 +12,11 @@ pub mod scan;
 pub mod stringify;
 
 pub use directives::extract_click_directives;
-pub use extract::{detect_features, extract_images, extract_note, extract_title_level, DetectedFeatures};
-pub use matter::{matter, json_to_yaml, parse_yaml_object, yaml_to_json, FrontmatterStyle, Matter};
-pub use scan::{scan_spans, SlideSpan};
+pub use extract::{
+    DetectedFeatures, detect_features, extract_images, extract_note, extract_title_level,
+};
+pub use matter::{FrontmatterStyle, Matter, json_to_yaml, matter, parse_yaml_object, yaml_to_json};
+pub use scan::{SlideSpan, scan_spans};
 pub use stringify::{prettify_deck, prettify_slide, stringify, stringify_slide};
 
 use serde_json::{Map, Value};
@@ -119,12 +121,12 @@ pub fn revision_hash(s: &str) -> String {
     let mut hash: i32 = 0;
     for unit in s.encode_utf16() {
         // hash = (hash << 5) - hash + codeUnit, wrapping like `hash |= 0`
-        hash = hash.wrapping_shl(5).wrapping_sub(hash).wrapping_add(i32::from(unit));
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(i32::from(unit));
     }
-    js_to_string_36(hash)
-        .chars()
-        .take(12)
-        .collect()
+    js_to_string_36(hash).chars().take(12).collect()
 }
 
 /// JS `Number.prototype.toString(36)` for an i32 (sign + base36 digits).

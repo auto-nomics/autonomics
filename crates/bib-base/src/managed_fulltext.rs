@@ -7,8 +7,17 @@ use turso::transaction::{Transaction, TransactionBehavior};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ImportMode {
-    New { expected_preferred: Option<String> },
-    Repair { expected_path: String },
+    New {
+        expected_preferred: Option<String>,
+    },
+    Repair {
+        expected_path: String,
+    },
+    Attach {
+        title: Option<String>,
+        content_type: String,
+        make_preferred: bool,
+    },
 }
 #[derive(Debug, Clone)]
 pub(crate) struct ManagedImport {
@@ -30,6 +39,24 @@ impl BibCore {
             if self.get_article(&ft.article_id).await?.is_none(){return Err(Error::NotFound(format!("article {}",ft.article_id)));}
             let preferred=zotero_model::attachment_for_article(&tx,&ft.article_id).await?;
             let is_preferred=match &input.mode {
+                ImportMode::Attach { title, content_type, make_preferred } => {
+                    let mut rows = tx.query("SELECT l.editable,l.archived FROM articleItems ai JOIN items i ON i.itemID=ai.itemID JOIN libraries l ON l.libraryID=i.libraryID WHERE ai.article_id=?1", turso::params![ft.article_id.clone()]).await?;
+                    let row = rows.next().await?.ok_or_else(|| Error::NotFound(format!("article {}", ft.article_id)))?;
+                    if row.get::<i64>(0)? == 0 || row.get::<i64>(1)? != 0 {
+                        return Err(Error::CollectionConflict("target library is read-only or archived".into()));
+                    }
+                    drop(rows);
+                    let new = NewAttachment {
+                        article_id: ft.article_id.clone(), title: title.clone(),
+                        filename: Some(input.filename.clone()), content_type: Some(content_type.clone()),
+                        file_format: ft.file_format, link_mode: LINK_MODE_IMPORTED_FILE,
+                        path: Some(format!("storage:{}", input.filename)), source_url: input.source_url.clone(),
+                        vfs_path: Some(ft.file_path.clone()), storage_hash: ft.file_hash.clone(), file_size: ft.file_size,
+                    };
+                    zotero_model::create_attachment_with_key(&tx, &new, *make_preferred, Some(key)).await?;
+                    tx.execute("UPDATE items SET libraryID=(SELECT i.libraryID FROM articleItems ai JOIN items i ON i.itemID=ai.itemID WHERE ai.article_id=?1) WHERE key=?2 AND itemID IN (SELECT itemID FROM itemAttachments WHERE parentItemID=(SELECT itemID FROM articleItems WHERE article_id=?1))", turso::params![ft.article_id.clone(), key]).await?;
+                    *make_preferred || preferred.is_none()
+                }
                 ImportMode::Repair{expected_path}=>{
                     let Some(existing)=zotero_model::attachment_by_key(&tx,&ft.article_id,key).await? else{return Ok(None)};
                     if existing.vfs_path.as_deref()!=Some(expected_path){return Ok(None);}

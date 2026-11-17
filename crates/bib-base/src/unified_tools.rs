@@ -414,7 +414,10 @@ pub fn unified_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
         ToolRegistration::from(LiteratureSearchTool {
             shared: shared.clone(),
         }),
-        ToolRegistration::from(LiteratureImportTool { shared }),
+        ToolRegistration::from(LiteratureImportTool {
+            shared: shared.clone(),
+        }),
+        ToolRegistration::from(crate::attach_tool::LiteratureAttachTool { shared }),
     ]
 }
 
@@ -433,7 +436,14 @@ mod tests {
             .iter()
             .map(|tool| tool.definition.name.clone())
             .collect();
-        assert_eq!(names, ["literature_search", "literature_import"]);
+        assert_eq!(
+            names,
+            [
+                "literature_search",
+                "literature_import",
+                "literature_attach"
+            ]
+        );
         assert!(
             tools
                 .iter()

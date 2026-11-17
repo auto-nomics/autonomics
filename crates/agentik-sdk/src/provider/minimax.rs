@@ -25,7 +25,9 @@ pub const DEFAULT_BASE_URL: &str = "https://api.minimaxi.com/anthropic";
 pub struct MinimaxProvider;
 
 impl ProviderPreset for MinimaxProvider {
-    fn wire_protocol()->crate::wire::WireProtocolKind{crate::wire::WireProtocolKind::MinimaxAnthropic}
+    fn wire_protocol() -> crate::wire::WireProtocolKind {
+        crate::wire::WireProtocolKind::MinimaxAnthropic
+    }
     fn provider_type() -> ProviderType {
         ProviderType::Minimax
     }

@@ -36,9 +36,7 @@ impl RuntimeHost {
                     Some((path, agent_id)) => {
                         read_agent_history(storage, agent_id, path, limit).await
                     }
-                    None => {
-                        read_persisted_agent_history(storage, requested_path, limit).await
-                    }
+                    None => read_persisted_agent_history(storage, requested_path, limit).await,
                 };
                 let _ = reply_tx.send(response);
             },
@@ -47,10 +45,7 @@ impl RuntimeHost {
 
     /// `HostCommand::GetStatus` — registry snapshot plus network
     /// topology summary.
-    pub(super) fn handle_get_status(
-        &mut self,
-        reply_tx: tokio::sync::oneshot::Sender<HostStatus>,
-    ) {
+    pub(super) fn handle_get_status(&mut self, reply_tx: tokio::sync::oneshot::Sender<HostStatus>) {
         let g = self.network.graph();
         let status = HostStatus {
             agents: self
@@ -86,8 +81,7 @@ impl RuntimeHost {
             .as_ref()
             .and_then(|key| self.agents.get(key).map(|e| self.snapshot_info(e)))
             .or_else(|| {
-                AgentKind::from_name(&name)
-                    .map(|k| capability_from_kind(k.name(), k.name(), k))
+                AgentKind::from_name(&name).map(|k| capability_from_kind(k.name(), k.name(), k))
             });
         let _ = reply_tx.send(info);
     }

@@ -6,17 +6,13 @@ use std::sync::Arc;
 
 use agentik_sdk::model::Model;
 
-use super::super::relay::AgentCommand;
 use super::super::RuntimeHost;
+use super::super::relay::AgentCommand;
 
 impl RuntimeHost {
     /// `HostCommand::SetAgentModel` — forward the new model to the relay
     /// and broadcast the change on the host event stream.
-    pub(super) fn handle_set_agent_model(
-        &mut self,
-        name: String,
-        model: Model,
-    ) {
+    pub(super) fn handle_set_agent_model(&mut self, name: String, model: Model) {
         // Capture the spec from the payload before the relay takes
         // ownership — the async slot store must not race the event.
         let spec = model.model_spec();
@@ -77,9 +73,7 @@ impl RuntimeHost {
                     agentik_core::supervise::spawn_safe_on_drop(
                         &self.infra.runtime_handle,
                         &task_name,
-                        agentik_core::memory::run_memory_pipeline(
-                            agent_id, storage, memory, model,
-                        ),
+                        agentik_core::memory::run_memory_pipeline(agent_id, storage, memory, model),
                     );
                 }
                 config

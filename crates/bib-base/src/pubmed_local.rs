@@ -108,16 +108,15 @@ impl LocalPubmedDb {
                 return true;
             }
             conn.execute_batch("INSTALL fts; LOAD fts;").is_ok()
-        })()
-            && conn
-                .query_row(
-                    "SELECT count(*) FROM information_schema.tables \
+        })() && conn
+            .query_row(
+                "SELECT count(*) FROM information_schema.tables \
                      WHERE table_schema = 'fts_main_articles'",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )
-                .map(|n| n > 0)
-                .unwrap_or(false);
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .unwrap_or(false);
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -299,7 +298,10 @@ pub(crate) fn compile_where(fts_available: bool, query: &StructuredSearch) -> Re
         let clause = authors
             .iter()
             .map(|name| {
-                format!("contains(lower(coalesce(a.authors,'')), {})", sql_text(&name.to_lowercase()))
+                format!(
+                    "contains(lower(coalesce(a.authors,'')), {})",
+                    sql_text(&name.to_lowercase())
+                )
             })
             .collect::<Vec<_>>()
             .join(" OR ");
@@ -308,7 +310,11 @@ pub(crate) fn compile_where(fts_available: bool, query: &StructuredSearch) -> Re
 
     // ---- MeSH descriptors (exact IN match) --------------------------------
     if let Some(mesh) = query.mesh.as_ref().filter(|m| !m.is_empty()) {
-        let list = mesh.iter().map(|t| sql_text(t)).collect::<Vec<_>>().join(",");
+        let list = mesh
+            .iter()
+            .map(|t| sql_text(t))
+            .collect::<Vec<_>>()
+            .join(",");
         clauses.push(format!(
             "a.pmid IN (SELECT pmid FROM article_mesh WHERE descriptor_name IN ({list}))"
         ));
@@ -316,7 +322,11 @@ pub(crate) fn compile_where(fts_available: bool, query: &StructuredSearch) -> Re
 
     // ---- journals (exact IN match) ----------------------------------------
     if let Some(journals) = query.journal.as_ref().filter(|j| !j.is_empty()) {
-        let list = journals.iter().map(|t| sql_text(t)).collect::<Vec<_>>().join(",");
+        let list = journals
+            .iter()
+            .map(|t| sql_text(t))
+            .collect::<Vec<_>>()
+            .join(",");
         clauses.push(format!("a.journal IN ({list})"));
     }
 
@@ -324,7 +334,12 @@ pub(crate) fn compile_where(fts_available: bool, query: &StructuredSearch) -> Re
     if let Some(pub_types) = query.publication_types.as_ref().filter(|p| !p.is_empty()) {
         let clause = pub_types
             .iter()
-            .map(|t| format!("contains(coalesce(a.publication_types,''), {})", sql_text(t)))
+            .map(|t| {
+                format!(
+                    "contains(coalesce(a.publication_types,''), {})",
+                    sql_text(t)
+                )
+            })
             .collect::<Vec<_>>()
             .join(" OR ");
         clauses.push(format!("({clause})"));
@@ -352,10 +367,7 @@ pub(crate) fn compile_where(fts_available: bool, query: &StructuredSearch) -> Re
 /// and inside `COPY (…) TO …` — all values are inlined literals.
 /// Whether a compiled query's text half runs through the ranked FTS CTE.
 fn uses_ranked_fts(fts_available: bool, query: &StructuredSearch) -> bool {
-    let has_text = query
-        .keywords
-        .as_ref()
-        .is_some_and(|k| !k.is_empty())
+    let has_text = query.keywords.as_ref().is_some_and(|k| !k.is_empty())
         || query.title.as_ref().is_some_and(|t| !t.is_empty());
     has_text && fts_available && query.keywords_op.unwrap_or_default() != BoolOp::Not
 }
@@ -438,7 +450,11 @@ pub(crate) fn read_article_row(row: &duckdb::Row<'_>) -> Result<Article> {
     if !doi.trim().is_empty() {
         article.identifiers.push(Identifier::doi(doi.trim()));
     }
-    article.abstract_text = if abstract_text.is_empty() { None } else { Some(abstract_text) };
+    article.abstract_text = if abstract_text.is_empty() {
+        None
+    } else {
+        Some(abstract_text)
+    };
     article.authors = parse_authors(&authors);
     article.journal = non_empty(journal);
     article.issn = non_empty(issn);
@@ -549,8 +565,7 @@ impl LiteratureSource for LocalPubmedSource {
     async fn search(&self, query: &StructuredSearch, limit: usize) -> Result<SourceBatch> {
         let sql = compile_search(self.db.fts_available(), query, limit as u64)?;
         let db = self.db.clone();
-        let articles =
-            spawn_query(db, move |db| db.query_rows(&sql, read_article_row)).await?;
+        let articles = spawn_query(db, move |db| db.query_rows(&sql, read_article_row)).await?;
         let total = articles.len();
         Ok(SourceBatch {
             source: self.name().into(),
@@ -622,7 +637,10 @@ pub(crate) fn structured_from_request(request: &UnifiedSearchRequest) -> Result<
         }
     }
     for t in &request.filters.publication_types {
-        search.publication_types.get_or_insert_with(Vec::new).push(t.clone());
+        search
+            .publication_types
+            .get_or_insert_with(Vec::new)
+            .push(t.clone());
     }
     Ok(search)
 }
@@ -637,25 +655,37 @@ fn translate_expr(expr: &SearchExpr, search: &mut StructuredSearch) -> Result<()
         ))
     };
     match expr {
-        SearchExpr::Term { value, field }
-        | SearchExpr::Phrase { value, field } => {
+        SearchExpr::Term { value, field } | SearchExpr::Phrase { value, field } => {
             let field = field.unwrap_or(SearchField::Any);
             match field {
                 SearchField::Any | SearchField::Abstract | SearchField::Keyword => {
-                    search.keywords.get_or_insert_with(Vec::new).push(value.clone());
+                    search
+                        .keywords
+                        .get_or_insert_with(Vec::new)
+                        .push(value.clone());
                 }
-                SearchField::Title => search.title.get_or_insert_with(Vec::new).push(value.clone()),
-                SearchField::Creator => {
-                    search.authors.get_or_insert_with(Vec::new).push(value.clone())
-                }
-                SearchField::Publication => {
-                    search.journal.get_or_insert_with(Vec::new).push(value.clone())
-                }
+                SearchField::Title => search
+                    .title
+                    .get_or_insert_with(Vec::new)
+                    .push(value.clone()),
+                SearchField::Creator => search
+                    .authors
+                    .get_or_insert_with(Vec::new)
+                    .push(value.clone()),
+                SearchField::Publication => search
+                    .journal
+                    .get_or_insert_with(Vec::new)
+                    .push(value.clone()),
                 SearchField::Year => {
-                    let year: u16 = value
-                        .parse()
-                        .map_err(|_| Error::InvalidSearchQuery(format!("pubmed_local: year `{value}` is not a number")))?;
-                    search.year_range = Some(YearRange { from: year, to: year });
+                    let year: u16 = value.parse().map_err(|_| {
+                        Error::InvalidSearchQuery(format!(
+                            "pubmed_local: year `{value}` is not a number"
+                        ))
+                    })?;
+                    search.year_range = Some(YearRange {
+                        from: year,
+                        to: year,
+                    });
                 }
                 _ => return Err(unsupported(&format!("field `{field:?}`"))),
             }
@@ -678,11 +708,7 @@ fn translate_expr(expr: &SearchExpr, search: &mut StructuredSearch) -> Result<()
                 }
             }
             // AND between two keyword contributions narrows the match.
-            let keyword_contributions = search
-                .keywords
-                .as_ref()
-                .map(|k| k.len())
-                .unwrap_or(0);
+            let keyword_contributions = search.keywords.as_ref().map(|k| k.len()).unwrap_or(0);
             if any_keywords && keyword_contributions > 1 {
                 search.keywords_op = Some(BoolOp::And);
             }
@@ -788,11 +814,13 @@ mod tests {
             .unwrap()
             .expect("row 2");
         assert_eq!(by_doi.title, "Telomere shortening");
-        assert!(source
-            .fetch(&Identifier::new(IdKind::Pmid, "999"))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            source
+                .fetch(&Identifier::new(IdKind::Pmid, "999"))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -813,7 +841,10 @@ mod tests {
         let source = LocalPubmedSource::new(Arc::new(fixture_db()));
         let query = StructuredSearch {
             mesh: Some(vec!["Telomere Shortening".into()]),
-            year_range: Some(YearRange { from: 2020, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let batch = source.search(&query, 10).await.unwrap();
@@ -822,7 +853,10 @@ mod tests {
 
         // Year filter excludes.
         let query = StructuredSearch {
-            year_range: Some(YearRange { from: 2030, to: 2031 }),
+            year_range: Some(YearRange {
+                from: 2030,
+                to: 2031,
+            }),
             ..Default::default()
         };
         let batch = source.search(&query, 10).await.unwrap();
@@ -878,7 +912,10 @@ mod tests {
         let q = StructuredSearch {
             keywords: Some(vec!["APOE".into(), "lipoprotein".into()]),
             keywords_op: Some(BoolOp::And),
-            year_range: Some(YearRange { from: 2020, to: 2026 }),
+            year_range: Some(YearRange {
+                from: 2020,
+                to: 2026,
+            }),
             ..Default::default()
         };
         let batch = source.search(&q, 5).await.unwrap();
@@ -890,7 +927,10 @@ mod tests {
         let t1 = std::time::Instant::now();
         let q = StructuredSearch {
             mesh: Some(vec!["Telomere Shortening".into()]),
-            year_range: Some(YearRange { from: 2023, to: 2024 }),
+            year_range: Some(YearRange {
+                from: 2023,
+                to: 2024,
+            }),
             ..Default::default()
         };
         let batch = source.search(&q, 3).await.unwrap();

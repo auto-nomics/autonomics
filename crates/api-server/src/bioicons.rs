@@ -25,10 +25,18 @@ pub(crate) struct Search {
     start: usize,
 }
 pub(crate) async fn search(Query(input): Query<Search>) -> Response {
-    if input.q.trim().is_empty() || input.q.len() > 300 || input.author.as_deref().is_some_and(|a| a.trim().is_empty() || a.len() > 300) {
+    if input.q.trim().is_empty()
+        || input.q.len() > 300
+        || input
+            .author
+            .as_deref()
+            .is_some_and(|a| a.trim().is_empty() || a.len() > 300)
+    {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(json!({"error":"search requires 1..300 query bytes and an optional nonblank author of at most 300 bytes"})),
+            Json(
+                json!({"error":"search requires 1..300 query bytes and an optional nonblank author of at most 300 bytes"}),
+            ),
         ));
     }
     let client = CLIENT.as_ref().map_err(error)?;

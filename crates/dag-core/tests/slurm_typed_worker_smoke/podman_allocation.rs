@@ -409,8 +409,7 @@ fn validate_backend_records(
         || !leaf.starts_with("apm-")
         || !leaf[4..].bytes().all(|byte| byte.is_ascii_alphanumeric())
         || backend["schema"] != "ORDINARY_PODMAN_SLURM_LOCAL_BACKEND_V1"
-        || backend["workspace"]
-            != json!(Path::new(workspace).join("typed-state/work"))
+        || backend["workspace"] != json!(Path::new(workspace).join("typed-state/work"))
         || backend["cleanup"] != "RETAINED_UNTIL_INDEPENDENT_HELPER_STOP_AND_IDENTITY_PROOF"
     {
         return Err("worker did not retain its private node-local Podman backend identity".into());

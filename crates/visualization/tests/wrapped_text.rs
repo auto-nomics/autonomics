@@ -221,19 +221,39 @@ fn explicit_arrow_caption_width_changes_only_its_wrapping_and_keeps_native_cente
     assert_eq!(after["originalText"], before["originalText"]);
     assert_eq!(after["width"], 180.);
     for axis in [("x", "width"), ("y", "height")] {
-        assert!((after[axis.0].as_f64().unwrap() + after[axis.1].as_f64().unwrap()/2.
-            - before[axis.0].as_f64().unwrap() - before[axis.1].as_f64().unwrap()/2.).abs() < 1e-6);
+        assert!(
+            (after[axis.0].as_f64().unwrap() + after[axis.1].as_f64().unwrap() / 2.
+                - before[axis.0].as_f64().unwrap()
+                - before[axis.1].as_f64().unwrap() / 2.)
+                .abs()
+                < 1e-6
+        );
     }
-    for field in ["containerId", "fontFamily", "fontSize", "lineHeight", "groupIds", "customData", "strokeColor"] {
+    for field in [
+        "containerId",
+        "fontFamily",
+        "fontSize",
+        "lineHeight",
+        "groupIds",
+        "customData",
+        "strokeColor",
+    ] {
         assert_eq!(after[field], before[field]);
     }
     for old in narrow["elements"].as_array().unwrap() {
-        if old["id"] != "edge-label-0" { assert_eq!(element(&wide, old["id"].as_str().unwrap()), old); }
+        if old["id"] != "edge-label-0" {
+            assert_eq!(element(&wide, old["id"].as_str().unwrap()), old);
+        }
     }
     assert_eq!(wide["files"], narrow["files"]);
     assert_eq!(wide["scientificPlan"], narrow["scientificPlan"]);
     for invalid in [0., -1., 20001., f64::NAN] {
-        assert!(scene::apply(&narrow, &[operation("edge-label-0", source, Some(invalid))]).is_err());
+        assert!(
+            scene::apply(&narrow, &[operation("edge-label-0", source, Some(invalid))]).is_err()
+        );
     }
-    assert!(scene::apply(&original, &[operation("label-0", source, Some(180.))]).is_err(), "shape-bound text still uses its container");
+    assert!(
+        scene::apply(&original, &[operation("label-0", source, Some(180.))]).is_err(),
+        "shape-bound text still uses its container"
+    );
 }

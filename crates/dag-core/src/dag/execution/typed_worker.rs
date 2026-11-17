@@ -360,10 +360,8 @@ pub(super) fn lower_worker_task(
         return Err(failure(format!("remote_service_unavailable: {reason}")));
     }
     settings.validate()?;
-    if matches!(
-        execution.node.kind(),
-        "http_head" | "file_download"
-    ) && execution.node.plugin_identity().is_none()
+    if matches!(execution.node.kind(), "http_head" | "file_download")
+        && execution.node.plugin_identity().is_none()
         && settings
             .native_environment
             .as_ref()

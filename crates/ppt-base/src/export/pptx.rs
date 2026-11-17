@@ -29,10 +29,13 @@ pub fn build_pptx(
     let cy = u64::from(canvas_height) * u64::from(EMU_PER_PX);
 
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options: zip::write::FileOptions<'_, ()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-    let add = |zip: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>, name: &str, data: &[u8]| -> Result<()> {
+    let add = |zip: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+               name: &str,
+               data: &[u8]|
+     -> Result<()> {
         zip.start_file(name, options)
             .map_err(|e| Error::Export(format!("pptx zip {name}: {e}")))?;
         std::io::Write::write_all(zip, data)
@@ -103,7 +106,11 @@ pub fn build_pptx(
         ));
     }
     pres_rels.push_str("</Relationships>");
-    add(&mut zip, "ppt/_rels/presentation.xml.rels", pres_rels.as_bytes())?;
+    add(
+        &mut zip,
+        "ppt/_rels/presentation.xml.rels",
+        pres_rels.as_bytes(),
+    )?;
 
     let mut sld_ids = String::new();
     for i in 1..=pngs.len() {
@@ -126,7 +133,11 @@ pub fn build_pptx(
     )?;
 
     // slide master / layout / theme / notes master (minimal-but-valid)
-    add(&mut zip, "ppt/slideMasters/slideMaster1.xml", slide_master(cx, cy).as_bytes())?;
+    add(
+        &mut zip,
+        "ppt/slideMasters/slideMaster1.xml",
+        slide_master(cx, cy).as_bytes(),
+    )?;
     add(
         &mut zip,
         "ppt/slideMasters/_rels/slideMaster1.xml.rels",
@@ -136,7 +147,11 @@ pub fn build_pptx(
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
 </Relationships>"#,
     )?;
-    add(&mut zip, "ppt/slideLayouts/slideLayout1.xml", slide_layout(cx, cy).as_bytes())?;
+    add(
+        &mut zip,
+        "ppt/slideLayouts/slideLayout1.xml",
+        slide_layout(cx, cy).as_bytes(),
+    )?;
     add(
         &mut zip,
         "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
@@ -146,7 +161,11 @@ pub fn build_pptx(
 </Relationships>"#,
     )?;
     add(&mut zip, "ppt/theme/theme1.xml", theme().as_bytes())?;
-    add(&mut zip, "ppt/notesMasters/notesMaster1.xml", notes_master(cx, cy).as_bytes())?;
+    add(
+        &mut zip,
+        "ppt/notesMasters/notesMaster1.xml",
+        notes_master(cx, cy).as_bytes(),
+    )?;
     add(
         &mut zip,
         "ppt/notesMasters/_rels/notesMaster1.xml.rels",

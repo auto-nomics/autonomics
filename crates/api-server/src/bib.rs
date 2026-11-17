@@ -77,7 +77,10 @@ pub fn router(shared: BibShared) -> Router {
         .route("/articles/manual", post(create_manual_article))
         .route("/articles/trash", get(list_article_trash))
         .route("/articles/{id}/restore", post(restore_article))
-        .route("/articles/{id}/permanent", delete(permanently_delete_article))
+        .route(
+            "/articles/{id}/permanent",
+            delete(permanently_delete_article),
+        )
         .route("/articles/unfiled", get(list_unfiled_articles))
         .route("/articles/import", post(import_article))
         .route(
@@ -176,7 +179,8 @@ pub fn router(shared: BibShared) -> Router {
         .route("/search/v2", post(search_local_v2))
         .route(
             "/search/explore",
-            post(explore_literature).layer(axum::middleware::from_fn(crate::cache_control::no_cache)),
+            post(explore_literature)
+                .layer(axum::middleware::from_fn(crate::cache_control::no_cache)),
         )
         .route("/search/parse", post(parse_search_query))
         .route("/search/cancel", post(cancel_search_request))
@@ -716,7 +720,10 @@ fn article_from_input(
         .iter()
         .filter_map(|display| parse_display_author(display))
         .collect::<Vec<_>>();
-    let id = identifiers.first().map(|primary| format!("{}:{}", primary.kind.as_str(), primary.value)).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let id = identifiers
+        .first()
+        .map(|primary| format!("{}:{}", primary.kind.as_str(), primary.value))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let now = Utc::now();
 
     Ok(Article {
@@ -975,14 +982,39 @@ fn reliability_error(failure: bib_base::Error) -> (StatusCode, Json<ApiError>) {
 
 fn validate_edited_article(article: &mut Article) -> Result<(), (StatusCode, Json<ApiError>)> {
     article.title = article.title.trim().to_owned();
-    if article.title.is_empty() { return Err(error(StatusCode::BAD_REQUEST,"title cannot be empty")); }
-    if article.year.is_some_and(|year| year == 0 || year > 9999) { return Err(error(StatusCode::BAD_REQUEST,"year must be between 1 and 9999")); }
-    if article.month.is_some_and(|month| month == 0 || month > 12) { return Err(error(StatusCode::BAD_REQUEST,"month must be between 1 and 12")); }
-    for author in &mut article.authors { author.last_name=author.last_name.trim().to_owned(); if author.last_name.is_empty() { return Err(error(StatusCode::BAD_REQUEST,"author family or organization name cannot be empty")); } }
-    let mut kinds=std::collections::HashSet::new();
+    if article.title.is_empty() {
+        return Err(error(StatusCode::BAD_REQUEST, "title cannot be empty"));
+    }
+    if article.year.is_some_and(|year| year == 0 || year > 9999) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "year must be between 1 and 9999",
+        ));
+    }
+    if article.month.is_some_and(|month| month == 0 || month > 12) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "month must be between 1 and 12",
+        ));
+    }
+    for author in &mut article.authors {
+        author.last_name = author.last_name.trim().to_owned();
+        if author.last_name.is_empty() {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "author family or organization name cannot be empty",
+            ));
+        }
+    }
+    let mut kinds = std::collections::HashSet::new();
     for identifier in &mut article.identifiers {
-        identifier.value=identifier.value.trim().to_owned();
-        if identifier.value.is_empty() || !kinds.insert(identifier.kind.as_str()) { return Err(error(StatusCode::BAD_REQUEST,"identifier values must be nonempty and each identifier type may occur only once")); }
+        identifier.value = identifier.value.trim().to_owned();
+        if identifier.value.is_empty() || !kinds.insert(identifier.kind.as_str()) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                "identifier values must be nonempty and each identifier type may occur only once",
+            ));
+        }
     }
     Ok(())
 }
@@ -991,8 +1023,15 @@ async fn create_manual_article(
     Json(mut article): Json<Article>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
     validate_edited_article(&mut article)?;
-    let article=shared.bib.create_manual_article_checked(article).await.map_err(reliability_error)?;
-    Ok((StatusCode::CREATED, Json(json!({"revision":bib_base::article_revision(&article),"article":article}))))
+    let article = shared
+        .bib
+        .create_manual_article_checked(article)
+        .await
+        .map_err(reliability_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"revision":bib_base::article_revision(&article),"article":article})),
+    ))
 }
 
 async fn update_article(
@@ -1002,54 +1041,120 @@ async fn update_article(
 ) -> ApiResult {
     validate_edited_article(&mut input.article)?;
     input.article.id = id;
-    let article = shared.bib.update_article_checked(input.article,input.expected_revision).await.map_err(reliability_error)?;
-    Ok(Json(json!({ "revision":bib_base::article_revision(&article), "article": article })))
+    let article = shared
+        .bib
+        .update_article_checked(input.article, input.expected_revision)
+        .await
+        .map_err(reliability_error)?;
+    Ok(Json(
+        json!({ "revision":bib_base::article_revision(&article), "article": article }),
+    ))
 }
 
 #[derive(Deserialize)]
-struct ArticleTrashQuery { limit: Option<usize>, offset: Option<usize> }
-async fn list_article_trash(State(shared): State<Arc<BibShared>>, Query(input): Query<ArticleTrashQuery>) -> ApiResult {
-    let (articles,total) = shared.bib.list_article_trash(input.limit.unwrap_or(50).clamp(1,500),input.offset.unwrap_or(0)).await.map_err(internal)?;
+struct ArticleTrashQuery {
+    limit: Option<usize>,
+    offset: Option<usize>,
+}
+async fn list_article_trash(
+    State(shared): State<Arc<BibShared>>,
+    Query(input): Query<ArticleTrashQuery>,
+) -> ApiResult {
+    let (articles, total) = shared
+        .bib
+        .list_article_trash(
+            input.limit.unwrap_or(50).clamp(1, 500),
+            input.offset.unwrap_or(0),
+        )
+        .await
+        .map_err(internal)?;
     Ok(Json(json!({"articles":articles,"total":total})))
 }
-async fn restore_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
-    let restored = shared.bib.set_article_trash(&id,false).await.map_err(reliability_error)?;
+async fn restore_article(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let restored = shared
+        .bib
+        .set_article_trash(&id, false)
+        .await
+        .map_err(reliability_error)?;
     Ok(Json(json!({"restored":restored,"id":id})))
 }
 async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
-    let deleted = shared.bib.set_article_trash(&id,true).await.map_err(reliability_error)?;
+    let deleted = shared
+        .bib
+        .set_article_trash(&id, true)
+        .await
+        .map_err(reliability_error)?;
     Ok(Json(json!({"deleted":deleted,"trashed":true,"id":id})))
 }
-async fn permanently_delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
+async fn permanently_delete_article(
+    State(shared): State<Arc<BibShared>>,
+    Path(id): Path<String>,
+) -> ApiResult {
     let attachments = shared.bib.zotero_attachments(&id).await.map_err(internal)?;
     let mut files = Vec::new();
     for attachment in &attachments {
-        if let Some(fulltext) = shared.bib.get_attachment_fulltext(&id,&attachment.key).await.map_err(internal)? {
-            files.push((attachment.key.clone(),fulltext));
+        if let Some(fulltext) = shared
+            .bib
+            .get_attachment_fulltext(&id, &attachment.key)
+            .await
+            .map_err(internal)?
+        {
+            files.push((attachment.key.clone(), fulltext));
         }
     }
     let fulltext = shared.bib.get_fulltext(&id).await.map_err(internal)?;
-    let removed = shared.bib.erase_trashed_article(&id).await.map_err(reliability_error)?;
+    let removed = shared
+        .bib
+        .erase_trashed_article(&id)
+        .await
+        .map_err(reliability_error)?;
     if removed > 0 {
-        for (key,file) in files { delete_attachment_figures(&shared,&id,&key,&file).await; }
-        if let Some(ref file) = fulltext { delete_article_figures(&shared,file).await; }
+        for (key, file) in files {
+            delete_attachment_figures(&shared, &id, &key, &file).await;
+        }
+        if let Some(ref file) = fulltext {
+            delete_article_figures(&shared, file).await;
+        }
         let mut paths = std::collections::HashSet::new();
-        for attachment in attachments { if let Some(path) = attachment.vfs_path { paths.insert(path); } }
-        if let Some(file) = fulltext { paths.insert(file.file_path); }
+        for attachment in attachments {
+            if let Some(path) = attachment.vfs_path {
+                paths.insert(path);
+            }
+        }
+        if let Some(file) = fulltext {
+            paths.insert(file.file_path);
+        }
         for path in paths {
             if let Some(path) = vfs_virtual_path(&path) {
-                if let Err(failure) = delete_stored_file(&shared,&path).await {
+                if let Err(failure) = delete_stored_file(&shared, &path).await {
                     tracing::warn!(path=%path,error=%failure.1.error,"article removed but stored object remains");
                 }
             }
         }
     }
-    Ok(Json(json!({"deleted":removed>0,"id":id,"rows_removed":removed})))
+    Ok(Json(
+        json!({"deleted":removed>0,"id":id,"rows_removed":removed}),
+    ))
 }
 
-async fn require_active_article(shared: &BibShared, id: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
-    if shared.bib.get_article(id).await.map_err(internal)?.is_none() {
-        return Err(error(StatusCode::NOT_FOUND, "Article is missing or in trash; restore it before accessing attachments."));
+async fn require_active_article(
+    shared: &BibShared,
+    id: &str,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if shared
+        .bib
+        .get_article(id)
+        .await
+        .map_err(internal)?
+        .is_none()
+    {
+        return Err(error(
+            StatusCode::NOT_FOUND,
+            "Article is missing or in trash; restore it before accessing attachments.",
+        ));
     }
     Ok(())
 }
@@ -1060,7 +1165,7 @@ async fn structure_response(
     key: Option<&str>,
     generate: bool,
 ) -> ApiResult {
-    require_active_article(&shared, &id).await?;
+    require_active_article(shared, id).await?;
     let fulltext = match key {
         Some(key) => shared.bib.get_attachment_fulltext(id, key).await,
         None => shared.bib.get_fulltext(id).await,
@@ -1175,11 +1280,7 @@ async fn upload_attachment(
         .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
     let mut upload = AttachmentUpload::default();
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(multipart_rejection)?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_rejection)? {
         match field.name() {
             Some("file") => {
                 upload.filename = field
@@ -1673,11 +1774,7 @@ async fn upload_fulltext(
 
     let mut filename = None;
     let mut content = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(multipart_rejection)?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(multipart_rejection)? {
         if field.name() != Some("file") {
             continue;
         }

@@ -287,10 +287,9 @@ mod tests {
         let deck = assemble(&md, "d", "t", "t");
         assert_eq!(deck.slides[0].title.as_deref(), Some("x"));
         assert!(!deck.meta.features.katex, "meeting starter has no math");
-        let panel = deck
-            .slides
-            .iter()
-            .find(|s| s.frontmatter.layout.clone().map(|l| l.to_string()) == Some("panel-grid".into()));
+        let panel = deck.slides.iter().find(|s| {
+            s.frontmatter.layout.clone().map(|l| l.to_string()) == Some("panel-grid".into())
+        });
         assert!(panel.is_some());
         assert!(panel.unwrap().click_plan.is_some());
     }

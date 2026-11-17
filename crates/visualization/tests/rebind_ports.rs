@@ -126,7 +126,10 @@ fn optional_saved_smad_repair() {
     let d = &input["document"];
     let label = get(d, "label-6");
     let ops = [
-        Operation::PositionArrowCaption { id:"edge-label-5".into(), position:0.5 },
+        Operation::PositionArrowCaption {
+            id: "edge-label-5".into(),
+            position: 0.5,
+        },
         Operation::SetTextPosition {
             id: "label-6".into(),
             x: label["x"].as_f64().unwrap(),
@@ -154,8 +157,15 @@ fn optional_saved_smad_repair() {
         ] {
             assert_eq!(new[key], old[key]);
         }
-        if !["edge-4", "edge-5", "edge-6", "edge-label-4", "edge-label-5", "label-6"]
-            .contains(&old["id"].as_str().unwrap())
+        if ![
+            "edge-4",
+            "edge-5",
+            "edge-6",
+            "edge-label-4",
+            "edge-label-5",
+            "label-6",
+        ]
+        .contains(&old["id"].as_str().unwrap())
         {
             assert_eq!(new, old);
         }

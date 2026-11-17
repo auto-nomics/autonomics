@@ -7,11 +7,11 @@
 use serde_json::{Map, Value};
 
 use ppt_types::aspect::AspectRatio;
-use ppt_types::clicks::{compute_plan, ClickDirective};
+use ppt_types::clicks::{ClickDirective, compute_plan};
 use ppt_types::model::{ColorSchema, DeckFeatures, DeckMeta, SlideFrontmatter, SlideSpec};
 use ppt_types::range::parse_range_pages;
 
-use crate::parser::{extract_click_directives, headmatter, parse, revision_hash, SourceSlide};
+use crate::parser::{SourceSlide, extract_click_directives, headmatter, parse, revision_hash};
 
 pub mod templates;
 
@@ -39,7 +39,10 @@ impl Deck {
 
     /// Selected page indices from a Slidev-style range string
     /// (`"1,4-5"`); `None` = all pages.
-    pub fn resolve_range(&self, range: Option<&str>) -> Result<Vec<usize>, ppt_types::ParseRangeError> {
+    pub fn resolve_range(
+        &self,
+        range: Option<&str>,
+    ) -> Result<Vec<usize>, ppt_types::ParseRangeError> {
         match range {
             None => Ok((0..self.slides.len()).collect()),
             Some(r) => parse_range_pages(r, self.slides.len()),
@@ -181,7 +184,13 @@ mod tests {
         assert_eq!(deck.meta.title, "My Deck");
         assert_eq!(deck.meta.slide_count, 2); // hidden slide excluded
         assert_eq!(deck.len(), 2);
-        assert_eq!(deck.meta.aspect_ratio, Some(AspectRatio { width: 4, height: 3 }));
+        assert_eq!(
+            deck.meta.aspect_ratio,
+            Some(AspectRatio {
+                width: 4,
+                height: 3
+            })
+        );
         assert_eq!(deck.meta.canvas_width, Some(900));
         assert_eq!(deck.meta.canvas_height(), 675);
 
@@ -204,9 +213,23 @@ mod tests {
         let md = "---\ndefaults:\n  layout: two-cols\n  class: wide\nlayout: cover\n---\n\none\n\n---\n\ntwo\n";
         let deck = assemble(md, "d", "t", "t");
         // slide 1 overrides layout, keeps class
-        assert_eq!(deck.slides[0].frontmatter.layout.clone().map(|l| l.to_string()), Some("cover".into()));
+        assert_eq!(
+            deck.slides[0]
+                .frontmatter
+                .layout
+                .clone()
+                .map(|l| l.to_string()),
+            Some("cover".into())
+        );
         assert_eq!(deck.slides[0].frontmatter.class.as_deref(), Some("wide"));
-        assert_eq!(deck.slides[1].frontmatter.layout.clone().map(|l| l.to_string()), Some("two-cols".into()));
+        assert_eq!(
+            deck.slides[1]
+                .frontmatter
+                .layout
+                .clone()
+                .map(|l| l.to_string()),
+            Some("two-cols".into())
+        );
         assert_eq!(deck.slides[1].frontmatter.class.as_deref(), Some("wide"));
     }
 
@@ -226,7 +249,10 @@ mod tests {
         assert_eq!(deck.meta.title, "");
         assert_eq!(deck.meta.aspect_ratio, Some(AspectRatio::sixteen_nine()));
         // but slide 2 does see its own typed frontmatter
-        assert_eq!(deck.slides[1].frontmatter.title.as_deref(), Some("Not Deck Title"));
+        assert_eq!(
+            deck.slides[1].frontmatter.title.as_deref(),
+            Some("Not Deck Title")
+        );
     }
 
     #[test]

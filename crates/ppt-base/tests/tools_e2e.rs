@@ -108,10 +108,7 @@ async fn full_deck_lifecycle_through_tools() {
         json!({"deck_id": deck_id, "from": 3, "to": count_after_insert}),
     )
     .await;
-    assert_eq!(
-        moved["slide_count"].as_u64().unwrap(),
-        count_after_insert
-    );
+    assert_eq!(moved["slide_count"].as_u64().unwrap(), count_after_insert);
 
     // 7. slide_remove
     let removed = call_tool(
@@ -158,12 +155,7 @@ async fn full_deck_lifecycle_through_tools() {
     .await;
     assert_eq!(exported["status"], "queued");
     let export_id = exported["export_id"].as_str().unwrap().to_string();
-    let status = call_tool(
-        &regs,
-        "deck_export_status",
-        json!({"export_id": export_id}),
-    )
-    .await;
+    let status = call_tool(&regs, "deck_export_status", json!({"export_id": export_id})).await;
     assert_eq!(status["status"], "queued");
     assert_eq!(status["deck_id"], deck_id.as_str());
 
@@ -193,13 +185,12 @@ async fn asset_attach_by_vfs_path() {
     let png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
     let bytes = {
         use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD.decode(png_b64).unwrap()
+        base64::engine::general_purpose::STANDARD
+            .decode(png_b64)
+            .unwrap()
     };
     let vpath = "/data/figures/km_plot.png";
-    storage
-        .write_bytes(vpath, bytes.clone())
-        .await
-        .unwrap();
+    storage.write_bytes(vpath, bytes.clone()).await.unwrap();
 
     let shared = std::sync::Arc::new(
         DeckShared::open_in_memory()
@@ -235,7 +226,10 @@ async fn asset_attach_by_vfs_path() {
     assert_eq!(blob, bytes);
 
     // guard rails: both sources / no source / oversized inline
-    let reg = regs.iter().find(|r| r.definition.name == "asset_attach").unwrap();
+    let reg = regs
+        .iter()
+        .find(|r| r.definition.name == "asset_attach")
+        .unwrap();
     let both = reg
         .implementation
         .execute(json!({"deck_id": deck_id, "vfs_path": vpath, "data_base64": "aGk="}))
@@ -278,7 +272,10 @@ async fn headmatter_guard_surfaces_through_tool() {
         }),
     )
     .await;
-    assert!(err.contains("headmatter"), "error mentions headmatter: {err}");
+    assert!(
+        err.contains("headmatter"),
+        "error mentions headmatter: {err}"
+    );
 }
 
 #[tokio::test]
@@ -335,13 +332,28 @@ async fn css_tools_roundtrip_and_reject_stale_revisions() {
     let id = created["deck_id"].as_str().unwrap();
     let theme = call_tool(&regs, "deck_css_get", json!({"deck_id":id})).await;
     let theme_rev = theme["revision"].as_str().unwrap();
-    call_tool(&regs, "deck_css_set", json!({"deck_id":id,"css":":scope { color: red }","revision":theme_rev})).await;
-    let err = call_tool_err(&regs, "deck_css_set", json!({"deck_id":id,"css":"bad","revision":theme_rev})).await;
+    call_tool(
+        &regs,
+        "deck_css_set",
+        json!({"deck_id":id,"css":":scope { color: red }","revision":theme_rev}),
+    )
+    .await;
+    let err = call_tool_err(
+        &regs,
+        "deck_css_set",
+        json!({"deck_id":id,"css":"bad","revision":theme_rev}),
+    )
+    .await;
     assert!(err.contains("revision conflict"));
     let theme = call_tool(&regs, "deck_css_get", json!({"deck_id":id})).await;
     assert_eq!(theme["css"], ":scope { color: red }");
     let page = call_tool(&regs, "deck_css_get", json!({"deck_id":id,"no":1})).await;
-    call_tool(&regs, "deck_css_set", json!({"deck_id":id,"no":1,"css":"h1 { color: blue }","revision":page["revision"]})).await;
+    call_tool(
+        &regs,
+        "deck_css_set",
+        json!({"deck_id":id,"no":1,"css":"h1 { color: blue }","revision":page["revision"]}),
+    )
+    .await;
     let page = call_tool(&regs, "deck_css_get", json!({"deck_id":id,"no":1})).await;
     assert_eq!(page["css"], "h1 { color: blue }");
 }
@@ -350,12 +362,24 @@ async fn css_tools_roundtrip_and_reject_stale_revisions() {
 async fn new_deck_theme_dimensions_follow_requested_aspect_ratio() {
     let handle = DeckHandle::spawn_in_memory().await.unwrap();
     let regs = deck_all_registrations(handle.clone());
-    let deck = call_tool(&regs, "deck_create", json!({"title":"Ratio", "aspect_ratio":"4/3"})).await;
+    let deck = call_tool(
+        &regs,
+        "deck_create",
+        json!({"title":"Ratio", "aspect_ratio":"4/3"}),
+    )
+    .await;
     let id = deck["deck_id"].as_str().unwrap();
     let meta = handle.shared().load_deck(id).await.unwrap().meta;
     let size = handle.shared().canvas_size(id, &meta).await.unwrap();
     assert_eq!(size.width * 3, size.height * 4);
-    assert!(handle.shared().theme_css(id).await.unwrap().contains("--deck-width:"));
+    assert!(
+        handle
+            .shared()
+            .theme_css(id)
+            .await
+            .unwrap()
+            .contains("--deck-width:")
+    );
 }
 
 #[tokio::test]
@@ -367,16 +391,36 @@ async fn theme_file_is_persisted_in_vfs_and_isolated_per_deck() {
     let storage = OpendalFileStorage::new(&root);
     let assets = BlobArea::on_vfs(storage.clone(), "deck-assets");
     let exports = BlobArea::on_vfs(storage.clone(), "deck-exports");
-    let shared = DeckShared::open_with(":memory:", assets, exports, std::sync::Arc::new(ppt_base::NullExporter)).await.unwrap();
+    let shared = DeckShared::open_with(
+        ":memory:",
+        assets,
+        exports,
+        std::sync::Arc::new(ppt_base::NullExporter),
+    )
+    .await
+    .unwrap();
     let first = shared.create_deck("First", None).await.unwrap();
     let second = shared.create_deck("Second", None).await.unwrap();
     let fresh = shared.theme_css(&first.meta.id).await.unwrap();
-    shared.save_theme_css(&first.meta.id, ":scope { color: purple; }", &ppt_base::shared::css_revision(&fresh)).await.unwrap();
+    shared
+        .save_theme_css(
+            &first.meta.id,
+            ":scope { color: purple; }",
+            &ppt_base::shared::css_revision(&fresh),
+        )
+        .await
+        .unwrap();
     let reopened = BlobArea::on_vfs(OpendalFileStorage::new(&root), "deck-assets");
     let first_path = format!("themes/{}/theme.css", first.meta.id);
     let second_path = format!("themes/{}/theme.css", second.meta.id);
-    assert_eq!(reopened.get(&first_path).await.unwrap(), b":scope { color: purple; }");
-    assert_eq!(reopened.get(&second_path).await.unwrap(), ppt_base::theme::starter_css(&second.meta).as_bytes());
+    assert_eq!(
+        reopened.get(&first_path).await.unwrap(),
+        b":scope { color: purple; }"
+    );
+    assert_eq!(
+        reopened.get(&second_path).await.unwrap(),
+        ppt_base::theme::starter_css(&second.meta).as_bytes()
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -384,7 +428,12 @@ async fn theme_file_is_persisted_in_vfs_and_isolated_per_deck() {
 async fn write_results_inject_static_diagnostics_and_render_status() {
     let handle = DeckHandle::spawn_in_memory().await.unwrap();
     let regs = deck_all_registrations(handle.clone());
-    let deck = call_tool(&regs, "deck_create", json!({"title":"注入", "template":"meeting"})).await;
+    let deck = call_tool(
+        &regs,
+        "deck_create",
+        json!({"title":"注入", "template":"meeting"}),
+    )
+    .await;
     let id = deck["deck_id"].as_str().unwrap().to_string();
 
     // slide_patch result carries the diagnostics block; a patch that
@@ -396,7 +445,11 @@ async fn write_results_inject_static_diagnostics_and_render_status() {
     )
     .await;
     let diagnostics = &patched["diagnostics"];
-    assert_eq!(diagnostics["renderTier"], json!("unavailable"), "no worker in tests");
+    assert_eq!(
+        diagnostics["renderTier"],
+        json!("unavailable"),
+        "no worker in tests"
+    );
     assert!(
         diagnostics["staticFindings"]
             .as_array()
@@ -428,7 +481,12 @@ async fn outline_tool_exposes_parent_and_section_path() {
     let deck = call_tool(&regs, "deck_create", json!({"title":"T"})).await;
     let id = deck["deck_id"].as_str().unwrap();
     call_tool(&regs, "slide_insert", json!({"deck_id":id, "after":1, "content":"# 方法", "frontmatter_raw":"layout: section\nsectionTitle: Methods"})).await;
-    call_tool(&regs, "slide_insert", json!({"deck_id":id, "after":2, "content":"## 数据"})).await;
+    call_tool(
+        &regs,
+        "slide_insert",
+        json!({"deck_id":id, "after":2, "content":"## 数据"}),
+    )
+    .await;
     let outline = call_tool(&regs, "deck_outline", json!({"deck_id":id})).await;
     assert_eq!(outline["outline"][1]["isSection"], true);
     assert_eq!(outline["outline"][1]["sectionTitle"], "Methods");

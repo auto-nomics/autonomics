@@ -8,14 +8,14 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 
-use super::{box_write, tool_err, DeckToolState};
+use super::{DeckToolState, box_write, tool_err};
 use crate::actor::DeckHandle;
-use crate::shared::DeckShared;
 use crate::citation::{
-    extract_cite_keys, format_slide_reference, references_slide_markdown, DeckCitationResolver,
+    DeckCitationResolver, extract_cite_keys, format_slide_reference, references_slide_markdown,
 };
-use crate::operations::{apply_slide_patch, insert_slide, SlidePatch};
+use crate::operations::{SlidePatch, apply_slide_patch, insert_slide};
 use crate::parser::parse;
+use crate::shared::DeckShared;
 
 #[tool(
     name = "deck_references",
@@ -38,24 +38,18 @@ struct DeckReferencesTool {
     handle: DeckHandle,
 }
 
-
 #[async_trait]
 impl ToolFunction for DeckReferencesTool {
     type Input = DeckReferencesInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
-        let bib = self
-            .handle
-            .shared()
-            .bib
-            .clone()
-            .ok_or_else(|| {
-                agentik_core::tools::ToolError::ExecutionFailed {
-                    source: Box::new(crate::Error::Export(
-                        "no bibliography attached to the deck engine in this deployment".into(),
-                    )),
-                }
-            })?;
+        let bib = self.handle.shared().bib.clone().ok_or_else(|| {
+            agentik_core::tools::ToolError::ExecutionFailed {
+                source: Box::new(crate::Error::Export(
+                    "no bibliography attached to the deck engine in this deployment".into(),
+                )),
+            }
+        })?;
 
         let deck_id = input.deck_id.clone();
         let explicit_keys = input.keys.clone();

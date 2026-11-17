@@ -354,8 +354,12 @@ fn reroute_failures_leave_the_original_scene_unchanged() {
     let mut original = sketch::compile(&cross_plan()).unwrap();
     // Force a real invalid second operation; legal caption route discovery
     // must not determine whether this atomicity test fails.
-    original["elements"].as_array_mut().unwrap().iter_mut()
-        .find(|e| e["id"] == "edge-0").unwrap()["locked"] = json!(true);
+    original["elements"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|e| e["id"] == "edge-0")
+        .unwrap()["locked"] = json!(true);
     let before = original.clone();
     assert!(
         scene::apply(
@@ -681,27 +685,78 @@ fn ifng_captions_avoid_panel_borders_and_retain_native_label_centers() {
 #[test]
 fn frames_share_row_height_without_changing_independent_panel_content() {
     let plan:visualization::sketch::Plan=serde_json::from_value(json!({"message":"Compare independently declared concepts","audience":"Researchers","layout":"vertical","panels":[{"id":"short","title":"Short","column":0,"row":0},{"id":"tall","title":"Tall","column":1,"row":0}],"nodes":[{"id":"a","label":"A","panel":"short","evidence":["source A"]},{"id":"b","label":"B","panel":"tall"},{"id":"c","label":"C","panel":"tall"}],"edges":[{"from":"b","to":"c","label":"Declared relation","evidence":["relation source"]}]})).unwrap();
-    let scene=visualization::sketch::compile(&plan).unwrap();
-    let short=find(&scene,"panel-0");let tall=find(&scene,"panel-1");assert_eq!(short["height"],tall["height"]);assert_eq!(short["y"],tall["y"]);
-    let mut alone=plan.clone();alone.panels.truncate(1);alone.nodes.truncate(1);alone.edges.clear();let single=visualization::sketch::compile(&alone).unwrap();
-    assert!(short["height"].as_f64().unwrap()>find(&single,"panel-0")["height"].as_f64().unwrap());
-    for id in ["node-0","label-0","panel-title-0"] {
-        let mut actual=find(&scene,id).clone();let mut expected=find(&single,id).clone();
-        if let Some(data)=actual.get_mut("customData").and_then(serde_json::Value::as_object_mut){data.remove("scientificPlan");}
-        if let Some(data)=expected.get_mut("customData").and_then(serde_json::Value::as_object_mut){data.remove("scientificPlan");}
-        assert_eq!(actual,expected,"{id} content and position remain independent of the taller neighbor");
+    let scene = visualization::sketch::compile(&plan).unwrap();
+    let short = find(&scene, "panel-0");
+    let tall = find(&scene, "panel-1");
+    assert_eq!(short["height"], tall["height"]);
+    assert_eq!(short["y"], tall["y"]);
+    let mut alone = plan.clone();
+    alone.panels.truncate(1);
+    alone.nodes.truncate(1);
+    alone.edges.clear();
+    let single = visualization::sketch::compile(&alone).unwrap();
+    assert!(
+        short["height"].as_f64().unwrap() > find(&single, "panel-0")["height"].as_f64().unwrap()
+    );
+    for id in ["node-0", "label-0", "panel-title-0"] {
+        let mut actual = find(&scene, id).clone();
+        let mut expected = find(&single, id).clone();
+        if let Some(data) = actual
+            .get_mut("customData")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            data.remove("scientificPlan");
+        }
+        if let Some(data) = expected
+            .get_mut("customData")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            data.remove("scientificPlan");
+        }
+        assert_eq!(
+            actual, expected,
+            "{id} content and position remain independent of the taller neighbor"
+        );
     }
-    assert_eq!(find(&scene,"edge-0")["customData"]["evidence"],json!(["relation source"]));
+    assert_eq!(
+        find(&scene, "edge-0")["customData"]["evidence"],
+        json!(["relation source"])
+    );
 }
 
 #[test]
 fn automatic_heading_balance_keeps_source_identifiers_and_line_budget() {
-    let title="胞质：凋亡小体上 procaspase-9 二聚化与加工";
+    let title = "胞质：凋亡小体上 procaspase-9 二聚化与加工";
     let plan:visualization::sketch::Plan=serde_json::from_value(json!({"message":"Reviewed heading","audience":"Researchers","layout":"vertical","panels":[{"id":"p","title":title,"column":0,"row":0}],"nodes":[{"id":"n","label":"N","panel":"p"}]})).unwrap();
-    let scene=visualization::sketch::compile(&plan).unwrap();let heading=find(&scene,"panel-title-0");let text=heading["text"].as_str().unwrap();
-    assert_eq!(heading["originalText"],title);assert_eq!(text.lines().count(),3);assert!(text.contains("procaspase-9"));assert!(text.contains("二聚化与加工"));assert!(text.lines().last().unwrap().chars().count()>=4,"orphan remains: {text}");
-    assert_eq!(text.chars().filter(|c|!c.is_whitespace()).collect::<String>(),title.chars().filter(|c|!c.is_whitespace()).collect::<String>());assert_eq!(heading["width"],240.);assert_eq!(heading["height"],75.);
-    let mut explicit=plan;explicit.panels[0].title="Explicit title\nPreserved break".into();let scene=visualization::sketch::compile(&explicit).unwrap();assert_eq!(find(&scene,"panel-title-0")["text"],"Explicit title\nPreserved break");
+    let scene = visualization::sketch::compile(&plan).unwrap();
+    let heading = find(&scene, "panel-title-0");
+    let text = heading["text"].as_str().unwrap();
+    assert_eq!(heading["originalText"], title);
+    assert_eq!(text.lines().count(), 3);
+    assert!(text.contains("procaspase-9"));
+    assert!(text.contains("二聚化与加工"));
+    assert!(
+        text.lines().last().unwrap().chars().count() >= 4,
+        "orphan remains: {text}"
+    );
+    assert_eq!(
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>(),
+        title
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    );
+    assert_eq!(heading["width"], 240.);
+    assert_eq!(heading["height"], 75.);
+    let mut explicit = plan;
+    explicit.panels[0].title = "Explicit title\nPreserved break".into();
+    let scene = visualization::sketch::compile(&explicit).unwrap();
+    assert_eq!(
+        find(&scene, "panel-title-0")["text"],
+        "Explicit title\nPreserved break"
+    );
 }
 
 #[test]
@@ -711,28 +766,61 @@ fn reroute_keeps_its_caption_clear_of_an_unrelated_straight_connector() {
     let x = label["x"].as_f64().unwrap() - 40.;
     let y = label["y"].as_f64().unwrap() + label["height"].as_f64().unwrap() / 2.;
     let width = label["width"].as_f64().unwrap() + 80.;
-    let before = scene::apply(&original, &[Operation::Add { element: json!({
-        "id":"unrelated-connector", "type":"arrow", "x":x, "y":y,
-        "width":width, "height":0., "angle":0., "roundness":null,
-        "points":[[0.,0.],[width,0.]], "elbowed":false
-    }) }]).unwrap();
-    let after = scene::apply(&before, &[Operation::Reroute {id:"edge-2".into()}]).unwrap();
+    let before = scene::apply(
+        &original,
+        &[Operation::Add {
+            element: json!({
+                "id":"unrelated-connector", "type":"arrow", "x":x, "y":y,
+                "width":width, "height":0., "angle":0., "roundness":null,
+                "points":[[0.,0.],[width,0.]], "elbowed":false
+            }),
+        }],
+    )
+    .unwrap();
+    let after = scene::apply(
+        &before,
+        &[Operation::Reroute {
+            id: "edge-2".into(),
+        }],
+    )
+    .unwrap();
     let next = find(&after, "edge-label-2");
     let left = next["x"].as_f64().unwrap();
     let top = next["y"].as_f64().unwrap();
     let right = left + next["width"].as_f64().unwrap();
     let bottom = top + next["height"].as_f64().unwrap();
-    assert!(right <= x - 2. || left >= x + width + 2. || bottom <= y - 2. || top >= y + 2.,
-        "the caption must not cover the unrelated connector");
+    assert!(
+        right <= x - 2. || left >= x + width + 2. || bottom <= y - 2. || top >= y + 2.,
+        "the caption must not cover the unrelated connector"
+    );
     for element in before["elements"].as_array().unwrap() {
         let id = element["id"].as_str().unwrap();
-        if id != "edge-2" && id != "edge-label-2" { assert_eq!(element, find(&after, id)); }
+        if id != "edge-2" && id != "edge-label-2" {
+            assert_eq!(element, find(&after, id));
+        }
     }
-    for field in ["text","originalText","width","height","fontSize","fontFamily","containerId"] {
+    for field in [
+        "text",
+        "originalText",
+        "width",
+        "height",
+        "fontSize",
+        "fontFamily",
+        "containerId",
+    ] {
         assert_eq!(find(&before, "edge-label-2")[field], next[field]);
     }
-    for field in ["startBinding","endBinding","startArrowhead","endArrowhead","customData"] {
-        assert_eq!(find(&before, "edge-2")[field], find(&after, "edge-2")[field]);
+    for field in [
+        "startBinding",
+        "endBinding",
+        "startArrowhead",
+        "endArrowhead",
+        "customData",
+    ] {
+        assert_eq!(
+            find(&before, "edge-2")[field],
+            find(&after, "edge-2")[field]
+        );
     }
 }
 
@@ -741,35 +829,91 @@ fn swap_frames_moves_complete_contents_and_preserves_scientific_fields() {
     let mut p = cross_plan();
     p.edges.truncate(3);
     let original = sketch::compile(&p).unwrap();
-    let swapped = scene::apply(&original, &[Operation::SwapFrames {first_id:"panel-0".into(), second_id:"panel-1".into()}]).unwrap();
-    for (a,b) in [("panel-0","panel-1"),("panel-1","panel-0")] {
-        assert_eq!(find(&swapped,a)["x"],find(&original,b)["x"]);
-        assert_eq!(find(&swapped,a)["y"],find(&original,b)["y"]);
+    let swapped = scene::apply(
+        &original,
+        &[Operation::SwapFrames {
+            first_id: "panel-0".into(),
+            second_id: "panel-1".into(),
+        }],
+    )
+    .unwrap();
+    for (a, b) in [("panel-0", "panel-1"), ("panel-1", "panel-0")] {
+        assert_eq!(find(&swapped, a)["x"], find(&original, b)["x"]);
+        assert_eq!(find(&swapped, a)["y"], find(&original, b)["y"]);
     }
     for old in original["elements"].as_array().unwrap() {
-        let next = find(&swapped,old["id"].as_str().unwrap());
-        for field in ["id","text","originalText","fontFamily","fontSize","lineHeight","frameId","groupIds","customData","startArrowhead","endArrowhead"] {
-            assert_eq!(next[field],old[field]);
+        let next = find(&swapped, old["id"].as_str().unwrap());
+        for field in [
+            "id",
+            "text",
+            "originalText",
+            "fontFamily",
+            "fontSize",
+            "lineHeight",
+            "frameId",
+            "groupIds",
+            "customData",
+            "startArrowhead",
+            "endArrowhead",
+        ] {
+            assert_eq!(next[field], old[field]);
         }
         if let Some(frame) = old["frameId"].as_str() {
-            for axis in ["x","y"] {
-                let delta = find(&swapped,frame)[axis].as_f64().unwrap()-find(&original,frame)[axis].as_f64().unwrap();
-                assert!((next[axis].as_f64().unwrap()-old[axis].as_f64().unwrap()-delta).abs()<1e-6);
+            for axis in ["x", "y"] {
+                let delta = find(&swapped, frame)[axis].as_f64().unwrap()
+                    - find(&original, frame)[axis].as_f64().unwrap();
+                assert!(
+                    (next[axis].as_f64().unwrap() - old[axis].as_f64().unwrap() - delta).abs()
+                        < 1e-6
+                );
             }
         }
     }
-    for field in ["files","scientificPlan"] {assert_eq!(swapped[field],original[field]);}
-    for field in ["startBinding","endBinding"] {
-        assert_eq!(find(&swapped,"edge-2")[field]["elementId"],find(&original,"edge-2")[field]["elementId"]);
+    for field in ["files", "scientificPlan"] {
+        assert_eq!(swapped[field], original[field]);
+    }
+    for field in ["startBinding", "endBinding"] {
+        assert_eq!(
+            find(&swapped, "edge-2")[field]["elementId"],
+            find(&original, "edge-2")[field]["elementId"]
+        );
     }
 }
 #[test]
 fn frame_swap_rejects_locked_frames_labels_and_unsupported_connectors_without_mutation() {
-    let mut p = cross_plan();p.edges.truncate(3);
+    let mut p = cross_plan();
+    p.edges.truncate(3);
     let original = sketch::compile(&p).unwrap();
-    let op=Operation::SwapFrames {first_id:"panel-0".into(),second_id:"panel-1".into()};
-    for (id,key,value) in [("panel-0","locked",json!(true)),("edge-label-2","locked",json!(true)),("edge-2","roundness",json!({"type":2})),("panel-0","frameId",json!("panel-1"))] {
-        let mut document=original.clone();let element=document["elements"].as_array_mut().unwrap().iter_mut().find(|e|e["id"]==id).unwrap();element[key]=value;let before=document.clone();assert!(scene::apply(&document,std::slice::from_ref(&op)).is_err());assert_eq!(document,before);
+    let op = Operation::SwapFrames {
+        first_id: "panel-0".into(),
+        second_id: "panel-1".into(),
+    };
+    for (id, key, value) in [
+        ("panel-0", "locked", json!(true)),
+        ("edge-label-2", "locked", json!(true)),
+        ("edge-2", "roundness", json!({"type":2})),
+        ("panel-0", "frameId", json!("panel-1")),
+    ] {
+        let mut document = original.clone();
+        let element = document["elements"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|e| e["id"] == id)
+            .unwrap();
+        element[key] = value;
+        let before = document.clone();
+        assert!(scene::apply(&document, std::slice::from_ref(&op)).is_err());
+        assert_eq!(document, before);
     }
-    assert!(scene::apply(&original,&[Operation::SwapFrames {first_id:"panel-0".into(),second_id:"panel-0".into()}]).is_err());
+    assert!(
+        scene::apply(
+            &original,
+            &[Operation::SwapFrames {
+                first_id: "panel-0".into(),
+                second_id: "panel-0".into()
+            }]
+        )
+        .is_err()
+    );
 }

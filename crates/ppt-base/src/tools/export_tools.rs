@@ -7,15 +7,19 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 
-use super::{box_write, tool_err, DeckToolState};
+use super::{DeckToolState, box_write, tool_err};
 use crate::actor::DeckHandle;
 use crate::shared::DeckShared;
 
 /// Build export tool registrations.
 pub fn registrations(state: DeckToolState) -> Vec<ToolRegistration> {
     vec![
-        ToolRegistration::from(DeckExportTool { handle: state.handle.clone() }),
-        ToolRegistration::from(DeckExportStatusTool { handle: state.handle }),
+        ToolRegistration::from(DeckExportTool {
+            handle: state.handle.clone(),
+        }),
+        ToolRegistration::from(DeckExportStatusTool {
+            handle: state.handle,
+        }),
     ]
 }
 
@@ -77,7 +81,11 @@ impl ToolFunction for DeckExportTool {
                     let pages = deck.resolve_range(range.as_deref())?;
                     let notes = pages
                         .iter()
-                        .map(|p| deck.slide(p + 1).and_then(|sl| sl.note.clone()).unwrap_or_default())
+                        .map(|p| {
+                            deck.slide(p + 1)
+                                .and_then(|sl| sl.note.clone())
+                                .unwrap_or_default()
+                        })
                         .collect();
                     let canvas = s.canvas_size(&deck_id, &deck.meta).await?;
                     let (record, _token) = s

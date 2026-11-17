@@ -117,12 +117,22 @@ fn visible_unsupported_labels_keep_default_but_unmeasurable_or_clipped_frames_re
             "hidden_connector" => original["elements"][3]["opacity"] = json!(0),
             _ => original["elements"][3]["startBinding"] = Value::Null,
         };
-        let result = image::illustrate(&original, "node", Image {
-            file_id: "asset", data_url: "data:image/png;base64,abc", width: 40, height: 100,
-            provenance: json!({"license":"test","source":"fixture"}),
-        });
+        let result = image::illustrate(
+            &original,
+            "node",
+            Image {
+                file_id: "asset",
+                data_url: "data:image/png;base64,abc",
+                width: 40,
+                height: 100,
+                provenance: json!({"license":"test","source":"fixture"}),
+            },
+        );
         if matches!(mode, "invalid_angle" | "outside_frame") {
-            assert!(result.is_err(), "{mode} must not silently hide an unmeasurable/clipped label");
+            assert!(
+                result.is_err(),
+                "{mode} must not silently hide an unmeasurable/clipped label"
+            );
         } else {
             let (next, _) = result.unwrap();
             assert_eq!(get(&next, "label")["y"], 212.);

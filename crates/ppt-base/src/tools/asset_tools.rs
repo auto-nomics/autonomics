@@ -94,7 +94,13 @@ impl ToolFunction for AssetAttachTool {
                 move |s: Arc<DeckShared>| {
                     box_write(async move {
                         attach_inner(
-                            s, deck_id, vfs_path, data_base64, filename_in, caption, provenance,
+                            s,
+                            deck_id,
+                            vfs_path,
+                            data_base64,
+                            filename_in,
+                            caption,
+                            provenance,
                         )
                         .await
                     })
@@ -169,40 +175,40 @@ async fn attach_inner(
         }
     };
 
-        if bytes.is_empty() {
-            return Err(crate::Error::Asset("empty asset payload".into()));
-        }
-        if bytes.len() > MAX_ASSET_BYTES {
-            return Err(crate::Error::Asset(format!(
-                "asset too large: {} bytes (cap {MAX_ASSET_BYTES})",
-                bytes.len()
-            )));
-        }
+    if bytes.is_empty() {
+        return Err(crate::Error::Asset("empty asset payload".into()));
+    }
+    if bytes.len() > MAX_ASSET_BYTES {
+        return Err(crate::Error::Asset(format!(
+            "asset too large: {} bytes (cap {MAX_ASSET_BYTES})",
+            bytes.len()
+        )));
+    }
 
-        let asset_id = format!("asset-{}", uuid::Uuid::new_v4().simple());
-        let blob_key = crate::assets::asset_blob_key(&deck_id, &asset_id, &filename);
-        s.assets.put(&blob_key, bytes.clone()).await?;
+    let asset_id = format!("asset-{}", uuid::Uuid::new_v4().simple());
+    let blob_key = crate::assets::asset_blob_key(&deck_id, &asset_id, &filename);
+    s.assets.put(&blob_key, bytes.clone()).await?;
 
-        let sha = {
-            let mut h = Sha256::new();
-            h.update(&bytes);
-            format!("{:x}", h.finalize())
-        };
-        let mime = guess_mime(&filename);
-        let meta = crate::store::AssetMeta {
-            id: asset_id.clone(),
-            deck_id: deck_id.clone(),
-            filename: filename.clone(),
-            mime: mime.into(),
-            size: bytes.len() as i64,
-            sha256: sha,
-            caption,
-            provenance,
-            blob_key: blob_key.clone(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
-        s.store.add_asset(&meta).await?;
-        Ok((meta, bytes.len() as i64))
+    let sha = {
+        let mut h = Sha256::new();
+        h.update(&bytes);
+        format!("{:x}", h.finalize())
+    };
+    let mime = guess_mime(&filename);
+    let meta = crate::store::AssetMeta {
+        id: asset_id.clone(),
+        deck_id: deck_id.clone(),
+        filename: filename.clone(),
+        mime: mime.into(),
+        size: bytes.len() as i64,
+        sha256: sha,
+        caption,
+        provenance,
+        blob_key: blob_key.clone(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    s.store.add_asset(&meta).await?;
+    Ok((meta, bytes.len() as i64))
 }
 
 /// Read bytes from the shared VFS (mount-routed; the sanctioned API,
@@ -289,9 +295,7 @@ mod tests {
             .unwrap()
             .with_vfs(Some(storage));
         assert_eq!(
-            read_vfs(&shared, "local://figure%20%25.png")
-                .await
-                .unwrap(),
+            read_vfs(&shared, "local://figure%20%25.png").await.unwrap(),
             b"image"
         );
         assert!(read_vfs(&shared, "missing://figure.png").await.is_err());

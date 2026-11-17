@@ -50,9 +50,23 @@ const CHANNEL_CAPACITY: usize = 128;
 /// Arguments are owned (cloned at the handle boundary) so the actor never
 /// borrows caller state.
 pub(crate) enum BibCommand {
-    LibraryMergeAssetRevisions { ids: Vec<String>, reply: oneshot::Sender<Result<std::collections::HashMap<String,String>>> },
-    ImportLibraryRecords { articles: Vec<Article>, collection: Option<String>, reply: oneshot::Sender<Result<crate::library_merge::LibraryImportOutcome>> },
-    MergeLibraryArticles { target_id: String, source_ids: Vec<String>, expected: std::collections::HashMap<String,String>, metadata: Option<Article>, expected_assets: Option<std::collections::HashMap<String,String>>, reply: oneshot::Sender<Result<Article>> },
+    LibraryMergeAssetRevisions {
+        ids: Vec<String>,
+        reply: oneshot::Sender<Result<std::collections::HashMap<String, String>>>,
+    },
+    ImportLibraryRecords {
+        articles: Vec<Article>,
+        collection: Option<String>,
+        reply: oneshot::Sender<Result<crate::library_merge::LibraryImportOutcome>>,
+    },
+    MergeLibraryArticles {
+        target_id: String,
+        source_ids: Vec<String>,
+        expected: std::collections::HashMap<String, String>,
+        metadata: Option<Article>,
+        expected_assets: Option<std::collections::HashMap<String, String>>,
+        reply: oneshot::Sender<Result<Article>>,
+    },
     // Schema
     Migrate {
         reply: oneshot::Sender<Result<()>>,
@@ -91,11 +105,29 @@ pub(crate) enum BibCommand {
         collection: Option<String>,
         reply: oneshot::Sender<Result<Vec<bib_types::discovery::DiscoveryImportOutcome>>>,
     },
-    CreateManualArticleChecked { article: Article, reply: oneshot::Sender<Result<Article>> },
-    UpdateArticleChecked { article: Article, expected_revision: Option<String>, reply: oneshot::Sender<Result<Article>> },
-    EraseTrashedArticle { id: String, reply: oneshot::Sender<Result<u64>> },
-    SetArticleTrash { id: String, trashed: bool, reply: oneshot::Sender<Result<bool>> },
-    ListArticleTrash { limit: usize, offset: usize, reply: oneshot::Sender<Result<(Vec<crate::TrashedArticle>, u64)>> },
+    CreateManualArticleChecked {
+        article: Article,
+        reply: oneshot::Sender<Result<Article>>,
+    },
+    UpdateArticleChecked {
+        article: Article,
+        expected_revision: Option<String>,
+        reply: oneshot::Sender<Result<Article>>,
+    },
+    EraseTrashedArticle {
+        id: String,
+        reply: oneshot::Sender<Result<u64>>,
+    },
+    SetArticleTrash {
+        id: String,
+        trashed: bool,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    ListArticleTrash {
+        limit: usize,
+        offset: usize,
+        reply: oneshot::Sender<Result<(Vec<crate::TrashedArticle>, u64)>>,
+    },
     UpsertArticle {
         article: Article,
         reply: oneshot::Sender<Result<()>>,
@@ -435,11 +467,32 @@ impl BibCommand {
             Self::Migrate { reply } => {
                 let _ = reply.send(core.migrate().await);
             }
-            Self::CreateManualArticleChecked { article, reply } => { let _ = reply.send(core.create_manual_article_checked(article).await); }
-            Self::UpdateArticleChecked { article, expected_revision, reply } => { let _ = reply.send(core.update_article_checked(article, expected_revision).await); }
-            Self::EraseTrashedArticle { id, reply } => { let _ = reply.send(core.erase_article(&id, true).await); }
-            Self::SetArticleTrash { id, trashed, reply } => { let _ = reply.send(core.set_article_trash(&id, trashed).await); }
-            Self::ListArticleTrash { limit, offset, reply } => { let _ = reply.send(core.list_article_trash(limit, offset).await); }
+            Self::CreateManualArticleChecked { article, reply } => {
+                let _ = reply.send(core.create_manual_article_checked(article).await);
+            }
+            Self::UpdateArticleChecked {
+                article,
+                expected_revision,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.update_article_checked(article, expected_revision)
+                        .await,
+                );
+            }
+            Self::EraseTrashedArticle { id, reply } => {
+                let _ = reply.send(core.erase_article(&id, true).await);
+            }
+            Self::SetArticleTrash { id, trashed, reply } => {
+                let _ = reply.send(core.set_article_trash(&id, trashed).await);
+            }
+            Self::ListArticleTrash {
+                limit,
+                offset,
+                reply,
+            } => {
+                let _ = reply.send(core.list_article_trash(limit, offset).await);
+            }
             Self::UpsertArticle { article, reply } => {
                 let _ = reply.send(core.upsert_article(&article).await);
             }
@@ -470,9 +523,35 @@ impl BibCommand {
             } => {
                 let _ = reply.send(core.import_discovery(records, library, collection).await);
             }
-            Self::ImportLibraryRecords { articles, collection, reply } => { let _ = reply.send(core.import_library_records(articles, collection).await); }
-            Self::MergeLibraryArticles { target_id, source_ids, expected, metadata, expected_assets, reply } => { let _ = reply.send(core.merge_library_articles(target_id, source_ids, expected, metadata, expected_assets).await); }
-            Self::LibraryMergeAssetRevisions { ids, reply } => { let _ = reply.send(core.library_merge_asset_revisions(ids).await); }
+            Self::ImportLibraryRecords {
+                articles,
+                collection,
+                reply,
+            } => {
+                let _ = reply.send(core.import_library_records(articles, collection).await);
+            }
+            Self::MergeLibraryArticles {
+                target_id,
+                source_ids,
+                expected,
+                metadata,
+                expected_assets,
+                reply,
+            } => {
+                let _ = reply.send(
+                    core.merge_library_articles(
+                        target_id,
+                        source_ids,
+                        expected,
+                        metadata,
+                        expected_assets,
+                    )
+                    .await,
+                );
+            }
+            Self::LibraryMergeAssetRevisions { ids, reply } => {
+                let _ = reply.send(core.library_merge_asset_revisions(ids).await);
+            }
             Self::UpsertArticles { articles, reply } => {
                 let _ = reply.send(core.upsert_articles(&articles).await);
             }

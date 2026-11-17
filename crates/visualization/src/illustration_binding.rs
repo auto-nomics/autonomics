@@ -140,7 +140,12 @@ pub(crate) fn bind(
         if e["type"] != "text" {
             return Err(fail("labels must be text"));
         }
-        if !e["boundElements"].is_null() && !e["boundElements"].is_array() && e["boundElements"]!="" {return Err(fail("invalid native label connector references"));}
+        if !e["boundElements"].is_null()
+            && !e["boundElements"].is_array()
+            && e["boundElements"] != ""
+        {
+            return Err(fail("invalid native label connector references"));
+        }
 
         if let Some(container) = e["containerId"].as_str() {
             if container != anchor_id
@@ -207,8 +212,9 @@ pub(crate) fn bind(
     for id in label_ids {
         let i = index(elements, id)?;
         elements[i]["containerId"] = Value::Null;
-        if elements[i]["boundElements"]=="" {elements[i]["boundElements"]=json!([]);}
-
+        if elements[i]["boundElements"] == "" {
+            elements[i]["boundElements"] = json!([]);
+        }
     }
     for m in members {
         let i = index(elements, &m.id)?;

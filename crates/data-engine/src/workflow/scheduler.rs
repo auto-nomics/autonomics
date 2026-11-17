@@ -1181,9 +1181,10 @@ mod tests {
         ) -> Result<PortOutputs, DagError> {
             EXECUTIONS.with(|counter| counter.set(counter.get() + 1));
             if let Some(needle) = &self.fail_on
-                && *needle == self.tag {
-                    return Err(DagError::Schedule("echo failed by request".into()));
-                }
+                && *needle == self.tag
+            {
+                return Err(DagError::Schedule("echo failed by request".into()));
+            }
             // Transient failure budget: the first `fail_times` executions of
             // this tag fail, later ones succeed — retry semantics under test.
             if let Some(budget) = self.fail_times {

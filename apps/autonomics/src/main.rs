@@ -98,7 +98,9 @@ fn init_frontend_logging(nocapture: bool) -> color_eyre::Result<()> {
 }
 
 fn main() -> color_eyre::Result<()> {
-    if manuscript_engine::run_worker_if_requested() { return Ok(()); }
+    if manuscript_engine::run_worker_if_requested() {
+        return Ok(());
+    }
     // Parse CLI first so we can read --nocapture before logging init.
     let cli = Cli::parse();
 
@@ -147,7 +149,10 @@ fn main() -> color_eyre::Result<()> {
             let code = match args.first().map(String::as_str) {
                 Some("enroll") => runtime.block_on(gateway::cli::compute_enroll_main(&args[1..])),
                 Some("check") => runtime.block_on(gateway::cli::compute_check_main(&args[1..])),
-                _ => { eprintln!("usage: autonomics compute <enroll|check> …"); 2 }
+                _ => {
+                    eprintln!("usage: autonomics compute <enroll|check> …");
+                    2
+                }
             };
             std::process::exit(code);
         }

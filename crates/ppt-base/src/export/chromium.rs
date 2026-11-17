@@ -14,9 +14,9 @@
 use std::time::Duration;
 
 use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
+use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::cdp::browser_protocol::page::PrintToPdfParams;
 use chromiumoxide::page::ScreenshotParams;
-use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -95,7 +95,9 @@ async fn wait_for_page(tab: &Tab, expected: Option<(usize, u32)>) -> Result<()> 
             .map_err(|e| Error::Export(format!("evaluate failed: {e}")))?;
         let (ready, waitfor) = parse_ready(&value);
         if let Some(error) = value.get("error").and_then(Value::as_str) {
-            return Err(Error::Export(format!("print page initialization failed: {error}")));
+            return Err(Error::Export(format!(
+                "print page initialization failed: {error}"
+            )));
         }
         let goto = value.get("goto").and_then(Value::as_bool).unwrap_or(false);
         let state = value.get("state").unwrap_or(&Value::Null);
@@ -116,10 +118,7 @@ async fn wait_for_page(tab: &Tab, expected: Option<(usize, u32)>) -> Result<()> 
 }
 
 fn parse_ready(value: &Value) -> (bool, u64) {
-    let ready = value
-        .get("ready")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let ready = value.get("ready").and_then(Value::as_bool).unwrap_or(false);
     let waitfor = value
         .get("waitfor")
         .and_then(Value::as_u64)
@@ -151,11 +150,7 @@ impl crate::export::DeckExporter for ChromiumExporter {
         ChromiumExporter::preview_png(self, job, slide_no, clicks).await
     }
 
-    async fn diagnose_slides(
-        &self,
-        job: &ExportJob,
-        targets: &[(u32, u32)],
-    ) -> Result<Value> {
+    async fn diagnose_slides(&self, job: &ExportJob, targets: &[(u32, u32)]) -> Result<Value> {
         ChromiumExporter::diagnose_slides(self, job, targets).await
     }
 }
@@ -175,9 +170,7 @@ impl ChromiumExporter {
         let mut browser = Browser::launch(self.options.clone())
             .await
             .map_err(|e| Error::Export(format!("browser launch failed: {e}")))?;
-        let result = self
-            .capture_one(&browser, job, slide_no, clicks)
-            .await;
+        let result = self.capture_one(&browser, job, slide_no, clicks).await;
         let _ = browser.close().await;
         result
     }
@@ -186,13 +179,11 @@ impl ChromiumExporter {
     /// but instead of a screenshot evaluate `window.__deckDiagnose()`
     /// (mounted by the print page's diagnostics module) per slide at
     /// scale 1.0 so CSS-px geometry matches canvas coordinates.
-    pub async fn diagnose_slides(
-        &self,
-        job: &ExportJob,
-        targets: &[(u32, u32)],
-    ) -> Result<Value> {
+    pub async fn diagnose_slides(&self, job: &ExportJob, targets: &[(u32, u32)]) -> Result<Value> {
         if job.print_token.is_empty() {
-            return Err(Error::Export("diagnostics job carries no print token".into()));
+            return Err(Error::Export(
+                "diagnostics job carries no print token".into(),
+            ));
         }
         let mut browser = Browser::launch(self.options.clone())
             .await
@@ -233,9 +224,7 @@ impl ChromiumExporter {
                 .map_err(|e| Error::Export(format!("goto slide {slide_no}: {e}")))?;
             wait_for_page(&tab, Some((*slide_no as usize, *clicks))).await?;
             let value = tab
-                .evaluate(
-                    "window.__deckDiagnose ? window.__deckDiagnose() : { unsupported: true }",
-                )
+                .evaluate("window.__deckDiagnose ? window.__deckDiagnose() : { unsupported: true }")
                 .await
                 .map_err(|e| Error::Export(format!("diagnose slide {slide_no}: {e}")))?;
             out.insert(slide_no.to_string(), value);
@@ -303,13 +292,10 @@ impl ChromiumExporter {
             ExportFormat::Png => self.export_png(browser, job, canvas_w, canvas_h).await,
             ExportFormat::Pptx => {
                 // M9: PNG frames feed the OOXML writer.
-                let pngs = self.capture_png_pages(browser, job, canvas_w, canvas_h).await?;
-                let bytes = crate::export::pptx::build_pptx(
-                    &pngs,
-                    canvas_w,
-                    canvas_h,
-                    &job.notes,
-                )?;
+                let pngs = self
+                    .capture_png_pages(browser, job, canvas_w, canvas_h)
+                    .await?;
+                let bytes = crate::export::pptx::build_pptx(&pngs, canvas_w, canvas_h, &job.notes)?;
                 Ok(ExportOutput {
                     bytes,
                     mime: ExportFormat::Pptx.mime().to_string(),
@@ -359,14 +345,17 @@ impl ChromiumExporter {
         canvas_w: u32,
         canvas_h: u32,
     ) -> Result<ExportOutput> {
-        let pages = self.capture_png_pages(browser, job, canvas_w, canvas_h).await?;
+        let pages = self
+            .capture_png_pages(browser, job, canvas_w, canvas_h)
+            .await?;
         // One file per page, zipped: deck-000.png …
         let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
         for (i, bytes) in pages.iter().enumerate() {
             zip.start_file(format!("deck-{:03}.png", i + 1), options)
                 .map_err(|e| Error::Export(format!("zip: {e}")))?;
-            std::io::Write::write_all(&mut zip, bytes).map_err(|e| Error::Export(format!("zip: {e}")))?;
+            std::io::Write::write_all(&mut zip, bytes)
+                .map_err(|e| Error::Export(format!("zip: {e}")))?;
         }
         let cursor = zip
             .finish()
@@ -426,7 +415,9 @@ impl ChromiumExporter {
                                 .height(f64::from(canvas_h))
                                 .scale(1.0)
                                 .build()
-                                .map_err(|e: String| Error::Export(format!("viewport params: {e}")))?,
+                                .map_err(|e: String| {
+                                    Error::Export(format!("viewport params: {e}"))
+                                })?,
                         )
                         .capture_beyond_viewport(true)
                         .build(),

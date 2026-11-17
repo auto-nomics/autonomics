@@ -293,10 +293,12 @@ async fn update_entry(
     if let Some(map) = body.as_object_mut() {
         map.insert(
             "rewrote_links_in".to_string(),
-            json!(rewritten
-                .iter()
-                .map(|(id, title)| json!({ "id": id, "title": title }))
-                .collect::<Vec<_>>()),
+            json!(
+                rewritten
+                    .iter()
+                    .map(|(id, title)| json!({ "id": id, "title": title }))
+                    .collect::<Vec<_>>()
+            ),
         );
     }
     Ok(Json(body))

@@ -1970,9 +1970,8 @@ pub fn spawn_with_engine(engine: DataEngine) -> (DataEngineClient, JoinHandle<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use crate::data_engine::DataEngine;
-    
 
     struct RendezvousExecutor {
         barrier: Arc<tokio::sync::Barrier>,

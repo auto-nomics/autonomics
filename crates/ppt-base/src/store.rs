@@ -186,7 +186,9 @@ impl ExportFormat {
         match self {
             ExportFormat::Pdf => "application/pdf",
             ExportFormat::Png => "image/png",
-            ExportFormat::Pptx => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ExportFormat::Pptx => {
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            }
         }
     }
 
@@ -301,7 +303,8 @@ impl DeckStore {
                 turso::params![id, title, markdown, revision, parsed_cache, now.clone(), now],
             )
             .await?;
-        self.snapshot_version(id, 1, markdown, None, "create").await?;
+        self.snapshot_version(id, 1, markdown, None, "create")
+            .await?;
         Ok(())
     }
 
@@ -325,7 +328,15 @@ impl DeckStore {
             .execute(
                 "UPDATE decks SET title = ?2, markdown = ?3, revision = ?4, parsed_cache = ?5, \
                  version = ?6, updated_at = ?7 WHERE id = ?1",
-                turso::params![id, title, markdown, revision, parsed_cache, version, now.clone()],
+                turso::params![
+                    id,
+                    title,
+                    markdown,
+                    revision,
+                    parsed_cache,
+                    version,
+                    now.clone()
+                ],
             )
             .await?;
         if n == 0 {
@@ -337,7 +348,12 @@ impl DeckStore {
     }
 
     /// Update only the parsed cache (cache warm-up after a read).
-    pub async fn update_parsed_cache(&self, id: &str, revision: &str, parsed_cache: &str) -> Result<()> {
+    pub async fn update_parsed_cache(
+        &self,
+        id: &str,
+        revision: &str,
+        parsed_cache: &str,
+    ) -> Result<()> {
         self.conn
             .execute(
                 "UPDATE decks SET parsed_cache = ?2 WHERE id = ?1 AND revision = ?3",
@@ -362,15 +378,7 @@ impl DeckStore {
                 "INSERT OR REPLACE INTO deck_versions \
                  (id, deck_id, version, markdown, author, message, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                turso::params![
-                    version_id,
-                    deck_id,
-                    version,
-                    markdown,
-                    author,
-                    message,
-                    now
-                ],
+                turso::params![version_id, deck_id, version, markdown, author, message, now],
             )
             .await?;
         Ok(())
@@ -426,9 +434,17 @@ impl DeckStore {
 
     /// Delete a deck and all child rows.
     pub async fn delete_deck(&self, id: &str) -> Result<()> {
-        for table in ["deck_versions", "deck_assets", "deck_exports", "deck_diagnostics"] {
+        for table in [
+            "deck_versions",
+            "deck_assets",
+            "deck_exports",
+            "deck_diagnostics",
+        ] {
             self.conn
-                .execute(&format!("DELETE FROM {table} WHERE deck_id = ?1"), turso::params![id])
+                .execute(
+                    &format!("DELETE FROM {table} WHERE deck_id = ?1"),
+                    turso::params![id],
+                )
                 .await?;
         }
         let n = self
@@ -652,7 +668,11 @@ impl DeckStore {
     }
 
     /// Find an export by deck id + valid print token hash.
-    pub async fn get_export_by_token(&self, deck_id: &str, token_hash: &str) -> Result<ExportRecord> {
+    pub async fn get_export_by_token(
+        &self,
+        deck_id: &str,
+        token_hash: &str,
+    ) -> Result<ExportRecord> {
         let mut rows = self
             .conn
             .query(
@@ -761,7 +781,15 @@ mod tests {
         assert_eq!(row.version, 1);
 
         let v = s
-            .save_deck("deck-1", "T2", "# b\n", "rev2", "cache2", "edit", Some("agent"))
+            .save_deck(
+                "deck-1",
+                "T2",
+                "# b\n",
+                "rev2",
+                "cache2",
+                "edit",
+                Some("agent"),
+            )
             .await
             .unwrap();
         assert_eq!(v, 2);
@@ -788,7 +816,9 @@ mod tests {
     #[tokio::test]
     async fn parsed_cache_update() {
         let s = store().await;
-        s.create_deck("deck-1", "T", "md", "rev1", "").await.unwrap();
+        s.create_deck("deck-1", "T", "md", "rev1", "")
+            .await
+            .unwrap();
         s.update_parsed_cache("deck-1", "rev1", "{\"ok\":true}")
             .await
             .unwrap();
@@ -799,9 +829,15 @@ mod tests {
     #[tokio::test]
     async fn stale_cache_fill_cannot_revert_revision() {
         let s = store().await;
-        s.create_deck("deck-cache", "T", "# old", "old", "old-cache").await.unwrap();
-        s.save_deck("deck-cache", "T", "# new", "new", "new-cache", "edit", None).await.unwrap();
-        s.update_parsed_cache("deck-cache", "old", "stale-cache").await.unwrap();
+        s.create_deck("deck-cache", "T", "# old", "old", "old-cache")
+            .await
+            .unwrap();
+        s.save_deck("deck-cache", "T", "# new", "new", "new-cache", "edit", None)
+            .await
+            .unwrap();
+        s.update_parsed_cache("deck-cache", "old", "stale-cache")
+            .await
+            .unwrap();
         let row = s.get_deck_row("deck-cache").await.unwrap();
         assert_eq!(row.revision, "new");
         assert_eq!(row.parsed_cache, "new-cache");

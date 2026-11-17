@@ -168,10 +168,7 @@ mod tests {
     #[test]
     fn serde_as_string() {
         let a = AspectRatio::parse("16/9").unwrap();
-        assert_eq!(
-            serde_json::to_value(a).unwrap(),
-            serde_json::json!("16/9")
-        );
+        assert_eq!(serde_json::to_value(a).unwrap(), serde_json::json!("16/9"));
         assert_eq!(
             serde_json::from_value::<AspectRatio>(serde_json::json!("16/9")).unwrap(),
             a

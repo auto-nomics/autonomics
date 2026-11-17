@@ -19,7 +19,11 @@ pub(crate) fn validate(queries: &[String]) -> Result<(), &'static str> {
 pub(crate) async fn search(client: &::bioicons::BioIconsClient, queries: &[String]) -> Value {
     search_with_author(client, queries, None).await
 }
-pub(crate) async fn search_with_author(client: &::bioicons::BioIconsClient, queries: &[String], author: Option<&str>) -> Value {
+pub(crate) async fn search_with_author(
+    client: &::bioicons::BioIconsClient,
+    queries: &[String],
+    author: Option<&str>,
+) -> Value {
     let mut items = Vec::new();
     let mut successes = 0;
     // Shared client caches the catalogue. Sequential searches avoid duplicate upstream work;
@@ -59,20 +63,33 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
     #[tokio::test]
     async fn author_filter_is_retained_for_every_query_including_zero_hits() {
-        let server=MockServer::start().await;
-        Mock::given(path("/icons/icons.json")).respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {"name":"protein","category":"Protein","license":"cc-0","author":"A"},
-            {"name":"receptor","category":"Protein","license":"cc-by-4.0","author":"B"}
-        ]))).expect(1).mount(&server).await;
-        Mock::given(path("/icons/authors.json")).respond_with(ResponseTemplate::new(200).set_body_json(json!({}))).mount(&server).await;
-        let client=::bioicons::BioIconsClient::with_endpoint(&format!("{}/",server.uri())).unwrap();
-        let result=search_with_author(&client,&["protein".into(),"receptor".into()],Some("A")).await;
-        assert_eq!(result["author_filter"],"A");assert_eq!(result["successful"],2);
-        assert_eq!(result["items"][0]["result"]["total"],1);
-        assert_eq!(result["items"][1]["result"]["total"],0);
-        for item in result["items"].as_array().unwrap(){
-            assert_eq!(item["result"]["search_scope"]["author_filter"],"A");
-            assert_eq!(item["result"]["search_scope"]["proves_catalogue_absence"],false);
+        let server = MockServer::start().await;
+        Mock::given(path("/icons/icons.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"name":"protein","category":"Protein","license":"cc-0","author":"A"},
+                {"name":"receptor","category":"Protein","license":"cc-by-4.0","author":"B"}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/icons/authors.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+        let client =
+            ::bioicons::BioIconsClient::with_endpoint(&format!("{}/", server.uri())).unwrap();
+        let result =
+            search_with_author(&client, &["protein".into(), "receptor".into()], Some("A")).await;
+        assert_eq!(result["author_filter"], "A");
+        assert_eq!(result["successful"], 2);
+        assert_eq!(result["items"][0]["result"]["total"], 1);
+        assert_eq!(result["items"][1]["result"]["total"], 0);
+        for item in result["items"].as_array().unwrap() {
+            assert_eq!(item["result"]["search_scope"]["author_filter"], "A");
+            assert_eq!(
+                item["result"]["search_scope"]["proves_catalogue_absence"],
+                false
+            );
         }
     }
     #[tokio::test]
@@ -181,23 +198,42 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("must-not-create.sqlite");
         let tool = crate::bioicons::registrations(path.clone()).remove(0);
-        let first = tool.implementation.execute(json!({"action":"search","query":"protein"})).await.unwrap();
+        let first = tool
+            .implementation
+            .execute(json!({"action":"search","query":"protein"}))
+            .await
+            .unwrap();
         let first = serde_json::to_value(first).unwrap();
-        let author = first["content"]["assets"][0]["author"].as_str().expect("live catalogue protein author");
-        let single = tool.implementation.execute(json!({"action":"search","query":"protein","author":author})).await.unwrap();
+        let author = first["content"]["assets"][0]["author"]
+            .as_str()
+            .expect("live catalogue protein author");
+        let single = tool
+            .implementation
+            .execute(json!({"action":"search","query":"protein","author":author}))
+            .await
+            .unwrap();
         let single = serde_json::to_value(single).unwrap();
-        assert_eq!(single["content"]["search_scope"]["author_filter"],author);
+        assert_eq!(single["content"]["search_scope"]["author_filter"], author);
         let batch = tool.implementation.execute(json!({"action":"search_batch","queries":["protein","receptor","codex-author-filter-nohit-7b2e"],"author":author})).await.unwrap();
         let batch = serde_json::to_value(batch).unwrap();
-        let content = &batch["content"];assert_eq!(content["successful"],3);
+        let content = &batch["content"];
+        assert_eq!(content["successful"], 3);
         for item in content["items"].as_array().unwrap() {
-            assert_eq!(item["result"]["search_scope"]["author_filter"],author);
-            assert_eq!(item["result"]["search_scope"]["proves_catalogue_absence"],false);
-            for asset in item["result"]["assets"].as_array().unwrap() {assert_eq!(asset["author"],author);}
+            assert_eq!(item["result"]["search_scope"]["author_filter"], author);
+            assert_eq!(
+                item["result"]["search_scope"]["proves_catalogue_absence"],
+                false
+            );
+            for asset in item["result"]["assets"].as_array().unwrap() {
+                assert_eq!(asset["author"], author);
+            }
         }
-        assert_eq!(content["items"][2]["result"]["total"],0);
+        assert_eq!(content["items"][2]["result"]["total"], 0);
         assert!(!path.exists());
-        println!("{}",json!({"passed":true,"author":author,"queries":content["items"].as_array().unwrap().iter().map(|i|json!({"query":i["query"],"total":i["result"]["total"],"scope":i["result"]["search_scope"]})).collect::<Vec<_>>(),"store_created":false,"image_downloaded":false}));
+        println!(
+            "{}",
+            json!({"passed":true,"author":author,"queries":content["items"].as_array().unwrap().iter().map(|i|json!({"query":i["query"],"total":i["result"]["total"],"scope":i["result"]["search_scope"]})).collect::<Vec<_>>(),"store_created":false,"image_downloaded":false})
+        );
     }
     #[tokio::test]
     #[ignore = "opt-in live BioIcons catalogue smoke; downloads catalogue metadata only"]

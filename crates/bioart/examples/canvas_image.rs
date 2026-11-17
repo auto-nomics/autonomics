@@ -7,7 +7,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for asset in result.assets {
         match client.canvas_image(asset.id).await {
             Ok(image) => {
-                println!("asset={} title={:?} dimensions={}x{} sha256={} licenses={:?}", image.asset.id, image.asset.title, image.width, image.height, image.sha256, image.asset.licenses);
+                println!(
+                    "asset={} title={:?} dimensions={}x{} sha256={} licenses={:?}",
+                    image.asset.id,
+                    image.asset.title,
+                    image.width,
+                    image.height,
+                    image.sha256,
+                    image.asset.licenses
+                );
                 return Ok(());
             }
             Err(error) => eprintln!("asset={}: {error}", asset.id),

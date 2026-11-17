@@ -21,19 +21,52 @@ pub const NUMERIC_UPDATE_FIELDS: [&str; 11] = [
 
 // Crop uses native source-pixel units, not normalized SVG bounds. Validate
 // only incoming writes so older documents can still be read and repaired.
-fn validate_image_fields(fields: &serde_json::Map<String, Value>, id: &str) -> Result<(), SceneError> {
+fn validate_image_fields(
+    fields: &serde_json::Map<String, Value>,
+    id: &str,
+) -> Result<(), SceneError> {
     if let Some(crop) = fields.get("crop").filter(|v| !v.is_null()) {
-        let invalid = || SceneError::InvalidUpdate(format!("{id}.crop requires a complete native object with finite JSON numbers x/y/width/height/naturalWidth/naturalHeight in source pixels, not quoted numbers or normalized fractions without source dimensions; use null to clear crop"));
-        let read = |key: &str| crop.get(key).and_then(Value::as_f64)
-            .filter(|n| n.is_finite() && n.abs() <= 1e6).ok_or_else(invalid);
-        let (x,y,w,h,nw,nh) = (read("x")?,read("y")?,read("width")?,read("height")?,read("naturalWidth")?,read("naturalHeight")?);
-        if x<0. || y<0. || w<=0. || h<=0. || nw<=0. || nh<=0. || x+w>nw+1e-6 || y+h>nh+1e-6 {
+        let invalid = || {
+            SceneError::InvalidUpdate(format!(
+                "{id}.crop requires a complete native object with finite JSON numbers x/y/width/height/naturalWidth/naturalHeight in source pixels, not quoted numbers or normalized fractions without source dimensions; use null to clear crop"
+            ))
+        };
+        let read = |key: &str| {
+            crop.get(key)
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite() && n.abs() <= 1e6)
+                .ok_or_else(invalid)
+        };
+        let (x, y, w, h, nw, nh) = (
+            read("x")?,
+            read("y")?,
+            read("width")?,
+            read("height")?,
+            read("naturalWidth")?,
+            read("naturalHeight")?,
+        );
+        if x < 0.
+            || y < 0.
+            || w <= 0.
+            || h <= 0.
+            || nw <= 0.
+            || nh <= 0.
+            || x + w > nw + 1e-6
+            || y + h > nh + 1e-6
+        {
             return Err(invalid());
         }
     }
     if let Some(scale) = fields.get("scale")
-        && !scale.as_array().is_some_and(|a| a.len()==2 && a.iter().all(|v| matches!(v.as_f64(),Some(1.0)|Some(-1.0)))) {
-        return Err(SceneError::InvalidUpdate(format!("{id}.scale requires two native numeric flips [1,1], [-1,1], [1,-1] or [-1,-1], not display size factors or quoted values")));
+        && !scale.as_array().is_some_and(|a| {
+            a.len() == 2
+                && a.iter()
+                    .all(|v| matches!(v.as_f64(), Some(1.0) | Some(-1.0)))
+        })
+    {
+        return Err(SceneError::InvalidUpdate(format!(
+            "{id}.scale requires two native numeric flips [1,1], [-1,1], [1,-1] or [-1,-1], not display size factors or quoted values"
+        )));
     }
     Ok(())
 }
@@ -133,8 +166,22 @@ pub struct IllustrationSample {
 
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ConnectorPort { Left, Right, Top, Bottom }
-impl ConnectorPort { pub(crate) fn index(&self)->usize {match self {Self::Left=>0,Self::Right=>1,Self::Top=>2,Self::Bottom=>3}} }
+pub enum ConnectorPort {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+impl ConnectorPort {
+    pub(crate) fn index(&self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => 1,
+            Self::Top => 2,
+            Self::Bottom => 3,
+        }
+    }
+}
 
 #[derive(schemars::JsonSchema, Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -208,9 +255,15 @@ pub enum Operation {
         id: String,
     },
     /// Reposition one bound caption by fractional length along the existing path.
-    PositionArrowCaption { id: String, position: f64 },
+    PositionArrowCaption {
+        id: String,
+        position: f64,
+    },
     /// Fit a component to the union of exact current samples for every primary/accessory image.
-    FitIllustrationGroup { anchor_id: String, samples: Vec<IllustrationSample> },
+    FitIllustrationGroup {
+        anchor_id: String,
+        samples: Vec<IllustrationSample>,
+    },
     /// Bind already placed images and detached labels to one component, preserving
     /// geometry/files. Explicit members use accessory ownership and meanings;
     /// old fit metadata is removed and the primary must be reviewed/refitted.
@@ -222,14 +275,30 @@ pub enum Operation {
         members: Vec<IllustrationMember>,
     },
     /// Attach one explicitly selected text label to an existing illustration group.
-    AttachIllustrationLabel { id: String, anchor_id: String },
+    AttachIllustrationLabel {
+        id: String,
+        anchor_id: String,
+    },
     /// Crop an image in source fractions without stretching or moving retained pixels.
     /// Read actual natural dimensions from image_info; invalidates its owner's fit snapshot.
-    CropImage { id: String, file_id: String, natural_width: f64, natural_height: f64, normalized_crop: [f64;4] },
+    CropImage {
+        id: String,
+        file_id: String,
+        natural_width: f64,
+        natural_height: f64,
+        normalized_crop: [f64; 4],
+    },
     /// Link an existing standalone accessory image to an illustrated component.
-    AttachIllustrationBadge { id: String, anchor_id: String, meaning: String },
+    AttachIllustrationBadge {
+        id: String,
+        anchor_id: String,
+        meaning: String,
+    },
     /// Remove accessory ownership without changing geometry, file or recorded meaning.
-    DetachIllustrationBadge { id: String, anchor_id: String },
+    DetachIllustrationBadge {
+        id: String,
+        anchor_id: String,
+    },
     /// Translate complete existing components rigidly, preserving IDs and metadata.
     Translate {
         element_ids: Vec<String>,
@@ -237,10 +306,17 @@ pub enum Operation {
         dy: f64,
     },
     /// Atomically exchange two top-level frames and reroute generated sharp cross-panel arrows.
-    SwapFrames { first_id: String, second_id: String },
+    SwapFrames {
+        first_id: String,
+        second_id: String,
+    },
     /// Pack selected top-level frames in existing spatial order with an explicit 8..512 gap.
     /// Move complete contents and reroute supported cross-panel connectors; no scientific reordering.
-    PackFrames { element_ids: Vec<String>, vertical: bool, gap: f64 },
+    PackFrames {
+        element_ids: Vec<String>,
+        vertical: bool,
+        gap: f64,
+    },
     /// Duplicate complete native components with new IDs and rigid offsets.
     Duplicate {
         element_ids: Vec<String>,
@@ -250,7 +326,10 @@ pub enum Operation {
     },
     /// Shrink a top-level frame around its live direct children without moving any content.
     /// Keep the frame origin; padding 8..128 is added only where the old size permits.
-    FitFrame { id: String, padding: f64 },
+    FitFrame {
+        id: String,
+        padding: f64,
+    },
     /// Shrink existing unbound scientific text to its current wrapped lines.
     /// Preserve wording, line breaks and visible alignment; never reflow or grow.
     FitTextWidth {
@@ -293,7 +372,11 @@ pub enum Operation {
     /// Preserves IDs, scientific metadata, text, styling and unrelated objects.
     /// Explicitly choose centered ports and rebuild a sharp local path, retaining
     /// bindings, gaps, direction, caption geometry and scientific metadata.
-    RebindConnectorPorts { id: String, start_side: ConnectorPort, end_side: ConnectorPort },
+    RebindConnectorPorts {
+        id: String,
+        start_side: ConnectorPort,
+        end_side: ConnectorPort,
+    },
     /// Recompute the path without changing scientific endpoint identities.
     Reroute {
         id: String,
@@ -376,7 +459,11 @@ pub(crate) fn owned_elements(elements: &[Value], id: &str) -> HashSet<String> {
                         })
                     });
             let frame_child = parent["type"] == "frame" && element["frameId"].as_str() == Some(id);
-            let badge=element["type"]=="image"&&element["customData"]["semanticBadgeAnchorId"].as_str()==Some(id)&&parent["customData"]["visualBadgeIds"].as_array().is_some_and(|ids|ids.contains(&element["id"]));
+            let badge = element["type"] == "image"
+                && element["customData"]["semanticBadgeAnchorId"].as_str() == Some(id)
+                && parent["customData"]["visualBadgeIds"]
+                    .as_array()
+                    .is_some_and(|ids| ids.contains(&element["id"]));
             native_label || visual || badge || detached_label || frame_child
         })
         .filter_map(|element| element["id"].as_str().map(str::to_owned))
@@ -603,12 +690,31 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
             Operation::SyncInsetRegion { id } => {
                 crate::inset_sync::apply(elements, &document["files"], id)?
             }
-            Operation::PositionArrowCaption { id, position } => crate::connector_path::position_caption(elements,id,*position)?,
-            Operation::FitIllustrationGroup { anchor_id, samples } => crate::illustration_fit::apply_group(elements, anchor_id, samples)?,
-            Operation::BindIllustration { anchor_id, primary_id, label_ids, members } => crate::illustration_binding::bind(elements, anchor_id, primary_id, label_ids, members)?,
-            Operation::AttachIllustrationLabel { id, anchor_id } => crate::illustration_badge::attach_label(elements,id,anchor_id)?,
-            Operation::AttachIllustrationBadge { id, anchor_id, meaning } => crate::illustration_badge::attach(elements,id,anchor_id,meaning)?,
-            Operation::DetachIllustrationBadge { id, anchor_id } => crate::illustration_badge::detach(elements,id,anchor_id)?,
+            Operation::PositionArrowCaption { id, position } => {
+                crate::connector_path::position_caption(elements, id, *position)?
+            }
+            Operation::FitIllustrationGroup { anchor_id, samples } => {
+                crate::illustration_fit::apply_group(elements, anchor_id, samples)?
+            }
+            Operation::BindIllustration {
+                anchor_id,
+                primary_id,
+                label_ids,
+                members,
+            } => crate::illustration_binding::bind(
+                elements, anchor_id, primary_id, label_ids, members,
+            )?,
+            Operation::AttachIllustrationLabel { id, anchor_id } => {
+                crate::illustration_badge::attach_label(elements, id, anchor_id)?
+            }
+            Operation::AttachIllustrationBadge {
+                id,
+                anchor_id,
+                meaning,
+            } => crate::illustration_badge::attach(elements, id, anchor_id, meaning)?,
+            Operation::DetachIllustrationBadge { id, anchor_id } => {
+                crate::illustration_badge::detach(elements, id, anchor_id)?
+            }
             Operation::Translate {
                 element_ids,
                 dx,
@@ -620,14 +726,21 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                     .map_err(|error| SceneError::InvalidTranslation(error.to_string()))?;
                 *elements = translated["elements"].as_array().unwrap().clone();
             }
-            Operation::PackFrames { element_ids, vertical, gap } => {
+            Operation::PackFrames {
+                element_ids,
+                vertical,
+                gap,
+            } => {
                 let mut snapshot = document.clone();
                 snapshot["elements"] = Value::Array(elements.clone());
                 let packed = crate::arrange::pack_frames(&snapshot, element_ids, *vertical, *gap)
                     .map_err(|error| SceneError::InvalidTranslation(error.to_string()))?;
                 *elements = packed["elements"].as_array().unwrap().clone();
             }
-            Operation::SwapFrames { first_id, second_id } => {
+            Operation::SwapFrames {
+                first_id,
+                second_id,
+            } => {
                 let mut snapshot = document.clone();
                 snapshot["elements"] = Value::Array(elements.clone());
                 let swapped = crate::arrange::swap_frames(&snapshot, first_id, second_id)
@@ -706,7 +819,16 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
             Operation::FitFrame { id, padding } => {
                 crate::frame_fit::fit(elements, id, *padding)?;
             }
-            Operation::RebindConnectorPorts { id, start_side, end_side } => crate::panel_routes::rebind_local_ports(elements,id,[start_side.index(),end_side.index()]).map_err(|e|SceneError::InvalidRoute(e.0))?,
+            Operation::RebindConnectorPorts {
+                id,
+                start_side,
+                end_side,
+            } => crate::panel_routes::rebind_local_ports(
+                elements,
+                id,
+                [start_side.index(), end_side.index()],
+            )
+            .map_err(|e| SceneError::InvalidRoute(e.0))?,
             Operation::Reroute { id } => {
                 if !ids.contains(id) {
                     return Err(SceneError::NotFound(id.clone()));
@@ -714,8 +836,20 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 crate::panel_routes::reroute(elements, id)
                     .map_err(|error| SceneError::InvalidRoute(error.0))?;
             }
-            Operation::CropImage { id,file_id,natural_width,natural_height,normalized_crop } => {
-                crate::image_crop::apply(elements,id,file_id,[*natural_width,*natural_height],*normalized_crop)?;
+            Operation::CropImage {
+                id,
+                file_id,
+                natural_width,
+                natural_height,
+                normalized_crop,
+            } => {
+                crate::image_crop::apply(
+                    elements,
+                    id,
+                    file_id,
+                    [*natural_width, *natural_height],
+                    *normalized_crop,
+                )?;
             }
             Operation::Add { element } => {
                 let id = element
@@ -728,11 +862,15 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 }
                 let fields = element.as_object().unwrap();
                 for field in NUMERIC_UPDATE_FIELDS {
-                    if fields.get(field).is_some_and(|v| !v.as_f64().is_some_and(|n| n.is_finite() && n.abs()<=1e6)) {
-                        return Err(SceneError::InvalidUpdate(format!("{id}.{field} requires a finite JSON number within ±1000000 when adding native objects; quoted numbers, null and containers are invalid")));
+                    if fields.get(field).is_some_and(|v| {
+                        !v.as_f64().is_some_and(|n| n.is_finite() && n.abs() <= 1e6)
+                    }) {
+                        return Err(SceneError::InvalidUpdate(format!(
+                            "{id}.{field} requires a finite JSON number within ±1000000 when adding native objects; quoted numbers, null and containers are invalid"
+                        )));
                     }
                 }
-                validate_image_fields(fields,id)?;
+                validate_image_fields(fields, id)?;
                 if !ids.insert(id.to_owned()) {
                     return Err(SceneError::Duplicate(id.into()));
                 }
@@ -846,14 +984,25 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                         )));
                     }
                 }
-                validate_image_fields(changes,id)?;
+                validate_image_fields(changes, id)?;
                 let owned = owned_elements(elements, id);
                 let element = elements
                     .iter_mut()
                     .find(|element| element["id"].as_str() == Some(id))
                     .ok_or_else(|| SceneError::NotFound(id.clone()))?;
                 if let Some(metadata) = changes.get("customData") {
-                    for key in ["visualAssetElementId", "semanticAnchorId", "visualAssetGroupId", "visualLabelIds", "visualBadgeIds", "semanticBadgeAnchorId", "visualBadgeGroupId", "badgeMeaning", "visualAnchorFit", "visualAssetSlot"] {
+                    for key in [
+                        "visualAssetElementId",
+                        "semanticAnchorId",
+                        "visualAssetGroupId",
+                        "visualLabelIds",
+                        "visualBadgeIds",
+                        "semanticBadgeAnchorId",
+                        "visualBadgeGroupId",
+                        "badgeMeaning",
+                        "visualAnchorFit",
+                        "visualAssetSlot",
+                    ] {
                         if metadata[key] != element["customData"][key] {
                             return Err(SceneError::InvalidUpdate(format!(
                                 "{id}.customData.{key} is maintained by illustration operations; use asset replace for a primary illustration, attach_illustration_badge/detach_illustration_badge for accessories, or the dedicated fit/geometry operations. Generic update cannot create or erase ownership and fit records"
@@ -918,7 +1067,13 @@ pub fn apply(document: &Value, operations: &[Operation]) -> Result<Value, SceneE
                 }
                 // Remove stale Excalidraw links while leaving scene geometry intact.
                 for element in elements.iter_mut() {
-                    if let Some(badges)=element.get_mut("customData").and_then(|d|d.get_mut("visualBadgeIds")).and_then(Value::as_array_mut){badges.retain(|v|!v.as_str().is_some_and(|id|removed.contains(id)));}
+                    if let Some(badges) = element
+                        .get_mut("customData")
+                        .and_then(|d| d.get_mut("visualBadgeIds"))
+                        .and_then(Value::as_array_mut)
+                    {
+                        badges.retain(|v| !v.as_str().is_some_and(|id| removed.contains(id)));
+                    }
                     if let Some(bindings) = element
                         .get_mut("boundElements")
                         .and_then(Value::as_array_mut)

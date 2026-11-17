@@ -131,12 +131,20 @@ pub struct PubmedLocalNode {
 impl PubmedLocalNode {
     pub fn new(spec: PubmedLocalSpec) -> Self {
         let meta = port_layout(spec.output);
-        Self { meta, spec, mirror: None }
+        Self {
+            meta,
+            spec,
+            mirror: None,
+        }
     }
 
     pub fn with_mirror(spec: PubmedLocalSpec, mirror: SharedLocalPubmed) -> Self {
         let meta = port_layout(spec.output);
-        Self { meta, spec, mirror: Some(mirror) }
+        Self {
+            meta,
+            spec,
+            mirror: Some(mirror),
+        }
     }
 
     fn mirror(&self) -> Result<SharedLocalPubmed, DagError> {
@@ -221,7 +229,8 @@ impl DagNode for PubmedLocalNode {
                 }
                 set.dedup_in_place();
                 let bytes = set.to_bytes().map_err(DagError::Schedule)?;
-                let file = write_artifact(node_ctx, &self.spec.path, bytes, EVIDENCE_FORMAT).await?;
+                let file =
+                    write_artifact(node_ctx, &self.spec.path, bytes, EVIDENCE_FORMAT).await?;
                 let mut outputs = PortOutputs::new();
                 outputs.insert_file(0, file);
                 Ok(outputs)
@@ -232,18 +241,14 @@ impl DagNode for PubmedLocalNode {
                     .limit
                     .unwrap_or(DEFAULT_PARQUET_LIMIT)
                     .min(pubmed_local::MAX_EXPORT_ROWS);
-                let select = pubmed_local::compile_search(
-                    mirror.fts_available(),
-                    &self.spec.query,
-                    limit,
-                )
-                .map_err(|e| DagError::Schedule(format!("pubmed_local query: {e}")))?;
-                let tmp = std::env::temp_dir()
-                    .join(format!("pubmed-local-export-{}.parquet", uuid::Uuid::new_v4()));
-                let copy_sql = format!(
-                    "COPY ({select}) TO '{}' (FORMAT PARQUET)",
-                    tmp.display()
-                );
+                let select =
+                    pubmed_local::compile_search(mirror.fts_available(), &self.spec.query, limit)
+                        .map_err(|e| DagError::Schedule(format!("pubmed_local query: {e}")))?;
+                let tmp = std::env::temp_dir().join(format!(
+                    "pubmed-local-export-{}.parquet",
+                    uuid::Uuid::new_v4()
+                ));
+                let copy_sql = format!("COPY ({select}) TO '{}' (FORMAT PARQUET)", tmp.display());
                 mirror
                     .query_export(&copy_sql, &tmp)
                     .await
@@ -343,11 +348,19 @@ pub struct PubmedMeshNode {
 
 impl PubmedMeshNode {
     pub fn new(spec: PubmedMeshSpec) -> Self {
-        Self { meta: mesh_port_layout(), spec, mirror: None }
+        Self {
+            meta: mesh_port_layout(),
+            spec,
+            mirror: None,
+        }
     }
 
     pub fn with_mirror(spec: PubmedMeshSpec, mirror: SharedLocalPubmed) -> Self {
-        Self { meta: mesh_port_layout(), spec, mirror: Some(mirror) }
+        Self {
+            meta: mesh_port_layout(),
+            spec,
+            mirror: Some(mirror),
+        }
     }
 
     fn mirror(&self) -> Result<SharedLocalPubmed, DagError> {
@@ -407,7 +420,11 @@ impl DagNode for PubmedMeshNode {
              JOIN articles a ON a.pmid = m.pmid WHERE TRUE",
         );
         if let Some(desc) = self.spec.descriptors.as_ref().filter(|d| !d.is_empty()) {
-            let list = desc.iter().map(|d| sql_text(d)).collect::<Vec<_>>().join(",");
+            let list = desc
+                .iter()
+                .map(|d| sql_text(d))
+                .collect::<Vec<_>>()
+                .join(",");
             filter.push_str(&format!(" AND m.descriptor_name IN ({list})"));
         }
         if let Some(range) = self.spec.year_range.as_ref() {
@@ -442,8 +459,8 @@ impl DagNode for PubmedMeshNode {
             ),
         };
 
-        let tmp = std::env::temp_dir()
-            .join(format!("pubmed-mesh-{}.parquet", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("pubmed-mesh-{}.parquet", uuid::Uuid::new_v4()));
         let copy_sql = format!("COPY ({sql}) TO '{}' (FORMAT PARQUET)", tmp.display());
 
         reporter.info(
@@ -529,11 +546,19 @@ pub struct PubmedAuthorsNode {
 
 impl PubmedAuthorsNode {
     pub fn new(spec: PubmedAuthorsSpec) -> Self {
-        Self { meta: authors_port_layout(), spec, mirror: None }
+        Self {
+            meta: authors_port_layout(),
+            spec,
+            mirror: None,
+        }
     }
 
     pub fn with_mirror(spec: PubmedAuthorsSpec, mirror: SharedLocalPubmed) -> Self {
-        Self { meta: authors_port_layout(), spec, mirror: Some(mirror) }
+        Self {
+            meta: authors_port_layout(),
+            spec,
+            mirror: Some(mirror),
+        }
     }
 
     fn mirror(&self) -> Result<SharedLocalPubmed, DagError> {
@@ -611,8 +636,8 @@ impl DagNode for PubmedAuthorsNode {
              SELECT * FROM pairs ORDER BY weight DESC"
         );
 
-        let tmp = std::env::temp_dir()
-            .join(format!("pubmed-authors-{}.parquet", uuid::Uuid::new_v4()));
+        let tmp =
+            std::env::temp_dir().join(format!("pubmed-authors-{}.parquet", uuid::Uuid::new_v4()));
         let copy_sql = format!("COPY ({sql}) TO '{}' (FORMAT PARQUET)", tmp.display());
         mirror
             .query_export(&copy_sql, &tmp)
@@ -714,10 +739,7 @@ mod tests {
         format!("/tmp/pubmed-node-{tag}-{}.{ext}", uuid::Uuid::new_v4())
     }
 
-    async fn run(
-        mut node: Box<dyn DagNode>,
-        ctx: &NodeCtx,
-    ) -> Result<PortOutputs, DagError> {
+    async fn run(mut node: Box<dyn DagNode>, ctx: &NodeCtx) -> Result<PortOutputs, DagError> {
         let reporter = NodeReporter::noop();
         node.execute(ctx, &[], &reporter).await
     }
@@ -738,7 +760,9 @@ mod tests {
         let node = PubmedLocalNode::with_mirror(spec, fixture_mirror());
         let outputs = run(Box::new(node), &ctx).await.unwrap();
         let file = outputs.get(&0).unwrap().as_file().unwrap().clone();
-        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path).await.unwrap();
+        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path)
+            .await
+            .unwrap();
         let set = EvidenceSet::parse(&bytes).unwrap();
         assert_eq!(set.records.len(), 1);
         assert_eq!(set.records[0].origin.as_deref(), Some("pubmed_local"));
@@ -751,7 +775,10 @@ mod tests {
         let (ctx, _storage) = node_ctx();
         let spec = PubmedLocalSpec {
             query: StructuredSearch {
-                year_range: Some(bib_types::query::YearRange { from: 2020, to: 2024 }),
+                year_range: Some(bib_types::query::YearRange {
+                    from: 2020,
+                    to: 2024,
+                }),
                 ..Default::default()
             },
             output: PubmedLocalOutput::Parquet,
@@ -763,7 +790,9 @@ mod tests {
         let outputs = run(Box::new(node), &ctx).await.unwrap();
         let file = outputs.get(&0).unwrap().as_file().unwrap().clone();
         assert_eq!(file.format.as_deref(), Some("parquet"));
-        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path).await.unwrap();
+        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path)
+            .await
+            .unwrap();
         // Parquet magic at file start and one-byte EOF marker at the end.
         assert_eq!(&bytes[0..4], b"PAR1");
         assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
@@ -782,11 +811,14 @@ mod tests {
         let node = PubmedMeshNode::with_mirror(spec, fixture_mirror());
         let outputs = run(Box::new(node), &ctx).await.unwrap();
         let file = outputs.get(&0).unwrap().as_file().unwrap().clone();
-        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path).await.unwrap();
+        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path)
+            .await
+            .unwrap();
         assert_eq!(&bytes[0..4], b"PAR1");
         // Decode with duckdb itself to assert the row count.
         let out = std::env::temp_dir().join(format!("mesh-check-{}.duckdb", uuid::Uuid::new_v4()));
-        let tmp_write = std::env::temp_dir().join(format!("mesh-bytes-{}.parquet", uuid::Uuid::new_v4()));
+        let tmp_write =
+            std::env::temp_dir().join(format!("mesh-bytes-{}.parquet", uuid::Uuid::new_v4()));
         std::fs::write(&tmp_write, &bytes).unwrap();
         let conn = duckdb::Connection::open(&out).unwrap();
         let n: i64 = conn
@@ -816,11 +848,14 @@ mod tests {
         let node = PubmedAuthorsNode::with_mirror(spec, fixture_mirror());
         let outputs = run(Box::new(node), &ctx).await.unwrap();
         let file = outputs.get(&0).unwrap().as_file().unwrap().clone();
-        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path).await.unwrap();
+        let bytes = crate::nodes::read_file_bytes(&ctx, &file.path)
+            .await
+            .unwrap();
         let tmp_write =
             std::env::temp_dir().join(format!("authors-bytes-{}.parquet", uuid::Uuid::new_v4()));
         std::fs::write(&tmp_write, &bytes).unwrap();
-        let out = std::env::temp_dir().join(format!("authors-check-{}.duckdb", uuid::Uuid::new_v4()));
+        let out =
+            std::env::temp_dir().join(format!("authors-check-{}.duckdb", uuid::Uuid::new_v4()));
         let conn = duckdb::Connection::open(&out).unwrap();
         let rows: Vec<(String, String, i64)> = conn
             .prepare(&format!(
@@ -828,9 +863,7 @@ mod tests {
                 tmp_write.display()
             ))
             .unwrap()
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -838,8 +871,10 @@ mod tests {
         // Carol D + Eve F never share a paper. Tie order between the two
         // Alice B edges is unspecified, so compare as a set.
         assert_eq!(rows.len(), 2, "{rows:?}");
-        let mut pairs: Vec<(String, String)> =
-            rows.iter().map(|(a, b, _)| (a.clone(), b.clone())).collect();
+        let mut pairs: Vec<(String, String)> = rows
+            .iter()
+            .map(|(a, b, _)| (a.clone(), b.clone()))
+            .collect();
         pairs.sort();
         assert_eq!(
             pairs,

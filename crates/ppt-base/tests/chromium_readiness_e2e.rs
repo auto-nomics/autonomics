@@ -1,11 +1,23 @@
 #![cfg(feature = "e2e")]
 //! Exercise the actual Chromium exporter against an intentionally slow print page.
-use std::{io::{Read, Write}, net::TcpListener, sync::{Arc, atomic::{AtomicBool, Ordering}}, time::Duration};
 use ppt_base::export::{DeckExporter, ExportJob, chromium::ChromiumExporter};
 use ppt_base::store::ExportFormat;
 use serde_json::json;
+use std::{
+    io::{Read, Write},
+    net::TcpListener,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-struct TestServer { origin: String, stopped: Arc<AtomicBool>, thread: Option<std::thread::JoinHandle<()>> }
+struct TestServer {
+    origin: String,
+    stopped: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
 impl TestServer {
     fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -61,49 +73,120 @@ setTimeout(() => {
 }, 900);
 </script>"#
                         };
-                        let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
                         let _ = stream.write_all(response.as_bytes());
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(10)),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
                     Err(_) => break,
                 }
             }
         });
-        Self { origin, stopped, thread: Some(thread) }
+        Self {
+            origin,
+            stopped,
+            thread: Some(thread),
+        }
     }
 }
 impl Drop for TestServer {
-    fn drop(&mut self) { self.stopped.store(true, Ordering::Relaxed); if let Some(thread) = self.thread.take() { let _ = thread.join(); } }
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 fn job(deck: &str) -> ExportJob {
-    ExportJob { deck_id: deck.into(), export_id: "test".into(), format: ExportFormat::Png, dpi: 96, pages: vec![1, 2], canvas_width: 200, canvas_height: 120, notes: vec![], print_token: "test".into() }
+    ExportJob {
+        deck_id: deck.into(),
+        export_id: "test".into(),
+        format: ExportFormat::Png,
+        dpi: 96,
+        pages: vec![1, 2],
+        canvas_width: 200,
+        canvas_height: 120,
+        notes: vec![],
+        print_token: "test".into(),
+    }
 }
 
 #[tokio::test]
 async fn slow_initialization_and_navigation_wait_for_the_correct_page() {
     let server = TestServer::start();
-    let exporter = ChromiumExporter { origin: server.origin.clone(), options: browser_use::BrowserOptions { no_sandbox: true, ..Default::default() } };
+    let exporter = ChromiumExporter {
+        origin: server.origin.clone(),
+        options: browser_use::BrowserOptions {
+            no_sandbox: true,
+            ..Default::default()
+        },
+    };
     let output = exporter.export(job("test")).await.unwrap();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(output.bytes)).unwrap();
-    let mut first = Vec::new(); archive.by_index(0).unwrap().read_to_end(&mut first).unwrap();
-    let mut second = Vec::new(); archive.by_index(1).unwrap().read_to_end(&mut second).unwrap();
-    assert_ne!(first, second, "two distinct slide backgrounds must produce distinct PNGs");
+    let mut first = Vec::new();
+    archive
+        .by_index(0)
+        .unwrap()
+        .read_to_end(&mut first)
+        .unwrap();
+    let mut second = Vec::new();
+    archive
+        .by_index(1)
+        .unwrap()
+        .read_to_end(&mut second)
+        .unwrap();
+    assert_ne!(
+        first, second,
+        "two distinct slide backgrounds must produce distinct PNGs"
+    );
     let preview = exporter.preview_png(&job("test"), 2, 1).await.unwrap();
-    assert_eq!(preview, second, "preview must capture the committed target slide");
+    assert_eq!(
+        preview, second,
+        "preview must capture the committed target slide"
+    );
     let start = std::time::Instant::now();
-    let error = exporter.preview_png(&job("error"), 2, 0).await.unwrap_err().to_string();
+    let error = exporter
+        .preview_png(&job("error"), 2, 0)
+        .await
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("mock payload failed"), "{error}");
-    assert!(start.elapsed() < Duration::from_secs(15), "initialization errors should not wait for the full timeout");
+    assert!(
+        start.elapsed() < Duration::from_secs(15),
+        "initialization errors should not wait for the full timeout"
+    );
 }
 
 #[tokio::test]
 async fn diagnose_slides_collects_findings_per_committed_page() {
     let server = TestServer::start();
-    let exporter = ChromiumExporter { origin: server.origin.clone(), options: browser_use::BrowserOptions { no_sandbox: true, ..Default::default() } };
-    let value = exporter.diagnose_slides(&job("diagnose"), &[(1, 0), (2, 1)]).await.unwrap();
-    assert_eq!(value["1"][0]["message"], json!("slide 1 overflow"), "{value}");
-    assert_eq!(value["2"][0]["message"], json!("slide 2 overflow"), "{value}");
+    let exporter = ChromiumExporter {
+        origin: server.origin.clone(),
+        options: browser_use::BrowserOptions {
+            no_sandbox: true,
+            ..Default::default()
+        },
+    };
+    let value = exporter
+        .diagnose_slides(&job("diagnose"), &[(1, 0), (2, 1)])
+        .await
+        .unwrap();
+    assert_eq!(
+        value["1"][0]["message"],
+        json!("slide 1 overflow"),
+        "{value}"
+    );
+    assert_eq!(
+        value["2"][0]["message"],
+        json!("slide 2 overflow"),
+        "{value}"
+    );
     assert_eq!(value["2"][0]["rule"], json!("text-overflow-canvas"));
     assert_eq!(value["2"][0]["severity"], json!("error"));
 }

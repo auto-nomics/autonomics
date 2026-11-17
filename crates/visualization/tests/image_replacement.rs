@@ -162,21 +162,37 @@ fn compact_protein_frame() -> Value {
 }
 #[test]
 fn fresh_compact_frame_artwork_keeps_its_complete_label_visible_above_when_below_would_clip() {
-    let old=compact_protein_frame();
-    let (new,image_id)=image::illustrate(&old,"node",asset("replacement",100,220)).unwrap();
-    let get=|id:&str|new["elements"].as_array().unwrap().iter().find(|e|e["id"]==id).unwrap();
-    let label=get("caption");let artwork=get(&image_id);
-    assert_eq!(label["originalText"],old["elements"][3]["originalText"]);
-    assert_eq!(label["fontFamily"],9);assert_eq!(label["fontSize"],20.);
-    assert!(label["x"].as_f64().unwrap()>=0.);
-    assert!(label["x"].as_f64().unwrap()+label["width"].as_f64().unwrap()<=304.);
-    assert!(label["y"].as_f64().unwrap()+label["height"].as_f64().unwrap()<=artwork["y"].as_f64().unwrap()-8.);
-    assert_eq!(get("frame"),&old["elements"][0]);assert_eq!(get("heading"),&old["elements"][1]);
-    assert_eq!(new["scientificPlan"],old["scientificPlan"]);
+    let old = compact_protein_frame();
+    let (new, image_id) = image::illustrate(&old, "node", asset("replacement", 100, 220)).unwrap();
+    let get = |id: &str| {
+        new["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == id)
+            .unwrap()
+    };
+    let label = get("caption");
+    let artwork = get(&image_id);
+    assert_eq!(label["originalText"], old["elements"][3]["originalText"]);
+    assert_eq!(label["fontFamily"], 9);
+    assert_eq!(label["fontSize"], 20.);
+    assert!(label["x"].as_f64().unwrap() >= 0.);
+    assert!(label["x"].as_f64().unwrap() + label["width"].as_f64().unwrap() <= 304.);
+    assert!(
+        label["y"].as_f64().unwrap() + label["height"].as_f64().unwrap()
+            <= artwork["y"].as_f64().unwrap() - 8.
+    );
+    assert_eq!(get("frame"), &old["elements"][0]);
+    assert_eq!(get("heading"), &old["elements"][1]);
+    assert_eq!(new["scientificPlan"], old["scientificPlan"]);
 }
 #[test]
 fn fresh_artwork_with_no_visible_caption_space_rejects_without_modifying_the_source() {
-    let mut old=compact_protein_frame();old["elements"].as_array_mut().unwrap().push(json!({"id":"blocker","type":"rectangle","x":0.,"y":0.,"width":304.,"height":130.,"angle":0.,"frameId":"frame"}));let before=old.clone();
-    let error=image::illustrate(&old,"node",asset("replacement",100,220)).unwrap_err();
-    assert!(error.0.contains("label cannot fit"));assert_eq!(old,before);
+    let mut old = compact_protein_frame();
+    old["elements"].as_array_mut().unwrap().push(json!({"id":"blocker","type":"rectangle","x":0.,"y":0.,"width":304.,"height":130.,"angle":0.,"frameId":"frame"}));
+    let before = old.clone();
+    let error = image::illustrate(&old, "node", asset("replacement", 100, 220)).unwrap_err();
+    assert!(error.0.contains("label cannot fit"));
+    assert_eq!(old, before);
 }

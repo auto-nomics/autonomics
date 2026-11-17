@@ -252,7 +252,13 @@ async fn rename_rewrites_backlinks() {
     // 未改名:零改写。
     let mut same = e(a, "旧名", &["别名"], "词条正文");
     same.mtime = 2_000;
-    assert!(handle.update_entry_meta(same, "旧名").await.unwrap().is_empty());
+    assert!(
+        handle
+            .update_entry_meta(same, "旧名")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     // 改名:标题内链改写,别名链接与悬空链接不动。
     let mut renamed = e(a, "新名", &["别名"], "词条正文");

@@ -57,7 +57,9 @@ impl Default for FeedSpec {
 impl FeedSpec {
     fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() || self.name.len() > 256 {
-            return Err(RssError::Invalid("feed name must be 1–256 characters".into()));
+            return Err(RssError::Invalid(
+                "feed name must be 1–256 characters".into(),
+            ));
         }
         let parsed = reqwest::Url::parse(self.url.trim())
             .map_err(|_| RssError::Invalid("feed URL is not a valid absolute URL".into()))?;
@@ -70,7 +72,9 @@ impl FeedSpec {
             ));
         }
         if !(1..=5_000).contains(&self.max_items_per_feed) {
-            return Err(RssError::Invalid("per-feed item retention must be 1–5000".into()));
+            return Err(RssError::Invalid(
+                "per-feed item retention must be 1–5000".into(),
+            ));
         }
         Ok(())
     }
@@ -227,7 +231,9 @@ impl RssStore {
         let exists: i64 = rows.next().await?.unwrap().get(0)?;
         drop(rows);
         if exists > 0 {
-            return Err(RssError::Conflict("a feed with this URL already exists".into()));
+            return Err(RssError::Conflict(
+                "a feed with this URL already exists".into(),
+            ));
         }
         conn.execute(
             "INSERT INTO rssFeeds(id,name,url,enabled,intervalSeconds,maxItemsPerFeed,version,\
@@ -369,7 +375,10 @@ impl RssStore {
         conn.execute(
             "DELETE FROM rssItems WHERE feedId=?1 AND read=1 AND seq < COALESCE((\
              SELECT seq FROM rssItems WHERE feedId=?1 ORDER BY seq DESC LIMIT 1 OFFSET ?2),0)",
-            params![feed.id.as_str(), feed.spec.max_items_per_feed.saturating_sub(1)],
+            params![
+                feed.id.as_str(),
+                feed.spec.max_items_per_feed.saturating_sub(1)
+            ],
         )
         .await?;
         conn.execute(
@@ -380,7 +389,11 @@ impl RssStore {
                 feed.etag.as_deref(),
                 feed.last_modified.as_deref(),
                 now_ms(),
-                if outcome.status != "error" { Some(now_ms()) } else { None },
+                if outcome.status != "error" {
+                    Some(now_ms())
+                } else {
+                    None
+                },
                 feed.spec.interval_seconds
             ],
         )
@@ -404,10 +417,18 @@ impl RssStore {
     ) -> Result<(Vec<FeedItem>, Option<i64>)> {
         let conn = self.conn.lock().await;
         let sql = match (feed_id, before_seq) {
-            (Some(_), Some(_)) => "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems WHERE feedId=?1 AND seq<?2 ORDER BY seq DESC LIMIT ?3",
-            (Some(_), None) => "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems WHERE feedId=?1 ORDER BY seq DESC LIMIT ?3",
-            (None, Some(_)) => "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems WHERE seq<?2 ORDER BY seq DESC LIMIT ?3",
-            (None, None) => "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems ORDER BY seq DESC LIMIT ?3",
+            (Some(_), Some(_)) => {
+                "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems WHERE feedId=?1 AND seq<?2 ORDER BY seq DESC LIMIT ?3"
+            }
+            (Some(_), None) => {
+                "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems WHERE feedId=?1 ORDER BY seq DESC LIMIT ?3"
+            }
+            (None, Some(_)) => {
+                "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems WHERE seq<?2 ORDER BY seq DESC LIMIT ?3"
+            }
+            (None, None) => {
+                "SELECT seq,id,feedId,guid,title,link,summary,authors,publishedMs,firstSeenMs,read,importedArticleId FROM rssItems ORDER BY seq DESC LIMIT ?3"
+            }
         };
         let mut rows = conn
             .query(sql, params![feed_id, before_seq, limit as i64 + 1])
@@ -445,7 +466,10 @@ impl RssStore {
     pub async fn set_item_read(&self, id: &str, read: bool) -> Result<()> {
         let conn = self.conn.lock().await;
         let changed = conn
-            .execute("UPDATE rssItems SET read=?2 WHERE id=?1", params![id, i64::from(read)])
+            .execute(
+                "UPDATE rssItems SET read=?2 WHERE id=?1",
+                params![id, i64::from(read)],
+            )
             .await?;
         drop(conn);
         if changed == 0 {
@@ -456,7 +480,9 @@ impl RssStore {
 
     pub async fn delete_item(&self, id: &str) -> Result<()> {
         let conn = self.conn.lock().await;
-        let changed = conn.execute("DELETE FROM rssItems WHERE id=?1", params![id]).await?;
+        let changed = conn
+            .execute("DELETE FROM rssItems WHERE id=?1", params![id])
+            .await?;
         drop(conn);
         if changed == 0 {
             return Err(RssError::NotFound);
@@ -590,7 +616,10 @@ pub async fn fetch_feed(
         return Ok(None);
     }
     if !response.status().is_success() {
-        return Err(RssError::Fetch(format!("feed returned {}", response.status())));
+        return Err(RssError::Fetch(format!(
+            "feed returned {}",
+            response.status()
+        )));
     }
     let etag = response
         .headers()
@@ -617,8 +646,8 @@ pub async fn fetch_feed(
 /// Minimal streaming parser for RSS 2.0 `<item>` and Atom `<entry>` elements.
 /// quick-xml is already a workspace dependency.
 pub fn parse_feed(body: &str) -> Result<Vec<ParsedItem>> {
-    use quick_xml::events::Event;
     use quick_xml::Reader;
+    use quick_xml::events::Event;
     let mut reader = Reader::from_str(body);
     let mut items = Vec::new();
     let mut stack: Vec<String> = Vec::new();
@@ -654,15 +683,12 @@ pub fn parse_feed(body: &str) -> Result<Vec<ParsedItem>> {
                         for attr in event.attributes().flatten() {
                             if attr.key.as_ref() == b"href"
                                 && current.as_ref().is_some_and(|c| c.link.is_none())
-                                && !stack
-                                    .last()
-                                    .is_some_and(|p| p == "author" || p == "feed")
+                                && !stack.last().is_some_and(|p| p == "author" || p == "feed")
                                 && stack.last().is_some_and(|p| p == "entry")
                             {
                                 if let Some(c) = current.as_mut() {
-                                    c.link = Some(
-                                        String::from_utf8_lossy(&attr.value).into_owned(),
-                                    );
+                                    c.link =
+                                        Some(String::from_utf8_lossy(&attr.value).into_owned());
                                 }
                             }
                         }
@@ -699,22 +725,34 @@ pub fn parse_feed(body: &str) -> Result<Vec<ParsedItem>> {
                         if !value.is_empty() {
                             match field.as_str() {
                                 "title" => {
-                                    if let Some(c) = current.as_mut() { c.title.get_or_insert(value); }
+                                    if let Some(c) = current.as_mut() {
+                                        c.title.get_or_insert(value);
+                                    }
                                 }
                                 "link" => {
-                                    if let Some(c) = current.as_mut() { c.link.get_or_insert(value); }
+                                    if let Some(c) = current.as_mut() {
+                                        c.link.get_or_insert(value);
+                                    }
                                 }
                                 "guid" | "id" => {
-                                    if let Some(c) = current.as_mut() { c.guid.get_or_insert(value); }
+                                    if let Some(c) = current.as_mut() {
+                                        c.guid.get_or_insert(value);
+                                    }
                                 }
                                 "description" | "summary" | "content" => {
-                                    if let Some(c) = current.as_mut() { c.summary.get_or_insert(strip_html(&value)); }
+                                    if let Some(c) = current.as_mut() {
+                                        c.summary.get_or_insert(strip_html(&value));
+                                    }
                                 }
                                 "author" | "dc:creator" | "name" => {
-                                    if let Some(c) = current.as_mut() { c.authors.push(split_author(&value)); }
+                                    if let Some(c) = current.as_mut() {
+                                        c.authors.push(split_author(&value));
+                                    }
                                 }
                                 "pubdate" | "published" | "updated" => {
-                                    if let Some(c) = current.as_mut() { c.published_ms.get_or_insert(parse_time(&value)); }
+                                    if let Some(c) = current.as_mut() {
+                                        c.published_ms.get_or_insert(parse_time(&value));
+                                    }
                                 }
                                 _ => {}
                             }
@@ -737,15 +775,16 @@ pub fn parse_feed(body: &str) -> Result<Vec<ParsedItem>> {
                 // Self-closing elements — most importantly Atom
                 // `<link href="…"/>`.
                 let name = String::from_utf8_lossy(event.name().as_ref()).into_owned();
-                if in_item && name.to_lowercase() == "link" && stack.last().is_some_and(|p| p == "entry")
+                if in_item
+                    && name.to_lowercase() == "link"
+                    && stack.last().is_some_and(|p| p == "entry")
                 {
                     for attr in event.attributes().flatten() {
                         if attr.key.as_ref() == b"href"
                             && current.as_ref().is_some_and(|c| c.link.is_none())
                         {
                             if let Some(c) = current.as_mut() {
-                                c.link =
-                                    Some(String::from_utf8_lossy(&attr.value).into_owned());
+                                c.link = Some(String::from_utf8_lossy(&attr.value).into_owned());
                             }
                         }
                     }
@@ -872,9 +911,8 @@ pub async fn check_feed(shared: &crate::shared::BibShared, feed_id: &str) -> Res
     Ok(outcome)
 }
 
-static DOI_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r#"10\.\d{4,9}/[^\s"<>]+"#).unwrap()
-});
+static DOI_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r#"10\.\d{4,9}/[^\s"<>]+"#).unwrap());
 static ARXIV_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r"arxiv\.org/abs/([0-9]{4}\.[0-9]{4,5}|[a-z-]+/[0-9]{7})").unwrap()
 });
@@ -890,7 +928,9 @@ fn identifiers_from_item(item: &FeedItem) -> Vec<bib_types::Identifier> {
     for text in haystacks {
         if ids.is_empty() {
             if let Some(matched) = DOI_RE.find(text) {
-                ids.push(Identifier::doi(matched.as_str().trim_end_matches(['.', ')', ','])));
+                ids.push(Identifier::doi(
+                    matched.as_str().trim_end_matches(['.', ')', ',']),
+                ));
             }
         }
         if ids.is_empty() {
@@ -1027,7 +1067,11 @@ impl RssScheduler {
                 }
                 if let Ok(mut current) = status.lock() {
                     current.active_checks = 0;
-                    current.last_error = if errors.is_empty() { None } else { Some(errors.join("; ")) };
+                    current.last_error = if errors.is_empty() {
+                        None
+                    } else {
+                        Some(errors.join("; "))
+                    };
                 }
                 if tokio::select! {
                     _ = shutdown.notified() => true,
@@ -1044,11 +1088,14 @@ impl RssScheduler {
     }
 
     pub fn status(&self) -> SchedulerStatus {
-        self.status.lock().map(|s| s.clone()).unwrap_or(SchedulerStatus {
-            running: false,
-            active_checks: 0,
-            last_error: Some("scheduler state unavailable".into()),
-        })
+        self.status
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or(SchedulerStatus {
+                running: false,
+                active_checks: 0,
+                last_error: Some("scheduler state unavailable".into()),
+            })
     }
 
     pub async fn shutdown(&self) {

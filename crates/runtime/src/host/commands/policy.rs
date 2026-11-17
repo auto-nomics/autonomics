@@ -85,8 +85,8 @@ mod policy_tests {
     //! caller's direct children; the operator path stays unrestricted.
 
     use super::super::test_support::{config, register_agent_at, set_status};
-    use crate::host::RuntimeHost;
     use crate::control::HostCommand;
+    use crate::host::RuntimeHost;
 
     /// Delegation reaches only the caller's direct children. Siblings,
     /// cousins, grandparents, grandchildren, and self are all rejected;

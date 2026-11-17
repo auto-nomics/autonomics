@@ -50,7 +50,9 @@ pub(crate) fn tool_err(e: crate::Error) -> agentik_core::tools::ToolError {
 
 /// Wrap a write closure's future into the boxed form [`DeckHandle::write`]
 /// expects, keeping call sites free of pin/impl noise.
-pub(crate) fn box_write<T, F>(f: F) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<T>> + Send>>
+pub(crate) fn box_write<T, F>(
+    f: F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::Result<T>> + Send>>
 where
     T: Send + 'static,
     F: std::future::Future<Output = crate::Result<T>> + Send + 'static,
