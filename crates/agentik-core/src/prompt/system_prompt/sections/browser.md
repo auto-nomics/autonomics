@@ -23,6 +23,11 @@ with elements by CSS selector.
 - `browser_get_url` / `browser_get_title` — light state queries.
 - `browser_download(url[, tab_index, timeout_ms])` — download a URL and wait
 for completion. Completed files are visible in `local://browser-downloads`.
+- `vfs` op=`ls`/`stat`/`cp`/`mv`/`write` — manage downloaded files and persist
+extracted content. Downloads land under `local://browser-downloads`; move them
+to the destination the caller asked for, or save extracted text/tables with
+`vfs` op=`write` (e.g. `local://work/...`). See the Filesystem domains section
+for canonical addresses.
 - `browser_wait_for_download([timeout_ms])` — call this after clicking a
 download link or submitting a form that starts a download.
 - `browser_scroll(x, y[, tab_index])` — scroll the viewport.

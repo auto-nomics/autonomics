@@ -1,16 +1,24 @@
 /**
  * Workbench command palette (Ctrl+P all / Ctrl+Shift+P commands-only).
- * UI relocated from the agent view palette; the command list now merges
- * static shell commands, feature-registered commands and the active
- * editor's kind commands, plus a quick "open editor tab" section.
+ * Obsidian-style chrome: top-anchored minimal dialog — borderless query row
+ * with a divider and the dialog close button, then flat cmdk rows reading
+ * "Category: title" with shortcut chips on the right. cmdk owns filtering
+ * (fuzzy over title + category + keywords), arrow navigation, wrap-around
+ * and Enter; open-editor tabs ride above the commands as a quick switcher.
  */
 
-import { useMemo, useState } from "react";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { editorKind } from "./editor-registry";
 import {
   closePalette,
@@ -32,7 +40,13 @@ export function CommandPalette() {
   const palette = usePaletteState();
   const commands = useAllCommands();
   const state = useWorkbenchState();
-  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // The palette mounts fresh on every open, so the query resets; refocus
+  // explicitly — the dialog's initial-focus handling can beat autoFocus.
+  useEffect(() => {
+    if (palette.open) inputRef.current?.focus();
+  }, [palette.open]);
 
   const editorRows = useMemo<Row[]>(() => {
     if (palette.mode === "commands") return [];
@@ -69,54 +83,73 @@ export function CommandPalette() {
     return rows;
   }, [commands, state.groups]);
 
-  const rows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const all = [...editorRows, ...commandRows];
-    if (!needle) return all;
-    return all.filter((row) => `${row.title} ${row.category ?? ""} ${row.keywords ?? ""}`.toLowerCase().includes(needle));
-  }, [editorRows, commandRows, query]);
-
   if (!palette.open) return null;
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) closePalette(); }}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Command palette</DialogTitle>
-          <DialogDescription>Ctrl+P opens · type to filter · Enter runs.</DialogDescription>
+      <DialogContent className="top-[12%] translate-y-0 gap-0 overflow-hidden rounded-xl! p-0 sm:max-w-2xl">
+        <DialogHeader className="sr-only">
+          <DialogTitle>命令面板</DialogTitle>
+          <DialogDescription>Ctrl+P 打开 · 输入过滤 · 上下选择 · Enter 执行。</DialogDescription>
         </DialogHeader>
-        <Input
-          value={query}
-          placeholder="Search commands"
-          autoFocus
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              rows[0]?.run();
-              closePalette();
-            }
-          }}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <ScrollArea className="max-h-[60vh] min-h-0" contentClassName="space-y-1">
-          {rows.map((row) => (
-            <button
-              key={row.id}
-              type="button"
-              onClick={() => {
-                row.run();
-                closePalette();
-              }}
-              className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border p-2 text-left hover:bg-accent"
-            >
-              <span className="truncate text-sm">{row.title}</span>
-              {row.category && <Badge variant="outline">{row.category}</Badge>}
-            </button>
-          ))}
-          {!rows.length && <div className="p-4 text-sm text-muted-foreground">No matching commands</div>}
-        </ScrollArea>
+        <Command loop className="gap-0 p-0">
+          <CommandInput
+            ref={inputRef}
+            variant="plain"
+            placeholder={palette.mode === "commands" ? "选择命令…" : "搜索标签页或命令…"}
+            autoFocus
+            className="text-[13px]"
+          />
+          <CommandList className="max-h-[min(26rem,60vh)] p-1">
+            {editorRows.length > 0 && (
+              <CommandGroup>
+                {editorRows.map((row) => (
+                  <PaletteRow key={row.id} row={row} />
+                ))}
+              </CommandGroup>
+            )}
+            <CommandGroup>
+              {commandRows.map((row) => (
+                <PaletteRow key={row.id} row={row} />
+              ))}
+            </CommandGroup>
+            <CommandEmpty className="py-8 text-center text-sm text-muted-foreground">没有匹配的命令</CommandEmpty>
+          </CommandList>
+        </Command>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** One palette row: inline "Category: title" label (commands only; editor
+ *  tabs stay plain like a quick switcher) plus the optional shortcut chip. */
+function PaletteRow({ row }: { row: Row }) {
+  const category = row.category && row.section === "commands"
+    ? row.category.charAt(0).toUpperCase() + row.category.slice(1)
+    : null;
+  return (
+    <CommandItem
+      // value must be unique for cmdk selection; searchable text rides in keywords.
+      value={row.id}
+      keywords={[`${row.title} ${row.category ?? ""} ${row.keywords ?? ""}`]}
+      onSelect={() => {
+        closePalette();
+        row.run();
+      }}
+      className="data-selected:bg-accent py-2 text-[13px]"
+    >
+      <span className="min-w-0 flex-1 truncate">
+        {category && (
+          <span className="text-muted-foreground group-data-selected/command-item:text-foreground/70">{category}: </span>
+        )}
+        {row.title}
+      </span>
+      {row.shortcut && (
+        <CommandShortcut className="rounded-md border bg-muted px-1.5 py-0.5 font-mono text-[10px] tracking-normal">
+          {row.shortcut}
+        </CommandShortcut>
+      )}
+    </CommandItem>
   );
 }
 

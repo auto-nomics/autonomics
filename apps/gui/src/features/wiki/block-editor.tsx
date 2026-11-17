@@ -31,6 +31,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -50,7 +51,17 @@ import {
   useWikiMarkdown,
   type MarkdownBlock,
 } from "./markdown";
-import { listAttachments, uploadAttachment, type AttachmentMeta } from "./wiki-api";
+import {
+  findEntryByTitle,
+  getEntry,
+  listAttachments,
+  listEntries,
+  searchEntries,
+  uploadAttachment,
+  type AttachmentMeta,
+  type EntrySummary,
+  type WikiEntry,
+} from "./wiki-api";
 
 import { wikiImageMarkdown } from "@/lib/wiki-attachment-ref";
 import { useWikiImages, WikiAttachmentImage } from "./wiki-images";
@@ -96,6 +107,68 @@ const RenderedBlock = memo(function RenderedBlock({
   );
 });
 
+/** Fixed-position preview card floated near the cursor for a hovered
+ *  wikilink's target entry (title, tags/aliases, plain-text excerpt). */
+function WikiLinkHoverCard({ card }: { card: { x: number; y: number; entry: WikiEntry } }) {
+  const excerpt = card.entry.content
+    .replace(/!\[\[[^\]]*\]\]/g, "")
+    .replace(/\[\[([^\]|]*)\|?[^\]]*\]\]/g, "$1")
+    .replace(/[#>*`~\-]{1,3}\s?/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+  const left = Math.max(8, Math.min(card.x + 12, window.innerWidth - 296));
+  const top = Math.max(8, Math.min(card.y + 16, window.innerHeight - 180));
+  return createPortal(
+    <div
+      className="pointer-events-none fixed z-[60] w-72 rounded-md border bg-popover p-2.5 text-popover-foreground shadow-lg"
+      style={{ left, top }}
+      role="tooltip"
+    >
+      <div className="text-[13px] font-semibold">{card.entry.title}</div>
+      {(card.entry.tags.length > 0 || card.entry.alias.length > 0) && (
+        <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+          {card.entry.tags.map((tag) => (
+            <span key={tag} className="rounded bg-muted px-1 py-0">#{tag}</span>
+          ))}
+          {card.entry.alias.map((name) => (
+            <span key={name} className="rounded border px-1 py-0">alias: {name}</span>
+          ))}
+        </div>
+      )}
+      {excerpt && <p className="mt-1.5 line-clamp-4 text-xs leading-relaxed text-muted-foreground">{excerpt}</p>}
+    </div>,
+    document.body,
+  );
+}
+
+/** Measure the caret using the textarea's actual typography and wrapping. */
+function caretAnchor(el: HTMLTextAreaElement) {
+  const mirror = document.createElement("div");
+  const style = getComputedStyle(el);
+  for (const property of Array.from(style)) mirror.style.setProperty(property, style.getPropertyValue(property));
+  Object.assign(mirror.style, {
+    position: "fixed", left: "-10000px", top: "0", visibility: "hidden",
+    height: "auto", minHeight: "0", maxHeight: "none", overflow: "hidden",
+    whiteSpace: "pre-wrap", overflowWrap: "break-word",
+  });
+  mirror.textContent = el.value.slice(0, el.selectionStart);
+  const marker = document.createElement("span");
+  marker.textContent = el.value.slice(el.selectionStart) || "\u200b";
+  mirror.append(marker);
+  document.body.append(mirror);
+  const box = mirror.getBoundingClientRect();
+  const caret = marker.getBoundingClientRect();
+  const parent = el.offsetParent?.getBoundingClientRect() ?? el.getBoundingClientRect();
+  const input = el.getBoundingClientRect();
+  const position = {
+    left: input.left - parent.left + caret.left - box.left - el.scrollLeft,
+    top: input.top - parent.top + caret.top - box.top - el.scrollTop + (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5),
+  };
+  mirror.remove();
+  return position;
+}
+
 function autosize(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${el.scrollHeight}px`;
@@ -107,12 +180,15 @@ export function BlockEditor({
   onChange,
   onUploadsChange,
   getContent,
+  header,
 }: {
   entryId: string;
   initialContent: string;
   onChange: (content: string) => void;
   onUploadsChange?: (pending: boolean) => void;
   getContent?: () => string;
+  /** Rendered above the blocks inside the scroll area (properties card). */
+  header?: ReactNode;
 }) {
   const [blocks, setBlocks] = useState<MarkdownBlock[]>(() =>
     splitMarkdownBlocks(initialContent),
@@ -144,6 +220,123 @@ export function BlockEditor({
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  const updateRawRef = useRef<((key: string, raw: string) => void) | null>(null);
+  // ── [[wikilink autocomplete ──────────────────────────────────────────
+  // While the caret sits inside an unclosed `[[query`, a suggestion popup
+  // lists matching entries (BM25 search); Enter/Tab/click completes to
+  // `[[title]]`, arrows move, Esc dismisses.
+  const [suggest, setSuggest] = useState<{ key: string; queryStart: number; query: string } | null>(null);
+  const [suggestions, setSuggestions] = useState<EntrySummary[]>([]);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const suggestRun = useRef(0);
+  const [suggestPosition, setSuggestPosition] = useState({ left: 0, top: 0 });
+
+  /** Caret-relative trigger scan: last unclosed `[[` in the pre-caret text. */
+  const detectSuggest = useCallback((el: HTMLTextAreaElement) => {
+    const before = el.value.slice(0, el.selectionStart);
+    const match = before.match(/\[\[([^\[\]\n]*)$/);
+    if (!match) {
+      setSuggest(null);
+      return;
+    }
+    setSuggestPosition(caretAnchor(el));
+    const queryStart = el.selectionStart - match[1].length;
+    setSuggest((prev) =>
+      prev && prev.query === match[1] && prev.queryStart === queryStart ? prev : { key: el.value, queryStart, query: match[1] },
+    );
+  }, []);
+
+  // Debounced candidate fetch; search returns ids only, hydrated to
+  // summaries like the search dialog does.
+  useEffect(() => {
+    const runId = ++suggestRun.current;
+    setSuggestions([]);
+    if (!suggest) {
+      setSuggestions([]);
+      return;
+    }
+    const timer = window.setTimeout(async () => {
+      try {
+        if (!suggest.query.trim()) {
+          const entries = await listEntries({ limit: 6 });
+          if (runId === suggestRun.current) { setSuggestions(entries); setActiveIdx(0); }
+          return;
+        }
+        const hits = await searchEntries(suggest.query, { limit: 6 });
+        const hydrated = await Promise.all(
+          hits.map(async (hit) => {
+            try {
+              const entry = await getEntry(hit.entry_id);
+              const { content: _content, ...summary } = entry;
+              return summary;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        if (runId !== suggestRun.current) return;
+        setSuggestions(hydrated.filter((item): item is EntrySummary => item !== null));
+        setActiveIdx(0);
+      } catch {
+        if (runId === suggestRun.current) setSuggestions([]);
+      }
+    }, 180);
+    return () => { window.clearTimeout(timer); suggestRun.current++; };
+  }, [suggest]);
+
+  const acceptSuggestion = useCallback((item: EntrySummary) => {
+    const el = textareaRef.current;
+    if (!el || !suggest) return;
+    const caret = el.selectionStart;
+    const raw = el.value.slice(0, suggest.queryStart) + item.title + "]]" + el.value.slice(el.value.startsWith("]]", caret) ? caret + 2 : caret);
+    setSuggest(null);
+    if (editingKey) {
+      updateRawRef.current?.(editingKey, raw);
+      setFocusRequest({ key: editingKey, caret: suggest.queryStart + item.title.length + 2 });
+    }
+  }, [suggest, editingKey]);
+
+  // ── wikilink hover card ──────────────────────────────────────────────
+  // Rendered blocks carry `<a data-wikilink>`; hovering one for 300ms
+  // resolves the target entry and floats a preview card near the cursor.
+  const [hoverCard, setHoverCard] = useState<{ x: number; y: number; entry: WikiEntry } | null>(null);
+  const hoverTimer = useRef(0);
+  const hoverRun = useRef(0);
+  const hideHoverCard = useCallback(() => {
+    window.clearTimeout(hoverTimer.current);
+    hoverRun.current++;
+    setHoverCard(null);
+  }, []);
+  const onBlocksHover = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const hit = event.target instanceof HTMLElement ? event.target : null;
+    const link = hit?.closest<HTMLElement>("[data-wikilink]");
+    const target = link?.dataset.wikilink;
+    window.clearTimeout(hoverTimer.current);
+    if (!target) {
+      hoverRun.current++;
+      setHoverCard(null);
+      return;
+    }
+    const { clientX, clientY } = event;
+    hoverTimer.current = window.setTimeout(async () => {
+      const runId = ++hoverRun.current;
+      try {
+        const entry = await findEntryByTitle(target);
+        if (!entry || runId !== hoverRun.current) return;
+        setHoverCard({ x: clientX, y: clientY, entry });
+      } catch {
+        /* missing links show no card */
+      }
+    }, 300);
+  }, []);
+  // The card is cursor-anchored — any scroll (capture phase, any ancestor)
+  // dismisses it instead of letting it drift.
+  useEffect(() => {
+    if (!hoverCard) return;
+    window.addEventListener("scroll", hideHoverCard, true);
+    return () => window.removeEventListener("scroll", hideHoverCard, true);
+  }, [hoverCard, hideHoverCard]);
   useEffect(() => {
     if (joinMarkdownBlocks(blocks) === initialContent) return;
     const next = splitMarkdownBlocks(initialContent).map((block, index) => ({ ...block, key: blocks[index]?.key ?? block.key }));
@@ -191,6 +384,7 @@ export function BlockEditor({
   const updateRaw = (key: string, raw: string) => {
     applyBlocks(blocks.map((block) => (block.key === key ? { ...block, raw } : block)));
   };
+  updateRawRef.current = updateRaw;
 
   /** Insert a fresh block below `index` (-1 = front) and start editing it. */
   const insertBlockBelow = (index: number, raw: string, caret: number | "end") => {
@@ -398,6 +592,27 @@ export function BlockEditor({
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>, index: number) => {
     const el = event.currentTarget;
     const raw = el.value;
+    if (event.nativeEvent.isComposing) return;
+
+    // Wikilink autocomplete navigation takes precedence while the popup
+    // has candidates — including Esc (dismiss popup, not the block).
+    if (suggest && suggestions.length > 0) {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveIdx((idx) => (idx + (event.key === "ArrowDown" ? 1 : -1) + suggestions.length) % suggestions.length);
+        return;
+      }
+      if ((event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey) || (event.key === "Tab" && !event.ctrlKey && !event.metaKey)) {
+        event.preventDefault();
+        acceptSuggestion(suggestions[activeIdx]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSuggest(null);
+        return;
+      }
+    }
 
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey) {
       const key = event.key.toLowerCase();
@@ -566,11 +781,17 @@ export function BlockEditor({
           </div>;
         })}
       </div>}
-      <ScrollArea className="min-h-0 flex-1" contentClassName="px-3 py-2">
-        <div className="flex flex-col gap-1.5 pb-16" onClick={onContainerClick}>
+      <ScrollArea className="min-h-0 flex-1" contentClassName="pl-0.5 pr-3 py-2">
+        {header}
+        <div
+          className="flex flex-col gap-1.5 pb-16"
+          onClick={onContainerClick}
+          onMouseOver={onBlocksHover}
+          onMouseLeave={hideHoverCard}
+        >
           {blocks.map((block, index) =>
             block.key === editingKey ? (
-              <div key={block.key} className="wiki-block wiki-block--editing">
+              <div key={block.key} className="wiki-block wiki-block--editing relative">
                 <textarea
                   ref={textareaRef}
                   value={block.raw}
@@ -580,9 +801,48 @@ export function BlockEditor({
                   onChange={(event) => {
                     updateRaw(block.key, event.target.value);
                     autosize(event.target);
+                    detectSuggest(event.target);
                   }}
+                  onBlur={() => setSuggest(null)}
+                  onClick={(event) => detectSuggest(event.currentTarget)}
+                  onSelect={(event) => detectSuggest(event.currentTarget)}
+                  onScroll={(event) => setSuggestPosition(caretAnchor(event.currentTarget))}
                   onKeyDown={(event) => onKeyDown(event, index)}
                 />
+                {suggest && suggestions.length > 0 && (
+                  <div style={suggestPosition} className="absolute z-50 mt-1 min-w-56 max-w-full overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md" role="listbox" aria-label="词条补全">
+                    {suggestions.map((item, idx) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={idx === activeIdx}
+                        className={`flex w-full flex-col items-start gap-0.5 px-2.5 py-1.5 text-left text-[13px] ${idx === activeIdx ? "bg-accent text-accent-foreground" : ""}`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onMouseEnter={(event) => {
+                          setActiveIdx(idx);
+                          hideHoverCard();
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          const runId = hoverRun.current;
+                          hoverTimer.current = window.setTimeout(() => {
+                            void getEntry(item.id).then(entry => {
+                              if (runId === hoverRun.current) setHoverCard({ x: rect.right, y: rect.top, entry });
+                            }).catch(() => {});
+                          }, 250);
+                        }}
+                        onMouseLeave={hideHoverCard}
+                        onClick={() => { hideHoverCard(); acceptSuggestion(item); }}
+                      >
+                        <span className="min-w-0 truncate font-medium">{item.title}</span>
+                        {(item.alias.length > 0 || item.tags.length > 0) && (
+                          <span className="min-w-0 truncate text-[11px] text-muted-foreground">
+                            {[...item.alias, ...item.tags].join(" · ")}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               <ContextMenu key={block.key}>
@@ -636,6 +896,7 @@ export function BlockEditor({
             ),
           )}
         </div>
+        {hoverCard && <WikiLinkHoverCard card={hoverCard} />}
       </ScrollArea>
     </div>
   );

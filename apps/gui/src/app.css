@@ -378,7 +378,7 @@ body {
    Every rendered h1–h6 shows a persistent "H1"–"H6" tag to its left, in
    a reserved gutter (SiYuan-style). Pure CSS — no pipeline changes. */
 .wiki-md {
-  padding-left: 2.75rem;
+  padding-left: 1.5rem;
 }
 .wiki-md :is(h1, h2, h3, h4, h5, h6) {
   position: relative;
@@ -402,6 +402,33 @@ body {
 .wiki-md h4::before { content: "H4"; }
 .wiki-md h5::before { content: "H5"; }
 .wiki-md h6::before { content: "H6"; }
+
+/* ── wiki reading view: Obsidian-style properties block ──
+   Key/value rows in a single bordered card at the top of the note body. */
+.wiki-properties {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.wiki-properties-row {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0.15rem 0.6rem;
+}
+.wiki-properties-row + .wiki-properties-row {
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+.wiki-properties-key {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  user-select: none;
+}
 
 /* ── wiki SiYuan-style block editor ── */
 .wiki-block {

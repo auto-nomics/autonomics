@@ -5780,6 +5780,7 @@ dependencies = [
  "api-server",
  "arc-swap",
  "axum",
+ "base64 0.22.1",
  "bib-base",
  "bib-types",
  "chrono",

@@ -174,19 +174,40 @@ export function ReadingView({
             </Button>
           </span>
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-          {entry.tags.map((tag) => (
-            <Badge key={tag} variant="secondary" className="px-1 py-0 text-[10px]">{tag}</Badge>
-          ))}
-          {entry.alias.map((name) => (
-            <Badge key={name} variant="outline" className="px-1 py-0 text-[10px]">alias: {name}</Badge>
-          ))}
-          <span className="ml-auto">
-            创建 {formatTime(entry.ctime)} · 修改 {formatTime(entry.mtime)}
-          </span>
-        </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1" contentClassName="px-3 py-2">
+      <ScrollArea className="min-h-0 flex-1" contentClassName="pl-0.5 pr-3 py-2">
+        {/* Obsidian-style properties block at the top of the content body,
+            inside the same max-width column as the note itself. */}
+        <div className="wiki-properties mx-auto mb-4 max-w-3xl text-xs">
+          <div className="wiki-properties-row">
+            <span className="wiki-properties-key">tags</span>
+            <span className="flex flex-wrap items-center gap-1">
+              {entry.tags.length
+                ? entry.tags.map((tag) => (
+                    <Badge key={tag} variant="secondary" className="px-1 py-0 text-[10px]">{tag}</Badge>
+                  ))
+                : "—"}
+            </span>
+          </div>
+          <div className="wiki-properties-row">
+            <span className="wiki-properties-key">aliases</span>
+            <span className="flex flex-wrap items-center gap-1">
+              {entry.alias.length
+                ? entry.alias.map((name) => (
+                    <Badge key={name} variant="outline" className="px-1 py-0 text-[10px]">{name}</Badge>
+                  ))
+                : "—"}
+            </span>
+          </div>
+          <div className="wiki-properties-row">
+            <span className="wiki-properties-key">created</span>
+            <span className="text-muted-foreground">{formatTime(entry.ctime)}</span>
+          </div>
+          <div className="wiki-properties-row">
+            <span className="wiki-properties-key">modified</span>
+            <span className="text-muted-foreground">{formatTime(entry.mtime)}</span>
+          </div>
+        </div>
         {/* Wikilinks/`<a data-wikilink>` survive DOMPurify (data attrs
             allowed) — clicks are routed by the delegated handler above. */}
         <div

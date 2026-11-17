@@ -4,7 +4,7 @@ import { useWikiDocument } from "./wiki-document";
  * doc title in place), a collapsible attributes row (alias / tags) and the
  * block editor — plus a dirty-guarded exit back to 阅读模式.
  */
-import { ChevronDown, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -12,9 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { newId } from "@/lib/utils";
-import { BlockEditor } from "./block-editor";
+import { LiveEditor } from "./live-editor";
 import { ModeSwitch, type WikiMode } from "./reading-view";
-import { putEntryContent, updateEntryMeta, type WikiEntry } from "./wiki-api";
+import { formatTime, putEntryContent, updateEntryMeta, type WikiEntry } from "./wiki-api";
 
 export function EditorView({
   entry: initialEntry,
@@ -36,7 +36,6 @@ export function EditorView({
   const [uploadSource] = useState(newId);
   const setUploading = useCallback((pending: boolean) => model.setUploading(uploadSource, pending), [model, uploadSource]);
   const uploading = pendingImages > 0;
-  const [attrsOpen, setAttrsOpen] = useState(false);
 
   const split = (value: string) =>
     value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -130,46 +129,48 @@ export function EditorView({
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
           </Button>
         </div>
-        <div className="mt-1">
-          <button
-            type="button"
-            className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-            onClick={() => setAttrsOpen((open) => !open)}
-          >
-            <ChevronDown className={`h-3.5 w-3.5 transition-transform ${attrsOpen ? "" : "-rotate-90"}`} />
-            属性(别名 / 标签)
-          </button>
-          {attrsOpen ? (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              <div className="grid gap-1">
-                <span className="text-xs text-muted-foreground">别名(逗号分隔)</span>
-                <Input
-                  id="wiki-alias"
-                  className="h-7 text-[13px]"
-                  value={alias}
-                  onChange={(event) => setAlias(event.target.value)}
-                />
-              </div>
-              <div className="grid gap-1">
-                <span className="text-xs text-muted-foreground">标签(逗号分隔)</span>
-                <Input
-                  id="wiki-tags"
-                  className="h-7 text-[13px]"
-                  value={tags}
-                  onChange={(event) => setTags(event.target.value)}
-                />
-              </div>
-            </div>
-          ) : null}
-        </div>
       </div>
-      <BlockEditor
+      <LiveEditor
         key={entry.id}
         entryId={entry.id}
         initialContent={content}
         getContent={() => model.state.content}
         onChange={setContent}
         onUploadsChange={setUploading}
+        header={
+          /* Obsidian-style properties card at the top of the note body,
+             mirroring the reading view; alias/tags are editable here. */
+          <div className="wiki-properties wiki-properties--edit mx-auto mb-4 max-w-3xl text-xs">
+            <div className="wiki-properties-row">
+              <span className="wiki-properties-key">aliases</span>
+              <Input
+                id="wiki-alias"
+                className="h-6 border-0 bg-transparent px-1 text-[13px] shadow-none focus-visible:ring-0"
+                placeholder="别名(逗号分隔)"
+                value={alias}
+                onChange={(event) => setAlias(event.target.value)}
+              />
+            </div>
+            <div className="wiki-properties-row">
+              <span className="wiki-properties-key">tags</span>
+              <Input
+                id="wiki-tags"
+                className="h-6 border-0 bg-transparent px-1 text-[13px] shadow-none focus-visible:ring-0"
+                placeholder="标签(逗号分隔)"
+                value={tags}
+                onChange={(event) => setTags(event.target.value)}
+              />
+            </div>
+            <div className="wiki-properties-row">
+              <span className="wiki-properties-key">created</span>
+              <span className="text-muted-foreground">{formatTime(entry.ctime)}</span>
+            </div>
+            <div className="wiki-properties-row">
+              <span className="wiki-properties-key">modified</span>
+              <span className="text-muted-foreground">{formatTime(entry.mtime)}</span>
+            </div>
+          </div>
+        }
       />
     </div>
   );

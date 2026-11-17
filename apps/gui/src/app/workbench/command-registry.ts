@@ -10,9 +10,11 @@ import { useSyncExternalStore } from "react";
 export type WorkbenchCommand = {
   id: string;
   title: string;
-  /** Short group label shown as a badge. */
+  /** Short group label, shown inline as "Category: title" in the palette. */
   category?: string;
   keywords?: string;
+  /** Display-only keybinding chip, e.g. "Ctrl + Shift + P". */
+  shortcut?: string;
   run: () => void;
 };
 

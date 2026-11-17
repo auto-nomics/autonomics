@@ -180,6 +180,62 @@ type MessageItemProps = {
   onCopy: (text: string) => void;
 };
 
+/** Thinking trace row. While streaming and expanded, the content pane
+ *  stickies to the bottom as new reasoning deltas arrive — unless the user
+ *  has scrolled up to read, in which case we stop following until they
+ *  return near the bottom (the standard terminal-follow heuristic). */
+function ThinkingTrace({
+  message,
+  streaming,
+  expanded,
+  display,
+  onToggle,
+}: {
+  message: ChatItem;
+  streaming: boolean;
+  expanded: Record<number, boolean>;
+  display: DisplaySettings;
+  onToggle: (id: number, open: boolean) => void;
+}) {
+  const open = expanded[message.id] ?? !display.collapse_thinking;
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const followRef = useRef(true);
+
+  // A user scroll (anywhere but the very bottom) suspends following; landing
+  // near the bottom (within a small margin, covering wheel overshoot and
+  // programmatic clamping) resumes it.
+  const handleScroll = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el || !streaming || !open || !followRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [message.text, streaming, open]);
+
+  return (
+    <TraceCollapsible open={open} onOpenChange={(next) => onToggle(message.id, next)}>
+      <TraceCollapsibleTrigger>
+        <TraceLine status={streaming ? "running" : undefined}>
+          <TraceIcon>
+            <Brain className="size-3.5" />
+          </TraceIcon>
+          <TraceTitle>{streaming ? "Thinking…" : "Thought process"}</TraceTitle>
+          <TraceDescription>{formatTime(message.time)}</TraceDescription>
+        </TraceLine>
+      </TraceCollapsibleTrigger>
+      <TraceCollapsibleContent className="text-xs">
+        <div ref={contentRef} onScroll={handleScroll} className="max-h-64 overflow-y-auto">
+          <div className="whitespace-pre-wrap">{message.text}</div>
+        </div>
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
+  );
+}
+
 /** Memoized per-row: streaming deltas change only the one streaming item's
  *  identity (see appendStreamDelta's immutability note), so every other row
  *  bails here instead of re-running markdown/tool rendering per token. All
@@ -231,23 +287,7 @@ const MessageItem = memo(function MessageItem({ message, streamingId, display, e
   }
 
   if (message.role === "thinking") {
-    const open = expanded[message.id] ?? !display.collapse_thinking;
-    return (
-      <TraceCollapsible open={open} onOpenChange={(next) => onToggle(message.id, next)}>
-        <TraceCollapsibleTrigger>
-          <TraceLine status={isStreaming ? "running" : undefined}>
-            <TraceIcon>
-              <Brain className="size-3.5" />
-            </TraceIcon>
-            <TraceTitle>{isStreaming ? "Thinking…" : "Thought process"}</TraceTitle>
-            <TraceDescription>{formatTime(message.time)}</TraceDescription>
-          </TraceLine>
-        </TraceCollapsibleTrigger>
-        <TraceCollapsibleContent className="max-h-64 overflow-y-auto text-xs">
-          <div className="whitespace-pre-wrap">{message.text}</div>
-        </TraceCollapsibleContent>
-      </TraceCollapsible>
-    );
+    return <ThinkingTrace message={message} streaming={isStreaming} expanded={expanded} display={display} onToggle={onToggle} />;
   }
 
   if (message.role === "tool") {

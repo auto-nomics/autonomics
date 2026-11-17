@@ -20,6 +20,7 @@ export const entryCache = new Map<string, WikiEntry>();
 
 export function cacheEntry(entry: WikiEntry): void {
   entryCache.set(entry.id, entry);
+  titleCache.set(entry.id, entry.title);
 }
 
 export async function fetchEntryCached(id: string): Promise<WikiEntry | null> {
@@ -142,6 +143,8 @@ export function getWikiRevision(): number {
 }
 
 export function bumpWikiRevision(): void {
+  entryCache.clear();
+  titleCache.clear();
   revision += 1;
   for (const listener of revisionListeners) listener();
 }

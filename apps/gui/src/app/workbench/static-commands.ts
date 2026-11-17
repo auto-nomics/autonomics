@@ -5,8 +5,9 @@ import { resetWorkbenchViewLocations, toggleSecondarySidebar } from "./view-layo
  * are registered by the shell (owner "shell-runtime") instead.
  */
 
+import { openWikiSearch } from "@/features/wiki/wiki-state";
 import { cycleThemeMode } from "@/lib/theme";
-import { registerCommands } from "./command-registry";
+import { openPalette, registerCommands } from "./command-registry";
 import {
   closeEditor,
   closeSplit,
@@ -24,10 +25,13 @@ import {
 } from "./workbench-store";
 
 registerCommands("shell", [
-  { id: "workbench.toggle-secondary-sidebar", title: "Toggle secondary side bar", category: "view", keywords: "secondary sidebar visibility", run: toggleSecondarySidebar },
+  { id: "workbench.quick-open", title: "Quick switch tabs and commands", category: "view", keywords: "quick open switcher palette 快速切换 命令面板", shortcut: "Ctrl + P", run: () => openPalette("all") },
+  { id: "workbench.open-command-palette", title: "Open command palette", category: "view", keywords: "命令面板", shortcut: "Ctrl + Shift + P", run: () => openPalette("commands") },
+  { id: "workbench.wiki-search", title: "Search knowledge base", category: "go", keywords: "search find fulltext wiki 检索 搜索 全文", shortcut: "Ctrl + K", run: openWikiSearch },
+  { id: "workbench.toggle-secondary-sidebar", title: "Toggle secondary side bar", category: "view", keywords: "secondary sidebar visibility", shortcut: "Ctrl + Alt + B", run: toggleSecondarySidebar },
   { id: "workbench.reset-view-locations", title: "Reset view locations", category: "view", keywords: "reset sidebar panel layout", run: () => resetWorkbenchViewLocations() },
-  { id: "workbench.toggle-sidebar", title: "Toggle side bar", category: "view", keywords: "ctrl b sidebar visibility", run: toggleSidebar },
-  { id: "workbench.toggle-panel", title: "Toggle bottom panel", category: "view", keywords: "ctrl j output events notices", run: togglePanel },
+  { id: "workbench.toggle-sidebar", title: "Toggle side bar", category: "view", keywords: "ctrl b sidebar visibility", shortcut: "Ctrl + B", run: toggleSidebar },
+  { id: "workbench.toggle-panel", title: "Toggle bottom panel", category: "view", keywords: "ctrl j output events notices", shortcut: "Ctrl + J", run: togglePanel },
   { id: "workbench.panel-events", title: "Show event stream panel", category: "view", keywords: "events log frames", run: () => { setPanelTab("events"); } },
   { id: "workbench.panel-notices", title: "Show notices panel", category: "view", keywords: "notifications notices", run: () => { setPanelTab("notices"); } },
   { id: "workbench.split-editor", title: "Split editor", category: "view", keywords: "split right group", run: () => splitEditor() },

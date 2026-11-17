@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import type { WikiEntry } from "./wiki-api";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 
@@ -53,6 +53,11 @@ export function useWikiDocument(entry: WikiEntry) {
     if (!document) { document = new WikiDocument(entry); documents.set(entry.id, document); }
     return document;
   }, [entry.id]);
+  useEffect(() => {
+    if (model.state.entry !== entry && !model.state.saving) {
+      model.accept(entry, fields(model.state.entry));
+    }
+  }, [entry, model]);
   const state = useSyncExternalStore(model.subscribe, model.snapshot);
   return { ...state, model };
 }

@@ -66,8 +66,28 @@ function CommandDialog({
 
 function CommandInput({
   className,
+  variant = "boxed",
   ...props
-}: React.ComponentProps<typeof CommandPrimitive.Input>) {
+}: React.ComponentProps<typeof CommandPrimitive.Input> & {
+  /** "boxed" (default): the popover-style field. "plain": borderless
+   *  Obsidian-style query row for dialog palettes; sized so a DialogContent
+   *  close button (absolute top-2 right-2) lands inside the row. */
+  variant?: "boxed" | "plain"
+}) {
+  if (variant === "plain") {
+    return (
+      <div data-slot="command-input-wrapper" className="border-b px-4 py-3">
+        <CommandPrimitive.Input
+          data-slot="command-input"
+          className={cn(
+            "w-full bg-transparent pr-7 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+            className
+          )}
+          {...props}
+        />
+      </div>
+    )
+  }
   return (
     <div data-slot="command-input-wrapper" className="p-1 pb-0">
       <InputGroup className="h-8! rounded-lg! border-input/30 bg-input/30 shadow-none! *:data-[slot=input-group-addon]:pl-2!">
