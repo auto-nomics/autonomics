@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Bibliography management: Turso storage + unified literature query gateway."
 
 [dependencies]
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 manuscript-core = { path = "../manuscript-core" }
 bib-types = { path = "../bib-types" }
 text-embedding = { path = "../text-embedding" }

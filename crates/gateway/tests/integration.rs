@@ -535,7 +535,23 @@ async fn swagger_docs_expose_the_gateway_api() {
         .await
         .unwrap();
     assert_eq!(openapi["info"]["title"], "Autonomics Gateway API");
-    assert_eq!(openapi["paths"].as_object().unwrap().len(), 52);
+    assert!(openapi["paths"].as_object().unwrap().len() > 52);
+    for (path, method) in [
+        ("/api/v1/bib/articles", "get"),
+        ("/api/v1/bib/articles/import", "post"),
+        ("/api/v1/bib/articles/{id}/attachments", "post"),
+        ("/api/v1/bib/collections", "get"),
+        ("/api/v1/bib/search/sessions", "post"),
+        ("/api/v1/bib/search/sessions/{id}/import", "post"),
+        ("/api/v1/bib/import/preview", "post"),
+        ("/api/v1/bib/rss/feeds", "get"),
+    ] {
+        assert!(
+            openapi["paths"][path][method].is_object(),
+            "missing bibliography operation {method} {path}"
+        );
+    }
+    assert!(openapi["components"]["schemas"]["Article"].is_object());
     let expected_paths = [
         "/api/v1/gateway/status",
         "/api/v1/state",

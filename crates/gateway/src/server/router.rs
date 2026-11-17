@@ -6,7 +6,6 @@ use axum::Json;
 use axum::Router;
 use axum::routing::{delete, get, patch, post, put};
 use serde_json::json;
-use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::auth::{self, AuthContext, bearer_or_session};
@@ -312,8 +311,14 @@ pub fn router_with_bib(
         auth.clone(),
         bearer_or_session,
     ));
-    let docs =
-        SwaggerUi::new("/swagger-ui").url("/api/v1/api-docs/openapi.json", ApiDoc::openapi());
+    let docs = SwaggerUi::new("/swagger-ui").url(
+        "/api/v1/api-docs/openapi.json",
+        ApiDoc::for_server(
+            env_token
+                .as_ref()
+                .is_some_and(|token| !token.trim().is_empty()),
+        ),
+    );
     let bib = api_server::bib::router(bib_shared);
     let wiki_router = api_server::wiki::router(wiki);
     let deck_router = api_server::deck::router(deck_shared.clone());

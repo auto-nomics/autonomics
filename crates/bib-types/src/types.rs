@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// The struct is normalized: every external identifier lives in
 /// [`Article::identifiers`] so that dedup logic can match on any key
 /// (DOI, PMID, arXiv, …) without special-casing fields.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Article {
     /// Internal unique identifier (UUID or opaque string).
     pub id: String,
@@ -193,7 +193,7 @@ impl Article {
 // ---------------------------------------------------------------------------
 
 /// A single author / contributor on an article.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Author {
     /// Family / last name.
     pub last_name: String,
@@ -235,7 +235,7 @@ impl Author {
 // ---------------------------------------------------------------------------
 
 /// The category of an external identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum IdKind {
     /// Digital Object Identifier — highest-priority dedup key.
@@ -276,7 +276,7 @@ impl IdKind {
 }
 
 /// A single external identifier attached to an article.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Identifier {
     /// What kind of identifier this is.
     pub kind: IdKind,
@@ -308,7 +308,7 @@ impl Identifier {
 // ---------------------------------------------------------------------------
 
 /// Where a record entered the library.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ArticleSource {
     /// Imported from NCBI PubMed via E-utilities.
@@ -345,7 +345,7 @@ pub enum ArticleSource {
 /// The kind of user-added annotation. Notes never exist on their own: a
 /// remark is always the `comment` of the highlighted passage it explains
 /// (`Highlight`), or a free-standing remark on the article (`Comment`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AnnotationKind {
     /// A highlighted excerpt from the text.
@@ -373,7 +373,7 @@ impl AnnotationKind {
 }
 
 /// A user-created note, highlight, or comment on an article.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Annotation {
     /// Internal annotation ID.
     pub id: String,
@@ -421,7 +421,7 @@ pub struct Annotation {
 
 /// Editable annotation metadata. Source text, attachment identity and geometry
 /// are deliberately absent: editing a comment must not move a highlight.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AnnotationUpdate {
     pub comment: Option<String>,
@@ -431,7 +431,7 @@ pub struct AnnotationUpdate {
 
 /// Exact semantic selection in the structured text of a source PDF.
 /// PDF rectangles alone may be too coarse to recover a partial sentence.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnnotationTextRange {
     pub source_hash: String,
     pub start: Vec<u32>,
@@ -440,7 +440,7 @@ pub struct AnnotationTextRange {
 }
 
 /// A rectangle in normalized page space (0..1 relative to the rendered page).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnnotationRect {
     pub left: f64,
     pub top: f64,
@@ -466,7 +466,7 @@ pub struct AnnotationRect {
 }
 
 /// Proof that an annotation anchor was validated against a canonical text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnnotationAnchorProof {
     /// sha256 of the exact text the offsets point into.
     pub source_hash: String,
@@ -479,7 +479,7 @@ pub struct AnnotationAnchorProof {
 
 /// Server-validated anchor resolution returned to the agent alongside the
 /// created annotation — everything needed to self-check the citation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ResolvedAnchor {
     /// Which canonical text anchored the annotation: `fulltext` or `abstract`.
     pub source: String,
@@ -498,7 +498,7 @@ pub struct ResolvedAnchor {
 }
 
 /// A created annotation plus its server-validated anchor.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AnchoredAnnotation {
     pub annotation: Annotation,
     pub anchor: ResolvedAnchor,
@@ -527,7 +527,7 @@ impl Annotation {
 // ---------------------------------------------------------------------------
 
 /// Lifecycle status of a collection (research investigation).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CollectionStatus {
     /// Actively being worked on by an agent.
@@ -568,7 +568,7 @@ impl CollectionStatus {
 /// carries per-article semantic metadata (role, fetch status, …).
 /// The [`Collection::article_ids`] field is a convenience hydration of
 /// the ordered article IDs, populated on load.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Collection {
     /// Zotero collection identity; legacy public IDs remain stable.
     #[serde(default)]
@@ -645,7 +645,7 @@ impl Collection {
 // ---------------------------------------------------------------------------
 
 /// Why an article belongs to a collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ArticleRole {
     /// Agent actively requested this article for the investigation.
@@ -680,7 +680,7 @@ impl ArticleRole {
 }
 
 /// Full-text acquisition lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FetchStatus {
     /// Only metadata is available.
@@ -711,7 +711,7 @@ impl FetchStatus {
 }
 
 /// Who added an article to a collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AddedBy {
     #[default]
@@ -737,7 +737,7 @@ impl AddedBy {
 
 /// The association between a collection and an article, enriched with
 /// semantic metadata that drives the agent workflow.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CollectionArticle {
     pub collection_id: String,
     pub article_id: String,
@@ -763,7 +763,7 @@ pub struct CollectionArticle {
 // ---------------------------------------------------------------------------
 
 /// File format of a stored full text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum FileFormat {
     Pdf,
@@ -790,7 +790,7 @@ impl FileFormat {
 }
 
 /// Where a stored full text originated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FullTextSource {
     /// User manually uploaded the file.
@@ -816,7 +816,7 @@ impl FullTextSource {
 }
 
 /// Format of the extracted `text_content` stored alongside a full text.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TextFormat {
     /// Single-line normalized plain text (legacy extractors).
@@ -844,7 +844,7 @@ impl TextFormat {
 }
 
 /// Lifecycle of the background extraction that produces `text_content`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExtractStatus {
     /// Queued: the original file is stored, extraction has not started.
@@ -878,7 +878,7 @@ impl ExtractStatus {
 }
 
 /// Full text stored alongside an article.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FullText {
     /// Article this full text belongs to.
     pub article_id: String,
@@ -936,7 +936,7 @@ pub struct FullText {
 // ---------------------------------------------------------------------------
 
 /// A single full-text search result.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchHit {
     pub article_id: String,
     pub title: String,
@@ -963,7 +963,7 @@ pub struct SearchHit {
 /// Both endpoints reference article IDs. This struct is deliberately minimal
 /// so that a citation graph is just `Vec<Reference>` and can be fed into
 /// graph algorithms or a DataFusion edge table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Reference {
     /// ID of the citing article.
     pub source: String,
@@ -977,7 +977,7 @@ pub struct Reference {
 // ---------------------------------------------------------------------------
 
 /// The bibliographic export format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ExportFormat {
     /// BibTeX (`.bib`).
     Bibtex,
@@ -1007,7 +1007,7 @@ impl ExportFormat {
 
 /// A fully hydrated library record: the article plus user-managed data
 /// that is stored alongside it but not part of the bibliographic metadata.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LibraryEntry {
     /// The bibliographic record.
     pub article: Article,

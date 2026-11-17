@@ -12,14 +12,17 @@ use semantic_scholar::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExplorationKind {
     References,
     Citations,
-    Similar { pool: RecommendationPool },
+    Similar {
+        #[schema(value_type = String, example = "recent")]
+        pool: RecommendationPool,
+    },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExplorationRequest {
     /// Canonical S2 ID or an exact identifier supported by the discovery source.

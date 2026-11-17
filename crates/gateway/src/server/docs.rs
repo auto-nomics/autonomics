@@ -140,10 +140,44 @@ use crate::proto::*;
 )]
 pub(crate) struct ApiDoc;
 
+impl ApiDoc {
+    /// Match the bibliography router's optional environment-token guard.
+    pub(crate) fn for_server(bibliography_auth_required: bool) -> utoipa::openapi::OpenApi {
+        let mut doc = Self::openapi();
+        if !bibliography_auth_required {
+            for (path, item) in &mut doc.paths.paths {
+                if !path.starts_with("/api/v1/bib/") {
+                    continue;
+                }
+                for operation in [
+                    &mut item.get,
+                    &mut item.post,
+                    &mut item.put,
+                    &mut item.patch,
+                    &mut item.delete,
+                    &mut item.head,
+                    &mut item.options,
+                    &mut item.trace,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    operation
+                        .security
+                        .get_or_insert_with(Vec::new)
+                        .push(SecurityRequirement::default());
+                }
+            }
+        }
+        doc
+    }
+}
+
 struct BearerSecurityAddon;
 
 impl Modify for BearerSecurityAddon {
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi.merge(api_server::bib_openapi::BibliographyApiDoc::openapi());
         let security = vec![SecurityRequirement::new(
             "bearer_auth",
             Vec::<String>::new(),
@@ -178,6 +212,38 @@ impl Modify for BearerSecurityAddon {
                     ))
                     .build(),
             ),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bibliography_auth_matches_server_configuration() {
+        let optional = serde_json::to_value(ApiDoc::for_server(false)).unwrap();
+        let required = serde_json::to_value(ApiDoc::for_server(true)).unwrap();
+        let operation = |doc: &serde_json::Value, path: &str| {
+            doc["paths"][path]["get"]["security"]
+                .as_array()
+                .unwrap()
+                .clone()
+        };
+        assert!(
+            operation(&optional, "/api/v1/bib/articles")
+                .iter()
+                .any(|rule| rule == &serde_json::json!({}))
+        );
+        assert!(
+            !operation(&required, "/api/v1/bib/articles")
+                .iter()
+                .any(|rule| rule == &serde_json::json!({}))
+        );
+        assert!(
+            !operation(&optional, "/api/v1/agents")
+                .iter()
+                .any(|rule| rule == &serde_json::json!({}))
         );
     }
 }

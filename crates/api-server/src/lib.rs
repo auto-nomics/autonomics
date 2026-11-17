@@ -6,6 +6,7 @@
 //! mounted without changing startup behavior.
 
 pub mod bib;
+pub mod bib_openapi;
 mod cache_control;
 pub mod deck;
 mod discovery;

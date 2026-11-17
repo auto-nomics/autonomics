@@ -387,12 +387,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "syn 2.0.119",
  "tempfile",
  "tokio",
  "tokio-util",
  "tower",
  "tracing",
  "turso",
+ "utoipa",
  "uuid",
  "vfs",
  "visualization",
@@ -1523,6 +1525,7 @@ dependencies = [
  "tokio",
  "tracing",
  "turso",
+ "utoipa",
  "uuid",
  "vfs",
  "zip 8.6.0",
@@ -1536,6 +1539,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "utoipa",
 ]
 
 [[package]]

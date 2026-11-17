@@ -39,7 +39,9 @@ use serde::{Deserialize, Serialize};
 
 /// Boolean operator used to join terms *within* a single field of a
 /// [`StructuredSearch`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default, utoipa::ToSchema,
+)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum BoolOp {
     And,
@@ -60,7 +62,7 @@ impl BoolOp {
 }
 
 /// Inclusive publication-year range.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct YearRange {
     /// Lower bound (e.g. `2020`).
     pub from: u16,
@@ -73,7 +75,7 @@ pub struct YearRange {
 /// All fields are optional; populate only the ones you need. At least one
 /// field should be set for a meaningful query — individual backends decide
 /// how to report an empty query.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct StructuredSearch {
     /// Topic terms searched against title/abstract — the most common slot.
     pub keywords: Option<Vec<String>>,

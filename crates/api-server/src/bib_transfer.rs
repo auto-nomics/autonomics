@@ -34,7 +34,7 @@ pub(crate) fn router() -> Router<Arc<BibShared>> {
         .route("/duplicates", get(duplicates))
         .route("/duplicates/merge", post(merge))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ImportInput {
     format: String,
     contents: String,
@@ -44,6 +44,12 @@ struct ImportInput {
 fn keys(article: &Article) -> Vec<String> {
     bib_base::library_merge::library_identity_keys(article)
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/import/preview", tag = "bibliography-import-export",
+    operation_id = "bib_bib_transfer_preview",
+    summary = "Preview",
+    request_body = ImportInput,
+    responses((status = 200, description = "Preview", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn preview(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<ImportInput>,
@@ -91,6 +97,12 @@ async fn preview(
     }
     Ok(Json(json!({"records":rows,"total":rows.len()})))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/import/commit", tag = "bibliography-import-export",
+    operation_id = "bib_bib_transfer_commit",
+    summary = "Commit",
+    request_body = ImportInput,
+    responses((status = 200, description = "Commit", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn commit(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<ImportInput>,
@@ -115,11 +127,17 @@ async fn commit(
         .map_err(bad)?;
     Ok(Json(json!(outcome)))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct RenderInput {
     article_ids: Vec<String>,
     format: String,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/citations/render", tag = "bibliography-import-export",
+    operation_id = "bib_bib_transfer_render",
+    summary = "Render",
+    request_body = RenderInput,
+    responses((status = 200, description = "Render", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn render(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<RenderInput>,
@@ -160,6 +178,11 @@ fn normalized_title(article: &Article) -> String {
         .flat_map(char::to_lowercase)
         .collect()
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/duplicates", tag = "bibliography-import-export",
+    operation_id = "bib_bib_transfer_duplicates",
+    summary = "Duplicates",
+    responses((status = 200, description = "Duplicates", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn duplicates(State(shared): State<Arc<BibShared>>) -> ResultJson {
     let articles = shared.bib.list_all_articles().await.map_err(internal)?;
     // Bounded review sets: title matches are suggestions, never automatic merges.
@@ -193,13 +216,19 @@ async fn duplicates(State(shared): State<Arc<BibShared>>) -> ResultJson {
         json!({"groups":groups,"total":total,"truncated":total>200}),
     ))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct MergeInput {
     target_id: String,
     source_ids: Vec<String>,
     expected_revisions: HashMap<String, String>,
     metadata: Option<Article>,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/duplicates/merge", tag = "bibliography-import-export",
+    operation_id = "bib_bib_transfer_merge",
+    summary = "Merge",
+    request_body = MergeInput,
+    responses((status = 200, description = "Merge", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn merge(State(shared): State<Arc<BibShared>>, Json(input): Json<MergeInput>) -> ResultJson {
     if input.source_ids.is_empty()
         || input.source_ids.len() > 100

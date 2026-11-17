@@ -33,9 +33,11 @@ const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_FULLTEXT_CHARS: usize = 100_000;
 const MAX_FULLTEXT_CHARS: usize = 500_000;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::IntoParams)]
 struct FulltextPageQuery {
+    /// Character offset (default 0).
     offset: Option<usize>,
+    /// Character limit (default 100000, maximum 500000).
     limit: Option<usize>,
 }
 
@@ -50,7 +52,7 @@ impl FulltextPageQuery {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 struct ApiError {
     error: String,
 }
@@ -206,6 +208,11 @@ pub fn router(shared: BibShared) -> Router {
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/health", tag = "bibliography",
+    operation_id = "bib_bib_health",
+    summary = "Health",
+    responses((status = 200, description = "Health", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn health(State(shared): State<Arc<BibShared>>) -> ApiResult {
     let count = shared.bib.article_count().await.map_err(internal)?;
     Ok(Json(json!({
@@ -318,11 +325,22 @@ fn search_error(failure: bib_base::Error) -> (StatusCode, Json<ApiError>) {
     };
     error(status, failure.to_string())
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/saved-searches", tag = "bibliography-search",
+    operation_id = "bib_bib_list_saved_searches",
+    summary = "List saved searches",
+    responses((status = 200, description = "List saved searches", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_saved_searches(State(shared): State<Arc<BibShared>>) -> ApiResult {
     Ok(Json(
         json!({"saved_searches":shared.bib.list_saved_searches().await.map_err(search_error)?}),
     ))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/saved-searches", tag = "bibliography-search",
+    operation_id = "bib_bib_create_saved_search",
+    summary = "Create saved search",
+    request_body = bib_types::SaveSearchInput,
+    responses((status = 201, description = "Create saved search", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn create_saved_search(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<bib_types::SaveSearchInput>,
@@ -334,6 +352,13 @@ async fn create_saved_search(
         .map_err(search_error)?;
     Ok((StatusCode::CREATED, Json(json!({"saved_search":rule}))))
 }
+#[utoipa::path(method(put), path = "/api/v1/bib/saved-searches/{id}", tag = "bibliography-search",
+    operation_id = "bib_bib_update_saved_search",
+    summary = "Update saved search",
+    params(("id" = String, Path, description = "id")),
+    request_body = bib_types::SaveSearchInput,
+    responses((status = 200, description = "Update saved search", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn update_saved_search(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -346,10 +371,16 @@ async fn update_saved_search(
         .map_err(search_error)?;
     Ok(Json(json!({"saved_search":rule})))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 struct DeleteSavedSearchQuery {
     expected_version: u64,
 }
+#[utoipa::path(method(delete), path = "/api/v1/bib/saved-searches/{id}", tag = "bibliography-search",
+    operation_id = "bib_bib_delete_saved_search",
+    summary = "Delete saved search",
+    params(("id" = String, Path, description = "id"), DeleteSavedSearchQuery),
+    responses((status = 204, description = "Completed"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_saved_search(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -363,6 +394,13 @@ async fn delete_saved_search(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/search-evidence", tag = "bibliography-search",
+    operation_id = "bib_bib_search_evidence",
+    summary = "Search evidence",
+    params(("x-search-request-id" = Option<String>, Header), ("id" = String, Path, description = "id")),
+    request_body = bib_types::SearchEvidenceRequest,
+    responses((status = 200, description = "Search evidence", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn search_evidence(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -375,11 +413,18 @@ async fn search_evidence(
     Ok(Json(serde_json::to_value(page).map_err(internal)?))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct SearchExportInput {
     search: SearchRequestV2,
     format: Option<String>,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/search/export", tag = "bibliography-search",
+    operation_id = "bib_bib_export_search",
+    summary = "Export search",
+    request_body = SearchExportInput,
+    params(("x-search-request-id" = Option<String>, Header)),
+    responses((status = 200, description = "Export search", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn export_search(
     State(shared): State<Arc<BibShared>>,
     headers: HeaderMap,
@@ -405,20 +450,32 @@ async fn export_search(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ParseSearchInput {
     query: String,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/search/parse", tag = "bibliography-search",
+    operation_id = "bib_bib_parse_search_query",
+    summary = "Parse search query",
+    request_body = ParseSearchInput,
+    responses((status = 200, description = "Parse search query", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn parse_search_query(Json(input): Json<ParseSearchInput>) -> ApiResult {
     let expression = bib_types::parse_search_query(&input.query)
         .map_err(|e| error(StatusCode::BAD_REQUEST, e.to_string()))?;
     Ok(Json(json!({"expression":expression})))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CancelSearchInput {
     request_id: String,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/search/cancel", tag = "bibliography-search",
+    operation_id = "bib_bib_cancel_search_request",
+    summary = "Cancel search request",
+    request_body = CancelSearchInput,
+    responses((status = 202, description = "Cancel search request", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn cancel_search_request(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<CancelSearchInput>,
@@ -444,6 +501,13 @@ async fn cancellable_search<T>(
     tokio::select! {biased; _=guard.cancelled()=>Err(bib_base::Error::SearchCancelled),result=future=>result}
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/search/explore", tag = "bibliography-search",
+    operation_id = "bib_bib_explore_literature",
+    summary = "Explore literature",
+    request_body = bib_base::literature_exploration::ExplorationRequest,
+    params(("x-search-request-id" = Option<String>, Header)),
+    responses((status = 200, description = "Explore literature", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn explore_literature(
     State(shared): State<Arc<BibShared>>,
     headers: HeaderMap,
@@ -506,18 +570,34 @@ async fn explore_literature(
     }
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/search/status", tag = "bibliography-search",
+    operation_id = "bib_bib_search_index_status",
+    summary = "Search index status",
+    responses((status = 200, description = "Search index status", body = bib_types::SearchIndexStatus, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn search_index_status(State(shared): State<Arc<BibShared>>) -> ApiResult {
     Ok(Json(
         serde_json::to_value(shared.bib.search_index_status().await.map_err(internal)?)
             .map_err(internal)?,
     ))
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/search/semantic", tag = "bibliography-search",
+    operation_id = "bib_bib_semantic_search_status",
+    summary = "Semantic search status",
+    responses((status = 200, description = "Semantic search status", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn semantic_search_status(State(shared): State<Arc<BibShared>>) -> ApiResult {
     Ok(Json(
         serde_json::to_value(shared.bib.semantic_search_status().map_err(search_error)?)
             .map_err(internal)?,
     ))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/search/semantic/models", tag = "bibliography-search",
+    operation_id = "bib_bib_semantic_models",
+    summary = "Semantic models",
+    request_body = bib_base::semantic_service::SemanticModelDiscovery,
+    responses((status = 200, description = "Semantic models", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn semantic_models(
     Json(input): Json<bib_base::semantic_service::SemanticModelDiscovery>,
 ) -> ApiResult {
@@ -526,6 +606,12 @@ async fn semantic_models(
         .map_err(search_error)?;
     Ok(Json(json!({"models":models})))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/search/semantic/maintenance", tag = "bibliography-search",
+    operation_id = "bib_bib_semantic_maintenance",
+    summary = "Semantic maintenance",
+    request_body = bib_base::semantic_service::SemanticMaintenanceRequest,
+    responses((status = 202, description = "Semantic maintenance", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn semantic_maintenance(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<bib_base::semantic_service::SemanticMaintenanceRequest>,
@@ -542,6 +628,12 @@ async fn semantic_maintenance(
         ),
     ))
 }
+#[utoipa::path(method(put), path = "/api/v1/bib/search/semantic", tag = "bibliography-search",
+    operation_id = "bib_bib_configure_semantic_search",
+    summary = "Configure semantic search",
+    request_body = bib_base::semantic_service::SemanticConfig,
+    responses((status = 202, description = "Configure semantic search", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn configure_semantic_search(
     State(shared): State<Arc<BibShared>>,
     Json(config): Json<bib_base::semantic_service::SemanticConfig>,
@@ -558,6 +650,11 @@ async fn configure_semantic_search(
         ),
     ))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/search/rebuild", tag = "bibliography-search",
+    operation_id = "bib_bib_rebuild_search_index",
+    summary = "Rebuild search index",
+    responses((status = 202, description = "Rebuild search index", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn rebuild_search_index(
     State(shared): State<Arc<BibShared>>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<ApiError>)> {
@@ -580,6 +677,13 @@ async fn rebuild_search_index(
     ))
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/search/v2", tag = "bibliography-search",
+    operation_id = "bib_bib_search_local_v2",
+    summary = "Search local v2",
+    request_body = SearchRequestV2,
+    params(("x-search-request-id" = Option<String>, Header)),
+    responses((status = 200, description = "Search local v2", body = bib_types::SearchPageV2, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn search_local_v2(
     State(shared): State<Arc<BibShared>>,
     headers: HeaderMap,
@@ -594,6 +698,12 @@ async fn search_local_v2(
     Ok(Json(payload))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles", tag = "bibliography",
+    operation_id = "bib_bib_list_articles",
+    summary = "List articles",
+    params(("limit" = Option<usize>, Query), ("offset" = Option<usize>, Query), ("query" = Option<String>, Query)),
+    responses((status = 200, description = "List articles", body = crate::bib_openapi::ArticleListResponse, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_articles(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -619,6 +729,12 @@ async fn list_articles(
     ))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/unfiled", tag = "bibliography",
+    operation_id = "bib_bib_list_unfiled_articles",
+    summary = "List unfiled articles",
+    params(("limit" = Option<usize>, Query), ("offset" = Option<usize>, Query), ("query" = Option<String>, Query)),
+    responses((status = 200, description = "List unfiled articles", body = crate::bib_openapi::ArticleListResponse, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_unfiled_articles(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -643,7 +759,7 @@ async fn list_unfiled_articles(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CreateArticleRequest {
     title: String,
     doi: Option<String>,
@@ -664,6 +780,12 @@ struct CreateArticleRequest {
     source: Option<String>,
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles", tag = "bibliography",
+    operation_id = "bib_bib_create_article",
+    summary = "Create article",
+    request_body = CreateArticleRequest,
+    responses((status = 201, description = "Create article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn create_article(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<CreateArticleRequest>,
@@ -793,6 +915,12 @@ fn parse_article_source(source: Option<&str>) -> ArticleSource {
     }
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/import", tag = "bibliography",
+    operation_id = "bib_bib_import_article",
+    summary = "Import article",
+    request_body = ImportArticleRequest,
+    responses((status = 200, description = "Import article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn import_article(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<ImportArticleRequest>,
@@ -872,7 +1000,7 @@ async fn import_article(
     })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct ImportArticleRequest {
     collection_id: Option<String>,
     id_type: String,
@@ -920,6 +1048,12 @@ fn parse_id_kind(value: &str) -> Option<IdKind> {
     }
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}", tag = "bibliography",
+    operation_id = "bib_bib_get_article",
+    summary = "Get article",
+    params(("id" = String, Path, description = "id"), FulltextPageQuery),
+    responses((status = 200, description = "Get article", body = crate::bib_openapi::ArticleDetailResponse, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_article(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -964,7 +1098,7 @@ async fn get_article(
     })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct UpdateArticleRequest {
     #[serde(flatten)]
     article: Article,
@@ -1018,6 +1152,12 @@ fn validate_edited_article(article: &mut Article) -> Result<(), (StatusCode, Jso
     }
     Ok(())
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/manual", tag = "bibliography",
+    operation_id = "bib_bib_create_manual_article",
+    summary = "Create manual article",
+    request_body = Article,
+    responses((status = 201, description = "Create manual article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn create_manual_article(
     State(shared): State<Arc<BibShared>>,
     Json(mut article): Json<Article>,
@@ -1034,6 +1174,13 @@ async fn create_manual_article(
     ))
 }
 
+#[utoipa::path(method(put), path = "/api/v1/bib/articles/{id}", tag = "bibliography",
+    operation_id = "bib_bib_update_article",
+    summary = "Update article",
+    params(("id" = String, Path, description = "id")),
+    request_body = UpdateArticleRequest,
+    responses((status = 200, description = "Update article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn update_article(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1051,11 +1198,17 @@ async fn update_article(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 struct ArticleTrashQuery {
     limit: Option<usize>,
     offset: Option<usize>,
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/trash", tag = "bibliography",
+    operation_id = "bib_bib_list_article_trash",
+    summary = "List article trash",
+    params(ArticleTrashQuery),
+    responses((status = 200, description = "List article trash", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_article_trash(
     State(shared): State<Arc<BibShared>>,
     Query(input): Query<ArticleTrashQuery>,
@@ -1070,6 +1223,12 @@ async fn list_article_trash(
         .map_err(internal)?;
     Ok(Json(json!({"articles":articles,"total":total})))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/restore", tag = "bibliography",
+    operation_id = "bib_bib_restore_article",
+    summary = "Restore article",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Restore article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn restore_article(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1081,6 +1240,12 @@ async fn restore_article(
         .map_err(reliability_error)?;
     Ok(Json(json!({"restored":restored,"id":id})))
 }
+#[utoipa::path(method(delete), path = "/api/v1/bib/articles/{id}", tag = "bibliography",
+    operation_id = "bib_bib_delete_article",
+    summary = "Delete article",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Delete article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
     let deleted = shared
         .bib
@@ -1089,6 +1254,12 @@ async fn delete_article(State(shared): State<Arc<BibShared>>, Path(id): Path<Str
         .map_err(reliability_error)?;
     Ok(Json(json!({"deleted":deleted,"trashed":true,"id":id})))
 }
+#[utoipa::path(method(delete), path = "/api/v1/bib/articles/{id}/permanent", tag = "bibliography",
+    operation_id = "bib_bib_permanently_delete_article",
+    summary = "Permanently delete article",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Permanently delete article", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn permanently_delete_article(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1191,6 +1362,12 @@ async fn structure_response(
     Ok(Json(json!({ "structure": structure })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/fulltext/structured", tag = "bibliography-attachments",
+    operation_id = "bib_bib_get_structured_fulltext",
+    summary = "Get structured fulltext",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Get structured fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_structured_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1198,6 +1375,12 @@ async fn get_structured_fulltext(
     structure_response(&shared, &id, None, false).await
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/fulltext/structured", tag = "bibliography-attachments",
+    operation_id = "bib_bib_generate_structured_fulltext",
+    summary = "Generate structured fulltext",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Generate structured fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn generate_structured_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1205,6 +1388,12 @@ async fn generate_structured_fulltext(
     structure_response(&shared, &id, None, true).await
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/attachments/{key}/fulltext/structured", tag = "bibliography-attachments",
+    operation_id = "bib_bib_get_attachment_structure",
+    summary = "Get attachment structure",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "Get attachment structure", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_attachment_structure(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1212,6 +1401,12 @@ async fn get_attachment_structure(
     structure_response(&shared, &id, Some(&key), false).await
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/attachments/{key}/fulltext/structured", tag = "bibliography-attachments",
+    operation_id = "bib_bib_generate_attachment_structure",
+    summary = "Generate attachment structure",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "Generate attachment structure", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn generate_attachment_structure(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1219,6 +1414,12 @@ async fn generate_attachment_structure(
     structure_response(&shared, &id, Some(&key), true).await
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/fulltext", tag = "bibliography-attachments",
+    operation_id = "bib_bib_get_fulltext",
+    summary = "Get fulltext",
+    params(("id" = String, Path, description = "id"), FulltextPageQuery),
+    responses((status = 200, description = "Get fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1249,6 +1450,12 @@ async fn get_fulltext(
     ))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/attachments", tag = "bibliography-attachments",
+    operation_id = "bib_bib_list_attachments",
+    summary = "List attachments",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "List attachments", body = crate::bib_openapi::AttachmentListResponse, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_attachments(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1267,6 +1474,13 @@ struct AttachmentUpload {
     content: Option<axum::body::Bytes>,
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/attachments", tag = "bibliography-attachments",
+    operation_id = "bib_bib_upload_attachment",
+    summary = "Upload attachment",
+    params(("id" = String, Path, description = "id")),
+    request_body(content = crate::bib_openapi::AttachmentUpload, content_type = "multipart/form-data"),
+    responses((status = 201, description = "Upload attachment", body = crate::bib_openapi::AttachmentResponse, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict"), (status = 413, description = "Upload exceeds the 256 MiB request body limit")),
+)]
 async fn upload_attachment(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1463,6 +1677,12 @@ async fn upload_attachment(
     ))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/attachments/{key}", tag = "bibliography-attachments",
+    operation_id = "bib_bib_get_attachment",
+    summary = "Get attachment",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "Get attachment", body = crate::bib_openapi::AttachmentResponse, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1477,10 +1697,16 @@ async fn get_attachment(
     Ok(Json(json!({ "attachment": attachment })))
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, utoipa::IntoParams)]
 struct AttachmentDownloadQuery {
     expected_hash: Option<String>,
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/attachments/{key}/raw", tag = "bibliography-attachments",
+    operation_id = "bib_bib_download_attachment",
+    summary = "Download attachment (binary file; supports HTTP Range where applicable)",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key"), AttachmentDownloadQuery),
+    responses((status = 200, description = "Download attachment (binary file; supports HTTP Range where applicable)", body = String, content_type = "application/octet-stream"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn download_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1565,6 +1791,12 @@ async fn download_attachment(
     Ok(response)
 }
 
+#[utoipa::path(method(put), path = "/api/v1/bib/articles/{id}/attachments/{key}/preferred", tag = "bibliography-attachments",
+    operation_id = "bib_bib_set_preferred_attachment",
+    summary = "Set preferred attachment",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "Set preferred attachment", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn set_preferred_attachment(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1630,6 +1862,12 @@ async fn set_preferred_attachment(
     Ok(Json(json!({ "attachment": attachment })))
 }
 
+#[utoipa::path(method(delete), path = "/api/v1/bib/articles/{id}/attachments/{key}", tag = "bibliography-attachments",
+    operation_id = "bib_bib_delete_attachment_by_key",
+    summary = "Delete attachment by key",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "Delete attachment by key", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_attachment_by_key(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1678,6 +1916,12 @@ async fn delete_attachment_by_key(
     })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/attachments/{key}/fulltext", tag = "bibliography-attachments",
+    operation_id = "bib_bib_get_attachment_fulltext",
+    summary = "Get attachment fulltext",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key"), FulltextPageQuery),
+    responses((status = 200, description = "Get attachment fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_attachment_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1715,6 +1959,12 @@ async fn get_attachment_fulltext(
     ))
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/attachments/{key}/fulltext/reextract", tag = "bibliography-attachments",
+    operation_id = "bib_bib_reextract_attachment_fulltext",
+    summary = "Reextract attachment fulltext",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "Reextract attachment fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn reextract_attachment_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -1760,6 +2010,13 @@ async fn reextract_attachment_fulltext(
     Ok(Json(json!({ "fulltext": fulltext })))
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/fulltext", tag = "bibliography-attachments",
+    operation_id = "bib_bib_upload_fulltext",
+    summary = "Upload fulltext",
+    params(("id" = String, Path, description = "id")),
+    request_body(content = crate::bib_openapi::FulltextUpload, content_type = "multipart/form-data"),
+    responses((status = 200, description = "Upload fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict"), (status = 413, description = "Upload exceeds the 256 MiB request body limit")),
+)]
 async fn upload_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1890,6 +2147,12 @@ async fn upload_fulltext(
 /// Europe PMC paths) must be re-uploaded instead. The row resets to
 /// `pending`, a background task claims it, and the response carries the
 /// reset row so clients can poll for the terminal state.
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/fulltext/reextract", tag = "bibliography-attachments",
+    operation_id = "bib_bib_reextract_fulltext",
+    summary = "Reextract fulltext",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Reextract fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn reextract_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -1942,6 +2205,12 @@ async fn reextract_fulltext(
     Ok(Json(json!({ "fulltext": fulltext })))
 }
 
+#[utoipa::path(method(get, head), path = "/api/v1/bib/articles/{id}/fulltext/raw", tag = "bibliography-attachments",
+    operation_id = "bib_bib_download_fulltext",
+    summary = "Download fulltext (binary file; supports HTTP Range where applicable)",
+    params(("Range" = Option<String>, Header), ("If-Range" = Option<String>, Header), ("id" = String, Path, description = "id")),
+    responses((status = 206, description = "Requested byte range", body = String, content_type = "application/octet-stream"), (status = 416, description = "Invalid byte range"), (status = 200, description = "Download fulltext (binary file; supports HTTP Range where applicable)", body = String, content_type = "application/octet-stream"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn download_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2070,6 +2339,12 @@ async fn download_fulltext(
 /// Figures are small (bounded at extraction time), so unlike the raw-file
 /// route there is no Range support — the whole object streams inline for
 /// `<img>` rendering.
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/fulltext/images/{name}", tag = "bibliography-attachments",
+    operation_id = "bib_bib_download_figure",
+    summary = "Download figure (binary file; supports HTTP Range where applicable)",
+    params(("id" = String, Path, description = "id"), ("name" = String, Path, description = "name")),
+    responses((status = 200, description = "Download figure (binary file; supports HTTP Range where applicable)", body = String, content_type = "application/octet-stream"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn download_figure(
     State(shared): State<Arc<BibShared>>,
     Path((id, name)): Path<(String, String)>,
@@ -2160,6 +2435,12 @@ async fn download_figure(
     Ok(response)
 }
 
+#[utoipa::path(method(delete), path = "/api/v1/bib/articles/{id}/fulltext", tag = "bibliography-attachments",
+    operation_id = "bib_bib_delete_fulltext",
+    summary = "Delete fulltext",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Delete fulltext", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_fulltext(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2182,6 +2463,12 @@ async fn delete_fulltext(
     Ok(Json(json!({ "deleted": true, "id": id })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/annotations", tag = "bibliography-annotations",
+    operation_id = "bib_bib_list_annotations",
+    summary = "List annotations",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "List annotations", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_annotations(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2195,7 +2482,7 @@ async fn list_annotations(
     Ok(Json(json!({ "annotations": annotations })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AddAnnotationRequest {
     content: String,
     kind: Option<String>,
@@ -2205,6 +2492,13 @@ struct AddAnnotationRequest {
     attachment_key: Option<String>,
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/annotations", tag = "bibliography-annotations",
+    operation_id = "bib_bib_add_annotation",
+    summary = "Add annotation",
+    params(("id" = String, Path, description = "id")),
+    request_body = AddAnnotationRequest,
+    responses((status = 201, description = "Add annotation", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn add_annotation(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2237,6 +2531,13 @@ async fn add_annotation(
     ))
 }
 
+#[utoipa::path(method(patch), path = "/api/v1/bib/annotations/{id}", tag = "bibliography-annotations",
+    operation_id = "bib_bib_update_annotation",
+    summary = "Update annotation",
+    params(("id" = String, Path, description = "id")),
+    request_body = bib_types::AnnotationUpdate,
+    responses((status = 200, description = "Update annotation", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn update_annotation(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2286,6 +2587,12 @@ async fn update_annotation(
     Ok(Json(json!({ "annotation": annotation })))
 }
 
+#[utoipa::path(method(delete), path = "/api/v1/bib/annotations/{id}", tag = "bibliography-annotations",
+    operation_id = "bib_bib_delete_annotation",
+    summary = "Delete annotation",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Delete annotation", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_annotation(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2294,6 +2601,12 @@ async fn delete_annotation(
     Ok(Json(json!({ "deleted": true, "id": id })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/articles/{id}/attachments/{key}/annotations", tag = "bibliography-attachments",
+    operation_id = "bib_bib_list_attachment_annotations",
+    summary = "List attachment annotations",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    responses((status = 200, description = "List attachment annotations", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_attachment_annotations(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -2313,6 +2626,13 @@ async fn list_attachment_annotations(
     Ok(Json(json!({ "annotations": annotations })))
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/articles/{id}/attachments/{key}/annotations", tag = "bibliography-attachments",
+    operation_id = "bib_bib_add_attachment_annotation",
+    summary = "Add attachment annotation",
+    params(("id" = String, Path, description = "id"), ("key" = String, Path, description = "key")),
+    request_body = AddAnnotationRequest,
+    responses((status = 201, description = "Add attachment annotation", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn add_attachment_annotation(
     State(shared): State<Arc<BibShared>>,
     Path((id, key)): Path<(String, String)>,
@@ -2376,6 +2696,12 @@ fn bool_param(
     }
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/collections", tag = "bibliography-collections",
+    operation_id = "bib_bib_list_collections",
+    summary = "List collections",
+    params(("include_deleted" = Option<bool>, Query), ("view" = Option<String>, Query)),
+    responses((status = 200, description = "List collections", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_collections(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -2397,6 +2723,12 @@ async fn list_collections(
     Ok(Json(json!({"collections":collections})))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/collections/changes", tag = "bibliography-collections",
+    operation_id = "bib_bib_collection_changes",
+    summary = "Collection changes",
+    params(("since" = Option<u64>, Query, description = "Last observed collection revision; waits up to 25 seconds for a change")),
+    responses((status = 200, description = "Collection changes", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn collection_changes(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -2417,6 +2749,11 @@ async fn collection_changes(
     Ok(Json(json!({"revision":revision})))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/collections/top", tag = "bibliography-collections",
+    operation_id = "bib_bib_list_top_collections",
+    summary = "List top collections",
+    responses((status = 200, description = "List top collections", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_top_collections(State(shared): State<Arc<BibShared>>) -> ApiResult {
     let collections = shared
         .bib
@@ -2427,6 +2764,12 @@ async fn list_top_collections(State(shared): State<Arc<BibShared>>) -> ApiResult
         json!({"collections":collections.into_iter().filter(|c|c.parent_id.is_none()).collect::<Vec<_>>()}),
     ))
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/collections/{id}/collections", tag = "bibliography-collections",
+    operation_id = "bib_bib_list_child_collections",
+    summary = "List child collections",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "List child collections", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_child_collections(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2446,6 +2789,11 @@ async fn list_child_collections(
         json!({"collections":collections.into_iter().filter(|c|c.parent_id.as_deref()==Some(id.as_str())).collect::<Vec<_>>()}),
     ))
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/collections/trash", tag = "bibliography-collections",
+    operation_id = "bib_bib_list_trashed_collections",
+    summary = "List trashed collections",
+    responses((status = 200, description = "List trashed collections", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_trashed_collections(State(shared): State<Arc<BibShared>>) -> ApiResult {
     let collections = shared
         .bib
@@ -2456,6 +2804,13 @@ async fn list_trashed_collections(State(shared): State<Arc<BibShared>>) -> ApiRe
         json!({"collections":collections.into_iter().filter(|c|c.deleted).collect::<Vec<_>>()}),
     ))
 }
+#[utoipa::path(method(patch), path = "/api/v1/bib/collections/{id}", tag = "bibliography-collections",
+    operation_id = "bib_bib_update_collection",
+    summary = "Update collection",
+    params(("id" = String, Path, description = "id")),
+    request_body = crate::bib_openapi::CollectionPatch,
+    responses((status = 200, description = "Update collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn update_collection(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2494,6 +2849,12 @@ async fn update_collection(
         .map_err(collection_error)?;
     get_collection(State(shared), Path(id)).await
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/collections/{id}/restore", tag = "bibliography-collections",
+    operation_id = "bib_bib_restore_collection",
+    summary = "Restore collection",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Restore collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn restore_collection(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2506,7 +2867,7 @@ async fn restore_collection(
     Ok(Json(json!({"restored_ids":restored_ids})))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct CreateCollectionRequest {
     name: String,
     parent_id: Option<String>,
@@ -2515,6 +2876,12 @@ struct CreateCollectionRequest {
     tags: Vec<String>,
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/collections", tag = "bibliography-collections",
+    operation_id = "bib_bib_create_collection",
+    summary = "Create collection",
+    request_body = CreateCollectionRequest,
+    responses((status = 201, description = "Create collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn create_collection(
     State(shared): State<Arc<BibShared>>,
     Json(input): Json<CreateCollectionRequest>,
@@ -2544,6 +2911,12 @@ async fn create_collection(
     ))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/collections/{id}", tag = "bibliography-collections",
+    operation_id = "bib_bib_get_collection",
+    summary = "Get collection",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Get collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn get_collection(State(shared): State<Arc<BibShared>>, Path(id): Path<String>) -> ApiResult {
     let collection = shared
         .bib
@@ -2554,6 +2927,12 @@ async fn get_collection(State(shared): State<Arc<BibShared>>, Path(id): Path<Str
     Ok(Json(json!({ "collection": collection })))
 }
 
+#[utoipa::path(method(delete), path = "/api/v1/bib/collections/{id}", tag = "bibliography-collections",
+    operation_id = "bib_bib_delete_collection",
+    summary = "Delete collection",
+    params(("id" = String, Path, description = "id"), ("permanent" = Option<bool>, Query)),
+    responses((status = 200, description = "Delete collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_collection(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2593,6 +2972,12 @@ async fn delete_collection(
     ))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/collections/{id}/articles", tag = "bibliography-collections",
+    operation_id = "bib_bib_list_collection_articles",
+    summary = "List collection articles",
+    params(("id" = String, Path, description = "id"), ("include_descendants" = Option<bool>, Query), ("limit" = Option<usize>, Query), ("offset" = Option<usize>, Query), ("query" = Option<String>, Query)),
+    responses((status = 200, description = "List collection articles", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_collection_articles(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2618,13 +3003,20 @@ async fn list_collection_articles(
     ))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct AddToCollectionRequest {
     article_id: String,
     role: Option<String>,
     note: Option<String>,
 }
 
+#[utoipa::path(method(post), path = "/api/v1/bib/collections/{id}/articles", tag = "bibliography-collections",
+    operation_id = "bib_bib_add_to_collection",
+    summary = "Add to collection",
+    params(("id" = String, Path, description = "id")),
+    request_body = AddToCollectionRequest,
+    responses((status = 200, description = "Add to collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn add_to_collection(
     State(shared): State<Arc<BibShared>>,
     Path(collection_id): Path<String>,
@@ -2689,6 +3081,12 @@ fn parse_article_role(role: Option<&str>) -> ArticleRole {
     }
 }
 
+#[utoipa::path(method(delete), path = "/api/v1/bib/collections/{id}/articles/{article_id}", tag = "bibliography-collections",
+    operation_id = "bib_bib_remove_from_collection",
+    summary = "Remove from collection",
+    params(("id" = String, Path, description = "id"), ("article_id" = String, Path, description = "article id")),
+    responses((status = 200, description = "Remove from collection", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn remove_from_collection(
     State(shared): State<Arc<BibShared>>,
     Path((collection_id, article_id)): Path<(String, String)>,
@@ -2705,11 +3103,18 @@ async fn remove_from_collection(
     })))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 struct UpdateCollectionStatusRequest {
     status: String,
 }
 
+#[utoipa::path(method(put), path = "/api/v1/bib/collections/{id}/status", tag = "bibliography-collections",
+    operation_id = "bib_bib_update_collection_status",
+    summary = "Update collection status",
+    params(("id" = String, Path, description = "id")),
+    request_body = UpdateCollectionStatusRequest,
+    responses((status = 200, description = "Update collection status", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn update_collection_status(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -2734,6 +3139,12 @@ async fn update_collection_status(
     Ok(Json(json!({ "id": id, "status": input.status })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/requests", tag = "bibliography",
+    operation_id = "bib_bib_list_requests",
+    summary = "List requests",
+    params(("collection_id" = Option<String>, Query)),
+    responses((status = 200, description = "List requests", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_requests(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -2747,6 +3158,12 @@ async fn list_requests(
     Ok(Json(json!({ "requests": requests })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/export", tag = "bibliography",
+    operation_id = "bib_bib_export",
+    summary = "Export",
+    params(("collection_id" = Option<String>, Query), ("format" = Option<String>, Query), ("ids" = Option<String>, Query), ("include_descendants" = Option<bool>, Query), ("limit" = Option<usize>, Query), ("query" = Option<String>, Query), ("unfiled" = Option<bool>, Query)),
+    responses((status = 200, description = "Export", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn export(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,
@@ -2818,6 +3235,12 @@ async fn export(
     })))
 }
 
+#[utoipa::path(method(get), path = "/api/v1/bib/search/external", tag = "bibliography-search",
+    operation_id = "bib_bib_search_external",
+    summary = "Search external",
+    params(("limit" = Option<usize>, Query), ("query" = Option<String>, Query), ("sources" = Option<String>, Query)),
+    responses((status = 200, description = "Search external", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn search_external(
     State(shared): State<Arc<BibShared>>,
     Query(params): Query<HashMap<String, String>>,

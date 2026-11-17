@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Composable local HTTP API server hosted by the Autonomics gateway daemon."
 
 [dependencies]
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 zip.workspace = true
 manuscript-engine = { path = "../manuscript-engine" }
 manuscript-core = { path = "../manuscript-core" }
@@ -33,6 +34,7 @@ ppt-base = { path = "../ppt-base", features = ["vfs"] }
 ppt-types = { path = "../ppt-types" }
 
 [dev-dependencies]
+syn = { version = "2", features = ["full", "visit"] }
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 rusqlite = "0.40.1"

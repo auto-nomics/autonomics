@@ -33,7 +33,7 @@ pub fn now_ms() -> i64 {
 }
 
 /// User-editable feed definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct FeedSpec {
     pub name: String,

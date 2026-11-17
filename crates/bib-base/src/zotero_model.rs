@@ -245,7 +245,7 @@ CREATE INDEX IF NOT EXISTS searchTerms_articleID ON searchTerms(articleID);
 ";
 
 /// A Zotero-style stored attachment plus project-specific VFS metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct StoredAttachment {
     pub item_id: i64,
     pub parent_item_id: i64,

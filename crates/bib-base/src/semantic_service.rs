@@ -14,7 +14,7 @@ use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use turso::Connection;
 mod maintenance;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SemanticModelDiscovery {
     pub origin: String,
@@ -125,7 +125,7 @@ impl crate::BibBase {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct SemanticConfig {
     pub enabled: bool,
@@ -134,9 +134,12 @@ pub struct SemanticConfig {
     pub allow_remote: bool,
     pub model: String,
     pub model_digest: String,
+    #[schema(value_type = Object)]
     pub profile: SemanticProfile,
     pub batch_size: usize,
+    #[schema(value_type = Object)]
     pub inference: OllamaInferenceOptions,
+    #[schema(value_type = Object)]
     pub limits: SemanticLimits,
     pub timeout_seconds: u64,
 }
@@ -223,7 +226,7 @@ pub enum SemanticPhase {
     Paused,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticMaintenanceAction {
     Rebuild,
@@ -231,7 +234,7 @@ pub enum SemanticMaintenanceAction {
     Resume,
     Cancel,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SemanticMaintenanceRequest {
     pub action: SemanticMaintenanceAction,

@@ -46,16 +46,32 @@ pub(crate) fn router() -> Router<Arc<BibShared>> {
 async fn scheduler(shared: &BibShared) -> Result<rss::RssScheduler> {
     shared.rss_service().await.map_err(error)
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/rss/feeds", tag = "bibliography-rss",
+    operation_id = "bib_rss_list_feeds",
+    summary = "List feeds",
+    responses((status = 200, description = "List feeds", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn list_feeds(State(shared): State<Arc<BibShared>>) -> Result<Json<Value>> {
     Ok(Json(
         json!({"feeds": shared.rss.list_feeds().await.map_err(error)?}),
     ))
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/rss/status", tag = "bibliography-rss",
+    operation_id = "bib_rss_status",
+    summary = "Status",
+    responses((status = 200, description = "Status", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn status(State(shared): State<Arc<BibShared>>) -> Result<Json<Value>> {
     Ok(Json(
         json!({"scheduler": scheduler(&shared).await?.status()}),
     ))
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/rss/feeds", tag = "bibliography-rss",
+    operation_id = "bib_rss_create_feed",
+    summary = "Create feed",
+    request_body = rss::FeedSpec,
+    responses((status = 201, description = "Create feed", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn create_feed(
     State(shared): State<Arc<BibShared>>,
     Json(spec): Json<rss::FeedSpec>,
@@ -64,6 +80,12 @@ async fn create_feed(
     scheduler(&shared).await?;
     Ok((StatusCode::CREATED, Json(json!({"feed": feed}))))
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/rss/feeds/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_read_feed",
+    summary = "Read feed",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Read feed", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn read_feed(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -72,12 +94,19 @@ async fn read_feed(
         json!({"feed": shared.rss.get_feed(&id).await.map_err(error)?}),
     ))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct Replace {
     version: u64,
     spec: rss::FeedSpec,
 }
+#[utoipa::path(method(put), path = "/api/v1/bib/rss/feeds/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_replace_feed",
+    summary = "Replace feed",
+    params(("id" = String, Path, description = "id")),
+    request_body = Replace,
+    responses((status = 200, description = "Replace feed", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn replace_feed(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -87,11 +116,17 @@ async fn replace_feed(
         json!({"feed": shared.rss.replace_feed(&id, input.version, input.spec).await.map_err(error)?}),
     ))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 struct Version {
     version: u64,
 }
+#[utoipa::path(method(delete), path = "/api/v1/bib/rss/feeds/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_delete_feed",
+    summary = "Delete feed",
+    params(("id" = String, Path, description = "id"), Version),
+    responses((status = 204, description = "Completed"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_feed(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -104,12 +139,19 @@ async fn delete_feed(
         .map_err(error)?;
     Ok(StatusCode::NO_CONTENT)
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct Enabled {
     version: u64,
     enabled: bool,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/rss/feeds/{id}/enabled", tag = "bibliography-rss",
+    operation_id = "bib_rss_set_enabled",
+    summary = "Set enabled",
+    params(("id" = String, Path, description = "id")),
+    request_body = Enabled,
+    responses((status = 200, description = "Set enabled", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn set_enabled(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -125,6 +167,12 @@ async fn set_enabled(
 }
 /// Fetch one feed now. A failing fetch still returns the outcome payload so
 /// the GUI can render per-feed errors; only transport/authorization fails.
+#[utoipa::path(method(post), path = "/api/v1/bib/rss/feeds/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_check_feed",
+    summary = "Check feed",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Check feed", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn check_feed(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -139,7 +187,7 @@ async fn check_feed(
         }}))),
     }
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::IntoParams)]
 #[serde(default, deny_unknown_fields)]
 struct ItemPage {
     feed: Option<String>,
@@ -155,6 +203,12 @@ impl Default for ItemPage {
         }
     }
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/rss/items", tag = "bibliography-rss",
+    operation_id = "bib_rss_items",
+    summary = "Items",
+    params(ItemPage),
+    responses((status = 200, description = "Items", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn items(
     State(shared): State<Arc<BibShared>>,
     Query(page): Query<ItemPage>,
@@ -166,6 +220,12 @@ async fn items(
         .map_err(error)?;
     Ok(Json(json!({"items": items, "next": next})))
 }
+#[utoipa::path(method(get), path = "/api/v1/bib/rss/items/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_read_item",
+    summary = "Read item",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 200, description = "Read item", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn read_item(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -174,11 +234,18 @@ async fn read_item(
         json!({"item": shared.rss.get_item(&id).await.map_err(error)?}),
     ))
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct Read {
     read: bool,
 }
+#[utoipa::path(method(put), path = "/api/v1/bib/rss/items/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_set_item_read",
+    summary = "Set item read",
+    params(("id" = String, Path, description = "id")),
+    request_body = Read,
+    responses((status = 204, description = "Completed"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn set_item_read(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -191,6 +258,12 @@ async fn set_item_read(
         .map_err(error)?;
     Ok(StatusCode::NO_CONTENT)
 }
+#[utoipa::path(method(delete), path = "/api/v1/bib/rss/items/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_delete_item",
+    summary = "Delete item",
+    params(("id" = String, Path, description = "id")),
+    responses((status = 204, description = "Completed"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn delete_item(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,
@@ -199,11 +272,18 @@ async fn delete_item(
     Ok(StatusCode::NO_CONTENT)
 }
 /// Import one inbox item into the library (optionally into a collection).
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 struct Import {
     collection_id: Option<String>,
 }
+#[utoipa::path(method(post), path = "/api/v1/bib/rss/items/{id}", tag = "bibliography-rss",
+    operation_id = "bib_rss_import_item",
+    summary = "Import item",
+    params(("id" = String, Path, description = "id")),
+    request_body = Import,
+    responses((status = 200, description = "Import item", body = Value, content_type = "application/json"), (status = 400, description = "Invalid input"), (status = 401, description = "Authentication required when AUTONOMICS_HTTP_API_TOKEN is set"), (status = 404, description = "Record, attachment, collection or session not found"), (status = 409, description = "Revision, fingerprint or identity conflict")),
+)]
 async fn import_item(
     State(shared): State<Arc<BibShared>>,
     Path(id): Path<String>,

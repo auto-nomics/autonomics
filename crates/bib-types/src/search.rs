@@ -7,7 +7,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Bibliographic or textual field addressed by a search expression.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchField {
     Any,
@@ -24,7 +26,7 @@ pub enum SearchField {
 }
 
 /// Boolean and fielded search expression.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum SearchExpr {
     Term {
@@ -38,12 +40,15 @@ pub enum SearchExpr {
         field: Option<SearchField>,
     },
     And {
+        #[schema(no_recursion)]
         clauses: Vec<SearchExpr>,
     },
     Or {
+        #[schema(no_recursion)]
         clauses: Vec<SearchExpr>,
     },
     Not {
+        #[schema(no_recursion)]
         clause: Box<SearchExpr>,
     },
     Range {
@@ -56,7 +61,9 @@ pub enum SearchExpr {
 }
 
 /// The local bibliography region searched by a request.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default, utoipa::ToSchema,
+)]
 #[serde(default)]
 pub struct SearchScope {
     pub library_id: Option<i64>,
@@ -70,7 +77,9 @@ pub struct SearchScope {
 }
 
 /// Requested ordering for results.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchSort {
     #[default]
@@ -83,7 +92,7 @@ pub enum SearchSort {
 
 /// Unified query request. Cursors are opaque and scoped to the query and index
 /// generation that produced them.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(default)]
 pub struct SearchRequestV2 {
     /// Query-language input. Supply either query or expression.
@@ -131,7 +140,7 @@ impl Default for SearchRequestV2 {
 
 /// A document-level local search page. A cursor is valid only for the same
 /// request and unchanged ordered result snapshot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchPageV2 {
     pub hits: Vec<crate::SearchHit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -149,7 +158,7 @@ pub struct SearchPageV2 {
     pub retrieval: Option<SearchRetrieval>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchRetrieval {
     pub algorithm: String,
     pub total_kind: String,
@@ -166,14 +175,14 @@ pub struct SearchRetrieval {
     pub hits: std::collections::BTreeMap<String, SearchRecall>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchRecall {
     pub lexical_rank: Option<usize>,
     pub semantic_rank: Option<usize>,
     pub semantic_evidence: Option<SemanticSearchEvidence>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SemanticSearchEvidence {
     pub doc_id: String,
     pub anchor_key: String,
@@ -189,7 +198,9 @@ pub struct SemanticSearchEvidence {
 
 /// Recall strategy. Hybrid search must preserve exact identifier and Boolean
 /// constraints when those are present in the expression.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchMode {
     #[default]
@@ -234,7 +245,7 @@ mod tests {
 }
 
 /// Local projection progress. Extraction and indexing have separate lifecycles.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchIndexStatus {
     pub engine: String,
     pub source_revision: u64,
@@ -250,7 +261,9 @@ pub struct SearchIndexStatus {
 
 /// Exact metadata predicates: OR within each list, AND between fields.
 /// Empty lists impose no restriction; year bounds exclude missing years.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(default)]
 pub struct SearchFilters {
     pub tag_ids: Vec<i64>,
@@ -266,7 +279,9 @@ pub struct SearchFilters {
     pub fulltext_status: Option<SearchFulltextStatus>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SearchFulltextStatus {
     Indexed,
@@ -275,7 +290,7 @@ pub enum SearchFulltextStatus {
     Missing,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchFacets {
     pub tags: Vec<SearchFacetValue>,
     pub creators: Vec<SearchFacetValue>,
@@ -285,14 +300,14 @@ pub struct SearchFacets {
 }
 
 /// Counts are distinct parent articles; each facet ignores its own selection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchFacetValue {
     pub value: String,
     pub label: String,
     pub count: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SavedSearch {
     pub id: String,
     pub name: String,
@@ -303,7 +318,7 @@ pub struct SavedSearch {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SaveSearchInput {
     pub name: String,
     pub request: SearchRequestV2,
@@ -313,20 +328,20 @@ pub struct SaveSearchInput {
 
 /// Half-open Unicode code point range in the returned snippet (not UTF-8 bytes
 /// or JavaScript UTF-16 code units).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchHighlight {
     pub start: usize,
     pub end: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchEvidenceRequest {
     pub search: SearchRequestV2,
     /// Reject stale evidence after edits rather than silently relocating it.
     pub index_generation: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchEvidence {
     pub article_id: String,
     pub item_key: String,
@@ -347,7 +362,7 @@ pub struct SearchEvidence {
     pub semantic_evidence: Option<SemanticSearchEvidence>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SearchEvidencePage {
     pub evidence: Vec<SearchEvidence>,
     /// Distinct evidence objects, not occurrence count or article count.

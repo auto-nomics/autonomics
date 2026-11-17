@@ -4,7 +4,7 @@ use crate::{Article, SearchExpr, SearchField};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoverySort {
     #[default]
@@ -14,7 +14,7 @@ pub enum DiscoverySort {
     CitationCount,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiscoveryFilters {
     pub year_from: Option<u16>,
@@ -25,14 +25,14 @@ pub struct DiscoveryFilters {
 
 /// Native mode is bound to one source. Parameters are allowlisted by its
 /// planner; credentials, pagination and endpoint overrides are forbidden.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NativeSearch {
     pub source: String,
     pub parameters: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiscoveryRequest {
     pub query: String,
@@ -67,7 +67,7 @@ impl Default for DiscoveryRequest {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourcePagination {
     None,
@@ -78,7 +78,7 @@ pub enum SourcePagination {
     History,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourceCapabilities {
     pub source: String,
     pub searchable: bool,
@@ -94,7 +94,7 @@ pub struct SourceCapabilities {
     pub quota: Option<SourceQuota>,
     pub notes: Vec<String>,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceAuthentication {
     None,
@@ -105,14 +105,14 @@ pub enum SourceAuthentication {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourceNotice {
     pub code: String,
     pub message: String,
 }
 
 /// Values reported by upstream headers, in its own budget units.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourceQuota {
     pub limit: Option<f64>,
     pub remaining: Option<f64>,
@@ -120,7 +120,7 @@ pub struct SourceQuota {
     pub observed_at_unix_seconds: u64,
     pub last_http_status: u16,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoverySourceRuntime {
     pub source: String,
     pub occupied_slots: usize,
@@ -129,7 +129,7 @@ pub struct DiscoverySourceRuntime {
     pub blocked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourcePlan {
     pub source: String,
     pub page_size: u16,
@@ -139,7 +139,7 @@ pub struct SourcePlan {
     pub notices: Vec<SourceNotice>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceFailureKind {
     Unsupported,
@@ -155,7 +155,7 @@ pub enum SourceFailureKind {
     Capacity,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourceFailure {
     pub kind: SourceFailureKind,
     pub message: String,
@@ -180,7 +180,7 @@ impl std::fmt::Display for SourceFailure {
 impl std::error::Error for SourceFailure {}
 
 /// Opaque cursor is internal to the session, not a user-editable offset.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct SourcePage {
     pub source: String,
     pub articles: Vec<Article>,
@@ -192,7 +192,7 @@ pub struct SourcePage {
 }
 
 /// One immutable upstream contribution, retained even when records merge.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryRecord {
     pub source: String,
     pub article: Article,
@@ -205,23 +205,23 @@ pub struct DiscoveryRecord {
     pub query_translation: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FieldVariant {
     pub source: String,
     pub source_record_id: String,
     pub value: serde_json::Value,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FieldConflict {
     pub field: String,
     pub variants: Vec<FieldVariant>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CandidateLink {
     pub candidate_id: String,
     pub reason: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryCandidate {
     pub id: String,
     pub fingerprint: String,
@@ -236,7 +236,7 @@ pub struct DiscoveryCandidate {
     pub first_seen: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoverySourcePhase {
     Queued,
@@ -247,14 +247,14 @@ pub enum DiscoverySourcePhase {
     Failed,
     Cancelled,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoverySessionPhase {
     Running,
     Idle,
     Cancelled,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoverySourceStatus {
     pub source: String,
     pub phase: DiscoverySourcePhase,
@@ -270,7 +270,7 @@ pub struct DiscoverySourceStatus {
     pub query_translation: Option<String>,
     pub notices: Vec<SourceNotice>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoverySessionSnapshot {
     pub id: String,
     pub request: DiscoveryRequest,
@@ -281,7 +281,7 @@ pub struct DiscoverySessionSnapshot {
     pub merged_candidates: usize,
     pub sources: Vec<DiscoverySourceStatus>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DiscoveryEventPayload {
     Started,
@@ -312,21 +312,21 @@ pub enum DiscoveryEventPayload {
         phase: DiscoverySessionPhase,
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryEvent {
     pub sequence: u64,
     pub emitted_at: String,
     #[serde(flatten)]
     pub payload: DiscoveryEventPayload,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryEventPage {
     pub events: Vec<DiscoveryEvent>,
     pub sequence: u64,
     /// History eviction is explicit; clients must retrieve a fresh snapshot.
     pub reset_required: bool,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryResultOrder {
     #[default]
@@ -335,7 +335,7 @@ pub enum DiscoveryResultOrder {
     Newest,
     SourceRank,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryResultPage {
     pub candidates: Vec<DiscoveryCandidate>,
     pub obtained_candidates: usize,
@@ -344,7 +344,7 @@ pub struct DiscoveryResultPage {
     pub sequence: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DiscoveryImportSelection {
     pub candidate_id: String,
@@ -352,7 +352,7 @@ pub struct DiscoveryImportSelection {
     #[serde(default)]
     pub record_index: usize,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiscoveryImportRequest {
     pub selections: Vec<DiscoveryImportSelection>,
@@ -361,7 +361,7 @@ pub struct DiscoveryImportRequest {
     pub fetch_fulltext: bool,
 }
 /// Materialized from a checked session snapshot, retained after its TTL.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryImportRecord {
     pub schema_version: u32,
     pub session_id: String,
@@ -372,7 +372,7 @@ pub struct DiscoveryImportRecord {
     pub request: DiscoveryRequest,
     pub plans: Vec<SourcePlan>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryLibraryMatch {
     pub candidate_id: String,
     pub existing: Vec<Article>,
@@ -380,21 +380,21 @@ pub struct DiscoveryLibraryMatch {
     pub differences: Vec<FieldConflict>,
     pub error: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryImportPreview {
     pub library_id: i64,
     pub collection_id: Option<String>,
     pub editable: bool,
     pub items: Vec<DiscoveryLibraryMatch>,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryImportStatus {
     Imported,
     AlreadyPresent,
     Failed,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryImportOutcome {
     pub candidate_id: String,
     pub status: DiscoveryImportStatus,
@@ -405,12 +405,12 @@ pub struct DiscoveryImportOutcome {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryStoredProvenance {
     pub imported_at: String,
     pub provenance: DiscoveryImportRecord,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryProvenancePage {
     pub entries: Vec<DiscoveryStoredProvenance>,
     pub total: usize,
@@ -418,7 +418,7 @@ pub struct DiscoveryProvenancePage {
     pub related_article_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryAcquisitionStatus {
     Queued,
@@ -428,14 +428,14 @@ pub enum DiscoveryAcquisitionStatus {
     Failed,
     Cancelled,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryAcquisitionItem {
     pub article_id: String,
     pub status: DiscoveryAcquisitionStatus,
     pub error: Option<String>,
 }
 /// Process-local acquisition progress; stored attachments remain durable.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DiscoveryAcquisitionJob {
     pub id: String,
     pub created_at: String,
