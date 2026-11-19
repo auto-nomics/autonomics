@@ -31,6 +31,7 @@ members = [
   "crates/opengwas",
   "crates/eutils",
   "crates/allen-brain",
+  "crates/alphagenome",
   "crates/cellxgene",
   "crates/hca",
   "crates/hcl",
