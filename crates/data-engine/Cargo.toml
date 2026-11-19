@@ -46,6 +46,7 @@ nodes-causal = { path = "../node-bundles/nodes-causal", optional = true }
 nodes-lcmm = { path = "../node-bundles/nodes-lcmm", optional = true }
 nodes-survey = { path = "../node-bundles/nodes-survey", optional = true }
 nodes-genetics = { path = "../node-bundles/nodes-genetics", optional = true }
+nodes-alphagenome = { path = "../node-bundles/nodes-alphagenome", optional = true }
 nodes-mice = { path = "../node-bundles/nodes-mice", optional = true }
 nodes-writing = { path = "../node-bundles/nodes-writing", optional = true }
 nodes-rd = { path = "../node-bundles/nodes-rd", optional = true }
@@ -69,6 +70,7 @@ analysis = [
   "bundle-lcmm",
   "bundle-survey",
   "bundle-genetics",
+  "bundle-alphagenome",
   "bundle-mice",
   "bundle-rd",
   "bundle-dl",
@@ -88,6 +90,7 @@ bundle-causal = ["dep:nodes-causal"]
 bundle-lcmm = ["dep:nodes-lcmm"]
 bundle-survey = ["dep:nodes-survey"]
 bundle-genetics = ["dep:nodes-genetics"]
+bundle-alphagenome = ["dep:nodes-alphagenome"]
 bundle-mice = ["dep:nodes-mice"]
 bundle-writing = ["dep:nodes-writing"]
 bundle-rd = ["dep:nodes-rd"]

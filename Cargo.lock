@@ -3695,6 +3695,7 @@ dependencies = [
  "evalue",
  "futures",
  "glob",
+ "nodes-alphagenome",
  "nodes-causal",
  "nodes-dl",
  "nodes-epi",
@@ -9931,6 +9932,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "418abd1b6d34fbf6cae440dc874771b0525a604428704c76e48b29a5e67b8003"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "nodes-alphagenome"
+version = "0.1.0"
+dependencies = [
+ "alphagenome",
+ "arrow-array 58.4.0",
+ "arrow-schema 58.4.0",
+ "async-trait",
+ "dag-core",
+ "datafusion",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

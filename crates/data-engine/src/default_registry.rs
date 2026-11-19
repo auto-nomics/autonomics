@@ -52,6 +52,10 @@ pub fn build_default_registry_with_container_execution(
     #[cfg(feature = "bundle-genetics")]
     registry.register_plugin(&nodes_genetics::Plugin);
 
+    // ── AlphaGenome Atlas bundle ─────────────────────────────────────
+    #[cfg(feature = "bundle-alphagenome")]
+    registry.register_plugin(&nodes_alphagenome::Plugin);
+
     // ── MICE bundle ──────────────────────────────────────────────────
     #[cfg(feature = "bundle-mice")]
     registry.register_plugin(&nodes_mice::Plugin);
