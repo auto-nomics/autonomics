@@ -307,6 +307,7 @@ pub fn router_with_bib(
     env_token: Option<String>,
 ) -> Router {
     let auth = Arc::new(AuthContext::new(gateway_token));
+    let infra = state.infra.clone();
     let api = api_router(state).layer(axum::middleware::from_fn_with_state(
         auth.clone(),
         bearer_or_session,
@@ -357,10 +358,16 @@ pub fn router_with_bib(
                 .get(auth::session_status)
                 .delete(auth::logout),
         )
-        .with_state(auth);
+        .with_state(auth.clone());
+    // MCP surface at `/mcp` — outside `/api/v1` on purpose: it is not a
+    // REST resource but a protocol endpoint with its own session
+    // lifecycle, guarded by the same bearer token (cookie auth also
+    // accepted by the shared middleware, but MCP clients use the header).
+    let mcp = super::mcp::router(&infra, auth.clone());
     Router::new()
         .merge(docs)
         .merge(session)
+        .merge(mcp)
         .nest("/api/v1/bib", bib)
         .nest("/api/v1/visualization", visualization_router)
         .nest("/api/v1/wiki", wiki_router)

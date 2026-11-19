@@ -9,6 +9,7 @@ description = "Resident backend gateway: one daemon owning the RuntimeHost, many
 [dependencies]
 visualization = { path = "../visualization" }
 data-engine = { path = "../data-engine" }
+data-engine-tools = { path = "../data-engine-tools" }
 agentik-core = { path = "../agentik-core" }
 agentik-sdk = { path = "../agentik-sdk" }
 agentik-types = { path = "../agentik-types", features = ["schema"] }
@@ -50,6 +51,7 @@ percent-encoding = "2"
 tempfile = "3"
 tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
 portable-pty = "0.9.0"
+rmcp = { version = "3.11", features = ["transport-streamable-http-server"] }
 
 [features]
 # Test harness (`gateway::testing`) + mock-model support. Pulls
@@ -62,6 +64,7 @@ test-util = [
 
 [dev-dependencies]
 rusqlite = "0.40.1"
+async-trait.workspace = true
 # Self-reference so `cargo test -p gateway` enables `test-util` for the
 # integration tests too (workspace-wide runs get it via `headless`).
 gateway = { path = ".", features = ["test-util"] }

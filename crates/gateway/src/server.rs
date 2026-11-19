@@ -21,6 +21,7 @@ mod hpc_jobs;
 mod hydration;
 mod lifecycle;
 mod model_config;
+mod mcp;
 pub(crate) mod plugin_environments;
 mod plugins;
 mod router;
