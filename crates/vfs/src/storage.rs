@@ -2043,13 +2043,12 @@ fn staging_key(path: &str) -> String {
     let sequence = STAGING_OBJECT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let unique = format!("{}-{}-{}", std::process::id(), nanos, sequence);
 
-    let file_name = path.rsplit('/').next().filter(|name| !name.is_empty());
-    let Some(file_name) = file_name else {
-        return format!(".root-object-{unique}.tmp");
-    };
+    // Do not append to the destination basename: a valid name near NAME_MAX
+    // would become too long to stage. The parent and unique suffix suffice.
+    let file_name = format!(".autonomics-write-{unique}.tmp");
     match path.rfind('/') {
-        Some(index) if index > 0 => format!("{}.{file_name}{unique}.tmp", &path[..=index]),
-        _ => format!(".{file_name}{unique}.tmp"),
+        Some(index) if index > 0 => format!("{}{file_name}", &path[..=index]),
+        _ => file_name,
     }
 }
 
@@ -2987,6 +2986,23 @@ mod tests {
                 .kind(),
             opendal::ErrorKind::PermissionDenied
         ));
+    }
+
+    #[tokio::test]
+    async fn atomic_writes_accept_maximum_length_local_filenames() {
+        let storage = OpendalFileStorage::new_temp();
+        let path = format!("/downloads/{}", "x".repeat(255));
+        storage
+            .write_bytes(&path, b"original".to_vec())
+            .await
+            .unwrap();
+        let mut writer = storage.atomic_writer(&path).await.unwrap();
+        writer.write(b"replacement".to_vec()).await.unwrap();
+        writer.commit().await.unwrap();
+        assert_eq!(
+            storage.read_range(&path, 0..11).await.unwrap().to_vec(),
+            b"replacement"
+        );
     }
 
     #[tokio::test]

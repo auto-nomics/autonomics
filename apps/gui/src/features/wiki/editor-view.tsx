@@ -1,8 +1,7 @@
 import { useWikiDocument } from "./wiki-document";
 /**
- * SiYuan-style 编辑模式 shell: an inline document title (SiYuan edits the
- * doc title in place), a collapsible attributes row (alias / tags) and the
- * block editor — plus a dirty-guarded exit back to 阅读模式.
+ * Wiki editing shell: title, metadata in the scrolling document body,
+ * Vditor, and a dirty-guarded exit back to reading mode.
  */
 import { Loader2 } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
@@ -12,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { newId } from "@/lib/utils";
-import { LiveEditor } from "./live-editor";
+import { VditorEditor } from "./vditor-editor";
 import { ModeSwitch, type WikiMode } from "./reading-view";
 import { formatTime, putEntryContent, updateEntryMeta, type WikiEntry } from "./wiki-api";
 
@@ -47,7 +46,8 @@ export function EditorView({
     content !== entry.content;
 
   async function save() {
-    if (model.state.saving || uploading) return;
+    if (model.state.saving || model.state.pendingImages > 0) return;
+    const { title, alias, tags, content, entry } = model.state;
     const trimmed = title.trim();
     if (!trimmed) {
       toast.error("标题不能为空");
@@ -130,7 +130,7 @@ export function EditorView({
           </Button>
         </div>
       </div>
-      <LiveEditor
+      <VditorEditor
         key={entry.id}
         entryId={entry.id}
         initialContent={content}

@@ -285,10 +285,12 @@ function MetadataRow({ label, value, href, children }: MetadataRowProps) {
 function Section({
   title,
   count,
+  action,
   children,
 }: {
   title: string;
   count?: number | null;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -296,6 +298,7 @@ function Section({
       <div className="flex h-8 items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
         {title}
         {count != null && <span className="text-[11px] opacity-70">{count}</span>}
+        {action && <span className="ml-auto flex items-center">{action}</span>}
       </div>
       {children}
     </section>
@@ -387,20 +390,20 @@ export type BibliographyWorkspace = "library" | "discover" | "subscriptions" | "
 // the selected workspace and only keeps the lazy-mount bookkeeping: a panel
 // is created on first visit, then stays mounted (hidden) so its state
 // survives navigation.
-export function BibliographyView({ workspace = "library", active = true, sidebarSlot, externalSidebar = false, onOpenSidebar }: { workspace?: BibliographyWorkspace; active?: boolean; sidebarSlot?: HTMLElement | null; externalSidebar?: boolean; onOpenSidebar?: () => void } = {}) {
+export function BibliographyView({ workspace = "library", active = true, focusArticleId, focusNonce, sidebarSlot, externalSidebar = false, onOpenSidebar }: { workspace?: BibliographyWorkspace; active?: boolean; focusArticleId?: string | null; focusNonce?: number | null; sidebarSlot?: HTMLElement | null; externalSidebar?: boolean; onOpenSidebar?: () => void } = {}) {
   const [mounted, setMounted] = useState<Set<BibliographyWorkspace>>(() => new Set([workspace]));
   useEffect(() => {
     setMounted(current => (current.has(workspace) ? current : new Set([...current, workspace])));
   }, [workspace]);
   return <div className="flex min-h-0 flex-1 flex-col">
     {mounted.has("manuscripts") && <div hidden={workspace !== "manuscripts"} className={workspace === "manuscripts" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><ManuscriptsWorkspace active={active && workspace === "manuscripts"} sidebarSlot={workspace === "manuscripts" && active ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
-    {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView sidebarSlot={workspace === "library" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
+    {mounted.has("library") && <div hidden={workspace !== "library"} className={workspace === "library" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><LibraryView focusArticleId={workspace === "library" ? focusArticleId ?? null : null} focusNonce={focusNonce} sidebarSlot={workspace === "library" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
     {mounted.has("discover") && <div hidden={workspace !== "discover"} className={workspace === "discover" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><DiscoveryView /></div>}
     {mounted.has("subscriptions") && <div hidden={workspace !== "subscriptions"} className={workspace === "subscriptions" ? "flex min-h-0 flex-1 flex-col" : "hidden"}><RssSubscriptions active={active && workspace === "subscriptions"} sidebarSlot={workspace === "subscriptions" ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={onOpenSidebar} /></div>}
   </div>;
 }
 
-function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarSlot?: HTMLElement | null; externalSidebar: boolean; onOpenSidebar?: () => void }) {
+function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar, onOpenSidebar }: { focusArticleId?: string | null; focusNonce?: number | null; sidebarSlot?: HTMLElement | null; externalSidebar: boolean; onOpenSidebar?: () => void }) {
   const contextBasket = useContextBasket();
   const contextBasketRef = useRef(contextBasket);
   contextBasketRef.current = contextBasket;
@@ -465,9 +468,16 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   const [libraryTotal, setLibraryTotal] = useState(0);
   const [selectedArticle, setSelectedArticle] = useState<string | null>(null);
   const selectionRef=useRef(selectedArticle);selectionRef.current=selectedArticle;
+  /** Deep-linked article id (agent bib:// link) that must survive list reloads
+   *  until the loaded list actually contains it. */
+  const focusGuard = useRef<string | null>(null);
+  const lastFocusArticle = useRef<string | null>(null);
+  const [revealId, setRevealId] = useState<string | null>(null);
   const [resultContext,setResultContext]=useState("");
   const lastResultContext=useRef("");
   const [downloadingAttachments, setDownloadingAttachments] = useState<Set<string>>(new Set());
+  /** A file drag is hovering the entry-details pane (drop = attach to record). */
+  const [detailDropActive, setDetailDropActive] = useState(false);
   const downloadLocks = useRef(new Set<string>());
   const [attachmentsOpen, setAttachmentsOpen] = useState(true);
   const [editingArticle, setEditingArticle] = useState<BibArticle | null>(null);
@@ -569,7 +579,8 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
       recordHistoryRef.current[mode](mode === "hybrid" ? topic : nextQuery);
       const nextArticles: BibArticle[] = articleResponse.articles ?? [];
       const nextSummaries = articleResponse.attachment_summaries ?? {};
-      if (!append && context!==lastResultContext.current && detailSequence.current===selectionVersion && selectionRef.current && !nextArticles.some(article=>article.id===selectionRef.current)) {
+      if (focusGuard.current && nextArticles.some(article=>article.id===focusGuard.current)) focusGuard.current = null;
+      if (!append && context!==lastResultContext.current && detailSequence.current===selectionVersion && selectionRef.current && selectionRef.current!==focusGuard.current && !nextArticles.some(article=>article.id===selectionRef.current)) {
         detailSequence.current++;detailAbort.current?.abort();setSelectedArticle(null);setDetail(null);setDetailLoading(false);
       }
       lastResultContext.current=context;setResultContext(context);
@@ -650,6 +661,18 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
   }, []);
 
   const visibleIds = useMemo(() => visibleArticles.map((article) => article.id), [visibleArticles]);
+  // A new search context invalidates the pending reveal: the revealed row
+  // may be filtered out, and re-scrolling to it would fight the user.
+  useEffect(() => { setRevealId(null); }, [JSON.stringify({request:currentRequest,snippets:showSnippets})]);
+  // When a deep-linked record reaches the loaded list, reveal it: scroll the
+  // row into view and hand it the keyboard focus.
+  useEffect(() => {
+    const target = focusGuard.current;
+    if (target && visibleIds.includes(target)) {
+      focusGuard.current = null;
+      setRevealId(target);
+    }
+  }, [visibleIds]);
   const allVisibleChecked = visibleIds.length > 0 && visibleIds.every((id) => checkedIds.includes(id));
   const someVisibleChecked = visibleIds.some((id) => checkedIds.includes(id));
   const toggleAllChecked = (checked: boolean) => {
@@ -675,6 +698,31 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
       .catch((cause) => { if (requestId === detailSequence.current && !abort.signal.aborted) setError(String(cause)); })
       .finally(() => { if (requestId === detailSequence.current) setDetailLoading(false); });
   }, []);
+
+  // Deep link (bare bib:// agent link). In-view targets are selected and
+  // revealed directly; out-of-view targets switch to an exact identifier
+  // query instead of paging through the whole library. The nonce makes
+  // repeated clicks on the same link re-run the focus.
+  useEffect(() => {
+    const key = `${focusNonce ?? 0}:${focusArticleId ?? ""}`;
+    if (!focusArticleId || lastFocusArticle.current === key) return;
+    lastFocusArticle.current = key;
+    setRevealId(null);
+    if (visibleIds.includes(focusArticleId)) {
+      focusGuard.current = null;
+      selectArticle(focusArticleId);
+      setRevealId(focusArticleId);
+      return;
+    }
+    focusGuard.current = focusArticleId;
+    setMode("lexical");
+    selectCollection(null);
+    setExpression({ op: "term", field: "identifier", value: focusArticleId });
+    setQuery("");
+    setQueryDraft(`identifier:${focusArticleId}`);
+    selectArticle(focusArticleId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusArticleId, focusNonce]);
 
   const selectCollection = (collectionId: string | null) => {
     if (externalSidebar) onOpenSidebar?.();
@@ -855,11 +903,10 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
     }));
   };
 
-  const uploadForArticle = async (article: BibArticle) => {
+  const uploadFilesToArticle = async (article: BibArticle, files: Array<File | string>) => {
+    if (!files.length) return;
     setBusy("upload"); setError(null);
     try {
-      const files = await pickUploadFiles();
-      if (!files.length) return;
       const failures: string[] = [];
       let hasPreferred = article.id === activeDetail?.article.id ? Boolean(activeDetail.fulltext) : Boolean((await gatewayRequest("GET", `/bib/articles/${encodeURIComponent(article.id)}`)).fulltext);
       for (const file of files) {
@@ -874,6 +921,13 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
       if (failures.length) setError(`Some attachments could not be uploaded: ${failures.join("; ")}`);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(null); }
+  };
+
+  const uploadForArticle = async (article: BibArticle) => {
+    try {
+      const files = await pickUploadFiles();
+      await uploadFilesToArticle(article, files);
+    } catch (cause) { setError(String(cause)); }
   };
 
   const deleteFulltextFor = async (article: BibArticle) => {
@@ -1116,7 +1170,7 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
             </div>
           )}
 
-          <VirtualArticleList articles={visibleArticles} total={total} viewport={resultsViewport} contextKey={JSON.stringify({request:currentRequest,snippets:showSnippets})} estimatedHeight={showSnippets && Boolean(query.trim() || expression) ? 76 : 37} selectedId={selectedArticle} onNavigate={selectArticle} onToggle={id => toggleChecked(id, !checkedIds.includes(id))}>{(article) => {
+          <VirtualArticleList articles={visibleArticles} total={total} viewport={resultsViewport} contextKey={JSON.stringify({request:currentRequest,snippets:showSnippets})} estimatedHeight={showSnippets && Boolean(query.trim() || expression) ? 76 : 37} selectedId={selectedArticle} revealId={revealId} onNavigate={selectArticle} onToggle={id => toggleChecked(id, !checkedIds.includes(id))}>{(article) => {
             const isSelected = article.id === selectedArticle;
             const summary = article.id === selected?.id
               ? {
@@ -1246,6 +1300,21 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
           !roomy && "absolute top-0 bottom-0 right-0 z-[35] w-[min(94%,360px)] shadow-2xl transition-transform",
           !roomy && !detailsOpen && "translate-x-full",
         )}
+        onDragOver={(event) => {
+          if (!selected || !Array.from(event.dataTransfer.types).includes("Files")) return;
+          event.preventDefault();
+          setDetailDropActive(true);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDetailDropActive(false);
+        }}
+        onDrop={(event) => {
+          setDetailDropActive(false);
+          if (!selected || busy === "upload" || !event.dataTransfer.files.length) return;
+          event.preventDefault();
+          void uploadFilesToArticle(selected, Array.from(event.dataTransfer.files));
+        }}
       >
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
           <span className="min-w-0 truncate text-[13px] font-medium">
@@ -1269,6 +1338,12 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
           </div>
         </div>
 
+        {detailDropActive && selected && (
+          <div className="pointer-events-none absolute inset-0 z-[40] m-2 flex items-center justify-center rounded-md border-2 border-dashed border-primary/60 bg-background/70">
+            <span className="rounded bg-background px-2 py-1 text-xs font-medium text-primary">Drop to attach to this record</span>
+          </div>
+        )}
+
         <ScrollArea className="min-h-0 flex-1" contentClassName="p-3">
           {error && (
             <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
@@ -1282,7 +1357,12 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
             <div className="space-y-3">
               <AddToContext resource={articleContext(selected)} />
               {searchActive && indexGeneration && resultContext===JSON.stringify(currentRequest) && articles.some(article=>article.id===selected.id) && <SearchEvidencePanel articleId={selected.id} request={currentRequest} generation={indexGeneration} onOpen={evidence => void openEvidence(evidence)} />}
-              <Section title="Attachment Info" count={attachments.length}>
+              <Section title="Attachment Info" count={attachments.length} action={
+                <Button size="xs" variant="ghost" className="h-6 gap-1 px-1.5 text-[11px]" disabled={busy === "upload"}
+                  onClick={() => void uploadForArticle(selected)}>
+                  <Upload className="size-3" />Upload
+                </Button>
+              }>
                 {!detailLoading && attachments.length ? (
                   <div className="space-y-0.5">
                     {attachments.map((entry) => (
@@ -1291,7 +1371,12 @@ function LibraryView({ sidebarSlot, externalSidebar, onOpenSidebar }: { sidebarS
                   </div>
                 ) : (
                   <div className="text-xs text-muted-foreground">
-                    {detailLoading ? "Loading…" : "No attachment"}
+                    {detailLoading ? "Loading…" : (
+                      <button type="button" className="w-full rounded-md border border-dashed border-border px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-50"
+                        disabled={busy === "upload"} onClick={() => void uploadForArticle(selected)}>
+                        {busy === "upload" ? "Uploading…" : "No attachment — click to upload a file"}
+                      </button>
+                    )}
                   </div>
                 )}
               </Section>

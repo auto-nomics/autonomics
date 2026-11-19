@@ -43,6 +43,10 @@ export default defineConfig({
           const licenses = ["xterm", "addon-fit"].map(name => fs.readFileSync(path.resolve(__dirname, `node_modules/@xterm/${name}/LICENSE`), "utf8"));
           output.code = `/*!\n${licenses.join("\n\n")}\n*/\n` + output.code;
         }
+        if (output.type === "chunk" && Object.keys(output.modules).some(id => id.includes("/node_modules/vditor/"))) {
+          const license = fs.readFileSync(path.resolve(__dirname, "node_modules/vditor/LICENSE"), "utf8");
+          output.code = `/*! Vditor\n${license}\n*/\n` + output.code;
+        }
       }
     },
   }],
@@ -75,7 +79,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    assetsInlineLimit: (filePath) => filePath.includes("codicon.ttf") || /\.woff2?$/.test(filePath) ? true : undefined,
+    assetsInlineLimit: (filePath) => /\.(woff2?|ttf)$/.test(filePath) ? true : undefined,
     rollupOptions: {
       output: {
         inlineDynamicImports: true,

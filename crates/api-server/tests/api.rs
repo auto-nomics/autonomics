@@ -1180,6 +1180,109 @@ async fn wait_for_extraction(app: &axum::Router, uri: &str) -> serde_json::Value
 }
 
 #[tokio::test]
+async fn bib_upload_accepts_large_files_with_long_unicode_filenames() {
+    let (app, shared, _directory) = build_app_with_vfs().await;
+    let id = "long-filename-upload";
+    shared
+        .bib
+        .upsert_article(&bib_types::Article::new(id, "Upload regression"))
+        .await
+        .unwrap();
+
+    // The first name fits NAME_MAX, but the old staging suffix exceeded it.
+    // The second exceeds NAME_MAX after percent encoding and the hash prefix.
+    for (filename, size, endpoint) in [
+        (
+            "临床流行病学与循证医学（人卫第6版）.pdf".to_owned(),
+            36 * 1024 * 1024,
+            "attachments",
+        ),
+        (
+            format!("{}.pdf", "流行病学教材".repeat(10)),
+            128,
+            "attachments",
+        ),
+        (
+            format!("{}.pdf", "循证医学教材".repeat(10)),
+            128,
+            "fulltext",
+        ),
+    ] {
+        let mut content = b"%PDF-1.4\n".to_vec();
+        content.resize(size, b' ');
+        let mut body = format!(
+            "--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/pdf\r\n\r\n"
+        ).into_bytes();
+        body.extend_from_slice(&content);
+        body.extend_from_slice(b"\r\n--boundary--\r\n");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/bib/articles/{id}/{endpoint}"))
+                    .header("content-type", "multipart/form-data; boundary=boundary")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            if endpoint == "attachments" {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let path = if endpoint == "attachments" {
+            assert_eq!(result["attachment"]["original_filename"], filename);
+            let key = result["attachment"]["key"].as_str().unwrap();
+            let download = app
+                .clone()
+                .oneshot(request(
+                    "GET",
+                    &format!("/api/v1/bib/articles/{id}/attachments/{key}/raw"),
+                    None,
+                ))
+                .await
+                .unwrap();
+            assert_eq!(download.status(), StatusCode::OK);
+            assert!(
+                download.headers()["content-disposition"]
+                    .as_bytes()
+                    .windows(filename.len())
+                    .any(|part| part == filename.as_bytes()),
+                "{}",
+                String::from_utf8_lossy(download.headers()["content-disposition"].as_bytes())
+            );
+            assert_eq!(
+                download
+                    .into_body()
+                    .collect()
+                    .await
+                    .unwrap()
+                    .to_bytes()
+                    .as_ref(),
+                content.as_slice()
+            );
+            result["attachment"]["vfs_path"].as_str().unwrap()
+        } else {
+            result["fulltext"]["file_path"].as_str().unwrap()
+        };
+        let stored = bib_base::read_full(shared.file_storage.as_ref().unwrap(), path)
+            .await
+            .unwrap();
+        assert_eq!(stored.as_slice(), content.as_slice());
+    }
+}
+
+#[tokio::test]
 async fn bib_supports_multiple_zotero_attachments() {
     let (app, _shared, _directory) = build_app_with_vfs().await;
 

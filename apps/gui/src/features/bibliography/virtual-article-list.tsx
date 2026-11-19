@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { BibArticle } from "@/types";
 
-type Props = { articles: BibArticle[]; total: number; viewport: RefObject<HTMLDivElement | null>; contextKey: string; estimatedHeight: number; selectedId: string | null; onNavigate: (id: string) => void; onToggle: (id: string) => void; children: (article: BibArticle) => ReactNode };
+type Props = { articles: BibArticle[]; total: number; viewport: RefObject<HTMLDivElement | null>; contextKey: string; estimatedHeight: number; selectedId: string | null; revealId?: string | null; onNavigate: (id: string) => void; onToggle: (id: string) => void; children: (article: BibArticle) => ReactNode };
 function MeasuredRow({ id, top, index, total, onMeasure, children }: { id: string; top: number; index: number; total: number; onMeasure: (id: string, height: number) => void; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -21,7 +21,7 @@ function containing(offsets: number[], position: number): number {
 
 /** Variable-height windowing keeps expanded attachments and snippets in the
  * normal keyboard/selection model while limiting mounted DOM rows. */
-export function VirtualArticleList({ articles, total, viewport, contextKey, estimatedHeight, selectedId, onNavigate, onToggle, children }: Props) {
+export function VirtualArticleList({ articles, total, viewport, contextKey, estimatedHeight, selectedId, revealId, onNavigate, onToggle, children }: Props) {
   const heights = useRef(new Map<string, number>());
   const activeContext = useRef(contextKey);
   const [version, setVersion] = useState(0);
@@ -70,6 +70,20 @@ export function VirtualArticleList({ articles, total, viewport, contextKey, esti
     const button = row?.querySelector<HTMLButtonElement>("[data-bib-row-primary]");
     if (button) { button.focus({ preventScroll: true }); pendingFocus.current = null; }
   });
+  // Deep-link reveal: scroll the target row into the window and hand it the
+  // keyboard focus (pendingFocus persists across window remounts until the
+  // row's button is actually mounted).
+  useLayoutEffect(() => {
+    if (!revealId) return;
+    const index = layout.positions.get(revealId);
+    const node = viewport.current;
+    if (index === undefined || !node) return;
+    const top = layout.offsets[index], bottom = layout.offsets[index + 1];
+    if (top < node.scrollTop) node.scrollTop = top;
+    else if (bottom > node.scrollTop + node.clientHeight) node.scrollTop = bottom - node.clientHeight;
+    setWindow({ top: node.scrollTop, height: node.clientHeight || 600 });
+    pendingFocus.current = revealId;
+  }, [revealId, layout, viewport]);
   useEffect(() => {
     const node = viewport.current;
     if (!node) return;

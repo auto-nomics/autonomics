@@ -1521,7 +1521,15 @@ pub(crate) async fn sync_fulltext_attachment(
 
     let is_vfs = crate::stored_files::vfs_virtual_path(&fulltext.file_path).is_some();
     let original_filename = if is_vfs {
-        Some(filename_from_vfs_uri(&fulltext.file_path))
+        // Managed object names may be shortened to fit filesystem limits.
+        // Keep the upload's metadata when syncing the same stored object.
+        attachment_for_article(conn, &fulltext.article_id)
+            .await?
+            .filter(|attachment| {
+                attachment.vfs_path.as_deref() == Some(fulltext.file_path.as_str())
+            })
+            .and_then(|attachment| attachment.original_filename)
+            .or_else(|| Some(filename_from_vfs_uri(&fulltext.file_path)))
     } else {
         None
     };

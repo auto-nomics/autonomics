@@ -1,5 +1,6 @@
 import { openWikiEntry } from "@/features/wiki/wiki-state";
 import { openReaderEditor } from "@/features/reader/reader-opener";
+import { openBibRecordEditor } from "@/features/bibliography/bib-record-opener";
 
 /** Resource IDs are opaque and case-sensitive; do not normalize them as URL hostnames. */
 export function openResourceLink(href: string, title: string): boolean {
@@ -13,7 +14,15 @@ export function openResourceLink(href: string, title: string): boolean {
     else {
       const pageText = params.get("page");
       const page = pageText && /^[1-9]\d*$/.test(pageText) && Number.isSafeInteger(Number(pageText)) ? Number(pageText) : undefined;
-      openReaderEditor({ articleId: id, title: title || id, attachmentKey: params.get("attachment"), search: { page, query: params.get("query") ?? undefined } });
+      const query = params.get("query");
+      const attachment = params.get("attachment");
+      // A bare bib:// link (or an explicit ?view=record) jumps to the record
+      // entry in the library; locator params open the attachment reader.
+      if (params.get("view") !== "reader" && !attachment && !pageText && !query) {
+        openBibRecordEditor({ articleId: id });
+        return true;
+      }
+      openReaderEditor({ articleId: id, title: title || id, attachmentKey: attachment, search: { page, query: query ?? undefined } });
     }
     return true;
   } catch { return false; }

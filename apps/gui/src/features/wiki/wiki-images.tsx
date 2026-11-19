@@ -27,35 +27,50 @@ function acquire(entryId: string, attachmentId: string) {
   } };
 }
 
+/** Hydrate attachment images in React views and CodeMirror preview widgets alike. */
+export function loadWikiImages(root: HTMLElement, onLoad?: () => void) {
+  let cancelled = false;
+  const releases: (() => void)[] = [];
+  const errors: HTMLElement[] = [];
+  const fail = (img: HTMLImageElement) => {
+    if (img.hidden) return;
+    img.hidden = true;
+    const message = document.createElement("span");
+    message.className = "wiki-image-error";
+    message.textContent = `图片不存在或无法访问：${img.alt}`;
+    img.after(message); errors.push(message);
+    onLoad?.();
+  };
+  const onError = (event: Event) => { if (event.target instanceof HTMLImageElement) fail(event.target); };
+  root.addEventListener("error", onError, true);
+  if (onLoad) root.addEventListener("load", onLoad, true);
+  const images = root instanceof HTMLImageElement ? [root] : root.querySelectorAll<HTMLImageElement>("img");
+  images.forEach(img => {
+    img.hidden = false;
+    const attachment = wikiAttachmentRef(img.getAttribute("src") ?? "");
+    if (attachment) { img.dataset.wikiEntry = attachment.entryId; img.dataset.wikiAttachment = attachment.attachmentId; }
+    if ("__TAURI_INTERNALS__" in window && img.dataset.wikiEntry && img.dataset.wikiAttachment) {
+      img.removeAttribute("src");
+      const asset = acquire(img.dataset.wikiEntry, img.dataset.wikiAttachment);
+      releases.push(asset.release);
+      void asset.promise.then(url => { if (!cancelled) img.src = url; }, () => { if (!cancelled) fail(img); });
+    } else if (img.complete && img.getAttribute("src") && img.naturalWidth === 0) fail(img);
+  });
+  return () => {
+    cancelled = true;
+    root.removeEventListener("error", onError, true);
+    if (onLoad) root.removeEventListener("load", onLoad, true);
+    releases.forEach(release => release());
+    errors.forEach(error => error.remove());
+  };
+}
+
 export function useWikiImages(ref: RefObject<HTMLElement | null>, revision: string, preview = false) {
   const [opened, setOpened] = useState<{ src: string; alt: string } | null>(null);
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
-    let cancelled = false;
-    const releases: (() => void)[] = [];
-    const errors: HTMLElement[] = [];
-    const fail = (img: HTMLImageElement) => {
-      if (img.hidden) return;
-      img.hidden = true;
-      const message = document.createElement("span");
-      message.className = "wiki-image-error";
-      message.textContent = `图片不存在或无法访问：${img.alt}`;
-      img.after(message); errors.push(message);
-    };
-    const onError = (event: Event) => { if (event.target instanceof HTMLImageElement) fail(event.target); };
-    root.addEventListener("error", onError, true);
-    root.querySelectorAll<HTMLImageElement>("img").forEach(img => {
-      img.hidden = false;
-      const attachment = wikiAttachmentRef(img.getAttribute("src") ?? "");
-      if (attachment) { img.dataset.wikiEntry = attachment.entryId; img.dataset.wikiAttachment = attachment.attachmentId; }
-      if ("__TAURI_INTERNALS__" in window && img.dataset.wikiEntry && img.dataset.wikiAttachment) {
-        img.removeAttribute("src");
-        const asset = acquire(img.dataset.wikiEntry, img.dataset.wikiAttachment);
-        releases.push(asset.release);
-        void asset.promise.then(url => { if (!cancelled) img.src = url; }, () => { if (!cancelled) fail(img); });
-      } else if (img.complete && img.getAttribute("src") && img.naturalWidth === 0) fail(img);
-    });
+    const release = loadWikiImages(root);
     const click = (event: MouseEvent) => {
       if (preview && event.target instanceof HTMLImageElement && event.target.src) {
         event.preventDefault();
@@ -63,7 +78,7 @@ export function useWikiImages(ref: RefObject<HTMLElement | null>, revision: stri
       }
     };
     root.addEventListener("click", click);
-    return () => { cancelled = true; root.removeEventListener("error", onError, true); root.removeEventListener("click", click); releases.forEach(release => release()); errors.forEach(error => error.remove()); };
+    return () => { root.removeEventListener("click", click); release(); };
   }, [ref, revision, preview]);
   return <Dialog open={opened !== null} onOpenChange={open => { if (!open) setOpened(null); }}>
     <DialogContent className="max-w-[90vw]">

@@ -9,12 +9,15 @@ import { openWikiSearch } from "@/features/wiki/wiki-state";
 import { cycleThemeMode } from "@/lib/theme";
 import { openPalette, registerCommands } from "./command-registry";
 import {
+  activateEditorById,
+  allGroups,
   closeEditor,
   closeSplit,
   getWorkbenchState,
   getGroup,
   openAgentEditor,
   openEditor,
+  patchEditorParams,
   setContainer,
   setContainerView,
   setPanelTab,
@@ -74,6 +77,25 @@ export function openBibliographyEditor(workspace = "library"): void {
     setContainerView("bibliography", "library");
   }
   openEditor({ kind: "bibliography", params: { workspace } });
+}
+
+/** Reveals the bibliography library and selects the given record's entry.
+ *  Reuses the existing library tab instead of spawning one per article.
+ *  A per-invocation nonce makes repeat clicks re-run the focus. */
+let bibFocusSeq = 0;
+export function openBibliographyRecordEditor(articleId: string): void {
+  setContainer("bibliography");
+  setContainerView("bibliography", "library");
+  const focusNonce = ++bibFocusSeq;
+  const existing = allGroups(getWorkbenchState().groups)
+    .flatMap(([, group]) => group.editors)
+    .find(editor => editor.kind === "bibliography" && String(editor.params.workspace ?? "library") === "library");
+  if (existing) {
+    patchEditorParams(existing.id, { workspace: "library", articleId, focusNonce });
+    activateEditorById(existing.id);
+  } else {
+    openEditor({ kind: "bibliography", params: { workspace: "library", articleId, focusNonce } });
+  }
 }
 
 /** Opens (or focuses) the agent's editor tab — the unified chat window. */

@@ -492,3 +492,48 @@ body {
 .wiki-md img, .wiki-block img { height: auto; max-width: 100%; }
 .wiki-md img { cursor: zoom-in; }
 .wiki-image-pending, .wiki-image-error { display: inline-block; padding: .5em; border: 1px dashed var(--border); color: var(--muted-foreground); }
+
+/* Vditor owns editing behavior; the application owns its theme and layout. */
+.wiki-vditor .vditor {
+  --panel-background-color: var(--background);
+  --toolbar-background-color: var(--background);
+  --toolbar-icon-color: var(--muted-foreground);
+  --toolbar-icon-hover-color: var(--foreground);
+  --toolbar-icon-hover-background-color: var(--accent);
+  --border-color: var(--border);
+  --second-color: var(--muted-foreground);
+  --text-color: var(--foreground);
+  --textarea-background-color: var(--background);
+  --textarea-text-color: var(--foreground);
+  --tooltip-background-color: var(--popover);
+  --tooltip-text-color: var(--popover-foreground);
+  --hover-background-color: var(--accent);
+  --ir-marker-color: var(--muted-foreground);
+  border: 0;
+  border-radius: 0;
+}
+.wiki-vditor .vditor-toolbar { position: relative; z-index: 10; padding-inline: 16px; border-top: 1px solid var(--border); }
+.wiki-vditor [data-wiki-mode-menu] { display: none !important; }
+.wiki-vditor-modes { float: right; display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 0 4px 8px; }
+.wiki-vditor-modes button { height: 26px; padding: 0 8px; border: 1px solid transparent; border-radius: 5px; color: var(--muted-foreground); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.wiki-vditor-modes button:hover { color: var(--foreground); background: var(--accent); }
+.wiki-vditor-modes button[aria-pressed="true"] { color: var(--foreground); background: var(--muted); border-color: var(--border); }
+.wiki-vditor-modes button:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.wiki-vditor .vditor-content { min-height: 0; }
+.wiki-vditor-document { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+.wiki-vditor-body { display: flex; align-items: flex-start; min-width: 0; }
+.wiki-vditor .wiki-vditor-body :is(.vditor-ir, .vditor-wysiwyg) > .vditor-reset { height: auto; min-height: 260px; overflow: visible; }
+.wiki-vditor .wiki-vditor-body > .vditor-sv { flex-basis: 50%; min-height: 260px; overflow: hidden; }
+.wiki-vditor .vditor-content > .vditor-hint { transform: translateY(var(--wiki-editor-hint-offset, 0px)); }
+.wiki-vditor .vditor-reset { color: var(--foreground); font-family: inherit; font-size: 15px; line-height: 1.75; }
+.wiki-vditor :is(.vditor-ir, .vditor-wysiwyg) .vditor-reset { padding: 20px max(48px, calc((100% - 768px) / 2)) !important; }
+.wiki-vditor .vditor-sv { color: var(--foreground); background: var(--background); padding: 20px 24px; }
+.wiki-vditor .vditor-reset :is(pre, code) { background-color: var(--muted); }
+.wiki-vditor .vditor-reset img { max-width: 100%; height: auto; }
+.wiki-vditor .vditor-hint { background: var(--popover); color: var(--popover-foreground); }
+.wiki-vditor .vditor-reset table { color: var(--foreground); border-color: var(--border); background-color: var(--background); }
+.wiki-vditor .vditor-reset table :is(th, td) { color: inherit; border-color: var(--border); background-color: inherit; }
+.wiki-vditor .vditor-reset table tr { border-color: var(--border); background-color: var(--background); }
+.wiki-vditor .vditor-reset table tbody tr:nth-child(2n) { background-color: var(--muted); }
+.wiki-vditor .vditor-reset table thead th { background-color: var(--muted); }
+.wiki-vditor .vditor-reset table tbody tr:hover { background-color: var(--accent); }

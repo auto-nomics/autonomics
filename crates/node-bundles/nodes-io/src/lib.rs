@@ -16,7 +16,6 @@ pub mod image_registry;
 pub mod multiomic_concordance;
 pub mod parquet_sql;
 mod process_command;
-pub mod radiomics;
 pub mod script_nodes;
 pub mod source_chembl;
 pub mod source_ensembl;
@@ -229,11 +228,6 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(parquet_sql::DataFusionSqlNodeFactory {}));
-        registry.register(Box::new(radiomics::RadiomicsManifestNodeFactory));
-        registry.register(Box::new(radiomics::RadiomicsStageFileSetNodeFactory));
-        registry.register(Box::new(radiomics::RadiomicsDcmGlobNodeFactory));
-        registry.register(Box::new(radiomics::RadiomicsQcNodeFactory));
-        registry.register(Box::new(radiomics::RadiomicsFeatureSetAssembleNodeFactory));
         // `ldsc_h2`, `ldsc_munge`, and `ldsc_rg`
         // moved to the manifest plugin at `/mnt/projects/node-plugins/ldsc`;
         // their kinds are registered by the plugin loader at startup.

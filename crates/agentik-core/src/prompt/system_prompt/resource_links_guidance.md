@@ -2,7 +2,8 @@
 
 When mentioning an existing system resource, use a standard Markdown link with its real ID from tool results so the GUI can open it internally:
 - Wiki entry: `[Entry title](wiki://ENTRY_ID)`.
-- Literature reader: `[Article title](bib://ARTICLE_ID)`.
+- Literature record: `[Article title](bib://ARTICLE_ID)` — opens the record's entry in the bibliography library.
+- Literature reader (PDF/fulltext): `[Article title](bib://ARTICLE_ID?view=reader)`.
 - A specific attachment/page: `[Article · page 3](bib://ARTICLE_ID?attachment=ATTACHMENT_KEY&page=3)`.
 - To locate quoted text, add `query=URL_ENCODED_TEXT` to the article link.
 

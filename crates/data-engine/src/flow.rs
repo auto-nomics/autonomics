@@ -193,19 +193,6 @@ impl FlowRunner {
         options: &FlowOptions,
         cancel: Option<CancellationToken>,
     ) -> Result<FlowRunReport, crate::error::Error> {
-        let report = self
-            .run_internal(flow, options, cancel)
-            .await
-            .map_err(|error| crate::error::Error::Custom(error.to_string()))?;
-        Ok(report)
-    }
-
-    async fn run_internal(
-        &self,
-        flow: &FlowGraph,
-        options: &FlowOptions,
-        cancel: Option<CancellationToken>,
-    ) -> Result<FlowRunReport, crate::workflow::Error> {
         let snapshot = crate::dag_shell::DagShellSnapshot::from_flow(flow);
         let unary_registry = Arc::clone(&self.registry);
         let unary_snapshot = snapshot.clone();
@@ -233,7 +220,8 @@ impl FlowRunner {
             flow,
             self.storage.clone(),
             Some(channel_function.clone()),
-        )?;
+        )
+        .map_err(|error| crate::error::Error::Custom(error.to_string()))?;
         let config = FlowRunConfig {
             max_concurrency: options
                 .max_concurrency
@@ -247,6 +235,7 @@ impl FlowRunner {
             .with_channel_binary_function(binary_function)
             .run_dataflow_streamed_cached(flow, streams, &config, Some(&mut cache), cancel)
             .await
+            .map_err(|error| crate::error::Error::Custom(error.to_string()))
     }
 }
 

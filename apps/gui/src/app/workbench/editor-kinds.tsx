@@ -14,6 +14,8 @@ import { ArrowLeft, ArrowRight, Bot, Compass, FileText, FolderCode, GitFork, Lib
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
 import { useBibliographySidebarSlot } from "@/features/bibliography/sidebar-slot";
+import { registerBibRecordOpener } from "@/features/bibliography/bib-record-opener";
+import { openBibliographyRecordEditor } from "./static-commands";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { WikiEntrySurface } from "@/features/wiki/wiki-editor";
 import { WikiLocalGraph } from "./wiki-local-graph";
@@ -59,6 +61,8 @@ function BibliographyEditorBody({ editor }: EditorContext) {
   const workspace: BibliographyWorkspace = ["library", "discover", "subscriptions", "manuscripts"].includes(String(editor.params.workspace))
     ? editor.params.workspace as BibliographyWorkspace
     : "library";
+  const focusArticleId = workspace === "library" ? String(editor.params.articleId ?? "") || null : null;
+  const focusNonce = workspace === "library" ? Number(editor.params.focusNonce ?? 0) || null : null;
   const groups = useWorkbenchState().groups;
   const sidebarSlot = useBibliographySidebarSlot();
   const desktop = useMediaQuery("(min-width: 768px)");
@@ -80,7 +84,7 @@ function BibliographyEditorBody({ editor }: EditorContext) {
   }, [focused, workspace]);
   return (
     <section aria-label="文献工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <BibliographyView workspace={workspace} active={active} sidebarSlot={focused && externalSidebar ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
+      <BibliographyView workspace={workspace} active={active} focusArticleId={focusArticleId} focusNonce={focusNonce} sidebarSlot={focused && externalSidebar ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
     </section>
   );
 }
@@ -401,6 +405,11 @@ export function registerWorkbenchEditorKinds(): void {
     icon: (editor) => ({ manuscripts: FileText, discover: Compass, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
     mount: "keep-alive",
+  });
+  // Bibliography record opener bridge: agent bib:// links focus the library
+  // tab on a record without spawning one tab per article.
+  registerBibRecordOpener((spec) => {
+    openBibliographyRecordEditor(spec.articleId);
   });
   registerEditorKind({
     kind: "plugin-projects",

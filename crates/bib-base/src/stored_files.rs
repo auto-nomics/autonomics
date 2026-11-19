@@ -30,7 +30,7 @@ impl StoredFulltext {
 /// old object can therefore be deleted only after the database commit.
 pub fn stored_fulltext(article_id: &str, filename: &str, content: &[u8]) -> StoredFulltext {
     let file_hash = hex(&Sha256::digest(content));
-    let filename = encode_component(filename);
+    let filename = stored_filename(filename);
     let path = format!(
         "{VFS_PREFIX}/literature/{}/{file_hash}-{filename}",
         encode_component(article_id)
@@ -50,7 +50,7 @@ pub fn stored_attachment(
     content: &[u8],
 ) -> StoredFulltext {
     let file_hash = hex(&Sha256::digest(content));
-    let filename = encode_component(filename);
+    let filename = stored_filename(filename);
     let path = format!(
         "{VFS_PREFIX}/literature/{}/attachments/{}/{file_hash}-{filename}",
         encode_component(article_id),
@@ -192,6 +192,27 @@ pub fn scan_image_refs(markdown: &str) -> Vec<String> {
     refs
 }
 
+/// Keep the hash-prefixed basename within the common 255-byte filesystem
+/// limit. Original filenames live in attachment metadata, independently of
+/// this internal object key. Hashing long names also preserves their identity.
+fn stored_filename(filename: &str) -> String {
+    let encoded = encode_component(filename);
+    if encoded.len() <= 255 - 64 - 1 {
+        return encoded;
+    }
+    let name_hash = hex(&Sha256::digest(filename.as_bytes()));
+    match filename.rsplit_once('.') {
+        Some((_, extension))
+            if !extension.is_empty()
+                && extension.len() <= 16
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
+        {
+            format!("{name_hash}.{extension}")
+        }
+        _ => name_hash,
+    }
+}
+
 fn encode_component(value: &str) -> String {
     if value.is_empty() {
         return "unnamed".to_owned();
@@ -242,6 +263,26 @@ mod tests {
         assert!(a.path.starts_with("vfs:///literature/doi%3A10.1000%2Fx/"));
         assert!(a.path.ends_with("-paper%20one.pdf"));
         assert_eq!(a.file_hash.len(), 64);
+    }
+
+    #[test]
+    fn bounds_long_storage_filenames_without_losing_identity() {
+        for filename in [
+            format!("{}.pdf", "流行病学教材".repeat(20)),
+            format!("{}.txt", "x".repeat(255)),
+            format!("paper.{}", "x".repeat(256)),
+        ] {
+            let fulltext = stored_fulltext("article", &filename, b"content");
+            let attachment = stored_attachment("article", "key", &filename, b"content");
+            for stored in [&fulltext, &attachment] {
+                assert!(stored.path.rsplit('/').next().unwrap().len() <= 255);
+                assert_eq!(stored.file_hash, hex(&Sha256::digest(b"content")));
+            }
+            assert_ne!(
+                attachment.path,
+                stored_attachment("article", "key", &format!("other-{filename}"), b"content").path
+            );
+        }
     }
 
     #[test]

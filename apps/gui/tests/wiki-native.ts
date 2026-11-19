@@ -15,14 +15,14 @@ async function qualify() {
   mount(id);
   await waitFor(() => document.querySelectorAll(".wiki-md img").length === 2 && [...document.querySelectorAll<HTMLImageElement>(".wiki-md img")].every(img => img.src.startsWith("blob:") && img.naturalWidth > 0), "native legacy and portable image rendering");
   document.querySelector<HTMLButtonElement>('button[title="编辑模式"]')!.click();
-  await waitFor(() => !!document.querySelector('input[type="file"]'), "native editor");
+  await waitFor(() => !!document.querySelector('.wiki-vditor [aria-busy="false"] input[type="file"]'), "native editor");
   const filename = "native-upload [1] $a$.png";
   const transfer = new DataTransfer();
   transfer.items.add(new File([Uint8Array.from(atob(pngBase64), c => c.charCodeAt(0))], filename, { type: "image/png" }));
   const input = document.querySelector<HTMLInputElement>('input[type="file"]')!;
   input.files = transfer.files;
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  await waitFor(() => [...document.querySelectorAll<HTMLImageElement>(".wiki-block img")].some(img => img.alt === filename && img.src.startsWith("blob:") && img.naturalWidth > 0), "native multipart upload and image preview");
+  await waitFor(() => [...document.querySelectorAll<HTMLImageElement>(".wiki-vditor img")].some(img => img.alt === filename && img.src.startsWith("blob:") && img.naturalWidth > 0), "native multipart upload and image preview");
   await waitFor(() => !document.querySelector<HTMLButtonElement>('button[title="保存 Ctrl+S"]')!.disabled, "upload completed before save");
   document.querySelector<HTMLButtonElement>('button[title="保存 Ctrl+S"]')!.click();
   await waitFor(() => document.querySelectorAll(".wiki-md img").length === 3 && [...document.querySelectorAll<HTMLImageElement>(".wiki-md img")].every(img => img.src.startsWith("blob:") && img.naturalWidth > 0), "saved native reading view");

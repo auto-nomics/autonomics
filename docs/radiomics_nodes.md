@@ -7,11 +7,15 @@ belong to the existing DataFrame DAG nodes in Stage B.
 
 ## Node catalogue
 
+Radiomics execution nodes are supplied by the external radiomics manifest plugin.
+The native `nodes-io` radiomics nodes have been removed:
+`radiomics_manifest_build`, `radiomics_stage_file_set`, `radiomics_dcm_glob`,
+`radiomics_qc`, and `radiomics_feature_set_assemble`. Existing graphs using
+these kinds must be updated before execution. Cohort preparation, file discovery,
+and feature-table QC must be provided explicitly by the workflow.
+
 | Kind | Ports | Purpose |
 |---|---|---|
-| `radiomics_manifest_build` | DataFrame -> manifest, diagnostics | Normalizes extraction units and validates identifiers/paths |
-| `radiomics_stage_file_set` | DataFrame -> FileSet | Resolves image or mask paths in manifest order |
-| `radiomics_dcm_glob` | -> DICOM FileSet | Expands and sorts a local or VFS DICOM glob |
 | `radiomics_image_ingest` | File/Any -> image File, metadata File | Reads NIfTI/MHA or a DICOM series and writes MHA |
 | `radiomics_mask_ingest` | port 0 reference image Any + port 1 mask/RTSTRUCT Any -> mask File, metadata File | Reads voxel masks or rasterizes DICOM RTSTRUCT |
 | `radiomics_pair_validate` | image File + mask File -> validation File, geometry File | Checks size, spacing, origin, direction, label, and ROI size |
@@ -27,8 +31,6 @@ belong to the existing DataFrame DAG nodes in Stage B.
 | `radiomics_shape_topology` | mask -> topology, slice profile, report Files | Computes connected components, Euler residual, convex hull, principal axes, and per-slice geometry |
 | `radiomics_register` | fixed image + moving image -> registered image, transform, report Files | Runs SimpleITK rigid or affine registration |
 | `radiomics_delta_features` | wide feature File -> delta, report Files | Pairs baseline/followup rows and computes absolute, relative, and percent changes |
-| `radiomics_qc` | wide features -> sample QC, feature QC, filtered features | Deterministic missing/non-finite/constant checks |
-| `radiomics_feature_set_assemble` | filtered features -> feature set, feature metadata | Adds stable feature-set identity and checks duplicate IDs |
 
 The extraction unit is `extraction_id`, not `patient_id`. One patient may have
 multiple examinations, modalities, lesions, ROIs, or timepoints.
@@ -125,18 +127,9 @@ order of magnitude.
 
 ## Recommended pipelines
 
-For already paired NIfTI/MHA files:
-
-```text
-cohort table
-  -> radiomics_manifest_build
-  -> radiomics_stage_file_set(image_uri)
-  -> radiomics_stage_file_set(mask_uri)
-  -> pyradiomics_batch_extract
-  -> file_to_dataframe(features_wide.parquet)
-  -> radiomics_qc
-  -> radiomics_feature_set_assemble
-```
+For already paired NIfTI/MHA files, prepare the manifest and ordered image/mask
+FileSets explicitly, pass them to `pyradiomics_batch_extract`, and read the
+resulting feature table with `file_to_dataframe` for downstream analysis.
 
 For DICOM image series and RTSTRUCT:
 
@@ -210,7 +203,6 @@ The implementation was checked against the IBSI validation checkout at commit
 - DICOM metadata, PHI scrubbing, VOI similarity, image QC, RTSTRUCT geometry,
   IVH, topology, registration, and delta-feature commands all passed the
   Phase-A smoke script.
-- local and VFS DICOM glob expansion returned deterministic, sorted FileSets.
 
 The IBSI repository does not include its numerical reference tables. Golden
 feature files generated with the pinned image should be added before claiming
