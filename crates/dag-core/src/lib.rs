@@ -1,12 +1,12 @@
-//! Core DAG engine: node traits, factory registry, and graph scheduler,
-//! free of any concrete node implementations.
+//! Core DAG engine primitives: node traits, the factory registry, the task
+//! executor stack, and flow-engine support types — free of any concrete node
+//! implementations.
 //!
 //! Concrete node bundles live in separate `nodes-*` crates and register
 //! themselves via the [`plugin::NodePlugin`] trait.
 
 pub mod arrow_util;
 pub mod dag;
-pub mod dataset;
 pub mod error;
 pub mod fingerprint;
 pub mod node;
@@ -14,7 +14,6 @@ pub mod plugin;
 pub mod registry;
 pub mod resource;
 pub mod runtime_output;
-pub mod sink;
 pub mod value;
 
 pub use dag::{
@@ -39,7 +38,6 @@ pub use node::{
 };
 pub use plugin::NodePlugin;
 pub use registry::{NodeCtx, NodeFactory, NodeInfo, NodeRegistry, new_isolated_ctx};
-// pub use sink::SinkMode;
 pub use value::{
     ArtifactRef, ChannelValue, DomainId, FileFingerprint, FileRef, NodeValue, PortType,
 };

@@ -33,9 +33,11 @@ pub struct LiteratureFetchSpec {
     /// order, first hit wins. An unknown name fails the node.
     #[serde(default)]
     pub sources: Option<Vec<String>>,
-    /// Destination for the evidence JSON artifact. Prefers a `vfs://`
+    /// Destination for the evidence JSON artifact. Prefers a domain URI
+    /// (`local://`)
     /// URI for cross-process artifacts; a bare absolute path is
-    /// auto-rewritten to `vfs:///...` so the engine and the agent share
+    /// bare absolute paths are auto-rewritten to `local:///...` so the engine
+    /// and the agent share
     /// one mounted object-store namespace. Overwritten on re-run.
     pub path: String,
     /// Optional provenance note stamped on the record.
@@ -302,7 +304,7 @@ mod tests {
     }
 
     fn tmp_path(tag: &str) -> String {
-        // Absolute; `write_artifact` rewrites it to `vfs:///tmp/...` which
+        // Absolute; `write_artifact` rewrites it to `local:///tmp/...` which
         // resolves inside the test's VFS temp root.
         format!("/tmp/fetch-node-{tag}-{}.json", uuid::Uuid::new_v4())
     }

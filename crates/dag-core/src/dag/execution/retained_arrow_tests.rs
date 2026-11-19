@@ -216,11 +216,11 @@ fn fixture(schema_only: bool) -> (tempfile::TempDir, NodeCtx, FileRef) {
     let storage = Arc::new(vfs::OpendalFileStorage::new(temp.path()));
     let session = SessionContext::new();
     session.runtime_env().register_object_store(
-        ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+        ObjectStoreUrl::parse("local://").unwrap().as_ref(),
         storage.clone(),
     );
     let ctx = NodeCtx::new(session.runtime_env(), Some(storage));
-    let mut origin = FileRef::new("vfs:///retained", Some("arrow".into()));
+    let mut origin = FileRef::new("local:///retained", Some("arrow".into()));
     origin.fingerprint = Some(FileFingerprint::remote(
         std::fs::metadata(temp.path().join("retained"))
             .unwrap()
@@ -340,7 +340,7 @@ async fn zero_batch_ipc_keeps_its_schema_for_local_and_retained_outputs() {
         };
         assert_eq!(frame.schema().fields().len(), 2);
         assert_eq!(frame.schema().field(0).name(), "id");
-        if vfs::uri::is_uri(&artifact.path) {
+        if vfs::uri::storage_path(&artifact.path).is_some() {
             assert_eq!(
                 serde_json::to_value(pure_retained_arrow_origin(&frame)).unwrap(),
                 serde_json::to_value(&origin).unwrap()

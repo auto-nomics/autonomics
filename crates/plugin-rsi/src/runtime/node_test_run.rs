@@ -86,7 +86,7 @@ impl DevSessionManager {
         request: &TestRunRequest,
     ) -> Result<TestRunResult> {
         let workspace = crate::PluginWorkspace::new(candidate);
-        let manifest: container_plugin::manifest::PluginManifest =
+        let manifest: ::plugin::manifest::PluginManifest =
             toml::from_str(&workspace.read_text("manifest.toml")?)
                 .map_err(|e| Error::Validation(format!("invalid candidate: {e}")))?;
         let node = manifest
@@ -124,7 +124,7 @@ impl DevSessionManager {
             node.command.script_file = None;
         }
 
-        let spec = container_plugin::compile::spec_compile::compile_container_spec(
+        let spec = ::plugin::compile::spec_compile::compile_container_spec(
             &node,
             &manifest.image,
             &manifest.panels,
@@ -156,7 +156,7 @@ impl DevSessionManager {
         // scope (they need structured channel values).
         let mut input_container_paths: Vec<Option<String>> = Vec::new();
         for input in &node.ports.inputs {
-            if input.r#type != container_plugin::node_definition::PortKind::File {
+            if input.r#type != ::plugin::node_definition::PortKind::File {
                 return Err(Error::Validation(format!(
                     "test-run v1 supports file inputs only; port `{}` of `{}` is a tuple port",
                     input.label.as_deref().unwrap_or("?"),
@@ -339,7 +339,7 @@ impl DevSessionManager {
 
 fn read_outputs(
     workdir: &Path,
-    node: &container_plugin::node_definition::NodeDefinition,
+    node: &::plugin::node_definition::NodeDefinition,
 ) -> Vec<TestRunOutput> {
     node.ports
         .outputs

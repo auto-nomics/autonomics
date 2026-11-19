@@ -421,31 +421,31 @@ pub(super) fn lower_worker_task(
             };
         }
     }
-    if execution.submission.spec.kind == "logical_gather" {
-        let payload =
-            gather_output_payload(execution.submission.inputs.iter().map(
-                |input| match &input.data {
-                    NodeValue::DataFrame(_) => "dataframe",
-                    NodeValue::File(_) => "file",
-                    NodeValue::FileSet(_) => "file_set",
-                    NodeValue::Channel(_) => "channel",
-                    NodeValue::Structured(_) => "structured_channel",
-                },
-            ))?;
-        if execution.submission.spec.outputs.len() != 1
-            || execution.submission.spec.outputs[0].port != 0
-        {
-            return Err(failure("logical gather requires output port zero only"));
-        }
-        execution.submission.spec.outputs[0].payload = payload.into();
-    } else if execution
+    // A scheduler-native node may declare an Any output; the coordinator
+    // pins its one concrete transport payload from the runtime input values.
+    // Any outputs on ordinary nodes are never made portable.
+    if execution
         .submission
         .spec
         .outputs
         .iter()
         .any(|output| output.payload == "any")
     {
-        return Err(failure("remote typed output requires a concrete contract"));
+        if execution.submission.spec.outputs.len() != 1
+            || execution.submission.spec.outputs[0].port != 0
+        {
+            return Err(failure("Any output requires output port zero only"));
+        }
+        let payload = inferred_output_payload(execution.submission.inputs.iter().map(
+            |input| match &input.data {
+                NodeValue::DataFrame(_) => "dataframe",
+                NodeValue::File(_) => "file",
+                NodeValue::FileSet(_) => "file_set",
+                NodeValue::Channel(_) => "channel",
+                NodeValue::Structured(_) => "structured_channel",
+            },
+        ))?;
+        execution.submission.spec.outputs[0].payload = payload.into();
     }
     let original_vfs_principal = execution
         .engine_ctx
@@ -687,21 +687,23 @@ impl TaskExecutor for TypedRemoteTaskExecutor {
     }
 }
 
-fn gather_output_payload<'a>(
+/// Infer the concrete transport payload of an Any output port from the
+/// staged inputs' runtime payload types (homogeneity required).
+fn inferred_output_payload<'a>(
     payloads: impl IntoIterator<Item = &'a str>,
 ) -> Result<&'static str, DagError> {
     let mut payloads = payloads.into_iter();
     let first = payloads
         .next()
-        .ok_or_else(|| failure("remote logical gather requires an input"))?;
+        .ok_or_else(|| failure("remote Any output requires an input to infer from"))?;
     if payloads.any(|payload| payload != first) {
-        return Err(failure("remote logical gather requires homogeneous inputs"));
+        return Err(failure("remote Any output requires homogeneous inputs"));
     }
     match first {
         "dataframe" => Ok("dataframe"),
         "file" | "file_set" => Ok("file_set"),
         _ => Err(failure(
-            "remote logical gather only supports DataFrame, File or FileSet inputs",
+            "remote Any output only supports DataFrame, File or FileSet inputs",
         )),
     }
 }
@@ -1000,7 +1002,6 @@ pub(super) async fn execute_typed_worker_core(
     // every plugin/bundle node still goes through the strict registry path.
     let mut node: Box<dyn crate::DagNode> = match task.kind.as_str() {
         "channel" | "core/channel" => Box::new(crate::ChannelNode::from_spec(&task.spec)?),
-        "logical_gather" => Box::new(crate::dag::GatherNode::default()),
         _ => registry
             .build_node_strict(&task.kind, task.spec.clone())
             .map_err(|e| {
@@ -1036,16 +1037,14 @@ pub(super) async fn execute_typed_worker_core(
         .iter()
         .map(|port| (port.port, port.payload.clone()))
         .collect::<BTreeMap<_, _>>();
-    // Gather's native Any output has one precise runtime contract, inferred
-    // from homogeneous staged inputs. No other Any port is made portable.
-    let expected = if task.kind == "logical_gather" {
+    // A scheduler-native node may declare an Any output whose one precise
+    // runtime contract is inferred from homogeneous staged inputs; Any ports
+    // on ordinary nodes are never made portable.
+    let expected = if expected.values().any(|payload| payload == "any") {
         let payload =
-            gather_output_payload(task.inputs.iter().map(|input| input.payload.as_str()))?;
+            inferred_output_payload(task.inputs.iter().map(|input| input.payload.as_str()))?;
         [(0, payload.to_string())].into_iter().collect()
     } else {
-        if expected.values().any(|payload| payload == "any") {
-            return Err(failure("remote typed output requires a concrete contract"));
-        }
         expected
     };
     if expected != requested {

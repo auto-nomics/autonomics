@@ -10,7 +10,7 @@
 
 参考实现是 `ldsc` 家族（`ldsc_h2`、`ldsc_munge`、
 `ldsc_rg`），已端到端迁移完成，并由
-`crates/container-plugin/tests/ldsc_migration.rs`（黄金对账）和
+`crates/plugin/tests/ldsc_migration.rs`（黄金对账）和
 `ldsc_e2e.rs`（分发链路）持续验证。
 
 ## 总览
@@ -31,7 +31,7 @@ ldsc/
 └── README.md
 ```
 
-启动时运行时宿主执行 `container_plugin::sync::sync`（读
+启动时运行时宿主执行 `plugin::sync::sync`（读
 `state_dir/plugins.toml`），把每个插件物化到 `state_dir/plugins` 下，随后
 loader 扫描该根目录、以 fail-closed 方式校验每个 `manifest.toml`，并为每个
 `[[nodes]]` 条目注册一个 `ManifestNodeFactory`。
@@ -62,7 +62,7 @@ loader 扫描该根目录、以 fail-closed 方式校验每个 `manifest.toml`�
    `--flag $val` 列表。
 
 如果 DSL 确实表达不了某个东西（新参数类型、数组下标、条件模板），先扩展
-`crates/container-plugin` **再**迁移——不要在清单或脚本里打补丁。
+`crates/plugin` **再**迁移——不要在清单或脚本里打补丁。
 
 ## 第 1 步：创建插件目录
 
@@ -84,7 +84,7 @@ Dockerfile 还留在 `containers/` 下的包装只迁移了一半。
 
 ## 第 2 步：黄金对账测试
 
-在 `crates/container-plugin/tests/<tool>_migration.rs` 加一个测试，编译清单
+在 `crates/plugin/tests/<tool>_migration.rs` 加一个测试，编译清单
 并逐字段断言与旧包装 `container_spec` 的对账（见 `ldsc_migration.rs`）：
 
 ```rust
@@ -262,6 +262,6 @@ LDSC_INTERCEPT_H2 = "{{ intercept_h2 }}"
 - [ ] 插件已推到 git、钉 `rev`；`plugins.toml` 引用它。
 - [ ] 旧包装文件 + `pub mod` + `register(…)` 已删。
 - [ ] `grep "<tool>_container::"` 在 `crates/ apps/` 下为空。
-- [ ] `cargo test -p nodes-io -p data-engine -p container-plugin` 全绿。
+- [ ] `cargo test -p nodes-io -p data-engine -p plugin` 全绿。
 - [ ] `ldsc_e2e` 风格的分发测试（sync → load → build → execute）对着已推送
       的仓库通过。

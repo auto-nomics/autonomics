@@ -150,9 +150,15 @@ pub fn domain(address: &str) -> Option<&str> {
     (scheme != SCHEME && scheme != "file").then_some(scheme)
 }
 
-/// Build a `vfs://` URI from a virtual path.
+/// Build the canonical local-domain URI from a virtual path.
+///
+/// `local://` is the explicit local-domain spelling of the default virtual
+/// namespace; `storage_path` routes it through the mount-aware resolver and
+/// the resolver maps the `local` domain to the root mount. The legacy
+/// `vfs://` spelling stays readable everywhere (persisted run reports,
+/// caches, old rows), but producers emit the canonical form.
 pub fn uri(virtual_path: impl std::fmt::Display) -> String {
-    format!("{SCHEME_PREFIX}{virtual_path}")
+    format!("local://{virtual_path}")
 }
 
 #[cfg(test)]
@@ -180,10 +186,13 @@ mod tests {
     }
 
     #[test]
-    fn uri_round_trips_through_virtual_path() {
-        let built = uri(format!("data/{}", "x.bin"));
-        assert_eq!(built, "vfs://data/x.bin");
-        assert_eq!(virtual_path(&built), Some("data/x.bin"));
+    fn uri_builds_the_canonical_local_address() {
+        let built = uri("data/x.bin");
+        assert_eq!(built, "local://data/x.bin");
+        assert_eq!(domain(&built), Some("local"));
+        assert!(storage_path(&built).is_some());
+        // The legacy spelling keeps routing to the same virtual path.
+        assert_eq!(virtual_path("vfs://data/x.bin"), Some("data/x.bin"));
     }
 }
 

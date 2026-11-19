@@ -16,7 +16,7 @@
    容器包装时额外需要的 parity 流程。
 
 [节点插件架构设计](../design/node-plugin-architecture.md)解释历史设计动机。
-当历史提案与当前实现不一致时，以本目录文档和 `container-plugin` 源码为准。
+当历史提案与当前实现不一致时，以本目录文档和 `plugin` 源码为准。
 
 ## 生命周期
 
@@ -74,12 +74,12 @@ rev = "<完整-commit-sha>"
 
 Rust 类型和 loader 是实现层权威：
 
-- `crates/container-plugin/src/node_definition.rs`：manifest 节点 schema
+- `crates/plugin/src/node_definition.rs`：manifest 节点 schema
   与跨字段校验。
-- `crates/container-plugin/src/manifest.rs`：家族与镜像元数据。
-- `crates/container-plugin/src/loader.rs`：fail-closed 加载与脚本内联。
-- `crates/container-plugin/src/compile/`：参数解析、模板渲染和
+- `crates/plugin/src/manifest.rs`：家族与镜像元数据。
+- `crates/plugin/src/loader.rs`：fail-closed 加载与脚本内联。
+- `crates/plugin/src/compile/`：参数解析、模板渲染和
   `ContainerCommandSpec` 编译。
-- `crates/container-plugin/src/sync.rs`：Git/path 源同步。
+- `crates/plugin/src/sync.rs`：Git/path 源同步。
 
 如果文档与当前源码不一致，先修复文档或实现，不要依赖有争议的行为。

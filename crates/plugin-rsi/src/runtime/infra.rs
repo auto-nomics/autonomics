@@ -296,7 +296,7 @@ impl PluginInfra {
                     ));
                 }
                 let workspace = crate::PluginWorkspace::new(candidate);
-                let manifest: container_plugin::manifest::PluginManifest =
+                let manifest: ::plugin::manifest::PluginManifest =
                     toml::from_str(&workspace.read_text("manifest.toml")?)
                         .map_err(|e| Error::Validation(e.to_string()))?;
                 let owned: Vec<_> = manifest.nodes.iter().map(|n| n.kind.clone()).collect();

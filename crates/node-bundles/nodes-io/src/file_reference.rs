@@ -16,7 +16,7 @@ pub const FILE_REFERENCE_KIND: &str = "file_reference";
 
 #[derive(Debug, Clone, JsonSchema, Deserialize)]
 pub struct FileReferenceNodeSpec {
-    /// Concrete file path. Use `vfs://...` for runtime-mounted object
+    /// Concrete file path. Use a domain URI (`local://...`) for runtime-mounted object
     /// storage, or an absolute path for a local development input.
     pub path: String,
     /// Optional format label passed downstream, for example `sumstats_gz`.
@@ -229,7 +229,7 @@ fn local_path(path: &str) -> Result<&std::path::Path, DagError> {
     let path = std::path::Path::new(local);
     if !path.is_absolute() {
         return Err(DagError::Schedule(format!(
-            "file_reference path must be a `vfs://` URI or absolute path, got `{}`",
+            "file_reference path must be a domain URI (`local://`) or absolute path, got `{}`",
             path.display()
         )));
     }
@@ -249,7 +249,7 @@ impl NodeFactory for FileReferenceNodeFactory {
 
     fn doc(&self) -> &'static str {
         "A file reference for binary or already-normalized inputs. It validates \
-        that the configured `vfs://` or absolute path names a concrete file, \
+        that the configured `local://` (or legacy `vfs://`) or absolute path names a concrete file, \
         attaches size/mtime metadata, and emits a FileRef. Set `hash_content` \
         to true to also read once and attach a sha256 content hash. Unlike \
         `file_to_dataframe`, it never reads the payload into a DataFrame. This is \
@@ -346,7 +346,7 @@ mod tests {
         let (storage, _workspace) = mounted_ctx(input.path());
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
         let mut node =
-            FileReferenceNode::new("vfs:///input.sumstats.gz", Some("sumstats_gz".into()));
+            FileReferenceNode::new("local:///input.sumstats.gz", Some("sumstats_gz".into()));
 
         let outputs = node
             .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
@@ -367,7 +367,7 @@ mod tests {
         let (storage, _workspace) = mounted_ctx(input.path());
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
         let mut node =
-            FileReferenceNode::with_content_hashing("vfs:///input.tsv", Some("tsv".into()), true);
+            FileReferenceNode::with_content_hashing("local:///input.tsv", Some("tsv".into()), true);
 
         let outputs = node
             .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())
@@ -399,7 +399,7 @@ mod tests {
         let input = tempfile::tempdir().unwrap();
         let (storage, _workspace) = mounted_ctx(input.path());
         let ctx = NodeCtx::new(SessionContext::new().runtime_env(), Some(storage));
-        let mut node = FileReferenceNode::new("vfs:///missing.gz", None);
+        let mut node = FileReferenceNode::new("local:///missing.gz", None);
 
         let error = node
             .execute(&ctx, &[], &dag_core::dag::node_event::NodeReporter::noop())

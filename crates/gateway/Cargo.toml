@@ -22,7 +22,7 @@ bib-base = { path = "../bib-base" }
 bib-types = { path = "../bib-types" }
 vfs = { path = "../vfs" }
 dag-core = { path = "../dag-core" }
-container-plugin = { path = "../container-plugin" }
+plugin = { path = "../plugin" }
 container-runtime = { path = "../container-runtime" }
 axum = { version = "0.8", features = ["macros", "ws"] }
 hyper = { version = "1", features = ["client", "http1"] }

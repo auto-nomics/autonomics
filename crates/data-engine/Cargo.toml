@@ -50,7 +50,7 @@ nodes-mice = { path = "../node-bundles/nodes-mice", optional = true }
 nodes-writing = { path = "../node-bundles/nodes-writing", optional = true }
 nodes-rd = { path = "../node-bundles/nodes-rd", optional = true }
 nodes-dl = { path = "../node-bundles/nodes-dl", optional = true }
-container-plugin = { path = "../container-plugin" }
+plugin = { path = "../plugin" }
 
 [features]
 default = ["analysis", "bundle-writing", "bundle-literature"]

@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn record_and_lookup_round_trip_through_json() {
         let mut cache = InstanceCache::new();
-        let outputs = outputs_with_file(0, "vfs://data/a.out");
+        let outputs = outputs_with_file(0, "local://data/a.out");
         cache.record("qc", Some("a"), "fp-1".into(), &outputs);
         assert_eq!(cache.len(), 1);
 
@@ -258,7 +258,7 @@ mod tests {
         assert_eq!(cached.fingerprint, "fp-1");
         match cached.outputs.get(&0) {
             Some(CachedOutput::File(cached_file)) => {
-                assert_eq!(cached_file.path, "vfs://data/a.out");
+                assert_eq!(cached_file.path, "local://data/a.out");
                 assert_eq!(cached_file.fingerprint.as_ref().unwrap().size, 7);
             }
             other => panic!("expected a cached file, got {other:?}"),
@@ -273,7 +273,7 @@ mod tests {
             "multiqc",
             None,
             "fp".into(),
-            &outputs_with_file(0, "vfs://m"),
+            &outputs_with_file(0, "local://m"),
         );
         assert!(cache.lookup("multiqc", None).is_some());
         assert!(cache.lookup("multiqc", Some("0")).is_some());
@@ -342,7 +342,7 @@ mod tests {
             "qc",
             Some("a"),
             "fp".into(),
-            &outputs_with_file(0, "vfs://data/a.out"),
+            &outputs_with_file(0, "local://data/a.out"),
         );
         let cached = cache.lookup("qc", Some("a")).unwrap();
         assert!(

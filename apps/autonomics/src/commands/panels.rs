@@ -12,10 +12,10 @@ use std::time::{Duration, Instant};
 
 use color_eyre::Result;
 
-use container_plugin::bundles::{
+use plugin::bundles::{
     self, BUNDLE_CONCURRENCY, PanelBundleEvent, PanelBundleOutcome, PanelBundleReport,
 };
-use container_plugin::loader;
+use plugin::loader;
 use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
 
 use crate::cli::{PanelsAction, PanelsArgs};
@@ -57,7 +57,7 @@ async fn sync_command(state_dir: &Path) -> Result<()> {
 /// here are only carried for factory construction — nothing executes.
 pub(crate) fn load_installed_plugins(
     state_dir: &Path,
-) -> Result<Vec<container_plugin::factory::Plugin>> {
+) -> Result<Vec<plugin::factory::Plugin>> {
     let root = plugin_rsi::PluginStateLayout::open(state_dir).runtime_root();
     let connection: std::sync::Arc<dyn container_runtime::PodmanConnection> = std::sync::Arc::new(
         container_runtime::PodmanRuntime::new(container_runtime::PodmanConfig {

@@ -724,7 +724,7 @@ async fn open_plugin_rsi(
         .map_err(|error| crate::error::Error::Other(error.to_string()))?;
 
     // PluginStore owns `state_dir/plugins.toml` and `state_dir/plugins`;
-    // container-plugin remains the protocol and checkout tool layer.
+    // plugin remains the protocol and checkout tool layer.
     let gh_publisher = Arc::new(plugin_rsi::GhPublisher::new(
         config.plugin_rsi.publisher.clone(),
     ));
@@ -800,7 +800,7 @@ fn open_container_execution(config: &RuntimeConfig) -> Result<Arc<ContainerExecu
         ContainerExecutionInfra::for_operator_state_dir(&config.state_dir)
             .map_err(crate::error::Error::Other)?;
     if config.slurm.enabled && config.slurm.apptainer_manifest.is_some() {
-        let remote = container_plugin::slurm_runtime::SlurmContainerRuntime::new(
+        let remote = plugin::slurm_runtime::SlurmContainerRuntime::new(
             slurm_settings(config)?,
             container_execution.config.workspace_root.clone(),
             config.state_dir.join("slurm-containers"),
@@ -1187,7 +1187,7 @@ impl plugin_rsi::PluginRegistryControl for SharedPluginRegistryControl {
     fn reload_plugin(&self, plugin_name: &str) -> plugin_rsi::Result<()> {
         plugin_rsi::validate_plugin_name(plugin_name)?;
         let directory = self.store.runtime_root().join(plugin_name);
-        let plugin = container_plugin::loader::load_plugin(
+        let plugin = plugin::loader::load_plugin(
             &directory,
             Arc::clone(&self.execution.runtime),
             Arc::clone(&self.execution.panel_cache),

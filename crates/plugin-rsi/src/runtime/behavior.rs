@@ -295,7 +295,7 @@ impl crate::PluginInfra {
             }
         }
         let report = json!({"verification":if suite.authority=="independent" {"independent_contract"}else{"author_tested"},"suite_id":suite.id,"suite_digest":suite.digest()?,"checker_version":1,"candidate_fingerprint":crate::content_fingerprint(candidate)?,"cases":results,"passed":results.iter().all(|r|r["passed"]==true)});
-        let manifest: container_plugin::manifest::PluginManifest =
+        let manifest: ::plugin::manifest::PluginManifest =
             toml::from_str(&std::fs::read_to_string(candidate.join("manifest.toml"))?)
                 .map_err(|e| Error::Validation(e.to_string()))?;
         let mut report = report;

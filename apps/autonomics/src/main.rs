@@ -158,11 +158,6 @@ fn main() -> color_eyre::Result<()> {
         }
         Some(Command::Askpass { .. }) => std::process::exit(vfs::cli::askpass_main()),
         Some(Command::Run(args)) => commands::run::run_headless(args),
-        Some(Command::ExportRun(args)) => {
-            let runtime = tokio::runtime::Runtime::new()
-                .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
-            runtime.block_on(commands::export::run_export_run(args))
-        }
         // Serve was taken above (`if let Some(Command::Serve(..))`).
         Some(Command::Serve(_)) => unreachable!("dispatched before init_frontend_logging"),
     }

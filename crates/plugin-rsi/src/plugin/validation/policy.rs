@@ -9,7 +9,7 @@ use crate::{
     foundation::workspace::PluginWorkspace,
 };
 
-use container_plugin::manifest::PluginManifest;
+use ::plugin::manifest::PluginManifest;
 
 /// Applies the host-owned policy that surrounds an otherwise valid manifest.
 pub(crate) struct PolicyValidator<'a> {
@@ -96,7 +96,7 @@ impl<'a> PolicyValidator<'a> {
 
     fn validate_node(
         &self,
-        node: &container_plugin::node_definition::NodeDefinition,
+        node: &::plugin::node_definition::NodeDefinition,
         environment_id: &str,
         environment: &Environment,
     ) -> Result<(), String> {

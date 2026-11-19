@@ -46,8 +46,8 @@ original file remains available for retry. HTML/TXT keep their built-in extracti
 text, under the attachment key:
 
 ```text
-vfs:///literature/{article}/attachments/{key}/extracted/fulltext.sdt.json
-vfs:///literature/{article}/attachments/{key}/extracted/fulltext.txt
+local://literature/{article}/attachments/{key}/extracted/fulltext.sdt.json
+local://literature/{article}/attachments/{key}/extracted/fulltext.txt
 ```
 
 The cache envelope contains the original VFS path/hash and processor version.

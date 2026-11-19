@@ -33,7 +33,7 @@ example `/mnt/projects/node-plugins/clusterprofiler`:
 
 ```bash
 cd /path/to/autonomics
-cargo run -p container-plugin --bin nodedev -- \
+cargo run -p plugin --bin nodedev -- \
   init --name clusterprofiler --dir /mnt/projects/node-plugins
 ```
 
@@ -204,7 +204,7 @@ the output files and schemas.
 ## 7. Add Manifest Tests in Autonomics
 
 New plugins should have a focused integration test under
-`crates/container-plugin/tests/`. The test should locate the plugin checkout,
+`crates/plugin/tests/`. The test should locate the plugin checkout,
 parse and inline its manifest, and assert:
 
 - The image is digest-pinned.

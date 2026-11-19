@@ -2,7 +2,7 @@
 //! the bare-`autonomics` guide, and the serve startup gate.
 //!
 //! Zero network by design: plugin rev-presence via local git
-//! (`container_plugin::sync::check`), the model via its completion
+//! (`plugin::sync::check`), the model via its completion
 //! marker (`text_embedding::verify_install`), images via one
 //! `podman images` call. The provisioning that fills the gaps these
 //! checks find is `prepare`'s job — and the daemon's internal
@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use container_plugin::factory::Plugin;
+use plugin::factory::Plugin;
 
 use crate::commands::panels::load_installed_plugins;
 
@@ -175,7 +175,7 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
     let root = layout.runtime_root();
     let config_path = config
         .state_dir
-        .join(container_plugin::sync::PLUGIN_CONFIG_FILE);
+        .join(plugin::sync::PLUGIN_CONFIG_FILE);
     if !config_path.is_file() {
         return Category::Skipped(format!(
             "{} not present — built-in nodes only",
@@ -183,19 +183,19 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
         ));
     }
 
-    let report = match container_plugin::sync::check(&config_path, &root) {
+    let report = match plugin::sync::check(&config_path, &root) {
         Ok(report) => report,
         Err(error) => return Category::Failed(error.to_string()),
     };
     let gaps: Vec<Gap> = report
         .entries
         .into_iter()
-        .filter(|entry| entry.outcome != container_plugin::sync::CheckOutcome::Ok)
+        .filter(|entry| entry.outcome != plugin::sync::CheckOutcome::Ok)
         .map(|entry| {
             let (kind, label) = match entry.outcome {
-                container_plugin::sync::CheckOutcome::Ok => unreachable!(),
-                container_plugin::sync::CheckOutcome::Missing => (GapKind::Missing, "missing"),
-                container_plugin::sync::CheckOutcome::Inconsistent => {
+                plugin::sync::CheckOutcome::Ok => unreachable!(),
+                plugin::sync::CheckOutcome::Missing => (GapKind::Missing, "missing"),
+                plugin::sync::CheckOutcome::Inconsistent => {
                     (GapKind::Inconsistent, "inconsistent")
                 }
             };
@@ -330,7 +330,7 @@ fn check_panels(plugins: Option<&[Plugin]>) -> Category {
     let Some(plugins) = plugins else {
         return Category::Skipped("no loadable plugin families".into());
     };
-    let bundle_ids = container_plugin::bundles::collect_panel_bundles(plugins);
+    let bundle_ids = plugin::bundles::collect_panel_bundles(plugins);
     if bundle_ids.is_empty() {
         return Category::Ok("no data bundles declared".into());
     }
@@ -338,7 +338,7 @@ fn check_panels(plugins: Option<&[Plugin]>) -> Category {
         Ok(local) => local,
         Err(error) => return Category::Failed(format!("panel cache: {error}")),
     };
-    let report = container_plugin::bundles::check_panel_bundles(&bundle_ids, &local);
+    let report = plugin::bundles::check_panel_bundles(&bundle_ids, &local);
     let counts = report.counts();
     if counts.unavailable == 0 {
         Category::Ok(format!(

@@ -6,7 +6,7 @@ use super::{
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
-use container_plugin::node_definition::NodeDefinition;
+use ::plugin::node_definition::NodeDefinition;
 
 #[tool(
     name = "plugin_node_upsert",
@@ -23,7 +23,7 @@ pub(super) struct PluginNodeUpsertTool {
 impl ToolFunction for PluginNodeUpsertTool {
     type Input = PluginNodeUpsertInput;
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        container_plugin::node_definition::validate(&input.node).map_err(tool_error)?;
+        ::plugin::node_definition::validate(&input.node).map_err(tool_error)?;
         let target = resolve_target(&self.state, &input.plugin_path)
             .await
             .map_err(tool_error)?;

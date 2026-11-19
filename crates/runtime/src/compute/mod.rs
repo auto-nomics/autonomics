@@ -1369,7 +1369,7 @@ impl ComputeRegistry {
                     };
                 let containers: Arc<dyn PodmanConnection> = if settings.apptainer_manifest.is_some()
                 {
-                    let runtime = container_plugin::slurm_runtime::SlurmContainerRuntime::new(
+                    let runtime = plugin::slurm_runtime::SlurmContainerRuntime::new(
                         slurm,
                         self.local.workspace_root().to_path_buf(),
                         if target.id == "legacy-slurm" {

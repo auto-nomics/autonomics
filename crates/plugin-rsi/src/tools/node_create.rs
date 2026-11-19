@@ -3,7 +3,7 @@
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
-use container_plugin::node_definition::NodeDefinition;
+use ::plugin::node_definition::NodeDefinition;
 use serde_json::json;
 
 use super::PluginToolState;
@@ -104,7 +104,7 @@ impl ToolFunction for PluginNodeCreateTool {
             toml::from_str(&input.node_toml).map_err(|error| ToolError::ValidationFailed {
                 message: format!("invalid node definition TOML: {error}"),
             })?;
-        container_plugin::node_definition::validate(&node).map_err(|error| {
+        ::plugin::node_definition::validate(&node).map_err(|error| {
             ToolError::ValidationFailed {
                 message: format!("invalid node definition: {error}"),
             }

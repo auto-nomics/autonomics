@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::error::DagError;
-use super::logical::render_spec;
 use super::{DagNode, NodeInput, NodePorts};
 use crate::dag::PortOutputs;
 use crate::dag::node_event::NodeReporter;
@@ -695,6 +694,86 @@ impl ChannelNode {
             _ => Vec::new(),
         };
         Ok(outputs)
+    }
+}
+
+
+/// Render `{{item}}` / `{{item.field…}}` template tokens against one channel
+/// item. Strict: any other `{{…}}` token is an error, not an escape hatch.
+pub(crate) fn render_spec(
+    spec: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    match spec {
+        serde_json::Value::String(template) => render_string(template, item),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(|value| render_spec(value, item))
+            .collect::<Result<Vec<_>>>()
+            .map(serde_json::Value::Array),
+        serde_json::Value::Object(fields) => {
+            let mut rendered = serde_json::Map::new();
+            for (name, value) in fields {
+                rendered.insert(name.clone(), render_spec(value, item)?);
+            }
+            Ok(serde_json::Value::Object(rendered))
+        }
+        value => Ok(value.clone()),
+    }
+}
+
+fn render_string(template: &str, item: &serde_json::Value) -> Result<serde_json::Value> {
+    let mut rendered = String::new();
+    let mut cursor = 0;
+    while let Some(start) = template[cursor..].find("{{") {
+        let start = cursor + start;
+        rendered.push_str(&template[cursor..start]);
+        let Some(end_relative) = template[start..].find("}}") else {
+            return Err(DagError::Schedule(format!(
+                "invalid item template `{template}`: missing `}}`"
+            )));
+        };
+        let end = start + end_relative + 2;
+        let token = &template[start..end];
+        let path = token
+            .strip_prefix("{{item")
+            .and_then(|path| path.strip_suffix("}}"))
+            .ok_or_else(|| {
+                DagError::Schedule(format!(
+                    "unsupported template token `{token}`; expected `{{{{item}}}}` or `{{{{item.field}}}}`"
+                ))
+            })?;
+        let value = if path.is_empty() {
+            Some(item.clone())
+        } else {
+            item.pointer(&format!(
+                "/{}",
+                path.trim_start_matches('.').replace('.', "/")
+            ))
+            .cloned()
+        };
+        let Some(value) = value else {
+            return Err(DagError::Schedule(format!(
+                "template token `{token}` refers to a missing item field"
+            )));
+        };
+        rendered.push_str(&scalar_display(&value));
+        cursor = end;
+    }
+    rendered.push_str(&template[cursor..]);
+    if template == "{{item}}" {
+        return Ok(match item {
+            serde_json::Value::String(value) => serde_json::Value::String(value.clone()),
+            value => value.clone(),
+        });
+    }
+    Ok(serde_json::Value::String(rendered))
+}
+
+fn scalar_display(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        value => value.to_string(),
     }
 }
 

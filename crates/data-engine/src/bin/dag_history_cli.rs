@@ -1,48 +1,36 @@
-//! dag_history_cli —— DAG 快照历史命令行工具。
+//! dag_history_cli —— flow 运行审计与工作区持久化命令行工具。
 //!
 //! 子命令：
-//!   dag_history_cli log [--ref NAME] [--limit N]
-//!       查看快照历史（默认 ref=main, limit=20）
-//!   dag_history_cli show <snapshot_id>
-//!       查看某次快照的详情
-//!   dag_history_cli head [--ref NAME]
-//!       查看某 ref 当前指向的快照
-//!   dag_history_cli refs
-//!       列出所有 ref（branch / tag）
-//!   dag_history_cli manifest <snapshot_id>
-//!       打印快照的双层 manifest，pretty JSON
-//!   dag_history_cli diff <old_id> <new_id>
-//!       对比两次快照的 manifest 差异
-//!   dag_history_cli branch <new_name> [--from REF]
-//!       从 ref 创建新分支（默认 from=main）
-//!   dag_history_cli restore <snapshot_id> [--ref NAME]
-//!       将 ref 回退到历史快照（默认 ref=main）
+//!   dag_history_cli runs [--ref NAME] [--limit N]
+//!       列出最近的运行记录（默认 ref 不过滤, limit=20）
+//!   dag_history_cli run <run_id>
+//!       查看单次运行的详情（含 run report 摘要）
+//!   dag_history_cli flow <agent_id>
+//!       打印某 agent 持久化的 authored flow JSON
+//!   dag_history_cli flow-cache <agent_id>
+//!       打印某 agent 的实例 resume 缓存 JSON
 //!
 //! 全局选项：
 //!   --db <path>    指定数据库路径（默认 .autonomics/dag-history.db）
 //!
 //! 运行示例：
-//!   cargo run -p data-engine --bin dag_history_cli -- log --limit 10
-//!   cargo run -p data-engine --bin dag_history_cli -- refs
-//!   cargo run -p data-engine --bin dag_history_cli -- diff abc123 def456
-//!   cargo run -p data-engine --bin dag_history_cli -- log --db /path/to/custom.db
-
-use std::collections::HashMap as StdHashMap;
+//!   cargo run -p data-engine --bin dag_history_cli -- runs --limit 10
+//!   cargo run -p data-engine --bin dag_history_cli -- run 9a5c…
+//!   cargo run -p data-engine --bin dag_history_cli -- flow researcher
 
 use data_engine::dag::DagError;
-use data_engine::dag::history::{DagHistory, DagManifest, Snapshot};
+use data_engine::dag::history::DagHistory;
 
 type BoxErr = Box<dyn std::error::Error + Send + Sync>;
 type Result<T> = std::result::Result<T, BoxErr>;
 
 const DEFAULT_DB: &str = ".autonomics/dag-history.db";
-const DEFAULT_REF: &str = "main";
-const SHORT_HASH_LEN: usize = 12;
+const SHORT_ID_LEN: usize = 12;
 
 fn usage() -> ! {
     eprintln!(
         "用法: dag_history_cli [--db <path>] <subcommand> [args]\n\
-         子命令: log, show, head, refs, manifest, diff, branch, restore\n\
+         子命令: runs, run, flow, flow-cache\n\
          详见源码顶部文档。"
     );
     std::process::exit(2);
@@ -50,10 +38,10 @@ fn usage() -> ! {
 
 /// 取 id 的前 12 个字符（类似 git short hash）。
 fn short(id: &str) -> &str {
-    if id.len() <= SHORT_HASH_LEN {
+    if id.len() <= SHORT_ID_LEN {
         id
     } else {
-        &id[..SHORT_HASH_LEN]
+        &id[..SHORT_ID_LEN]
     }
 }
 
@@ -110,13 +98,17 @@ fn extract_flag<'a>(rest: &'a [String], flag: &str, default: &'a str) -> (&'a st
     (value, positional)
 }
 
+fn err_to_box(e: DagError) -> BoxErr {
+    e.into()
+}
+
 // ════════════════════════════════════════════════════════════════
 // 子命令实现
 // ════════════════════════════════════════════════════════════════
 
-/// `log [--ref NAME] [--limit N]` — 打印快照历史。
-async fn cmd_log(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let (ref_name, positional) = extract_flag(rest, "--ref", DEFAULT_REF);
+/// `runs [--ref NAME] [--limit N]` — 列出最近的运行记录。
+async fn cmd_runs(history: &DagHistory, rest: &[String]) -> Result<()> {
+    let (ref_name, positional) = extract_flag(rest, "--ref", "");
     let limit_str = positional
         .iter()
         .find(|s| s.starts_with("--limit"))
@@ -124,353 +116,135 @@ async fn cmd_log(history: &DagHistory, rest: &[String]) -> Result<()> {
         .unwrap_or("20");
     let limit: usize = limit_str.parse().unwrap_or(20);
 
-    let snapshots = history.log(ref_name, limit).await.map_err(err_to_box)?;
-
-    if snapshots.is_empty() {
-        println!("（ref '{ref_name}' 没有快照）");
-        return Ok(());
-    }
-
-    println!("ref: {ref_name}\n");
-    println!(
-        "{:<14} {:<26} {:<14} MESSAGE",
-        "SNAPSHOT", "TIMESTAMP", "MANIFEST"
-    );
-    println!("{}", "─".repeat(90));
-
-    for snap in &snapshots {
-        println!(
-            "{:<14} {:<26} {:<14} {}",
-            short(&snap.id),
-            &snap.timestamp[..26.min(snap.timestamp.len())],
-            short(&snap.manifest_hash),
-            snap.message,
-        );
-    }
-
-    // 额外统计
-    println!(
-        "\n{} 个快照（limit={}, 距离根节点 {} 代）",
-        snapshots.len(),
-        limit,
-        snapshots.len().saturating_sub(1)
-    );
-    Ok(())
-}
-
-/// `show <snapshot_id>` — 查看单个快照详情。
-async fn cmd_show(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let id = rest
-        .first()
-        .ok_or_else(|| BoxErr::from("show 需要快照 id"))?;
-
-    let snap = resolve_snapshot(history, id).await?;
-    let snap = snap.ok_or_else(|| BoxErr::from(format!("快照 '{id}' 不存在")))?;
-
-    println!("Snapshot:       {}", snap.id);
-    println!(
-        "Parent:         {}",
-        snap.parent_id.as_deref().unwrap_or("(root)")
-    );
-    println!("Manifest hash:  {}", snap.manifest_hash);
-    println!("Timestamp:      {}", snap.timestamp);
-    println!("Message:        {}", snap.message);
-    println!("Engine version: {}", snap.engine_version);
-    println!(
-        "Run report:     {}",
-        if snap.run_report_json.is_some() {
-            "有"
-        } else {
-            "无"
-        }
-    );
-
-    // Manifest 概要
-    if let Ok(manifest) = snap.manifest() {
-        println!("\nManifest 概要:");
-        println!(
-            "  Schema: {}（logical graphs: {}, physical jobs: {}）",
-            manifest.schema_version,
-            manifest.logical.graphs.len(),
-            manifest.physical_jobs.len()
-        );
-        for (index, graph) in manifest.logical.graphs.iter().enumerate() {
-            println!(
-                "  逻辑图 #{index}: {} 个节点, {} 条边",
-                graph.nodes().len(),
-                graph.edges().len()
-            );
-        }
-        println!("  物理节点: {} 个", manifest.nodes.len());
-        for n in &manifest.nodes {
-            println!("    • {} ({})", n.id, n.kind);
-        }
-        println!("  物理边: {} 条", manifest.edges.len());
-        for e in &manifest.edges {
-            println!(
-                "    • {}.[{}] → {}.[{}]",
-                e.from, e.from_port, e.to, e.to_port
-            );
-        }
-    }
-    Ok(())
-}
-
-/// `head [--ref NAME]` — 查看 ref 当前指向的快照。
-async fn cmd_head(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let (ref_name, _) = extract_flag(rest, "--ref", DEFAULT_REF);
-
-    let snap = history.ref_head(ref_name).await.map_err(err_to_box)?;
-
-    match snap {
-        Some(s) => {
-            println!("ref '{ref_name}' → {}", s.id);
-            println!("  消息:     {}", s.message);
-            println!("  时间:     {}", s.timestamp);
-            println!(
-                "  manifest: {} (短: {})",
-                s.manifest_hash,
-                short(&s.manifest_hash)
-            );
-            println!("  parent:   {}", s.parent_id.as_deref().unwrap_or("(root)"));
-        }
-        None => {
-            println!("ref '{ref_name}' 不存在或无快照");
-        }
-    }
-    Ok(())
-}
-
-/// `refs` — 列出所有 ref。
-async fn cmd_refs(history: &DagHistory) -> Result<()> {
-    let refs = history.list_refs().await.map_err(err_to_box)?;
-
-    if refs.is_empty() {
-        println!("（没有任何 ref）");
-        return Ok(());
-    }
-
-    println!("{:<20} {:<14} TYPE", "NAME", "SNAPSHOT");
-    println!("{}", "─".repeat(50));
-    for (name, snap_id, pinned) in &refs {
-        let ty = if *pinned { "tag" } else { "branch" };
-        println!("{:<20} {:<14} {}", name, short(snap_id), ty);
-    }
-    Ok(())
-}
-
-/// `manifest <snapshot_id>` — 打印快照的 manifest（pretty JSON）。
-async fn cmd_manifest(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let id = rest
-        .first()
-        .ok_or_else(|| BoxErr::from("manifest 需要快照 id"))?;
-
-    let snap = resolve_snapshot(history, id).await?;
-    let snap = snap.ok_or_else(|| BoxErr::from(format!("快照 '{id}' 不存在")))?;
-
-    let manifest = snap
-        .manifest()
-        .map_err(|e| BoxErr::from(format!("manifest 反序列化失败: {e}")))?;
-
-    let pretty = serde_json::to_string_pretty(&manifest)
-        .map_err(|e| BoxErr::from(format!("JSON 序列化失败: {e}")))?;
-
-    println!("{pretty}");
-    Ok(())
-}
-
-/// `diff <old_id> <new_id>` — 对比两次快照的 manifest。
-async fn cmd_diff(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let old_id = rest
-        .first()
-        .ok_or_else(|| BoxErr::from("diff 需要 <old_id> <new_id>"))?;
-    let new_id = rest
-        .get(1)
-        .ok_or_else(|| BoxErr::from("diff 需要 <old_id> <new_id>"))?;
-
-    let old_snap = resolve_snapshot(history, old_id)
-        .await?
-        .ok_or_else(|| BoxErr::from(format!("快照 '{old_id}' 不存在")))?;
-    let new_snap = resolve_snapshot(history, new_id)
-        .await?
-        .ok_or_else(|| BoxErr::from(format!("快照 '{new_id}' 不存在")))?;
-
-    let old_m = old_snap
-        .manifest()
-        .map_err(|e| BoxErr::from(e.to_string()))?;
-    let new_m = new_snap
-        .manifest()
-        .map_err(|e| BoxErr::from(e.to_string()))?;
-
-    diff_manifests(&old_m, &new_m);
-    Ok(())
-}
-
-/// `branch <name> [--from REF]` — 创建分支。
-async fn cmd_branch(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let (from_ref, positional) = extract_flag(rest, "--from", DEFAULT_REF);
-    let name = positional
-        .first()
-        .ok_or_else(|| BoxErr::from("branch 需要 <name>"))?;
-
-    history.branch(name, from_ref).await.map_err(err_to_box)?;
-
-    println!("已创建分支 '{name}' ← {from_ref}");
-    Ok(())
-}
-
-/// `restore <snapshot_id> [--ref NAME]` — 回退 ref 到历史快照。
-async fn cmd_restore(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let (ref_name, positional) = extract_flag(rest, "--ref", DEFAULT_REF);
-    let target = positional
-        .first()
-        .ok_or_else(|| BoxErr::from("restore 需要 <snapshot_id>"))?;
-
-    // 先确认快照存在
-    let snap = resolve_snapshot(history, target).await?;
-    let snap = snap.ok_or_else(|| BoxErr::from(format!("快照 '{target}' 不存在")))?;
-
-    history
-        .reset(ref_name, &snap.id)
+    let ref_filter = (!ref_name.is_empty()).then_some(ref_name);
+    let runs = history
+        .list_runs(limit, ref_filter)
         .await
         .map_err(err_to_box)?;
 
+    if runs.is_empty() {
+        println!("（没有运行记录）");
+        return Ok(());
+    }
+
     println!(
-        "ref '{ref_name}' 已回退到 {} ({})",
-        short(&snap.id),
-        snap.message
+        "{:<14} {:<8} {:<26} {:<14} {:<22} TRIGGER",
+        "RUN", "OK", "FINISHED", "REF", "MANIFEST"
     );
+    println!("{}", "─".repeat(100));
+
+    for run in &runs {
+        println!(
+            "{:<14} {:<8} {:<26} {:<14} {:<22} {}",
+            short(&run.id),
+            if run.ok {
+                "yes"
+            } else if run.cancelled {
+                "cancel"
+            } else {
+                "FAIL"
+            },
+            &run.finished_at[..26.min(run.finished_at.len())],
+            run.ref_name,
+            short(&run.manifest_hash),
+            run.trigger.as_deref().unwrap_or("(internal)"),
+        );
+    }
+
+    println!("\n{} 条运行记录（limit={limit}）", runs.len());
     Ok(())
 }
 
-// ════════════════════════════════════════════════════════════════
-// 辅助函数
-// ════════════════════════════════════════════════════════════════
+/// `run <run_id>` — 查看单次运行详情。
+async fn cmd_run(history: &DagHistory, rest: &[String]) -> Result<()> {
+    let id = rest.first().ok_or_else(|| BoxErr::from("run 需要 run id"))?;
 
-/// 将 DagError 转为 BoxErr。
-fn err_to_box(e: DagError) -> BoxErr {
-    BoxErr::from(e.to_string())
+    let run = history
+        .get_run(id.trim())
+        .await
+        .map_err(err_to_box)?
+        .ok_or_else(|| BoxErr::from(format!("运行 '{id}' 不存在")))?;
+
+    println!("Run id:         {}", run.id);
+    println!("Ref:            {}", run.ref_name);
+    println!("Manifest hash:  {}", run.manifest_hash);
+    println!("Trigger:        {}", run.trigger.as_deref().unwrap_or("(internal)"));
+    println!("Started:        {}", run.started_at);
+    println!("Finished:       {}", run.finished_at);
+    println!("OK:             {}（cancelled: {}）", run.ok, run.cancelled);
+    if let Some(error) = &run.error {
+        println!("Error:          {error}");
+    }
+    if let Some(message) = &run.message {
+        println!("Message:        {message}");
+    }
+    println!("Engine version: {}（rev {}）", run.engine_version, run.source_revision);
+
+    match &run.run_report_json {
+        Some(json) => {
+            let value: serde_json::Value = serde_json::from_str(json)
+                .map_err(|e| BoxErr::from(format!("run report 解析失败: {e}")))?;
+            println!("\nRun report 摘要:");
+            if let Some(ok) = value.get("ok") {
+                println!("  ok: {ok}");
+            }
+            if let Some(processes) = value.get("processes").and_then(|p| p.as_object()) {
+                for (name, summary) in processes {
+                    println!(
+                        "  process '{name}': total={}, ok={}, failed={}, skipped={}, reused={}",
+                        summary.get("total").and_then(|v| v.as_u64()).unwrap_or(0),
+                        summary.get("succeeded").and_then(|v| v.as_u64()).unwrap_or(0),
+                        summary.get("failed").and_then(|v| v.as_u64()).unwrap_or(0),
+                        summary.get("skipped").and_then(|v| v.as_u64()).unwrap_or(0),
+                        summary.get("reused").and_then(|v| v.as_u64()).unwrap_or(0),
+                    );
+                }
+            }
+            println!("\n完整 run report JSON:");
+            println!("{json}");
+        }
+        None => println!("\n（本次运行没有 run report）"),
+    }
+    Ok(())
 }
 
-/// 解析快照 id（支持短 hash 前缀匹配）。
-async fn resolve_snapshot(history: &DagHistory, id_or_prefix: &str) -> Result<Option<Snapshot>> {
-    // 先尝试精确匹配
-    if let Ok(Some(snap)) = history.get_snapshot(id_or_prefix).await {
-        return Ok(Some(snap));
-    }
-
-    // 短 hash 前缀匹配：查最近的快照历史
-    // 先从 main ref 的 lineage 里找
-    let snapshots = history.log("main", 1000).await.map_err(err_to_box)?;
-    for snap in snapshots {
-        if snap.id.starts_with(id_or_prefix) {
-            return Ok(Some(snap));
+/// `flow <agent_id>` — 打印持久化的 authored flow。
+async fn cmd_flow(history: &DagHistory, rest: &[String]) -> Result<()> {
+    let agent = rest.first().ok_or_else(|| BoxErr::from("flow 需要 agent id"))?;
+    let flow = history
+        .load_flow_workspace(agent)
+        .await
+        .map_err(err_to_box)?;
+    match flow {
+        Some(json) => {
+            let value: serde_json::Value = serde_json::from_str(&json)
+                .map_err(|e| BoxErr::from(format!("flow JSON 解析失败: {e}")))?;
+            println!("{value:#}");
         }
+        None => println!("（agent '{agent}' 没有持久化的 flow）"),
     }
-
-    // 也查其他 refs 的 heads
-    let refs = history.list_refs().await.map_err(err_to_box)?;
-    for (ref_name, _, _) in &refs {
-        if ref_name == "main" {
-            continue;
-        }
-        let snaps = history.log(ref_name, 200).await.map_err(err_to_box)?;
-        for snap in snaps {
-            if snap.id.starts_with(id_or_prefix) {
-                return Ok(Some(snap));
-            }
-        }
-    }
-
-    Ok(None)
+    Ok(())
 }
 
-/// 对比两个 manifest 并打印差异。
-fn diff_manifests(old: &DagManifest, new: &DagManifest) {
-    let old_nodes: StdHashMap<&str, &data_engine::dag::history::NodeEntry> =
-        old.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-    let new_nodes: StdHashMap<&str, &data_engine::dag::history::NodeEntry> =
-        new.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
-
-    let old_edges: std::collections::HashSet<String> = old
-        .edges
-        .iter()
-        .map(|e| format!("{}.[{}] → {}.[{}]", e.from, e.from_port, e.to, e.to_port))
-        .collect();
-    let new_edges: std::collections::HashSet<String> = new
-        .edges
-        .iter()
-        .map(|e| format!("{}.[{}] → {}.[{}]", e.from, e.from_port, e.to, e.to_port))
-        .collect();
-
-    let mut changes = 0;
-
-    // 新增节点
-    for n in &new.nodes {
-        if !old_nodes.contains_key(n.id.as_str()) {
-            println!("  + node {} ({})", n.id, n.kind);
-            changes += 1;
+/// `flow-cache <agent_id>` — 打印实例 resume 缓存。
+async fn cmd_flow_cache(history: &DagHistory, rest: &[String]) -> Result<()> {
+    let agent = rest
+        .first()
+        .ok_or_else(|| BoxErr::from("flow-cache 需要 agent id"))?;
+    let cache = history
+        .load_flow_cache(agent)
+        .await
+        .map_err(err_to_box)?;
+    match cache {
+        Some(json) => {
+            let value: serde_json::Value = serde_json::from_str(&json)
+                .map_err(|e| BoxErr::from(format!("cache JSON 解析失败: {e}")))?;
+            println!("{value:#}");
         }
+        None => println!("（agent '{agent}' 没有 resume 缓存）"),
     }
-    // 删除节点
-    for n in &old.nodes {
-        if !new_nodes.contains_key(n.id.as_str()) {
-            println!("  - node {} ({})", n.id, n.kind);
-            changes += 1;
-        }
-    }
-    // 修改节点（kind 或 spec 变了）
-    for n in &new.nodes {
-        if let Some(old_n) = old_nodes.get(n.id.as_str())
-            && (old_n.kind != n.kind || old_n.spec != n.spec)
-        {
-            println!("  ~ node {} ({})", n.id, n.kind);
-            // 简要显示 spec 变化
-            let old_keys: std::collections::HashSet<&str> = old_n
-                .spec
-                .as_object()
-                .iter()
-                .flat_map(|m| m.keys())
-                .map(|s| s.as_str())
-                .collect();
-            let new_keys: std::collections::HashSet<&str> = n
-                .spec
-                .as_object()
-                .iter()
-                .flat_map(|m| m.keys())
-                .map(|s| s.as_str())
-                .collect();
-            for k in new_keys.difference(&old_keys) {
-                println!("      + {k}");
-            }
-            for k in old_keys.difference(&new_keys) {
-                println!("      - {k}");
-            }
-            changes += 1;
-        }
-    }
-
-    // 新增边
-    for e in new_edges.difference(&old_edges) {
-        println!("  + edge {e}");
-        changes += 1;
-    }
-    // 删除边
-    for e in old_edges.difference(&new_edges) {
-        println!("  - edge {e}");
-        changes += 1;
-    }
-
-    if changes == 0 {
-        println!("（无差异）");
-    } else {
-        println!("\n共 {changes} 处变更");
-    }
+    Ok(())
 }
-
-// ════════════════════════════════════════════════════════════════
-// main
-// ════════════════════════════════════════════════════════════════
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -481,14 +255,10 @@ async fn main() -> Result<()> {
         .map_err(|e| BoxErr::from(format!("打开数据库失败 ({}): {e}", args.db_path)))?;
 
     match args.cmd.as_str() {
-        "log" => cmd_log(&history, &args.rest).await,
-        "show" => cmd_show(&history, &args.rest).await,
-        "head" => cmd_head(&history, &args.rest).await,
-        "refs" => cmd_refs(&history).await,
-        "manifest" => cmd_manifest(&history, &args.rest).await,
-        "diff" => cmd_diff(&history, &args.rest).await,
-        "branch" => cmd_branch(&history, &args.rest).await,
-        "restore" => cmd_restore(&history, &args.rest).await,
+        "runs" => cmd_runs(&history, &args.rest).await,
+        "run" => cmd_run(&history, &args.rest).await,
+        "flow" => cmd_flow(&history, &args.rest).await,
+        "flow-cache" => cmd_flow_cache(&history, &args.rest).await,
         "" => usage(),
         other => {
             eprintln!("未知子命令: {other}");

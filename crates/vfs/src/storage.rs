@@ -3422,11 +3422,11 @@ mod domain_address_tests {
         let storage = domain_storage(Some("hpc-b"));
         assert_eq!(
             storage.rewrite_domain_uri("hpc-b://share/x.vcf"),
-            "vfs:///data/hpc-b/share/x.vcf"
+            "local:///data/hpc-b/share/x.vcf"
         );
         assert_eq!(
             storage.rewrite_domain_uri("hpc-b://y.tsv"),
-            "vfs:///data/hpc-b/y.tsv"
+            "local:///data/hpc-b/y.tsv"
         );
         // Non-domain spellings pass through untouched.
         assert_eq!(

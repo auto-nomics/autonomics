@@ -34,7 +34,8 @@ pub struct UniprotStreamSpec {
     #[serde(default)]
     pub fields: Option<Vec<String>>,
 
-    /// Destination path: `vfs://...` for the engine's object storage, or an
+    /// Destination path: a domain URI (`local://...`) for the engine's
+    /// object storage, or an
     /// absolute local path.
     #[serde(default)]
     pub path: String,
@@ -135,7 +136,7 @@ impl DagNode for UniprotStreamNode {
         }
         if self.spec.path.trim().is_empty() {
             return Err(DagError::Schedule(
-                "source_uniprot_stream requires a `path` (vfs://… or absolute)".into(),
+                "source_uniprot_stream requires a `path` (a `local://` address or absolute)".into(),
             ));
         }
         let format =
@@ -168,7 +169,8 @@ impl DagNode for UniprotStreamNode {
 
 /// Write `bytes` to `path`, returning a fingerprinted [`FileRef`].
 ///
-/// `vfs://…` paths go through the engine's opendal storage (atomic
+/// Storage-addressed paths (`local://…`, legacy `vfs://…`) go through the
+/// engine's opendal storage (atomic
 /// staging + rename); anything else must be an absolute local path.
 async fn write_output(
     ctx: &NodeCtx,
@@ -205,7 +207,7 @@ async fn write_output(
         let dest = std::path::Path::new(path);
         if !dest.is_absolute() {
             return Err(DagError::Schedule(format!(
-                "path `{path}` must be a `vfs://` address or an absolute local path"
+                "path `{path}` must be a `local://` address or an absolute local path"
             )));
         }
         if let Some(parent) = dest.parent() {
@@ -261,7 +263,8 @@ mod tests {
         let fingerprint = file_ref.fingerprint.expect("fingerprint");
         assert_eq!(fingerprint.size, payload.len() as u64);
         // Local refs fingerprint by mtime; content hashing is reserved for
-        // vfs:// writes (see the `remote` fingerprint in `write_output`).
+        // Storage-addressed writes (see the `remote` fingerprint in
+        // `write_output`).
         assert!(fingerprint.content_hash.is_none());
         let on_disk = std::fs::read(&path).unwrap();
         assert_eq!(on_disk, payload);

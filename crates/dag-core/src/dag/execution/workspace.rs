@@ -867,7 +867,7 @@ mod typed_channel_staging_tests {
             artifact: FileRef,
             _: Option<&vfs::OpendalFileStorage>,
         ) -> Result<Option<FileRef>, DagError> {
-            if artifact.path == "vfs:///data/remote.tsv" {
+            if artifact.path == "local:///data/remote.tsv" {
                 Ok(Some(FileRef::new(
                     "/cluster/data/remote.tsv",
                     artifact.format,
@@ -975,7 +975,7 @@ mod typed_channel_staging_tests {
         let local = temp.path().join("local.txt");
         std::fs::write(&local, b"local").unwrap();
         let mut value = ChannelTransportValue::Tuple(vec![
-            ChannelTransportValue::File(FileRef::new("vfs:///data/remote.tsv", Some("tsv".into()))),
+            ChannelTransportValue::File(FileRef::new("local:///data/remote.tsv", Some("tsv".into()))),
             ChannelTransportValue::File(FileRef::local(&local, None).unwrap()),
         ]);
         let (staged, remote) = LocalTaskWorkspace::stage_channel_value(

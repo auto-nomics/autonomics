@@ -6,6 +6,14 @@ Autonomics is a complete, self-extending research system for biomedical science 
 
 The root Cargo workspace contains 101 crates at the time of this README update. It is an active research codebase: APIs, node contracts, and configuration paths may still change. The `dendrite/` directory is a separate nested Rust workspace for the knowledge-management system.
 
+## TUI Demo
+
+The Researcher agent reads 100 simulated predictions in the TUI. Model A has higher accuracy, while model B ranks first on balanced accuracy. When a false negative costs five times as much as a false positive, the total cost is 41 for A and 19 for B.
+
+![Autonomics TUI comparing two classifiers by accuracy, balanced accuracy, and error cost](docs/demos/model-benchmark.gif)
+
+[Asciinema recording](docs/demos/model-benchmark.cast) · [Example data](docs/demos/model-benchmark.csv)
+
 ## System Contract
 
 The system spans five planes plus one protocol:
@@ -18,10 +26,6 @@ The system spans five planes plus one protocol:
 - **Research protocol**: DAG history, snapshots, diffs, branches, provenance export (RO-Crate / W3C PROV-JSON), and numerical cross-validation make agent work inspectable, replayable, and publishable.
 
 Autonomics is not a general-purpose chat application, a notebook replacement built around free-form scripts, or a monolithic pipeline. Nor is it an autonomous mutator: agents never receive raw git, registry, host-filesystem, or live-registry access. Improvements are proposals that pass gates and review — the model may draft and test; humans and trusted infrastructure promote.
-
-## Demo
-
-![PubMed article retrieval](docs/pubmed.gif)
 
 ## System Architecture
 
@@ -125,7 +129,7 @@ Two mechanisms make the system trustworthy for biomedical work:
 | --- | --- | --- |
 | Model orchestration | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | Streaming LLM clients, tool schemas and calls, persistent memory, agent kinds and profiles, delegation-only multi-agent topology, and a sync-to-async host. |
 | Analysis execution | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*` | Node traits, plugin registry, typed ports, scheduler with pluggable executors, JSON-schema specs, and agent tools. |
-| Self-improvement | `plugin-rsi`, `container-plugin`, `wiki` | Plugin RSI lifecycle and tooling, manifest compile/load, wiki-hosted procedural knowledge. |
+| Self-improvement | `plugin-rsi`, `plugin`, `wiki` | Plugin RSI lifecycle and tooling, manifest compile/load, wiki-hosted procedural knowledge. |
 | Data infrastructure | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL-backed VFS, Hugging Face-hosted versioned packages, Podman execution, immutable panel caches, and biological-format DataFusion readers. |
 | Statistics and epidemiology | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `crrkit`, `survey`, `mice`, `hierint` | Descriptive statistics and regression; causal inference and mediation; composable tests and p-value workflows; prospective power and sample-size design; competing risks; survey designs; imputation; hierarchical interaction models. |
 | Machine learning and deep learning | `ml`, `dl` | Preprocessing, feature engineering, clustering, supervised models, ensembles, anomaly detection, dimensionality reduction; Burn-based MLP, DeepSurv, DeepHit, RNN, Transformer, and autoencoder workflows. Generalized random forests ship as the containerized `grf` plugin family (official R grf). |
@@ -236,7 +240,7 @@ autonomics/
 │   ├── data-engine-tools/        Agent ToolFunction adapters for DAG operations
 │   ├── node-bundles/             Feature-gated analysis-node plugins
 │   ├── plugin-rsi/               Recursive self-improvement substrate (plugins)
-│   ├── container-plugin/         Manifest compile, load, sync, factories
+│   ├── plugin/         Manifest compile, load, sync, factories
 │   ├── vfs/                      OpenDAL-backed virtual file system and vbash tools
 │   ├── data-catalog/             Versioned data-package catalog
 │   ├── container-runtime/        Podman execution and immutable panel cache
@@ -393,7 +397,7 @@ cargo test --workspace --no-run
 # Focused test loops.
 cargo test -p data-engine
 cargo test -p dag-core
-cargo test -p container-plugin
+cargo test -p plugin
 cargo test -p plugin-rsi
 cargo test -p biofusion
 cargo test -p agentik-core
@@ -409,7 +413,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Some tests call live public APIs, require credentials or private images, download large panels, or invoke Podman. Many external-resource tests are marked `#[ignore]`; run them explicitly with `cargo test -- --ignored` only when the dependency is available. Plugin behavior is covered by golden migration tests in `crates/container-plugin/tests/` (one suite per family), and the environment-development lifecycle by `crates/plugin-rsi/tests/env_dev.rs`.
+Some tests call live public APIs, require credentials or private images, download large panels, or invoke Podman. Many external-resource tests are marked `#[ignore]`; run them explicitly with `cargo test -- --ignored` only when the dependency is available. Plugin behavior is covered by golden migration tests in `crates/plugin/tests/` (one suite per family), and the environment-development lifecycle by `crates/plugin-rsi/tests/env_dev.rs`.
 
 The TUI HTTP frontend uses Bun:
 

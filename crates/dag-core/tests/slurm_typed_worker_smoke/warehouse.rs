@@ -231,7 +231,7 @@ fn context(profile: &Profile, fixture: &str, principal: VfsPrincipal) -> SmokeRe
     let session = SessionContext::new();
     session
         .runtime_env()
-        .register_object_store(ObjectStoreUrl::parse("vfs://")?.as_ref(), storage.clone());
+        .register_object_store(ObjectStoreUrl::parse("local://")?.as_ref(), storage.clone());
     Ok(Arc::new(NodeCtx::new(session.runtime_env(), Some(storage))))
 }
 
@@ -573,7 +573,7 @@ pub(super) async fn run() -> SmokeResult<()> {
         "public-read",
         read_task(
             "public-read",
-            "vfs:///warehouse-public/values.csv",
+            "local:///warehouse-public/values.csv",
             ctx.clone(),
         ),
     )
@@ -586,7 +586,7 @@ pub(super) async fn run() -> SmokeResult<()> {
         "denied-read",
         read_task(
             "denied-read",
-            "vfs:///warehouse-private/values.csv",
+            "local:///warehouse-private/values.csv",
             ctx.clone(),
         ),
     )
@@ -620,11 +620,11 @@ pub(super) async fn run() -> SmokeResult<()> {
         );
     }
     let execution = TaskExecution {
-        node: Box::new(dag_core::dag::GatherNode::default()),
+        node: Box::new(super::AnyFanInNode::new()),
         submission: TaskSubmission {
             spec: TaskSpec {
                 id: "retained-followup".into(),
-                kind: "logical_gather".into(),
+                kind: "any_fan_in".into(),
                 spec: json!({}),
                 logical_node: None,
                 item_key: None,

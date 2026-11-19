@@ -140,7 +140,7 @@ fn workspace_vfs(workspace_root: &Path) -> NodeCtx {
     ));
     let session = SessionContext::new();
     session.runtime_env().register_object_store(
-        ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+        ObjectStoreUrl::parse("local://").unwrap().as_ref(),
         mounted.clone(),
     );
     NodeCtx::new(session.runtime_env(), Some(storage))
@@ -233,7 +233,7 @@ async fn assert_container_artifact(
 async fn dataframe_to_file_output_flows_through_container_command() {
     let workspace = tempfile::tempdir().unwrap();
     let ctx = workspace_vfs(workspace.path());
-    let input_path = format!("vfs:///input-{}.csv", unique_container_name());
+    let input_path = format!("local:///input-{}.csv", unique_container_name());
     let run_root = workspace.path().join("fake-run");
     std::fs::create_dir_all(&run_root).unwrap();
     let runtime = Arc::new(FakeContainerRuntime::new(workspace.path()));

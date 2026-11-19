@@ -17,7 +17,6 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::dag::DAG;
 use crate::node_registry::registry::NodeRegistry;
 
 pub const MAX_SCRIPT_BYTES: usize = 64 * 1024;
@@ -206,33 +205,6 @@ pub struct DagShellSnapshot {
 }
 
 impl DagShellSnapshot {
-    pub(crate) fn from_dag(dag: &DAG) -> Self {
-        let snapshot = dag.tui_snapshot();
-        let mut nodes = BTreeMap::new();
-        for node in &snapshot.nodes {
-            let retained = dag.node_spec(&node.id);
-            nodes.insert(
-                node.id.clone(),
-                ShellNode {
-                    kind: node.kind.clone(),
-                    spec: retained.map(|(_, spec)| spec),
-                    ports: serde_json::to_value(node)
-                        .unwrap_or_else(|_| serde_json::json!({"id": node.id, "kind": node.kind})),
-                },
-            );
-        }
-        Self {
-            nodes,
-            edges: snapshot
-                .edges
-                .iter()
-                .flat_map(serde_json::to_value)
-                .collect(),
-            dot: dag.to_dot(),
-            logical_graph_count: dag.logical_graphs().len(),
-        }
-    }
-
     pub(crate) fn from_flow(flow: &crate::workflow::FlowGraph) -> Self {
         let mut nodes = BTreeMap::new();
         for p in flow.processes() {
@@ -411,14 +383,6 @@ pub fn operation_traces(operations: &[GraphEditOp]) -> Vec<OperationTrace> {
             trace
         })
         .collect()
-}
-
-pub fn graph_summary(dag: &DAG) -> serde_json::Value {
-    serde_json::json!({
-        "node_count": dag.tui_snapshot().nodes.len(),
-        "edge_count": dag.tui_snapshot().edges.len(),
-        "logical_graph_count": dag.logical_graphs().len(),
-    })
 }
 
 #[cfg(test)]

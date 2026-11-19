@@ -6,7 +6,8 @@ use super::*;
 fn sandbox() -> (Arc<NodeRegistry>, DagShellSnapshot) {
     let engine = crate::data_engine::DataEngine::builder().build();
     let registry = Arc::clone(engine.node_registry());
-    let snapshot = DagShellSnapshot::from_dag(engine.dag());
+    let flow = crate::workflow::FlowGraph::empty();
+    let snapshot = DagShellSnapshot::from_flow(&flow);
     (registry, snapshot)
 }
 
@@ -184,7 +185,7 @@ fn timeout_is_normalized() {
 fn rejects_oversized_script_before_compilation() {
     let engine = crate::data_engine::DataEngine::builder().build();
     let registry = Arc::clone(engine.node_registry());
-    let snapshot = DagShellSnapshot::from_dag(engine.dag());
+    let snapshot = DagShellSnapshot::from_flow(&crate::workflow::FlowGraph::empty());
     let script = "x".repeat(MAX_SCRIPT_BYTES + 1);
     let error =
         execute_script(&script, Duration::from_millis(10), &snapshot, &registry).unwrap_err();
@@ -372,12 +373,17 @@ for value in range(1002):
 
 #[test]
 fn queries_use_the_execution_start_snapshot() {
-    let mut engine = crate::data_engine::DataEngine::builder().build();
-    engine
-        .add_node_from_registry("source", "echo", serde_json::json!({}))
-        .unwrap();
+    let engine = crate::data_engine::DataEngine::builder().build();
     let registry = Arc::clone(engine.node_registry());
-    let snapshot = DagShellSnapshot::from_dag(engine.dag());
+    let flow = crate::workflow::FlowGraph::builder()
+        .process(crate::workflow::model::Process::new(
+            "source",
+            "echo",
+            serde_json::json!({}),
+        ))
+        .build()
+        .unwrap();
+    let snapshot = DagShellSnapshot::from_flow(&flow);
     let execution = execute_script(
         r#"
 observed = [has_node("source"), has_node("staged"), graph_summary()["node_count"]]

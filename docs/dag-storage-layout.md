@@ -100,7 +100,7 @@ artifact_prefix = "/artifacts/experiment"
 Each declared output is copied atomically to:
 
 ```text
-vfs://{artifact_prefix}/{run_name}/{output.path}
+local://{artifact_prefix}/{run_name}/{output.path}
 ```
 
 The pending object is hashed and uploaded, then atomically renamed. The value
@@ -243,7 +243,7 @@ Protected from deletion, always:
 - directories belonging to the newest `keep_runs` runs;
 - immutable VFS artifacts, the history DB, and logs.
 
-VFS artifacts (`vfs://` URIs) are counted in the central index (per
+VFS artifacts (storage-domain URIs) are counted in the central index (per
 run/session/cache-owner, with logical fingerprint bytes) and reported through
 `storage_status()` and every clean report, but the conservative policy of this
 round never deletes them — their retention belongs to the VFS backend.

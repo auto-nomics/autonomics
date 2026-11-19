@@ -38,6 +38,52 @@ mod warehouse;
 #[path = "slurm_typed_worker_smoke/podman_allocation.rs"]
 mod podman_allocation;
 
+/// Two-Any-input, Any-output stand-in for the removed legacy gather node:
+/// remote `prepare` must derive each input's transport contract from runtime
+/// values rather than declared payload types.
+pub(crate) struct AnyFanInNode {
+    ports: dag_core::NodePorts,
+}
+
+impl AnyFanInNode {
+    pub(crate) fn new() -> Self {
+        let ports = dag_core::NodePorts::new()
+            .add_input_port_of_type(None, dag_core::PortType::Any)
+            .add_input_port_of_type(None, dag_core::PortType::Any)
+            .add_output_port_of_type(None, dag_core::PortType::Any);
+        Self { ports }
+    }
+}
+
+#[async_trait::async_trait]
+impl dag_core::DagNode for AnyFanInNode {
+    fn ports(&self) -> &dag_core::NodePorts {
+        &self.ports
+    }
+    async fn execute(
+        &mut self,
+        _: &dag_core::NodeCtx,
+        inputs: &[dag_core::NodeInput],
+        _: &dag_core::dag::node_event::NodeReporter,
+    ) -> Result<dag_core::dag::PortOutputs, DagError> {
+        let mut outputs = dag_core::dag::PortOutputs::new();
+        if let Some(first) = inputs.first() {
+            outputs.insert(0, first.data.clone());
+        }
+        Ok(outputs)
+    }
+    fn clone_box(&self) -> Box<dyn dag_core::DagNode> {
+        Box::new(AnyFanInNode { ports: self.ports.clone() })
+    }
+    fn kind(&self) -> &'static str {
+        "any_fan_in"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Profile {
@@ -705,12 +751,12 @@ async fn real_cluster_typed_dataframe_gather_roundtrip() -> SmokeResult<()> {
         });
     }
     let execution = TaskExecution {
-        node: Box::new(dag_core::dag::GatherNode::default()),
+        node: Box::new(AnyFanInNode::new()),
         submission: TaskSubmission {
             spec: TaskSpec {
-                id: "synthetic-typed-dataframe-gather".into(),
+                id: "synthetic-typed-dataframe-fan-in".into(),
                 logical_node: None,
-                kind: "logical_gather".into(),
+                kind: "any_fan_in".into(),
                 spec: json!({}),
                 item_key: None,
                 item: None,

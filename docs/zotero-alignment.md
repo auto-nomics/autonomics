@@ -49,7 +49,7 @@ it the compatibility full text, and runs the existing extraction chain. With
 
 Zotero's `path` remains Zotero-shaped (`storage:paper.pdf`). Autonomics adds:
 
-- `itemAttachments.vfsPath`: the canonical resolvable `vfs:///literature/...`
+- `itemAttachments.vfsPath`: the canonical resolvable `local://literature/...`
   URI.
 - `itemAttachments.originalFilename`: the decoded user-facing filename.
 - `fulltextItems.vfsExtractedPath`: the derived markdown/plain-text artifact.

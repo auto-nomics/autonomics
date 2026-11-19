@@ -17,7 +17,7 @@ fn plugin_registers_multiomic_concordance_after_container_sweep() {
     // `limma_voom` and `wgcna` (bulk-rnaseq family) and `hyprcoloc` ship as
     // manifest plugins — no `*_container` kind remains in this registry.
     // Their registration is exercised by plugin_wave_e2e and the
-    // bulk_rnaseq/hyprcoloc golden tests in container-plugin.
+    // bulk_rnaseq/hyprcoloc golden tests in plugin.
     for kind in [
         "limma_voom",
         "wgcna",

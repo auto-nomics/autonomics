@@ -29,7 +29,7 @@ panel 不同，应拆分插件。
 
 ```bash
 cd /path/to/autonomics
-cargo run -p container-plugin --bin nodedev -- \
+cargo run -p plugin --bin nodedev -- \
   init --name clusterprofiler --dir /mnt/projects/node-plugins
 ```
 
@@ -187,7 +187,7 @@ rootfs。
 
 ## 7. 在 Autonomics 中添加 Manifest 测试
 
-新插件应在 `crates/container-plugin/tests/` 下有聚焦集成测试。测试应定位
+新插件应在 `crates/plugin/tests/` 下有聚焦集成测试。测试应定位
 插件 checkout、解析并内联 manifest，然后断言：
 
 - 镜像 digest 固定。

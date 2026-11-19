@@ -116,11 +116,11 @@ mod tests {
         use crate::{FileRef, NodeValue};
         let storage = vfs::OpendalFileStorage::new_temp();
         let mut outputs = PortOutputs::new();
-        outputs.insert_file(0, FileRef::new("vfs:///answer.tsv", None));
+        outputs.insert_file(0, FileRef::new("local:///answer.tsv", None));
         outputs.insert(
             1,
             NodeValue::Structured(T::List(vec![T::File(FileRef::new(
-                "vfs:///nested.tsv",
+                "local:///nested.tsv",
                 None,
             ))])),
         );
@@ -134,12 +134,12 @@ mod tests {
         };
         let T::File(file) = &values[0] else { panic!() };
         assert_eq!(file.path, "local://nested.tsv");
-        outputs.insert_file(0, FileRef::new("vfs:///uncommitted.tsv", None));
+        outputs.insert_file(0, FileRef::new("local:///uncommitted.tsv", None));
         outputs.insert_file(2, FileRef::new("unknown://file.tsv", None));
         assert!(outputs.canonicalize_files(&storage).is_err());
         assert_eq!(
             outputs.get(&0).unwrap().as_file().unwrap().path,
-            "vfs:///uncommitted.tsv"
+            "local:///uncommitted.tsv"
         );
     }
 

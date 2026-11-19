@@ -556,7 +556,7 @@ fn validate_local_path(path: &str, partitioned: bool) -> std::result::Result<(),
 
 /// DataFusion treats `file://` paths as its built-in local filesystem even
 /// when an OpenDAL-backed store is registered under that URL. Mounted virtual
-/// paths therefore must be addressed through the dedicated `vfs://` store.
+/// paths therefore must be addressed through the dedicated `local://` store.
 pub(crate) fn source_path(node_ctx: &dag_core::registry::NodeCtx, path: &str) -> String {
     if vfs::uri::storage_path(path).is_some() {
         return vfs::uri::datafusion_uri(path);
@@ -620,7 +620,7 @@ impl DagNode for FileToDataFrameNode {
             !self.partition_by.is_empty(),
         );
         // Pre-validate local paths so we never silently hand back a
-        // zero-row DataFrame for a typo'd glob or missing file. vfs://
+        // zero-row DataFrame for a typo'd glob or missing file. local://
         // paths go through OpenDAL and don't have local fs access.
         if vfs::uri::storage_path(&path).is_none() {
             validate_local_path(&path, !self.partition_by.is_empty())
@@ -798,7 +798,7 @@ async fn read_file_with_options(
     })
 }
 
-/// Read the full contents of an input path: `vfs://` addresses go through
+/// Read the full contents of an input path: `local://` addresses go through
 /// the engine's OpenDAL storage, anything else is a local filesystem read.
 async fn read_input_bytes(node_ctx: &NodeCtx, path: &str) -> Result<Vec<u8>, FileToDataFrameError> {
     if let Some(vpath) = vfs::uri::storage_path(path) {
@@ -1335,7 +1335,7 @@ mod tests {
         fixture.close().unwrap();
 
         let node_ctx = NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
-        let mut node = FileToDataFrameNode::new(Some("vfs:///nhanes/DEMO_J.xpt".into()), None);
+        let mut node = FileToDataFrameNode::new(Some("local:///nhanes/DEMO_J.xpt".into()), None);
         let outputs = node
             .execute(
                 &node_ctx,
@@ -1796,7 +1796,7 @@ mod tests {
         ));
         let ctx = SessionContext::new();
         ctx.runtime_env().register_object_store(
-            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            ObjectStoreUrl::parse("local://").unwrap().as_ref(),
             storage.clone(),
         );
 
@@ -2301,7 +2301,7 @@ mod tests {
         ));
         let ctx = datafusion::prelude::SessionContext::new();
         ctx.runtime_env()
-            .register_object_store(ObjectStoreUrl::parse("vfs://").unwrap().as_ref(), mounted);
+            .register_object_store(ObjectStoreUrl::parse("local://").unwrap().as_ref(), mounted);
         ctx.runtime_env().register_object_store(
             ObjectStoreUrl::parse("file://").unwrap().as_ref(),
             file_storage.clone(),
@@ -2310,22 +2310,22 @@ mod tests {
             dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(file_storage));
 
         for path in [
-            "vfs:///mount/data.csv",
+            "local:///mount/data.csv",
             "file:///mount/data.csv",
             "/mount/data.csv",
-            "vfs:///mount/data.json",
+            "local:///mount/data.json",
             "file:///mount/data.json",
             "/mount/data.json",
-            "vfs:///mount/sample.xls",
+            "local:///mount/sample.xls",
             "file:///mount/sample.xls",
             "/mount/sample.xls",
-            "vfs:///mount/sample.xlsx",
+            "local:///mount/sample.xlsx",
             "file:///mount/sample.xlsx",
             "/mount/sample.xlsx",
-            "vfs:///mount/data.tsv.gz",
+            "local:///mount/data.tsv.gz",
             "file:///mount/data.tsv.gz",
             "/mount/data.tsv.gz",
-            "vfs:///mount/matrix.txt.gz",
+            "local:///mount/matrix.txt.gz",
             "file:///mount/matrix.txt.gz",
             "/mount/matrix.txt.gz",
         ] {

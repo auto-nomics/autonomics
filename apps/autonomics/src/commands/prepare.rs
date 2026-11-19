@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use color_eyre::Result;
-use container_plugin::factory::Plugin;
+use plugin::factory::Plugin;
 
 use crate::cli::PrepareArgs;
 use crate::commands::panels::{load_installed_plugins, provision_missing_bundles};
@@ -79,7 +79,7 @@ fn sync_plugins(config: &gateway::RuntimeConfig) -> Result<Vec<Plugin>> {
     let root = layout.runtime_root();
     let config_path = config
         .state_dir
-        .join(container_plugin::sync::PLUGIN_CONFIG_FILE);
+        .join(plugin::sync::PLUGIN_CONFIG_FILE);
     if !config_path.is_file() {
         println!(
             "plugins: {} not present — built-in nodes only",
@@ -89,15 +89,15 @@ fn sync_plugins(config: &gateway::RuntimeConfig) -> Result<Vec<Plugin>> {
     }
 
     println!("plugins: syncing from {}", config_path.display());
-    let report = container_plugin::sync::sync(&config_path, &root)
+    let report = plugin::sync::sync(&config_path, &root)
         .map_err(|error| color_eyre::eyre::eyre!("plugin sync failed: {error}"))?;
     for (name, outcome) in &report.outcomes {
         match outcome {
-            container_plugin::sync::EntryOutcome::Installed => {
+            plugin::sync::EntryOutcome::Installed => {
                 println!("  + {name} installed")
             }
-            container_plugin::sync::EntryOutcome::Updated => println!("  ~ {name} updated"),
-            container_plugin::sync::EntryOutcome::Unchanged => {}
+            plugin::sync::EntryOutcome::Updated => println!("  ~ {name} updated"),
+            plugin::sync::EntryOutcome::Unchanged => {}
         }
     }
     if report.outcomes.is_empty() {

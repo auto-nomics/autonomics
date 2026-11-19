@@ -1,253 +1,33 @@
 //! Central lifecycle services for the per-agent DataEngine actors.
 //!
 //! [`DataEngineManager`](super::DataEngineManager) owns one instance of each
-//! service. They provide the process-wide policies that individual actors
-//! engines cannot safely decide alone: idle eviction, output-cache expiry,
-//! cross-agent file-result reuse, active references, run-aware local
+//! service. They provide the process-wide policies that individual actor
+//! engines cannot safely decide alone: idle eviction, run-aware local
 //! cleanup, and a managed-root byte budget.
 //!
 //! # Storage governance semantics (conservative)
 //!
-//! The [`StorageCoordinator`] keeps two reference indexes:
-//!
-//! - **Local managed roots** (`AUTONOMICS_DAG_WORK_ROOT`,
-//!   `AUTONOMICS_DAG_RECEIPTS_ROOT`): workdirs and receipt roots, counted per
-//!   run / live actor / result-cache owner. These are the only things the
-//!   run-aware budget cleaner may delete.
-//! - **VFS artifacts** (`vfs://` URIs): counted the same way and reported
-//!   through [`StorageCoordinator::artifact_snapshot`] and
-//!   [`StorageStatus`], but **never deleted** by local budget cleanup —
-//!   immutable object-store artifacts are treated as durable provenance.
+//! The [`StorageCoordinator`] counts **VFS artifacts** (`vfs://` URIs) from
+//! recorded run reports and reports them through
+//! [`StorageCoordinator::artifact_snapshot`] and [`RunAwareCleanReport`] —
+//! but **never deletes them**: immutable object-store artifacts are treated
+//! as durable provenance. Only managed local roots (`AUTONOMICS_DAG_WORK_ROOT`,
+//! `AUTONOMICS_DAG_RECEIPTS_ROOT`) are deletable, and only for runs outside
+//! the newest `keep_runs`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use serde::Serialize;
 
-use crate::dag::RunReport;
 use crate::dag::history::DagHistory;
-use crate::value::FileRef;
-
-/// A single reusable file output.
-#[derive(Debug, Clone)]
-pub struct CachedFileOutput {
-    pub node_id: String,
-    pub fingerprint: String,
-    pub port: u8,
-    pub file: FileRef,
-}
-
-#[derive(Debug, Clone)]
-struct CachedResult {
-    fingerprint: String,
-    outputs: Vec<CachedFileOutput>,
-    last_access: Instant,
-}
-
-/// Fingerprint-addressed file-result cache shared by all agents.
-///
-/// Only file outputs participate. DataFrame and Channel values remain
-/// actor-local because they are not durable values and cannot be restored
-/// safely from a report.
-#[derive(Debug, Default)]
-pub struct ResultCache {
-    max_entries: usize,
-    ttl: Option<Duration>,
-    entries: RwLock<HashMap<String, CachedResult>>,
-}
-
-impl ResultCache {
-    pub fn new(max_entries: usize, ttl: Option<Duration>) -> Self {
-        Self {
-            max_entries,
-            ttl,
-            entries: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Record successful file outputs from a completed run.
-    ///
-    /// A fingerprint includes node kind/spec, input identities, engine version
-    /// and plugin identity, so an equal fingerprint is the cross-agent reuse
-    /// key. Missing local files are rejected; immutable VFS files are accepted.
-    pub fn record_report(&self, agent_id: &str, report: &RunReport) -> usize {
-        self.record_report_collected(agent_id, report).0.len()
-    }
-
-    /// [`Self::record_report`] returning the outputs it cached and the
-    /// outputs it displaced, so the caller can maintain cache-owner storage
-    /// references in lockstep.
-    pub fn record_report_collected(
-        &self,
-        _agent_id: &str,
-        report: &RunReport,
-    ) -> (Vec<CachedFileOutput>, Vec<CachedFileOutput>) {
-        let mut cached = Vec::new();
-        let mut replaced = Vec::new();
-        for node in &report.nodes {
-            let Some(fingerprint) = &node.fingerprint else {
-                continue;
-            };
-            let outputs = node
-                .port_assignments
-                .iter()
-                .map(|(port, file)| CachedFileOutput {
-                    node_id: node.id.clone(),
-                    fingerprint: fingerprint.clone(),
-                    port: *port,
-                    file: file.clone(),
-                })
-                .collect::<Vec<_>>();
-            if outputs.is_empty() || !outputs.iter().all(|entry| output_available(&entry.file)) {
-                continue;
-            }
-            let mut entries = self.entries.write();
-            if let Some(previous) = entries.insert(
-                fingerprint.clone(),
-                CachedResult {
-                    fingerprint: fingerprint.clone(),
-                    outputs: outputs.clone(),
-                    last_access: Instant::now(),
-                },
-            ) {
-                replaced.extend(previous.outputs);
-            }
-            cached.extend(outputs);
-        }
-        // Enforce TTL/LRU immediately; retired entries lose their cache-owner
-        // reference together with the ones displaced above.
-        let retired = self.prune_locked();
-        replaced.extend(retired);
-        (cached, replaced)
-    }
-
-    /// Take a cache snapshot before a run.
-    ///
-    /// Entries whose local files have disappeared since recording are dropped
-    /// here as well: there is no point seeding a run with outputs that cannot
-    /// be read. Full fingerprint freshness is verified by
-    /// `DataEngine::restore_cached_file_outputs` at restore time.
-    pub fn snapshot(&self) -> Vec<CachedFileOutput> {
-        let now = Instant::now();
-        let selected: Vec<_> = self
-            .entries
-            .read()
-            .values()
-            .filter(|entry| match self.ttl {
-                Some(ttl) => now.duration_since(entry.last_access) < ttl,
-                None => true,
-            })
-            .filter(|entry| entry.outputs.iter().all(|out| output_available(&out.file)))
-            .cloned()
-            .collect();
-        let keys = selected
-            .iter()
-            .map(|entry| entry.fingerprint.clone())
-            .collect::<Vec<_>>();
-        let mut write = self.entries.write();
-        for key in keys {
-            if let Some(entry) = write.get_mut(&key) {
-                entry.last_access = now;
-            }
-        }
-        drop(write);
-        selected
-            .into_iter()
-            .flat_map(|entry| entry.outputs)
-            .collect()
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.read().len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.read().is_empty()
-    }
-
-    pub fn prune(&self) -> usize {
-        self.prune_locked().len()
-    }
-
-    /// Expire TTL-stale entries and enforce the LRU bound, returning every
-    /// evicted output so the caller can drop the corresponding cache-owner
-    /// storage references.
-    pub fn prune_retired(&self) -> Vec<CachedFileOutput> {
-        self.prune_locked()
-    }
-
-    fn prune_locked(&self) -> Vec<CachedFileOutput> {
-        let mut entries = self.entries.write();
-        let mut retired = Vec::new();
-        if let Some(ttl) = self.ttl {
-            let now = Instant::now();
-            let expired: Vec<String> = entries
-                .iter()
-                .filter(|(_, entry)| now.duration_since(entry.last_access) >= ttl)
-                .map(|(key, _)| key.clone())
-                .collect();
-            for key in expired {
-                if let Some(entry) = entries.remove(&key) {
-                    retired.extend(entry.outputs);
-                }
-            }
-        }
-        // Recency eviction. `record_report` moved each selected key, so sorting
-        // by last access gives deterministic LRU semantics.
-        if self.max_entries > 0 && entries.len() > self.max_entries {
-            let mut keys: Vec<_> = entries
-                .iter()
-                .map(|(key, value)| (key.clone(), value.last_access))
-                .collect();
-            keys.sort_by_key(|(_, access)| *access);
-            let excess = entries.len().saturating_sub(self.max_entries);
-            for (key, _) in keys.into_iter().take(excess) {
-                if let Some(entry) = entries.remove(&key) {
-                    retired.extend(entry.outputs);
-                }
-            }
-        }
-        retired
-    }
-}
-
-fn output_available(file: &FileRef) -> bool {
-    if vfs::uri::storage_path(&file.path).is_some() {
-        return true;
-    }
-    Path::new(&file.path).exists()
-}
-
-/// One active reference to a managed local directory.
-///
-/// `agents` counts live actor owners, `cache` counts result-cache owners;
-/// either protects the path from run-aware cleanup. `runs` records which
-/// historical runs mention the path (informational, for status reporting).
-#[derive(Debug, Clone, Default)]
-struct StorageReferences {
-    runs: HashSet<String>,
-    agents: HashSet<String>,
-    cache: usize,
-}
-
-impl StorageReferences {
-    fn protected(&self) -> bool {
-        !self.agents.is_empty() || self.cache > 0
-    }
-
-    fn empty(&self) -> bool {
-        self.runs.is_empty() && self.agents.is_empty() && self.cache == 0
-    }
-}
 
 /// Reference counts for one tracked VFS artifact.
 #[derive(Debug, Clone, Default)]
 struct ArtifactUsage {
     runs: HashSet<String>,
-    agents: HashSet<String>,
     bytes: u64,
 }
 
@@ -256,42 +36,16 @@ struct ArtifactUsage {
 pub struct ArtifactEntry {
     pub uri: String,
     pub runs: usize,
-    pub agents: usize,
     pub logical_bytes: u64,
 }
 
-/// One row of [`StorageStatus::references`].
-#[derive(Debug, Clone, Serialize)]
-pub struct ReferenceEntry {
-    pub path: PathBuf,
-    pub runs: usize,
-    pub agents: usize,
-    pub cache_owners: usize,
-}
-
-/// Point-in-time storage view served by
-/// [`DataEngineManager::storage_status`](super::DataEngineManager::storage_status).
-#[derive(Debug, Default, Clone, Serialize)]
-pub struct StorageStatus {
-    pub agent_count: usize,
-    pub result_cache_entries: usize,
-    /// Bytes under the local managed roots (workdirs + receipts).
-    pub local_bytes: u64,
-    /// Tracked `vfs://` artifacts. Indexed and reported only — the local
-    /// budget cleaner never deletes them.
-    pub artifact_count: usize,
-    pub artifact_bytes: u64,
-    pub references: Vec<ReferenceEntry>,
-    pub artifacts: Vec<ArtifactEntry>,
-}
-
-/// Tracks local workdirs/receipts and VFS artifacts currently retained by
-/// live actors, the result cache, and recorded history.
+/// Tracks VFS artifacts mentioned by recorded history. Local workdirs and
+/// receipt roots are never indexed here: they are classified directly from
+/// the run reports during run-aware cleanup.
 #[derive(Debug, Default)]
 pub struct StorageCoordinator {
     work_root: PathBuf,
     receipt_root: PathBuf,
-    references: Mutex<HashMap<PathBuf, StorageReferences>>,
     artifacts: Mutex<HashMap<String, ArtifactUsage>>,
 }
 
@@ -300,7 +54,6 @@ impl StorageCoordinator {
         Self {
             work_root: canonical_or_raw(work_root.into()),
             receipt_root: canonical_or_raw(receipt_root.into()),
-            references: Mutex::new(HashMap::new()),
             artifacts: Mutex::new(HashMap::new()),
         }
     }
@@ -313,207 +66,13 @@ impl StorageCoordinator {
         &self.receipt_root
     }
 
-    /// Retain every managed local path and VFS artifact mentioned by a run
-    /// report for its producing agent. This is the live-actor half of
-    /// reference counting; history-based retention is recomputed by run-aware
-    /// cleanup.
-    pub fn retain_report(&self, agent_id: &str, report: &RunReport) -> usize {
-        let run_id = report
-            .run_id
-            .clone()
-            .unwrap_or_else(|| format!("session:{agent_id}"));
-        let mut retained = 0;
-        let value = match serde_json::to_value(report) {
-            Ok(value) => value,
-            Err(_) => return 0,
-        };
-        {
-            let mut refs = self.references.lock();
-            for path in report_local_roots_from_value(&value, &self.work_root, &self.receipt_root) {
-                let entry = refs.entry(path).or_default();
-                entry.runs.insert(run_id.clone());
-                entry.agents.insert(agent_id.to_string());
-                retained += 1;
-            }
-        }
-        {
-            let mut artifacts = self.artifacts.lock();
-            for (uri, bytes) in vfs_artifacts_from_value(&value) {
-                let entry = artifacts.entry(uri).or_default();
-                entry.runs.insert(run_id.clone());
-                entry.agents.insert(agent_id.to_string());
-                if entry.bytes == 0 {
-                    entry.bytes = bytes;
-                }
-                retained += 1;
-            }
-        }
-        retained
-    }
-
-    /// Add a result-cache owner reference for every managed local path behind
-    /// `outputs`, so run-aware cleanup cannot delete a file that a future
-    /// cross-agent restore may still consume.
-    pub fn retain_cache_owner(&self, outputs: &[CachedFileOutput]) -> usize {
-        let mut refs = self.references.lock();
-        let mut retained = 0;
-        for output in outputs {
-            let Some(path) =
-                managed_root_from_path(&output.file.path, &self.work_root, &self.receipt_root)
-            else {
-                continue;
-            };
-            refs.entry(path).or_default().cache += 1;
-            retained += 1;
-        }
-        retained
-    }
-
-    /// Drop result-cache owner references for evicted cache entries.
-    pub fn release_cache_owner(&self, outputs: &[CachedFileOutput]) -> usize {
-        let mut refs = self.references.lock();
-        let mut released = 0;
-        for output in outputs {
-            let Some(path) =
-                managed_root_from_path(&output.file.path, &self.work_root, &self.receipt_root)
-            else {
-                continue;
-            };
-            if let Some(entry) = refs.get_mut(&path)
-                && entry.cache > 0
-            {
-                entry.cache -= 1;
-                released += 1;
-                if entry.empty() {
-                    refs.remove(&path);
-                }
-            }
-        }
-        released
-    }
-
-    pub fn release_agent(&self, agent_id: &str) -> usize {
-        let mut released = 0;
-        {
-            let mut refs = self.references.lock();
-            for entry in refs.values_mut() {
-                if entry.agents.remove(agent_id) {
-                    released += 1;
-                }
-            }
-            refs.retain(|_, entry| !entry.empty());
-        }
-        let mut artifacts = self.artifacts.lock();
-        for entry in artifacts.values_mut() {
-            if entry.agents.remove(agent_id) {
-                released += 1;
-            }
-        }
-        artifacts.retain(|_, entry| !entry.runs.is_empty() || !entry.agents.is_empty());
-        released
-    }
-
-    /// Count managed local paths protected by at least one live actor.
-    pub fn active_reference_count(&self) -> usize {
-        self.references
-            .lock()
-            .iter()
-            .filter(|(_, entry)| !entry.agents.is_empty())
-            .count()
-    }
-
-    /// Bytes currently stored under the local managed roots.
-    pub fn managed_bytes(&self) -> u64 {
-        managed_bytes(&self.work_root, &self.receipt_root)
-    }
-
-    /// Number of tracked VFS artifacts.
-    pub fn artifact_count(&self) -> usize {
-        self.artifacts.lock().len()
-    }
-
-    /// Summed logical byte size of tracked VFS artifacts.
-    pub fn artifact_bytes(&self) -> u64 {
-        self.artifacts.lock().values().map(|e| e.bytes).sum()
-    }
-
-    fn protected_paths(&self) -> HashSet<PathBuf> {
-        self.references
-            .lock()
-            .iter()
-            .filter(|(_, entry)| entry.protected())
-            .map(|(path, _)| path.clone())
-            .collect()
-    }
-
-    pub fn reference_snapshot(&self) -> Vec<ReferenceEntry> {
-        self.references
-            .lock()
-            .iter()
-            .map(|(path, entry)| ReferenceEntry {
-                path: path.clone(),
-                runs: entry.runs.len(),
-                agents: entry.agents.len(),
-                cache_owners: entry.cache,
-            })
-            .collect()
-    }
-
-    pub fn artifact_snapshot(&self) -> Vec<ArtifactEntry> {
-        self.artifacts
-            .lock()
-            .iter()
-            .map(|(uri, entry)| ArtifactEntry {
-                uri: uri.clone(),
-                runs: entry.runs.len(),
-                agents: entry.agents.len(),
-                logical_bytes: entry.bytes,
-            })
-            .collect()
-    }
-
-    /// Rebuild historical run references (local roots + VFS artifacts) from
-    /// `DagHistory` into the index, so [`StorageStatus`] reflects every
-    /// recorded run rather than only live actors. Run-aware cleanup
-    /// performs the same sync as part of [`Self::classify_candidates`].
-    pub async fn sync_history_references(&self, history: &DagHistory) -> Result<(), String> {
-        let runs = history
-            .list_runs(usize::MAX, None)
-            .await
-            .map_err(|error| error.to_string())?;
-        for run in &runs {
-            let Some(report_json) = &run.run_report_json else {
-                continue;
-            };
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(report_json) else {
-                continue;
-            };
-            let mut refs = self.references.lock();
-            for path in report_local_roots_from_value(&value, &self.work_root, &self.receipt_root) {
-                refs.entry(path).or_default().runs.insert(run.id.clone());
-            }
-            drop(refs);
-            let mut artifacts = self.artifacts.lock();
-            for (uri, bytes) in vfs_artifacts_from_value(&value) {
-                let entry = artifacts.entry(uri).or_default();
-                entry.runs.insert(run.id.clone());
-                if entry.bytes == 0 {
-                    entry.bytes = bytes;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Classify managed local directories for run-aware cleanup: rebuild the
-    /// historical reference index from `history`, then collect directories
-    /// that belong only to runs outside the newest `keep_runs` and are not
-    /// protected by a live actor or the result cache.
+    /// Classify managed local directories for run-aware cleanup: collect
+    /// directories that belong only to runs outside the newest `keep_runs`.
     async fn classify_candidates(
         &self,
         history: &DagHistory,
         keep_runs: usize,
-    ) -> Result<(HashSet<PathBuf>, usize, usize), String> {
+    ) -> Result<(HashSet<PathBuf>, usize), String> {
         let keep_runs = keep_runs.max(1);
         let runs = history
             .list_runs(keep_runs, None)
@@ -521,8 +80,8 @@ impl StorageCoordinator {
             .map_err(|error| error.to_string())?;
         let protected_runs: HashSet<_> = runs.iter().map(|run| run.id.as_str()).collect();
 
-        // list_runs is newest-first. Re-list all runs, rebuild the historical
-        // reference index, then classify old paths.
+        // list_runs is newest-first. Re-list all runs to classify old paths
+        // and index the VFS artifacts every run mentions.
         let all_runs = history
             .list_runs(usize::MAX, None)
             .await
@@ -535,14 +94,6 @@ impl StorageCoordinator {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(report_json) else {
                 continue;
             };
-            {
-                let mut refs = self.references.lock();
-                for root in
-                    report_local_roots_from_value(&value, &self.work_root, &self.receipt_root)
-                {
-                    refs.entry(root).or_default().runs.insert(run.id.clone());
-                }
-            }
             {
                 let mut artifacts = self.artifacts.lock();
                 for (uri, bytes) in vfs_artifacts_from_value(&value) {
@@ -558,21 +109,15 @@ impl StorageCoordinator {
             }
         }
 
-        let active = self.protected_paths();
         let mut candidates = HashSet::<PathBuf>::new();
-        let mut protected_directories = 0usize;
         for report_json in &candidate_runs {
             for root in
                 report_local_roots_from_value(report_json, &self.work_root, &self.receipt_root)
             {
-                if active.contains(&root) {
-                    protected_directories += 1;
-                } else {
-                    candidates.insert(root);
-                }
+                candidates.insert(root);
             }
         }
-        Ok((candidates, protected_directories, all_runs.len()))
+        Ok((candidates, all_runs.len()))
     }
 
     fn base_report(&self, keep_runs: usize, scanned_runs: usize) -> RunAwareCleanReport {
@@ -612,7 +157,6 @@ impl StorageCoordinator {
                     current = current.saturating_sub(removed_bytes);
                     report.removed += 1;
                     report.bytes_freed += removed_bytes;
-                    self.references.lock().remove(&path);
                 }
                 Err(error) => report
                     .errors
@@ -633,8 +177,7 @@ impl StorageCoordinator {
     /// Enforce the local byte budget: delete managed local directories of old
     /// runs (oldest first) until usage drops to 75% of `max_bytes`.
     ///
-    /// Live-actor and result-cache references are never deleted. Immutable
-    /// VFS artifacts are indexed and reported, but never touched.
+    /// Immutable VFS artifacts are indexed and reported, but never touched.
     pub async fn run_aware_clean(
         &self,
         history: &DagHistory,
@@ -642,11 +185,9 @@ impl StorageCoordinator {
         max_bytes: u64,
         dry_run: bool,
     ) -> Result<RunAwareCleanReport, String> {
-        let (candidates, protected_directories, scanned_runs) =
-            self.classify_candidates(history, keep_runs).await?;
+        let (candidates, scanned_runs) = self.classify_candidates(history, keep_runs).await?;
         let mut report = self.base_report(keep_runs, scanned_runs);
         report.candidate_directories = candidates.len();
-        report.protected_directories = protected_directories;
 
         let total = managed_bytes(&self.work_root, &self.receipt_root);
         report.bytes_before = total;
@@ -660,19 +201,17 @@ impl StorageCoordinator {
         Ok(report)
     }
 
-    /// Explicit run-aware clean: delete every unprotected candidate directory
-    /// outside the newest `keep_runs`, regardless of the byte budget.
+    /// Explicit run-aware clean: delete every candidate directory outside the
+    /// newest `keep_runs`, regardless of the byte budget.
     pub async fn clean_history(
         &self,
         history: &DagHistory,
         keep_runs: usize,
         dry_run: bool,
     ) -> Result<RunAwareCleanReport, String> {
-        let (candidates, protected_directories, scanned_runs) =
-            self.classify_candidates(history, keep_runs).await?;
+        let (candidates, scanned_runs) = self.classify_candidates(history, keep_runs).await?;
         let mut report = self.base_report(keep_runs, scanned_runs);
         report.candidate_directories = candidates.len();
-        report.protected_directories = protected_directories;
         report.bytes_before = managed_bytes(&self.work_root, &self.receipt_root);
         self.remove_candidates(candidates, 0, dry_run, &mut report);
         Ok(report)
@@ -689,6 +228,18 @@ impl StorageCoordinator {
         self.run_aware_clean(history, keep_runs, max_bytes, dry_run)
             .await
     }
+
+    pub fn artifact_snapshot(&self) -> Vec<ArtifactEntry> {
+        self.artifacts
+            .lock()
+            .iter()
+            .map(|(uri, entry)| ArtifactEntry {
+                uri: uri.clone(),
+                runs: entry.runs.len(),
+                logical_bytes: entry.bytes,
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -696,9 +247,6 @@ pub struct RunAwareCleanReport {
     pub keep_runs: usize,
     pub scanned_runs: usize,
     pub candidate_directories: usize,
-    /// Old-run directories kept because a live actor or the result cache
-    /// still references them.
-    pub protected_directories: usize,
     pub removed: usize,
     pub bytes_freed: u64,
     pub bytes_before: u64,
@@ -715,9 +263,6 @@ pub struct RunAwareCleanReport {
 #[derive(Debug, Clone, Copy)]
 pub struct MaintenancePolicy {
     pub agent_idle: Duration,
-    pub output_cache_idle: Duration,
-    pub result_cache_ttl: Duration,
-    pub result_cache_max_entries: usize,
     pub maintenance_interval: Option<Duration>,
     pub clean_keep_runs: usize,
     pub storage_max_bytes: u64,
@@ -740,16 +285,6 @@ impl MaintenancePolicy {
         };
         Self {
             agent_idle: Duration::from_secs(secs("AUTONOMICS_DAG_SESSION_IDLE_SECS", 24 * 3600)),
-            output_cache_idle: Duration::from_secs(secs(
-                "AUTONOMICS_DAG_OUTPUT_CACHE_IDLE_SECS",
-                3600,
-            )),
-            result_cache_ttl: Duration::from_secs(secs(
-                "AUTONOMICS_DAG_RESULT_CACHE_TTL_SECS",
-                7 * 24 * 3600,
-            )),
-            result_cache_max_entries: secs("AUTONOMICS_DAG_RESULT_CACHE_MAX_ENTRIES", 4096)
-                as usize,
             maintenance_interval: match std::env::var("AUTONOMICS_DAG_MAINTENANCE_INTERVAL_SECS") {
                 Ok(raw) => raw
                     .trim()
@@ -945,9 +480,6 @@ fn remove_dir(path: &Path) -> std::io::Result<u64> {
     std::fs::remove_dir_all(path).map(|_| bytes)
 }
 
-/// Convenience alias used by [`crate::runtime`].
-pub type SharedStorageCoordinator = Arc<StorageCoordinator>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,7 +505,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_aware_clean_protects_new_runs_and_active_references() {
+    async fn run_aware_clean_protects_new_runs() {
         let root = tempfile::tempdir().unwrap();
         let work = root.path().join("work");
         let old = work.join("aa").join("b".repeat(62));
@@ -1086,63 +618,6 @@ mod tests {
         assert_eq!(artifacts[0].uri, "vfs://bucket/out.parquet");
         assert_eq!(artifacts[0].logical_bytes, 123);
         assert_eq!(artifacts[0].runs, 1);
-    }
-
-    #[tokio::test]
-    async fn cache_owner_reference_protects_local_files() {
-        let root = tempfile::tempdir().unwrap();
-        let work = root.path().join("work");
-        let cached = work.join("aa").join("b".repeat(62));
-        let latest = work.join("cc").join("d".repeat(62));
-        std::fs::create_dir_all(&cached).unwrap();
-        std::fs::create_dir_all(&latest).unwrap();
-        let file = cached.join("out.csv");
-        std::fs::write(&file, "cached").unwrap();
-
-        let old_json = format!(r#"{{"path":"{}"}}"#, file.display());
-        let history = DagHistory::open_in_memory().await.unwrap();
-        history
-            .record_run(&run_record("old", "2026-01-01T00:00:00Z", &old_json))
-            .await
-            .unwrap();
-        history
-            .record_run(&run_record(
-                "latest",
-                "2026-01-02T00:00:00Z",
-                &format!(r#"{{"path":"{}"}}"#, latest.display()),
-            ))
-            .await
-            .unwrap();
-
-        let coordinator = StorageCoordinator::new(&work, root.path().join("receipts"));
-        coordinator.retain_cache_owner(&[CachedFileOutput {
-            node_id: "sink".into(),
-            fingerprint: "fp".into(),
-            port: 0,
-            file: FileRef::local(&file, Some("csv".into())).unwrap(),
-        }]);
-
-        let report = coordinator
-            .run_aware_clean(&history, 1, 1, false)
-            .await
-            .unwrap();
-        assert_eq!(report.removed, 0);
-        assert_eq!(report.protected_directories, 1);
-        assert!(file.exists(), "result-cache owner must protect the file");
-
-        // Once the cache entry is evicted the reference is recyclable.
-        coordinator.release_cache_owner(&[CachedFileOutput {
-            node_id: "sink".into(),
-            fingerprint: "fp".into(),
-            port: 0,
-            file: FileRef::local(&file, Some("csv".into())).unwrap(),
-        }]);
-        let report = coordinator
-            .run_aware_clean(&history, 1, 1, false)
-            .await
-            .unwrap();
-        assert_eq!(report.removed, 1);
-        assert!(!file.exists());
     }
 
     #[test]

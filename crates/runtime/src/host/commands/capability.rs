@@ -95,7 +95,7 @@ pub(in crate::host) fn capability_from_kind(
         tags.push("plugin-validation".into());
         expertise.push("plugin-development".into());
         expertise.push("node-development".into());
-        expertise.push("container-plugin-lifecycle".into());
+        expertise.push("plugin-lifecycle".into());
         expertise.push("plugin-validation".into());
     }
     if kind.enable_browser() {

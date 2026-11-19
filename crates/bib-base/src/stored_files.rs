@@ -2,7 +2,14 @@
 
 use sha2::{Digest, Sha256};
 
-pub const VFS_PREFIX: &str = "vfs://";
+/// Canonical local-domain prefix of bibliography object paths.
+///
+/// Rows persisted before the domain-address migration keep the legacy
+/// `vfs://` spelling; every reader accepts both.
+pub const VFS_PREFIX: &str = "local://";
+
+/// Pre-migration spelling, still readable everywhere old rows persist it.
+const LEGACY_VFS_PREFIX: &str = "vfs://";
 
 /// A stable, content-addressed VFS location for an uploaded full text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,10 +37,10 @@ impl StoredFulltext {
 /// old object can therefore be deleted only after the database commit.
 pub fn stored_fulltext(article_id: &str, filename: &str, content: &[u8]) -> StoredFulltext {
     let file_hash = hex(&Sha256::digest(content));
-    let filename = stored_filename(filename);
+    let filename = vfs::uri::encode_path(&stored_filename(filename));
     let path = format!(
-        "{VFS_PREFIX}/literature/{}/{file_hash}-{filename}",
-        encode_component(article_id)
+        "{VFS_PREFIX}literature/{}/{file_hash}-{filename}",
+        vfs::uri::encode_path(&encode_component(article_id))
     );
     StoredFulltext { path, file_hash }
 }
@@ -50,11 +57,11 @@ pub fn stored_attachment(
     content: &[u8],
 ) -> StoredFulltext {
     let file_hash = hex(&Sha256::digest(content));
-    let filename = stored_filename(filename);
+    let filename = vfs::uri::encode_path(&stored_filename(filename));
     let path = format!(
-        "{VFS_PREFIX}/literature/{}/attachments/{}/{file_hash}-{filename}",
-        encode_component(article_id),
-        encode_component(attachment_key),
+        "{VFS_PREFIX}literature/{}/attachments/{}/{file_hash}-{filename}",
+        vfs::uri::encode_path(&encode_component(article_id)),
+        vfs::uri::encode_path(&encode_component(attachment_key)),
     );
     StoredFulltext { path, file_hash }
 }
@@ -68,7 +75,9 @@ pub fn vfs_virtual_path(uri: &str) -> Option<String> {
         }
         return Some(uri.to_string());
     }
-    let path = uri.strip_prefix(VFS_PREFIX)?.trim_start_matches('/');
+    let path = uri
+        .strip_prefix(LEGACY_VFS_PREFIX)?
+        .trim_start_matches('/');
     (!path.is_empty()).then(|| format!("/{path}"))
 }
 
@@ -79,19 +88,19 @@ pub fn vfs_virtual_path(uri: &str) -> Option<String> {
 /// already stable and re-extraction overwrites in place.
 pub fn figure_object_path(article_id: &str, name: &str) -> String {
     format!(
-        "{VFS_PREFIX}/literature/{}/images/{}",
-        encode_component(article_id),
-        encode_component(name)
+        "{VFS_PREFIX}literature/{}/images/{}",
+        vfs::uri::encode_path(&encode_component(article_id)),
+        vfs::uri::encode_path(&encode_component(name))
     )
 }
 
 /// VFS location of a figure derived from one attachment item.
 pub fn attachment_figure_object_path(article_id: &str, attachment_key: &str, name: &str) -> String {
     format!(
-        "{VFS_PREFIX}/literature/{}/attachments/{}/images/{}",
-        encode_component(article_id),
-        encode_component(attachment_key),
-        encode_component(name),
+        "{VFS_PREFIX}literature/{}/attachments/{}/images/{}",
+        vfs::uri::encode_path(&encode_component(article_id)),
+        vfs::uri::encode_path(&encode_component(attachment_key)),
+        vfs::uri::encode_path(&encode_component(name)),
     )
 }
 
@@ -111,8 +120,8 @@ pub fn extracted_object_path(article_id: &str, format: bib_types::TextFormat) ->
         bib_types::TextFormat::Plain => "txt",
     };
     format!(
-        "{VFS_PREFIX}/literature/{}/extracted/fulltext.{extension}",
-        encode_component(article_id)
+        "{VFS_PREFIX}literature/{}/extracted/fulltext.{extension}",
+        vfs::uri::encode_path(&encode_component(article_id))
     )
 }
 
@@ -127,9 +136,9 @@ pub fn extracted_attachment_object_path(
         bib_types::TextFormat::Plain => "txt",
     };
     format!(
-        "{VFS_PREFIX}/literature/{}/attachments/{}/extracted/fulltext.{extension}",
-        encode_component(article_id),
-        encode_component(attachment_key),
+        "{VFS_PREFIX}literature/{}/attachments/{}/extracted/fulltext.{extension}",
+        vfs::uri::encode_path(&encode_component(article_id)),
+        vfs::uri::encode_path(&encode_component(attachment_key)),
     )
 }
 
@@ -240,13 +249,13 @@ fn hex(bytes: &[u8]) -> String {
 pub fn structured_object_path(article_id: &str, attachment_key: Option<&str>) -> String {
     match attachment_key {
         Some(key) => format!(
-            "{VFS_PREFIX}/literature/{}/attachments/{}/extracted/fulltext.sdt.json",
-            encode_component(article_id),
-            encode_component(key),
+            "{VFS_PREFIX}literature/{}/attachments/{}/extracted/fulltext.sdt.json",
+            vfs::uri::encode_path(&encode_component(article_id)),
+            vfs::uri::encode_path(&encode_component(key)),
         ),
         None => format!(
-            "{VFS_PREFIX}/literature/{}/extracted/fulltext.sdt.json",
-            encode_component(article_id),
+            "{VFS_PREFIX}literature/{}/extracted/fulltext.sdt.json",
+            vfs::uri::encode_path(&encode_component(article_id)),
         ),
     }
 }
@@ -260,8 +269,8 @@ mod tests {
         let a = stored_fulltext("doi:10.1000/x", "paper one.pdf", b"content");
         let b = stored_fulltext("doi:10.1000/x", "paper one.pdf", b"changed");
         assert_ne!(a.path, b.path);
-        assert!(a.path.starts_with("vfs:///literature/doi%3A10.1000%2Fx/"));
-        assert!(a.path.ends_with("-paper%20one.pdf"));
+        assert!(a.path.starts_with("local://literature/doi%253A10.1000%252Fx/"));
+        assert!(a.path.ends_with("-paper%2520one.pdf"));
         assert_eq!(a.file_hash.len(), 64);
     }
 
@@ -322,7 +331,7 @@ mod tests {
     fn builds_figure_paths() {
         assert_eq!(
             figure_object_path("doi:10.1000/x", "abc.jpg"),
-            "vfs:///literature/doi%3A10.1000%2Fx/images/abc.jpg"
+            "local://literature/doi%253A10.1000%252Fx/images/abc.jpg"
         );
     }
 
@@ -330,11 +339,11 @@ mod tests {
     fn builds_canonical_extracted_paths() {
         assert_eq!(
             extracted_object_path("doi:10.1000/x", bib_types::TextFormat::Markdown),
-            "vfs:///literature/doi%3A10.1000%2Fx/extracted/fulltext.md"
+            "local://literature/doi%253A10.1000%252Fx/extracted/fulltext.md"
         );
         assert_eq!(
             extracted_object_path("a b", bib_types::TextFormat::Plain),
-            "vfs:///literature/a%20b/extracted/fulltext.txt"
+            "local://literature/a%2520b/extracted/fulltext.txt"
         );
     }
 

@@ -1,6 +1,6 @@
 //! Static review of inlined adapter scripts.
 
-use container_plugin::node_definition::NodeDefinition;
+use ::plugin::node_definition::NodeDefinition;
 
 /// Reviews the non-executable security contract for one node script.
 pub(crate) struct StaticScriptReviewer<'a> {

@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use dag_core::{BundleRegistry, DataBundle};
-use data_engine::data_engine::DataEngine;
 use datafusion::prelude::SessionContext;
 
 fn bundle(id: &str, vpath: &str) -> DataBundle {
@@ -125,15 +124,19 @@ fn global_builtin_bundles_build_without_a_runtime_catalog() {
 
 #[test]
 fn default_data_engine_uses_builtin_bundle_catalog() {
-    let mut engine = DataEngine::builder().build();
+    let ctx = SessionContext::new();
+    let registry = data_engine::default_registry::build_default_registry(
+        ctx.runtime_env(),
+        None,
+        Arc::new(BundleRegistry::new()),
+    );
 
-    engine
-        .add_node_from_registry(
-            "bundle_source",
+    registry
+        .build_node(
             "bundle_source",
             serde_json::json!({"bundle_id": "als_cns.cell_markers", "format": "tsv"}),
         )
-        .unwrap();
+        .unwrap_or_else(|error| panic!("build bundle source from built-in catalog: {error}"));
 }
 
 #[test]

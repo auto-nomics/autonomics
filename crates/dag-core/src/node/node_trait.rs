@@ -170,7 +170,7 @@ pub trait DagNode: Send + Sync {
 
     /// The identity of the plugin implementation this node executes, when
     /// the node's behavior is defined by a loaded plugin family (e.g.
-    /// container-plugin manifests) rather than purely by its kind + spec.
+    /// plugin manifests) rather than purely by its kind + spec.
     ///
     /// Fed into the node's execution fingerprint (WO-R09) so that swapping a
     /// plugin family's manifest, script, or image invalidates cached

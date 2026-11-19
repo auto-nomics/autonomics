@@ -184,7 +184,7 @@ fn ensure_plugin_mounts(
     let Ok(text) = std::fs::read_to_string(&registry_path) else {
         return Ok(());
     };
-    let parsed: container_plugin::sync::PluginsConfig = toml::from_str(&text)
+    let parsed: plugin::sync::PluginsConfig = toml::from_str(&text)
         .map_err(|error| Error::Other(format!("parse `{}`: {error}", registry_path.display())))?;
     if manifest
         .backend
@@ -1563,7 +1563,7 @@ mod executor_workspace_mount_tests {
         assert_eq!(bytes.to_vec(), original);
         let session = SessionContext::new();
         session.runtime_env().register_object_store(
-            datafusion::execution::object_store::ObjectStoreUrl::parse("vfs://")
+            datafusion::execution::object_store::ObjectStoreUrl::parse("local://")
                 .unwrap()
                 .as_ref(),
             mounts,
@@ -1580,7 +1580,7 @@ mod executor_workspace_mount_tests {
             .build_node(
                 "archive_extract",
                 serde_json::json!({
-                    "src": format!("vfs://{source}"),
+                    "src": format!("local://{source}"),
                     "destination_prefix": "/publication-probe/extracted"
                 }),
             )

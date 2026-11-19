@@ -45,7 +45,7 @@ A `FileRef` with `format == "evidence"` carries the UTF-8 JSON encoding of
 
 | Payload | Channel |
 |---|---|
-| Bibliography full text (PDF / HTML / extracted text) | **File channel** — content-addressed VFS objects at `vfs:///literature/{article_id}/{sha256}-{filename}` |
+| Bibliography full text (PDF / HTML / extracted text) | **File channel** — content-addressed store objects at `local://literature/{article_id}/{sha256}-{filename}` |
 | Citation records (search / fetch / citation graph / recommendations) | **File channel** — `evidence` artifacts |
 | Structured table data / database queries / node-to-node dataflow | **DataFrame channel** — `source_*` and transformation nodes |
 | Human-facing audit trail (node input lines, per-node evidence) | `NodeRunDetails` + `InputBinding` (audit, not data) |
@@ -81,11 +81,11 @@ cross-source lookup the merge node intentionally does not perform.
 
 ## Path discipline
 
-Spec-driven explicit `path` (`vfs://` URI or bare absolute), overwritten on
+Spec-driven explicit `path` (`local://` URI or bare absolute), overwritten on
 re-run, `sink_path()` declared. **Bare absolute paths are auto-normalized to
-`vfs:///...` and routed through the mounted runtime VFS, so the engine and
-the agent share one object-store namespace** — this is the only reliable
-form for cross-process artifacts. An explicit `vfs://` URI on an engine
+`local:///...` and routed through the mounted runtime storage, so the engine
+and the agent share one object-store namespace** — this is the only reliable
+form for cross-process artifacts. An explicit storage-domain URI on an engine
 without a mounted VFS fails closed; bare absolute paths on such embedded
 engines fall back to the host filesystem (test/embedded use only — the
 production runtime always mounts the VFS). The engine does not detect

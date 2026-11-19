@@ -517,8 +517,9 @@ impl BibCore {
     }
 
     /// List full-text rows still needing extraction: `pending` or `failed`,
-    /// whose original file lives in the VFS (only `vfs://` files can be
-    /// re-read and re-extracted; `europepmc:` paths carry inline text
+    /// whose original file lives in the bibliography object store (only
+    /// store-addressed files — canonical `local://` or legacy `vfs://` — can
+    /// be re-read and re-extracted; `europepmc:` paths carry inline text
     /// already).
     pub async fn list_articles_needing_extraction(&self) -> Result<Vec<PendingExtraction>> {
         let conn = self.conn();
@@ -526,7 +527,7 @@ impl BibCore {
             .query(
                 "SELECT article_id, file_path, file_format FROM fulltexts \
              WHERE extract_status IN ('pending', 'failed') \
-               AND file_path LIKE 'vfs://%'",
+               AND (file_path LIKE 'local://%' OR file_path LIKE 'vfs://%')",
                 turso::params![],
             )
             .await?;
@@ -554,7 +555,7 @@ impl BibCore {
                  JOIN items I ON I.itemID = AI.itemID \
                  LEFT JOIN fulltextItems F ON F.itemID = AI.itemID \
                  WHERE COALESCE(F.extractionStatus, 'pending') IN ('pending', 'failed') \
-                   AND AI.vfsPath LIKE 'vfs://%'",
+                   AND (AI.vfsPath LIKE 'local://%' OR AI.vfsPath LIKE 'vfs://%')",
                 turso::params![],
             )
             .await?;
@@ -1241,7 +1242,7 @@ mod tests {
         FullText {
             article_id: article_id.to_owned(),
             attachment_key: None,
-            file_path: format!("vfs://literature/{article_id}/deadbeef-paper.pdf"),
+            file_path: format!("local://literature/{article_id}/deadbeef-paper.pdf"),
             file_format: FileFormat::Pdf,
             text_content: None,
             source: FullTextSource::UserUpload,
@@ -1444,7 +1445,7 @@ mod tests {
         base.upsert_fulltext(&FullText {
             article_id: article_id.into(),
             attachment_key: None,
-            file_path: "vfs:///literature/x/inline.html".into(),
+            file_path: "local://literature/x/inline.html".into(),
             file_format: FileFormat::Html,
             text_content: Some("\u{feff}inline\r\ntext\r".into()),
             source: FullTextSource::OpenAccess,
@@ -1470,7 +1471,7 @@ mod tests {
         base.upsert_fulltext(&FullText {
             article_id: article_id.into(),
             attachment_key: None,
-            file_path: "vfs:///literature/x/replaced.pdf".into(),
+            file_path: "local://literature/x/replaced.pdf".into(),
             file_format: FileFormat::Pdf,
             text_content: None,
             source: FullTextSource::UserUpload,

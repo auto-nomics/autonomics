@@ -19,7 +19,7 @@ runtime = { path = "../../crates/runtime" }
 rpassword.workspace = true
 agentik-core = { path = "../../crates/agentik-core" }
 agentik-types = { path = "../../crates/agentik-types" }
-container-plugin = { path = "../../crates/container-plugin" }
+plugin = { path = "../../crates/plugin" }
 text-embedding = { path = "../../crates/text-embedding" }
 plugin-rsi = { path = "../../crates/plugin-rsi" }
 data-catalog = { path = "../../crates/data-catalog" }

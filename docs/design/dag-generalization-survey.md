@@ -13,7 +13,7 @@
 |---|---|---|
 | agent 工具 | `ToolFunction` + `#[tool]` 宏,请求-响应,返回 `ToolResult`(文本/JSON) | `crates/agentik-core/src/tools/function.rs:252` |
 | DAG 节点 | `DagNode`/`NodeFactory`/`NodePlugin`,端口化数据流(DataFrame/File/FileSet) | `crates/dag-core/src/node/node_trait.rs:16`、`registry/registry.rs:30` |
-| manifest 插件节点 | `manifest.toml` 声明、零 Rust,执行内核是 `container_command` | `crates/container-plugin/src/factory.rs:28` |
+| manifest 插件节点 | `manifest.toml` 声明、零 Rust,执行内核是 `container_command` | `crates/plugin/src/factory.rs:28` |
 | 控制面工具 | data-engine 元工具 21 个 + host 控制 14 个,操作 DAG 本身/宿主,**不属于迁移对象** | `crates/data-engine-tools/src/lib.rs:80-113` |
 
 三次前置迁移已铺平道路:crate 化(2026-08-07)→ 官方容器化(2026-08-26)→ manifest 插件化(2026-09-28)。本阶段是第四步:**收口工具面**。

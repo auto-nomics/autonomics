@@ -11,7 +11,7 @@ gateway daemon 启动时会启动 HTTP API 后端。该后端不是独立的文�
 - 鉴权：`/api/v1/*` 需要凭据——`Authorization: Bearer <token>`（`AUTONOMICS_HTTP_API_TOKEN`，未设置时是 `~/.autonomics/gateway.token` 里每次启动生成的令牌）或浏览器会话 Cookie（`POST /api/session` 用令牌换取，`HttpOnly` + `SameSite=Strict`）；静态前端资源不受影响
 - 令牌不落页面：`/` 返回的前端是静态壳，不注入任何令牌；浏览器只持有会话 Cookie，令牌不会出现在 HTML、JS 全局变量或 console 中
 - 数据库：与 `RuntimeHost` 中的 `SharedInfra.bib` 完全共享同一个 `BibShared`，因此 API、TUI agent 工具和写作系统共享同一 Turso 连接与文献源 HTTP 客户端
-- 原文存储：TUI 使用独立文献 VFS 空间 `vfs:///literature/...`；底层默认是 `state_dir/literature/` 本地目录，并自动挂载到 Agent VFS
+- 原文存储：TUI 使用独立文献存储空间 `local://literature/...`；底层默认是 `state_dir/literature/` 本地目录，并自动挂载到 Agent VFS
 - 生命周期：daemon 启动完成 `RuntimeHost::open` 后绑定端口；退出时先 graceful shutdown HTTP API，再关闭 agent 和共享基础设施
 - 安全边界：默认只监听回环地址。跨不受信网络暴露时请在前面放一层反向代理（TLS + 自己的认证），并设置固定的 `AUTONOMICS_HTTP_API_TOKEN`
 

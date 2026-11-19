@@ -13,7 +13,7 @@ wrapper.
 
 The reference implementation is the `ldsc` family (`ldsc_h2`,
 `ldsc_munge`, `ldsc_rg`), migrated end to end and
-exercised by `crates/container-plugin/tests/ldsc_migration.rs` (golden)
+exercised by `crates/plugin/tests/ldsc_migration.rs` (golden)
 and `ldsc_e2e.rs` (distribution).
 
 ## Overview
@@ -34,7 +34,7 @@ ldsc/
 └── README.md
 ```
 
-At startup the runtime host runs `container_plugin::sync::sync` (from
+At startup the runtime host runs `plugin::sync::sync` (from
 `state_dir/plugins.toml`), materializing each plugin under
 `state_dir/plugins`, then the loader scans that root, validates every
 `manifest.toml` fail-closed, and registers one `ManifestNodeFactory` per
@@ -81,7 +81,7 @@ behaviour. The three things that most often do **not** map directly:
 
 If the DSL genuinely cannot express something (a new param type, array
 subscripting, conditional templates), stop and extend
-`crates/container-plugin` **before** migrating — do not special-case it
+`crates/plugin` **before** migrating — do not special-case it
 inside the manifest or the script.
 
 ## Step 1: Create the plugin directory
@@ -108,7 +108,7 @@ the plugin checkout is absent.
 
 ## Step 2: Golden parity test
 
-Add a test under `crates/container-plugin/tests/<tool>_migration.rs` that
+Add a test under `crates/plugin/tests/<tool>_migration.rs` that
 compiles the manifest and asserts field-for-field parity with the old
 wrapper's `container_spec`. The pattern (see `ldsc_migration.rs`):
 
@@ -307,6 +307,6 @@ Rules of thumb:
 - [ ] Plugin pushed to git at a pinned `rev`; `plugins.toml` references it.
 - [ ] Old wrapper file + `pub mod` + `register(…)` removed.
 - [ ] `grep "<tool>_container::"` is empty across `crates/ apps/`.
-- [ ] `cargo test -p nodes-io -p data-engine -p container-plugin` green.
+- [ ] `cargo test -p nodes-io -p data-engine -p plugin` green.
 - [ ] `ldsc_e2e`-style distribution test (sync → load → build → execute)
       passes against the pushed repository.

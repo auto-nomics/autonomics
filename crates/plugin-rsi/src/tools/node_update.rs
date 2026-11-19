@@ -9,7 +9,7 @@
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
-use container_plugin::{manifest::PluginManifest, node_definition};
+use ::plugin::{manifest::PluginManifest, node_definition};
 use serde_json::json;
 use toml::Value as TomlValue;
 

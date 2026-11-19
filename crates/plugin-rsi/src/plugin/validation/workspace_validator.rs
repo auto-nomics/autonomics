@@ -1,6 +1,6 @@
 //! Ordered gate orchestration for one plugin validation attempt.
 
-use container_plugin::manifest::PluginManifest;
+use ::plugin::manifest::PluginManifest;
 
 use crate::foundation::report::{GateResult, ValidationReport};
 use crate::foundation::workspace::PluginWorkspace;

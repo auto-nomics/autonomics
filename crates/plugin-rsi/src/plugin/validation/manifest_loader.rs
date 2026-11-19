@@ -1,6 +1,6 @@
 //! Manifest parsing and script inlining for plugin validation.
 
-use container_plugin::{
+use ::plugin::{
     manifest::PluginManifest,
     node_definition::{self, NodeDefinition},
 };

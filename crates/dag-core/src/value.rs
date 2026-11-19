@@ -235,7 +235,7 @@ impl TryFrom<FileRefWire> for FileRef {
 
 /// A location-independent contract for an object stored by the DAG data plane.
 ///
-/// `uri` is normally a `vfs://` address. The fingerprint is content-based so
+/// `uri` is normally a `local://` address. The fingerprint is content-based so
 /// it remains valid after an object is copied between nodes or object stores.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactRef {
@@ -354,7 +354,7 @@ pub struct FileFingerprint {
     /// Declared at the value's **birth** (publish/staging point): the content
     /// lives on the immutable object store, so a recorded content hash makes
     /// the file permanently clean for incremental invalidation — regardless
-    /// of how the path is spelled (with or without the `vfs://` prefix).
+    /// of how the path is spelled (with or without the `local://` prefix).
     ///
     /// Deliberately excluded from equality reasoning by consumers: freshness
     /// checks compare fields explicitly rather than through [`PartialEq`].

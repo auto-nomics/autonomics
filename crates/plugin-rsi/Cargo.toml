@@ -11,7 +11,7 @@ agentik-proc = { path = "../agentik-proc" }
 agentik-sdk = { path = "../agentik-sdk" }
 apply-patch = { path = "../apply-patch" }
 async-trait.workspace = true
-container-plugin = { path = "../container-plugin" }
+plugin = { path = "../plugin" }
 container-runtime = { path = "../container-runtime" }
 schemars.workspace = true
 serde = { version = "1", features = ["derive"] }

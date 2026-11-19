@@ -256,7 +256,7 @@ pub struct StoredAttachment {
     pub path: Option<String>,
     pub title: Option<String>,
     pub source_url: Option<String>,
-    /// Project extension: resolvable object-store URI (`vfs:///...`).
+    /// Project extension: resolvable object-store URI (`local:///...`).
     pub vfs_path: Option<String>,
     pub original_filename: Option<String>,
     pub storage_hash: Option<String>,
@@ -2018,7 +2018,7 @@ mod tests {
         base.upsert_fulltext(&FullText {
             article_id: "doi:10.1/a".into(),
             attachment_key: None,
-            file_path: "vfs:///literature/doi%3A10.1%2Fa/abc-paper.pdf".into(),
+            file_path: "local://literature/doi%253A10.1%252Fa/abc-paper.pdf".into(),
             file_format: FileFormat::Pdf,
             text_content: Some("full text".into()),
             source: FullTextSource::UserUpload,
@@ -2042,7 +2042,7 @@ mod tests {
         assert_eq!(attachment.path.as_deref(), Some("storage:paper.pdf"));
         assert_eq!(
             attachment.vfs_path.as_deref(),
-            Some("vfs:///literature/doi%3A10.1%2Fa/abc-paper.pdf")
+            Some("local://literature/doi%253A10.1%252Fa/abc-paper.pdf")
         );
 
         let state = base
@@ -2202,7 +2202,7 @@ mod tests {
         core.upsert_fulltext(&FullText {
             article_id: "doi:10.1/search".into(),
             attachment_key: None,
-            file_path: "vfs:///literature/doi%3A10.1%2Fsearch/paper.pdf".into(),
+            file_path: "local://literature/doi%253A10.1%252Fsearch/paper.pdf".into(),
             file_format: FileFormat::Pdf,
             text_content: Some("attachmentanchorterm body".into()),
             source: FullTextSource::UserUpload,

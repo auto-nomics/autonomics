@@ -3,7 +3,7 @@
 //! `load_manifest` is also used by `container_run` to discover the image
 //! reference; the other helpers are only used by the manifest-mutating tools.
 
-use container_plugin::{manifest::PluginManifest, node_definition::NodeDefinition};
+use ::plugin::{manifest::PluginManifest, node_definition::NodeDefinition};
 use vfs::OpendalFileStorage;
 
 use crate::plugin::store::is_editable;

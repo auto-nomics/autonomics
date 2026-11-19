@@ -75,14 +75,14 @@ fn status_label<T: serde::Serialize + std::fmt::Debug>(status: T) -> String {
         .unwrap_or_else(|| format!("{status:?}").to_lowercase())
 }
 
-fn status_text(manifest: &container_plugin::manifest::PluginManifest) -> String {
+fn status_text(manifest: &plugin::manifest::PluginManifest) -> String {
     if let Some(status) = manifest.installation.status {
         return status_label(status);
     }
     status_label(manifest.status)
 }
 
-fn plugin_source_view(source: &container_plugin::sync::PluginSource) -> PluginSourceView {
+fn plugin_source_view(source: &plugin::sync::PluginSource) -> PluginSourceView {
     PluginSourceView {
         git: source.git.clone(),
         rev: source.rev.clone(),
@@ -825,7 +825,7 @@ pub(crate) async fn list_project_nodes(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> super::error::GatewayResult<Json<serde_json::Value>> {
     let workspace = project_workspace(&state, &name)?;
-    let manifest: container_plugin::manifest::PluginManifest =
+    let manifest: plugin::manifest::PluginManifest =
         toml::from_str(&workspace.read_text("manifest.toml").map_err(|error| {
             super::error::GatewayError::Status(
                 axum::http::StatusCode::NOT_FOUND,
@@ -844,14 +844,14 @@ pub(crate) async fn list_project_nodes(
                 "desc": node.desc,
                 "inputs": node.ports.inputs.iter().map(|input| serde_json::json!({
                     "label": input.label,
-                    "type": match input.r#type { container_plugin::node_definition::PortKind::File => "file", container_plugin::node_definition::PortKind::Tuple => "tuple" },
+                    "type": match input.r#type { plugin::node_definition::PortKind::File => "file", plugin::node_definition::PortKind::Tuple => "tuple" },
                 })).collect::<Vec<_>>(),
                 "outputs": node.ports.outputs.iter().map(|output| serde_json::json!({
                     "path": output.path,
                     "label": output.label,
                     "optional": output.optional,
                 })).collect::<Vec<_>>(),
-                "params": serde_json::to_value(container_plugin::compile::compile_schema(&node.params)).unwrap_or_default(),
+                "params": serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap_or_default(),
             })
         })
         .collect();

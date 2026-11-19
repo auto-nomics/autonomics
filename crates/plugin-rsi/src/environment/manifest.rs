@@ -1,7 +1,7 @@
 //! Environment (image) development manifest and lifecycle state.
 //!
 //! Mirrors the plugin manifest's shape conventions but lives in this crate:
-//! `container-plugin` owns node/plugin protocol types and must not learn
+//! `plugin` owns node/plugin protocol types and must not learn
 //! about environment development. `manifest.toml` inside an environment
 //! workspace is daemon-written; agents mutate it only through the
 //! `environment_manifest_update` tool.

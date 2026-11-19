@@ -172,7 +172,7 @@ impl DataFrameToFileNode {
     ) -> Result<(), DataFrameToFileError> {
         let Some(virtual_path) = vfs::uri::storage_path(path) else {
             return Err(DataFrameToFileError::InvalidInput {
-                message: format!("expected a vfs:// partitioned output path, got `{path}`"),
+                message: format!("expected a storage-domain partitioned output path (`local://`), got `{path}`"),
             });
         };
         let Some(storage) = node_ctx.opendal.as_ref() else {
@@ -244,7 +244,7 @@ impl DataFrameToFileNode {
     }
 
     /// Check a DataFusion path without relying on host-path semantics. A
-    /// `vfs://` object is resolved through the mounted OpenDAL backend.
+    /// `local://` object is resolved through the mounted OpenDAL backend.
     async fn object_exists(&self, node_ctx: &dag_core::registry::NodeCtx, path: &str) -> bool {
         let Some(virtual_path) = vfs::uri::storage_path(path) else {
             return std::path::Path::new(path).exists();
@@ -708,7 +708,7 @@ impl DagNode for DataFrameToFileNode {
                 } else {
                     return Err(DataFrameToFileError::InvalidInput {
                         message: format!(
-                            "partitioned Parquet overwrite supports local or vfs:// paths, got `{path}`"
+                            "partitioned Parquet overwrite supports local or domain-URI (`local://`) paths, got `{path}`"
                         ),
                     }
                     .into());
@@ -1299,7 +1299,7 @@ mod tests {
         let storage = Arc::new(OpendalFileStorage::with_mounts(data_root.path(), mounted));
         let (ctx, first) = sample_dataframe();
         ctx.runtime_env().register_object_store(
-            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            ObjectStoreUrl::parse("local://").unwrap().as_ref(),
             storage.clone(),
         );
         let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
@@ -1338,7 +1338,7 @@ mod tests {
         .await
         .unwrap();
 
-        let ids = read_csv_ids(&ctx, "vfs:///out.csv").await;
+        let ids = read_csv_ids(&ctx, "local:///out.csv").await;
         assert_eq!(ids, vec![1, 2, 3, 4, 5]);
     }
 
@@ -1355,7 +1355,7 @@ mod tests {
         let storage = Arc::new(OpendalFileStorage::with_mounts(data_root.path(), mounted));
         let ctx = SessionContext::new();
         ctx.runtime_env().register_object_store(
-            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            ObjectStoreUrl::parse("local://").unwrap().as_ref(),
             storage.clone(),
         );
         let node_ctx =
@@ -1511,7 +1511,7 @@ mod tests {
         let mounted = Arc::new(MountedObjectStore::from_manifest(&manifest).unwrap());
         let storage = Arc::new(OpendalFileStorage::with_mounts(data_root.path(), mounted));
         ctx.runtime_env().register_object_store(
-            ObjectStoreUrl::parse("vfs://").unwrap().as_ref(),
+            ObjectStoreUrl::parse("local://").unwrap().as_ref(),
             storage.clone(),
         );
         let node_ctx = dag_core::registry::NodeCtx::new(ctx.runtime_env().clone(), Some(storage));
@@ -1565,7 +1565,7 @@ mod tests {
             metadata.len()
         );
         let output = ctx
-            .read_parquet("vfs:///large.parquet", Default::default())
+            .read_parquet("local:///large.parquet", Default::default())
             .await
             .unwrap();
         assert_eq!(output.count().await.unwrap(), rows + 1);

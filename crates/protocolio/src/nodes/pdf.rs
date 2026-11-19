@@ -12,7 +12,7 @@ use crate::{ProtocolPdfView, ProtocolioClient};
 pub struct ProtocolioPdfSpec {
     /// Numeric protocol ID or URI.
     pub protocol_id: String,
-    /// `vfs://...` or an absolute local path.
+    /// A domain URI (`local://...`) or an absolute local path.
     pub path: String,
     /// `full`, `compact`, `materials`, `commands`, or `steps`.
     #[serde(default)]
@@ -38,7 +38,8 @@ impl NodeFactory for ProtocolioPdfNodeFactory {
 
     fn doc(&self) -> &'static str {
         "Uses the independently rate-limited PDF export endpoint and writes through the \
-        engine VFS when the destination starts with `vfs://`."
+        engine VFS when the destination is a storage-domain address
+        (`local://…`, legacy `vfs://…`)."
     }
 
     fn spec_schema(&self) -> schemars::Schema {

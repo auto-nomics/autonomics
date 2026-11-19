@@ -891,8 +891,8 @@ impl NodeFactory for LrCommunicationScoreNodeFactory {
         } else if parsed.use_catalog_lr_table {
             let bundle = node_ctx.bound_data_bundle("lr_table")?;
             Some(format!(
-                "vfs://{}/{}",
-                bundle.vpath.trim_end_matches('/'),
+                "local://{}/{}",
+                bundle.vpath.trim_start_matches('/').trim_end_matches('/'),
                 parsed.lr_table_file.trim_start_matches('/')
             ))
         } else {
@@ -963,7 +963,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             node.fallback_lr_table_path.as_deref(),
-            Some("vfs:///bundles/lrdb.cellphonedb.v5/lr_pairs.parquet")
+            Some("local://bundles/lrdb.cellphonedb.v5/lr_pairs.parquet")
         );
     }
 

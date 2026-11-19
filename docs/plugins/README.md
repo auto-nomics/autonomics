@@ -18,7 +18,7 @@ container image that executes them, and any versioned data panels they need.
    wrapper.
 
 The older [node-plugin architecture note](../design/node-plugin-architecture.md)
-explains the design history. The documents here and the `container-plugin`
+explains the design history. The documents here and the `plugin`
 source are authoritative when historical proposals differ.
 
 ## Lifecycle
@@ -83,14 +83,14 @@ rev = "<full-commit-sha>"
 
 The Rust types and loader are the implementation-level authority:
 
-- `crates/container-plugin/src/node_definition.rs` — manifest node schema and
+- `crates/plugin/src/node_definition.rs` — manifest node schema and
   cross-field validation.
-- `crates/container-plugin/src/manifest.rs` — family and image metadata.
-- `crates/container-plugin/src/loader.rs` — fail-closed loading and script
+- `crates/plugin/src/manifest.rs` — family and image metadata.
+- `crates/plugin/src/loader.rs` — fail-closed loading and script
   inlining.
-- `crates/container-plugin/src/compile/` — parameter resolution, template
+- `crates/plugin/src/compile/` — parameter resolution, template
   rendering, and `ContainerCommandSpec` compilation.
-- `crates/container-plugin/src/sync.rs` — Git/path source synchronization.
+- `crates/plugin/src/sync.rs` — Git/path source synchronization.
 
 If this documentation and current source disagree, file a documentation or
 implementation fix before relying on the disputed behavior.

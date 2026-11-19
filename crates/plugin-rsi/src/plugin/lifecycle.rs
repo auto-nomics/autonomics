@@ -49,7 +49,7 @@ impl<'a, 'b> PluginLifecycle<'a, 'b> {
         }
     }
 
-    pub fn plugin(&self) -> &container_plugin::manifest::PluginManifest {
+    pub fn plugin(&self) -> &::plugin::manifest::PluginManifest {
         self.operator.manifest()
     }
 

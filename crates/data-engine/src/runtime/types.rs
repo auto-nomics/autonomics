@@ -2,10 +2,8 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::dag::DagTuiSnapshot;
-use crate::dag::graph::PortOutputs;
 use crate::dag::runtime::RuntimeStatus;
 use crate::dag_shell::DagShellOutcome;
-use crate::data_engine::ClearDagOutcome;
 use crate::error::Result as EngineResult;
 
 /// Envelope that routes a [`DataEngineCmd`] to an agent's actor.
@@ -68,10 +66,6 @@ pub enum DataEngineCmd {
         to_port: u8,
         reply: oneshot::Sender<EngineResult<()>>,
     },
-    GetOutput {
-        id: String,
-        reply: oneshot::Sender<EngineResult<Option<PortOutputs>>>,
-    },
     /// Read artifact bytes for one output path (`vfs://` URI resolved through
     /// the mounted object storage, absolute host path otherwise). Lets the
     /// tool layer render payload files (e.g. `evidence` artifacts) inline
@@ -93,7 +87,7 @@ pub enum DataEngineCmd {
         id: String,
         reply: oneshot::Sender<EngineResult<Option<(String, serde_json::Value)>>>,
     },
-    /// Whether a node with the given id exists in the DAG (regardless of
+    /// Whether a node with the given id exists in the flow (regardless of
     /// whether it has a retained spec).
     NodeExists {
         id: String,
@@ -103,35 +97,9 @@ pub enum DataEngineCmd {
         id: String,
         reply: oneshot::Sender<EngineResult<()>>,
     },
-    ViewDag {
-        reply: oneshot::Sender<EngineResult<String>>,
-    },
     /// Return the structured topology/runtime snapshot used by TUI rendering.
     GetDagTuiSnapshot {
         reply: oneshot::Sender<EngineResult<DagTuiSnapshot>>,
-    },
-    ClearDag {
-        reply: oneshot::Sender<EngineResult<ClearDagOutcome>>,
-    },
-    /// Clear the in-memory DAG and switch to a new history ref.
-    NewDagRef {
-        name: String,
-        reply: oneshot::Sender<EngineResult<()>>,
-    },
-    /// Switch the engine's history ref to an existing ref.
-    SwitchDagRef {
-        name: String,
-        reply: oneshot::Sender<EngineResult<()>>,
-    },
-    /// List all history refs.
-    ListDagRefs {
-        reply: oneshot::Sender<EngineResult<Vec<(String, String, bool)>>>,
-    },
-    /// Show snapshot lineage for a ref.
-    DagLog {
-        ref_name: Option<String>,
-        limit: usize,
-        reply: oneshot::Sender<EngineResult<Vec<crate::dag::Snapshot>>>,
     },
     /// Query the execution audit trail: recent runs, or one run by id.
     DagRunsLog {
@@ -142,53 +110,10 @@ pub enum DataEngineCmd {
         run_id: Option<String>,
         reply: oneshot::Sender<EngineResult<Vec<crate::dag::RunRecord>>>,
     },
-    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
-    ExportRun {
-        /// Run id (unique prefix accepted).
-        run_id: String,
-        /// `prov` or `crate`.
-        format: String,
-        /// Absolute output directory.
-        out_dir: std::path::PathBuf,
-        reply: oneshot::Sender<EngineResult<crate::dag::ExportSummary>>,
-    },
-    /// Load a snapshot's DAG into memory without moving the ref.
-    CheckoutDag {
-        snapshot_id: String,
-        reply: oneshot::Sender<EngineResult<()>>,
-    },
-    /// Create a new ref from a snapshot + switch + load its DAG.
-    BranchFromSnapshot {
-        snapshot_id: String,
-        ref_name: String,
-        reply: oneshot::Sender<EngineResult<()>>,
-    },
-    /// Fetch a single snapshot (manifest + run report + metadata).
-    GetSnapshot {
-        snapshot_id: String,
-        reply: oneshot::Sender<EngineResult<Option<crate::dag::Snapshot>>>,
-    },
-    /// Diff two snapshots' manifests.
-    DiffSnapshots {
-        old_id: String,
-        new_id: String,
-        reply: oneshot::Sender<EngineResult<String>>,
-    },
-    /// Query the current history ref name.
-    GetDagRef {
-        reply: oneshot::Sender<EngineResult<String>>,
-    },
     UpdateNode {
         id: String,
         spec: serde_json::Value,
         reply: oneshot::Sender<EngineResult<()>>,
-    },
-    /// Release retained in-memory outputs while preserving the graph.
-    ///
-    /// Replies `true` when a non-empty cache was actually released and `false`
-    /// when it was already empty, so idle maintenance never double-counts.
-    ReleaseOutputs {
-        reply: oneshot::Sender<EngineResult<bool>>,
     },
     /// Stop this engine actor. Replies `false` when a DAG run is active.
     Shutdown {

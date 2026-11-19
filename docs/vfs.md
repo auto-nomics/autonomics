@@ -182,7 +182,7 @@ read_only = true
 Paths are routed by the longest matching mount and rewritten from `source` to the virtual `path`. For example:
 
 ```text
-vfs:///data/oss/ld_score/1000g_eur/part.parquet
+local://data/oss/ld_score/1000g_eur/part.parquet
 ```
 
 is read from:
@@ -209,7 +209,7 @@ read_only = true
 DataFusion can then use:
 
 ```text
-vfs:///data/local/gwas/foo.parquet
+local://data/local/gwas/foo.parquet
 ```
 
 Credentials remain runtime configuration in `vfs.toml`.

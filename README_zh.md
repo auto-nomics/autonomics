@@ -6,6 +6,14 @@ Autonomics 是一个以 LLM 智能体为核心、可自我扩展的完整科研�
 
 根 Cargo 工作空间在本版 README 更新时包含 101 个 crate。这是一个活跃研究代码库，API、节点契约和配置路径仍可能调整。`dendrite/` 是独立的嵌套 Rust 工作空间，用于知识管理系统。
 
+## TUI 演示
+
+Researcher 智能体在 TUI 中读取 100 条模拟预测。模型 A 的准确率更高，模型 B 的平衡准确率更高。若一次漏报的成本是一次误报的 5 倍，A 的总成本为 41，B 为 19。
+
+![Autonomics TUI 比较两个模型的准确率、平衡准确率和误判成本](docs/demos/model-benchmark.gif)
+
+[Asciinema 录屏](docs/demos/model-benchmark.cast) · [示例数据](docs/demos/model-benchmark.csv)
+
 ## 系统契约
 
 系统横跨五个面与一个协议：
@@ -18,10 +26,6 @@ Autonomics 是一个以 LLM 智能体为核心、可自我扩展的完整科研�
 - **科研协议**：DAG 历史、快照、diff、分支、溯源导出（RO-Crate / W3C PROV-JSON）与数值交叉验证，让智能体的工作可检查、可重放、可发表。
 
 Autonomics 不是通用聊天应用，不是围绕自由脚本的 notebook 替代品，也不是单体 pipeline；它同样不是一个自主变更器：智能体永远拿不到原始 git、镜像仓库、主机文件系统或实时注册表的访问权。一切改进都是通过门禁与审查的提案——模型可以起草和测试，人类与可信基础设施负责晋升。
-
-## 演示
-
-![PubMed 文献检索](docs/pubmed.gif)
 
 ## 系统架构
 
@@ -124,7 +128,7 @@ Autonomics 沿三条受监督的回路自我改进，共享同一个安全模型
 | --- | --- | --- |
 | 模型编排 | `agentik-sdk`, `agentik-types`, `agentik-proc`, `agentik-core`, `agentik-network`, `runtime` | 流式 LLM 客户端、工具 schema 与调用、持久记忆、智能体类别与 profile、仅委派的多智能体拓扑、sync-to-async 宿主。 |
 | 分析执行 | `dag-core`, `data-engine`, `data-engine-tools`, `crates/node-bundles/*` | 节点 trait、插件注册表、类型化端口、带可插拔执行器的调度器、JSON schema spec、智能体工具。 |
-| 自我改进 | `plugin-rsi`, `container-plugin`, `wiki` | 插件 RSI 生命周期与工具、manifest 编译/加载、Wiki 托管的操作知识。 |
+| 自我改进 | `plugin-rsi`, `plugin`, `wiki` | 插件 RSI 生命周期与工具、manifest 编译/加载、Wiki 托管的操作知识。 |
 | 数据基础设施 | `vfs`, `data-catalog`, `container-runtime`, `biofusion` | OpenDAL 支撑的 VFS、Hugging Face 托管的版本化数据包、Podman 执行、不可变面板缓存、生物格式 DataFusion 读取器。 |
 | 统计与流行病学 | `statkit`, `epi`, `hypothesize`, `nodes-power`, `cmprsk`, `crrkit`, `survey`, `mice`, `hierint` | 描述统计与回归；因果推断与中介；可组合检验与 p 值工作流；前瞻性效能与样本量设计；竞争风险；调查设计；插补；层次交互模型。 |
 | 机器学习与深度学习 | `ml`, `dl` | 预处理、特征工程、聚类、监督模型、集成、异常检测、降维；基于 Burn 的 MLP、DeepSurv、DeepHit、RNN、Transformer 与自编码器工作流。广义随机森林以容器化 `grf` 插件家族发布（官方 R grf）。 |
@@ -214,7 +218,7 @@ autonomics/
 │   ├── data-engine-tools/        DAG 操作的智能体 ToolFunction 适配器
 │   ├── node-bundles/             feature 门控的分析节点插件
 │   ├── plugin-rsi/               递归自我改进基座（插件）
-│   ├── container-plugin/         manifest 编译、加载、同步、工厂
+│   ├── plugin/         manifest 编译、加载、同步、工厂
 │   ├── vfs/                      OpenDAL 支撑的虚拟文件系统与 vbash 工具
 │   ├── data-catalog/             版本化数据包目录
 │   ├── container-runtime/        Podman 执行与不可变面板缓存
@@ -369,7 +373,7 @@ cargo test --workspace --no-run
 # 聚焦测试循环。
 cargo test -p data-engine
 cargo test -p dag-core
-cargo test -p container-plugin
+cargo test -p plugin
 cargo test -p plugin-rsi
 cargo test -p biofusion
 cargo test -p agentik-core
@@ -385,7 +389,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-部分测试调用在线公共 API、需要凭据或私有镜像、下载大型面板或调用 Podman。许多外部资源测试标记为 `#[ignore]`；仅当依赖可用时用 `cargo test -- --ignored` 显式运行。插件行为由 `crates/container-plugin/tests/` 中的黄金迁移测试覆盖（每个家族一套），运行环境开发生命周期由 `crates/plugin-rsi/tests/env_dev.rs` 覆盖。
+部分测试调用在线公共 API、需要凭据或私有镜像、下载大型面板或调用 Podman。许多外部资源测试标记为 `#[ignore]`；仅当依赖可用时用 `cargo test -- --ignored` 显式运行。插件行为由 `crates/plugin/tests/` 中的黄金迁移测试覆盖（每个家族一套），运行环境开发生命周期由 `crates/plugin-rsi/tests/env_dev.rs` 覆盖。
 
 TUI HTTP 前端使用 Bun：
 

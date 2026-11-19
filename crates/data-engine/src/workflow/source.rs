@@ -1,7 +1,7 @@
 //! Source resolution: enumerate fanout items through the VFS, uniformly.
 //!
 //! [`SourceSpec::Glob`] patterns address the engine's virtual filesystem — plain
-//! mount-relative paths (`data/*.fastq`) or explicit `vfs://` URLs — and are
+//! mount-relative paths (`data/*.fastq`) or explicit `local://` URLs — and are
 //! enumerated through [`vfs::OpendalFileStorage`], so mount policies,
 //! permission scoping and (later) SSH data homes all apply identically. There
 //! is deliberately no raw host-filesystem fallback: a flow never bypasses the
@@ -698,7 +698,7 @@ pub async fn resolve_sources(
 }
 
 /// Enumerate one glob pattern into item values. Each item is the matched
-/// file's virtual path as a JSON string (`vfs://…`), which `{{item}}`
+/// file's virtual path as a JSON string (`local://…`), which `{{item}}`
 /// templates render directly and [`crate::workflow::instance::item_key`] turns into a
 /// stable per-file key. Results are sorted by path so plans and reports are
 /// deterministic across runs.
@@ -792,25 +792,25 @@ mod tests {
     fn file_pair_prefix_matches_nextflow_examples() {
         use super::pair_prefix;
         assert_eq!(
-            pair_prefix("vfs://data/sample_R1.fastq", "data/*_R{1,2}.fastq")
+            pair_prefix("local://data/sample_R1.fastq", "data/*_R{1,2}.fastq")
                 .unwrap()
                 .as_deref(),
             Some("sample")
         );
         assert_eq!(
-            pair_prefix("vfs://data/sample_R2.fastq", "data/*_R{1,2}.fastq")
+            pair_prefix("local://data/sample_R2.fastq", "data/*_R{1,2}.fastq")
                 .unwrap()
                 .as_deref(),
             Some("sample")
         );
         assert_eq!(
-            pair_prefix("vfs://data/file_alpha_1.fa", "data/file*_1.fa")
+            pair_prefix("local://data/file_alpha_1.fa", "data/file*_1.fa")
                 .unwrap()
                 .as_deref(),
             Some("file_alpha")
         );
         assert_eq!(
-            pair_prefix("vfs://data/other.fastq", "data/*_R{1,2}.fastq").unwrap(),
+            pair_prefix("local://data/other.fastq", "data/*_R{1,2}.fastq").unwrap(),
             None
         );
     }
@@ -869,18 +869,18 @@ mod tests {
             values.push(value.unwrap());
         }
         assert_eq!(values.len(), 4);
-        assert_eq!(values[0], serde_json::json!("vfs://data/a.fastq"));
+        assert_eq!(values[0], serde_json::json!("local://data/a.fastq"));
         assert_eq!(
             values
                 .iter()
-                .filter(|value| **value == serde_json::json!("vfs://data/a.fastq"))
+                .filter(|value| **value == serde_json::json!("local://data/a.fastq"))
                 .count(),
             2
         );
         let batch = resolve_sources(&graph, Some(&storage)).await.unwrap();
         let items = batch.get("reads").unwrap();
         assert_eq!(items.len(), 4);
-        assert_eq!(items[0], serde_json::json!("vfs://data/a.fastq"));
+        assert_eq!(items[0], serde_json::json!("local://data/a.fastq"));
     }
 
     #[tokio::test]
@@ -898,7 +898,7 @@ mod tests {
         let reader = streams.readers.get_mut("reads").unwrap();
         assert_eq!(
             reader.recv().await.unwrap().unwrap(),
-            serde_json::json!("vfs://data/a.fastq")
+            serde_json::json!("local://data/a.fastq")
         );
         assert!(
             reader
@@ -970,9 +970,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(hidden.contains(&serde_json::json!("vfs://data/.secret.fastq")));
+        assert!(hidden.contains(&serde_json::json!("local://data/.secret.fastq")));
         let default = enumerate_glob("data/*.fastq", &storage).await.unwrap();
-        assert!(!default.contains(&serde_json::json!("vfs://data/.secret.fastq")));
+        assert!(!default.contains(&serde_json::json!("local://data/.secret.fastq")));
         for pattern in [
             "data/missing.fastq",
             "data/missing/*.fastq",
@@ -1000,7 +1000,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(literal, vec![serde_json::json!("vfs://data/[*")]);
+        // The canonical URI percent-escapes glob metacharacters; the address
+        // decodes back to the literal `[*` filename.
+        assert_eq!(literal, vec![serde_json::json!("local://data/%5B%2A")]);
         assert!(
             enumerate_glob_with_options(
                 "data/[*",
@@ -1023,14 +1025,14 @@ mod tests {
             storage.write_bytes(path, b"x".to_vec()).await.unwrap();
         }
         for (path_type, expected) in [
-            (PathType::File, vec!["vfs://data/root.txt"]),
-            (PathType::Dir, vec!["vfs://data/other", "vfs://data/sample"]),
+            (PathType::File, vec!["local://data/root.txt"]),
+            (PathType::Dir, vec!["local://data/other", "local://data/sample"]),
             (
                 PathType::Any,
                 vec![
-                    "vfs://data/other",
-                    "vfs://data/root.txt",
-                    "vfs://data/sample",
+                    "local://data/other",
+                    "local://data/root.txt",
+                    "local://data/sample",
                 ],
             ),
         ] {
@@ -1062,14 +1064,14 @@ mod tests {
         }
         for (depth, expected) in [
             (-1, vec![]),
-            (0, vec!["vfs://data/root.fastq"]),
-            (1, vec!["vfs://data/a/one.fastq", "vfs://data/root.fastq"]),
+            (0, vec!["local://data/root.fastq"]),
+            (1, vec!["local://data/a/one.fastq", "local://data/root.fastq"]),
             (
                 2,
                 vec![
-                    "vfs://data/a/b/two.fastq",
-                    "vfs://data/a/one.fastq",
-                    "vfs://data/root.fastq",
+                    "local://data/a/b/two.fastq",
+                    "local://data/a/one.fastq",
+                    "local://data/root.fastq",
                 ],
             ),
         ] {
@@ -1102,20 +1104,22 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                "vfs://data/a.fastq",
-                "vfs://data/b.fastq",
-                "vfs://data/sample_1.fastq"
+                "local://data/a.fastq",
+                "local://data/b.fastq",
+                "local://data/sample_1.fastq"
             ]
         );
     }
 
     #[tokio::test]
-    async fn vfs_scheme_and_question_mark_work() {
+    async fn local_scheme_and_encoded_question_mark_wildcard_work() {
         let storage = storage_with_files().await;
-        let items = enumerate_glob("vfs://data/sample_?.fastq", &storage)
+        // Domain addresses carry glob metacharacters percent-encoded; the
+        // resolver decodes the path before matching.
+        let items = enumerate_glob("local://data/sample_%3F.fastq", &storage)
             .await
             .unwrap();
-        assert_eq!(items, vec![serde_json::json!("vfs://data/sample_1.fastq")]);
+        assert_eq!(items, vec![serde_json::json!("local://data/sample_1.fastq")]);
     }
 
     #[tokio::test]
@@ -1123,11 +1127,11 @@ mod tests {
         let storage = storage_with_files().await;
         assert_eq!(
             enumerate_glob("data/c.txt", &storage).await.unwrap(),
-            vec![serde_json::json!("vfs://data/c.txt")]
+            vec![serde_json::json!("local://data/c.txt")]
         );
         assert_eq!(
             enumerate_glob("data/missing.txt", &storage).await.unwrap(),
-            vec![serde_json::json!("vfs://data/missing.txt")]
+            vec![serde_json::json!("local://data/missing.txt")]
         );
     }
 
@@ -1151,8 +1155,8 @@ mod tests {
         assert_eq!(
             items,
             vec![
-                serde_json::json!("vfs://data/a.fastq"),
-                serde_json::json!("vfs://data/b.fastq")
+                serde_json::json!("local://data/a.fastq"),
+                serde_json::json!("local://data/b.fastq")
             ]
         );
         let items = enumerate_glob("data/{a,b}.{fastq,txt}", &storage)
@@ -1161,8 +1165,8 @@ mod tests {
         assert_eq!(
             items,
             vec![
-                serde_json::json!("vfs://data/a.fastq"),
-                serde_json::json!("vfs://data/b.fastq")
+                serde_json::json!("local://data/a.fastq"),
+                serde_json::json!("local://data/b.fastq")
             ]
         );
     }
@@ -1189,14 +1193,14 @@ mod tests {
         assert_eq!(
             one_level,
             vec![
-                serde_json::json!("vfs://data/a/one.fastq"),
-                serde_json::json!("vfs://data/b/two.fastq")
+                serde_json::json!("local://data/a/one.fastq"),
+                serde_json::json!("local://data/b/two.fastq")
             ]
         );
         let recursive = enumerate_glob("data/**/*.fastq", &storage).await.unwrap();
-        assert!(recursive.contains(&serde_json::json!("vfs://data/b/nested/three.fastq")));
-        assert!(recursive.contains(&serde_json::json!("vfs://data/a.fastq")));
-        assert!(!recursive.contains(&serde_json::json!("vfs://data/.hidden/secret.fastq")));
+        assert!(recursive.contains(&serde_json::json!("local://data/b/nested/three.fastq")));
+        assert!(recursive.contains(&serde_json::json!("local://data/a.fastq")));
+        assert!(!recursive.contains(&serde_json::json!("local://data/.hidden/secret.fastq")));
     }
 
     #[tokio::test]

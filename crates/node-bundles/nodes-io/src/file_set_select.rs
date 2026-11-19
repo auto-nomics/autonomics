@@ -213,7 +213,7 @@ mod tests {
     async fn selects_unique_glob_and_preserves_metadata() {
         let spec = FileSetSelectSpec {
             path: None,
-            glob: Some("vfs:///extracted/**/*.csv".into()),
+            glob: Some("local:///extracted/**/*.csv".into()),
             index: None,
             require_unique: true,
         };
@@ -221,8 +221,8 @@ mod tests {
         let input = NodeInput {
             port: 0,
             data: NodeValue::FileSet(vec![
-                file("vfs:///extracted/a/b.txt", "txt"),
-                file("vfs:///extracted/a/table.csv", "csv"),
+                file("local:///extracted/a/b.txt", "txt"),
+                file("local:///extracted/a/table.csv", "csv"),
             ]),
         };
         let outputs = node
@@ -234,7 +234,7 @@ mod tests {
             .await
             .unwrap();
         let selected = outputs.get(&0).unwrap().as_file().unwrap();
-        assert_eq!(selected.path, "vfs:///extracted/a/table.csv");
+        assert_eq!(selected.path, "local:///extracted/a/table.csv");
         assert_eq!(selected.format.as_deref(), Some("csv"));
     }
 
@@ -242,9 +242,11 @@ mod tests {
     fn legacy_and_domain_selectors_match_canonical_files() {
         let storage = vfs::OpendalFileStorage::new_temp();
         let files = vec![file("local://extracted/a/table%20%25.csv", "csv")];
+        // Raw spaces/percent are legacy-spelling only; the domain address
+        // form requires the percent-encoded canonical spelling.
         for (path, glob) in [
             (Some("vfs:///extracted/a/table %.csv"), None),
-            (None, Some("vfs:///extracted/**/*.csv")),
+            (None, Some("local:///extracted/**/*.csv")),
             (Some("local://extracted/a/table%20%25.csv"), None),
             (None, Some("local://extracted/**/*.csv")),
         ] {

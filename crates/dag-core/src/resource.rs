@@ -318,5 +318,29 @@ fn sample_system_memory() -> Option<MemorySample> {
 }
 
 #[cfg(test)]
-#[path = "resource_tests.rs"]
-mod resource_tests;
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn memory_capacity_prefers_the_smaller_of_cgroup_and_system() {
+        let dir = std::env::temp_dir().join(format!("dag-core-capacity-{}", std::process::id()));
+        let limited = dir.join("limited");
+        let unlimited = dir.join("unlimited");
+        std::fs::create_dir_all(&limited).unwrap();
+        std::fs::create_dir_all(&unlimited).unwrap();
+        std::fs::write(limited.join("memory.max"), b"1073741824\n").unwrap();
+        let meminfo = "MemTotal: 8388608 kB\n"; // 8 GiB
+
+        // Membership in a cgroup without a memory.max falls back to the
+        // system total.
+        let bytes =
+            memory_capacity_bytes_at(&dir, "0::/unlimited\n", meminfo).unwrap();
+        assert_eq!(bytes, 8 * 1024 * 1024 * 1024);
+
+        // A cgroup limit below the system total wins.
+        let bytes = memory_capacity_bytes_at(&dir, "0::/limited\n", meminfo).unwrap();
+        assert_eq!(bytes, 1024 * 1024 * 1024);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

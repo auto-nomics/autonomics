@@ -81,6 +81,8 @@ async fn remote_inputs_use_authorized_shared_paths_and_reject_changed_content() 
     let mounts = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
     let storage = vfs::OpendalFileStorage::with_mounts(root, mounts);
     let store = store(root);
+    // The /cluster mount is unnamed, so the legacy virtual spelling is its
+    // only address.
     let input = FileRef::remote(
         "vfs:///cluster/input.tsv",
         Some("tsv".into()),
@@ -129,6 +131,8 @@ async fn another_data_source_is_staged_instead_of_reusing_its_physical_path() {
         Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap()),
     );
     let store = store(directory.path());
+    // The archive mount is unnamed, so the legacy virtual spelling is its
+    // only address; domain URIs would assert a placement the mount has not.
     let file = FileRef::new("vfs:///data/archive/input.tsv", Some("tsv".into()));
     assert!(
         store
@@ -252,7 +256,7 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
         .unwrap();
     let remote = store
         .remote_input(
-            FileRef::new("vfs:///cluster/input.tsv", None),
+            FileRef::new("hpc-b://input.tsv", None),
             Some(&storage),
         )
         .await

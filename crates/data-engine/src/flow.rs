@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(report.processes["read"].succeeded, 2);
     }
     #[tokio::test]
-    async fn vfs_resume_reuses_without_history_and_invalidates_same_size_changes() {
+    async fn resume_reuses_without_history_and_invalidates_same_size_changes() {
         let storage = Arc::new(OpendalFileStorage::new_temp());
         storage
             .write_bytes("data/a.fastq", b"first".to_vec())
@@ -395,7 +395,7 @@ mod tests {
         let json = serde_json::to_value(&first).unwrap();
         assert_eq!(
             json["nodes"][0]["output_files"][0]["path"],
-            "vfs://data/a.fastq"
+            "local://data/a.fastq"
         );
         let second = runner.run(&graph, &options, None).await.unwrap();
         assert_eq!(second.processes["read"].reused, 1);
@@ -527,7 +527,7 @@ mod tests {
         let mut template = engine();
         template.set_task_executor(Arc::clone(&executor));
         let agent = template.new_isolated_engine();
-        assert!(Arc::ptr_eq(&agent.dag.task_executor(), &executor));
+        assert!(Arc::ptr_eq(&agent.task_executor, &executor));
         let report = agent
             .flow_runner()
             .run(&flow, &FlowOptions::default(), None)

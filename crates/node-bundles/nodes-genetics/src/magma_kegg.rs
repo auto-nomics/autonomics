@@ -515,7 +515,7 @@ mod tests {
         };
         let mounted = Arc::new(vfs::MountedObjectStore::from_manifest(&manifest).unwrap());
         ctx.runtime_env().register_object_store(
-            datafusion::execution::object_store::ObjectStoreUrl::parse("vfs://")
+            datafusion::execution::object_store::ObjectStoreUrl::parse("local://")
                 .unwrap()
                 .as_ref(),
             mounted,

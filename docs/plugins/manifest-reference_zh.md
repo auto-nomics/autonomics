@@ -1,8 +1,8 @@
 # Manifest 规范
 
 本文是 schema version 1 中 `manifest.toml` 的规范参考。实现层事实来源是
-`crates/container-plugin/src/manifest.rs` 与
-`crates/container-plugin/src/node_definition.rs`。清单会拒绝未知字段，因此
+`crates/plugin/src/manifest.rs` 与
+`crates/plugin/src/node_definition.rs`。清单会拒绝未知字段，因此
 能被当前实现解析并不代表兼容未来 schema。
 
 ## 最小结构

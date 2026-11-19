@@ -268,7 +268,7 @@ pub(super) async fn publish(
     for (port, target, file) in planned {
         let file = publish_file(ctx, &file, &target).await.map_err(|error| {
             let paths = published.values().flatten().map(|file| file.path.as_str()).take(16).collect::<Vec<_>>();
-            failure(format!("coordinator publication failed for `vfs://{target}`: {error}; already published {} files: {paths:?}", published.values().map(Vec::len).sum::<usize>()))
+            failure(format!("coordinator publication failed for `local://{target}`: {error}; already published {} files: {paths:?}", published.values().map(Vec::len).sum::<usize>()))
         })?;
         published.entry(port).or_default().push(file);
     }
@@ -291,7 +291,7 @@ mod tests {
             "worker":{"executable":"/worker", "executable_sha256":"a".repeat(64),
                 "expected_source_revision":"test", "plugins_root":null,"plugins_sha256":null,
                 "apptainer_catalog":null,"apptainer_executable":null,"worker_vfs_manifest":null,"worker_vfs_sha256":null},
-            "task":{"id":"extract","kind":"core/archive_extract", "spec":{"destination_prefix":"vfs:///work/out"},
+            "task":{"id":"extract","kind":"core/archive_extract", "spec":{"destination_prefix":"local:///work/out"},
                 "inputs":[],"outputs":[{"name":"files","port":0,"payload":"file_set","artifact_paths":[]}]},
             "input_files":{},"output_directories":{"/destination_prefix":0},"bundles":[],"plugin_identity":null
         })).unwrap()

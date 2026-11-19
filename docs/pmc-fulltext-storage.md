@@ -29,7 +29,7 @@ Automatic acquisition now downloads a PDF, with no XML-to-TXT fallback:
    size, and PDF signature. A missing PDF leaves the article and its existing
    attachments intact; an HTML error document is never stored as a PDF.
 5. Write the original PDF to
-   `vfs:///literature/{article}/attachments/{key}/{sha256}-PMC….pdf` before
+   `local://literature/{article}/attachments/{key}/{sha256}-PMC….pdf` before
    committing metadata. Store the actual byte count, SHA-256, filename,
    `application/pdf`, `storage:filename`, and the real source URL.
 6. Commit the attachment, extraction state, preferred-file projection when

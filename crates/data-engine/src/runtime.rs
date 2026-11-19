@@ -39,8 +39,8 @@ pub mod storage;
 pub mod types;
 
 pub use storage::{
-    AgentActivityTracker, ArtifactEntry, CachedFileOutput, MaintenancePolicy, ReferenceEntry,
-    ResultCache, RunAwareCleanReport, StorageCoordinator, StorageStatus,
+    AgentActivityTracker, ArtifactEntry, MaintenancePolicy, RunAwareCleanReport,
+    StorageCoordinator,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -72,7 +72,6 @@ impl AgentEngineActor {
         Self::restore_flow_cache(&self.engine, &self.agent_id).await;
         Self::restore_flow_workspace(&self.engine, &self.agent_id).await;
         Self::restore_flow_report(&self.engine, &self.agent_id).await;
-        Self::restore_agent_workspace(&self.engine, &self.agent_id).await;
         while let Some(msg) = self.rx.recv().await {
             if let Err(panic) = AssertUnwindSafe(self.handle(msg)).catch_unwind().await {
                 tracing::error!(
@@ -186,27 +185,6 @@ impl AgentEngineActor {
         Ok(())
     }
 
-    /// Materialize the history ref's head snapshot into a freshly created
-    /// agent so a restarted agent resumes its previous DAG instead of an
-    /// empty workspace. Runs before the actor loop, so it can never race a
-    /// client command. Failures are logged and swallowed: an unrestorable
-    /// history must not stop the actor from serving commands.
-    async fn restore_agent_workspace(engine: &tokio::sync::Mutex<DataEngine>, agent_id: &str) {
-        if !agent_workspace_auto_restore_enabled() {
-            return;
-        }
-        let mut engine = engine.lock().await;
-        match engine.restore_ref_head().await {
-            Ok(true) => tracing::info!(agent_id, "restored DAG from history ref head"),
-            Ok(false) => {}
-            Err(error) => tracing::warn!(
-                agent_id,
-                error = %error,
-                "could not restore DAG from history ref head; starting with an empty workspace"
-            ),
-        }
-    }
-
     async fn handle(&self, msg: EngineMsg) {
         let EngineMsg { cmd } = msg;
 
@@ -217,7 +195,6 @@ impl AgentEngineActor {
             && !matches!(
                 &cmd,
                 DataEngineCmd::GetDagTuiSnapshot { .. }
-                    | DataEngineCmd::ViewDag { .. }
                     | DataEngineCmd::GetNodeStatus { .. }
                     | DataEngineCmd::GetNode { .. }
                     | DataEngineCmd::NodeExists { .. }
@@ -670,47 +647,10 @@ impl AgentEngineActor {
                     .await,
                 );
             }
-            DataEngineCmd::ClearDag { reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for it to complete before clearing"
-                            .to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let result = engine.clear_dag().await;
-                let _ = reply.send(result);
-            }
-
-            DataEngineCmd::ReleaseOutputs { reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; cannot release outputs".to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let released = engine.release_output_cache();
-                let _ = reply.send(Ok(released));
-            }
             DataEngineCmd::Shutdown { reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Ok(false));
                     return;
-                }
-                {
-                    let mut engine = self
-                        .engine
-                        .try_lock()
-                        .expect("uncontended: running flag is false");
-                    engine.release_output_cache();
                 }
                 // Shared storage references are released by the manager after
                 // the shutdown ack, guarded against a newer actor generation
@@ -720,19 +660,6 @@ impl AgentEngineActor {
             }
 
             // ── Read-only engine inspection ──────────────────────────────
-            DataEngineCmd::GetOutput { id, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; query outputs after it completes".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(Ok(engine.get_output(id).await));
-            }
             DataEngineCmd::ReadFile { path, reply } => {
                 if self.running.load(Ordering::SeqCst) {
                     let _ = reply.send(Err(crate::error::Error::Custom(
@@ -802,24 +729,6 @@ impl AgentEngineActor {
                     graph.process(&id).is_some() || graph.source(&id).is_some()
                 ));
             }
-            DataEngineCmd::ViewDag { reply } => {
-                if self.live_valid.load(Ordering::SeqCst) {
-                    let _ = reply.send(
-                        self.live_view
-                            .snapshot()
-                            .map(|snapshot| snapshot.to_dot())
-                            .ok_or_else(|| {
-                                crate::error::Error::Custom(
-                                    "DAG live snapshot is not available".to_string(),
-                                )
-                            }),
-                    );
-                    return;
-                }
-                let engine = self.engine.lock().await;
-                let graph = engine.flow.read().expect("flow lock");
-                let _ = reply.send(Ok(crate::flow::flow_snapshot(&graph).to_dot()));
-            }
             DataEngineCmd::GetDagTuiSnapshot { reply } => {
                 if self.live_valid.load(Ordering::SeqCst) {
                     let _ = reply.send(self.live_view.snapshot().ok_or_else(|| {
@@ -833,65 +742,7 @@ impl AgentEngineActor {
                 let graph = engine.flow.read().expect("flow lock");
                 let _ = reply.send(Ok(crate::flow::flow_snapshot(&graph)));
             }
-            // ── History / ref management (async, may hold lock across await) ──
-            DataEngineCmd::NewDagRef { name, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for completion before managing refs"
-                            .to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.new_dag_ref(&name).await);
-            }
-            DataEngineCmd::SwitchDagRef { name, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for completion before switching refs"
-                            .to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.switch_dag_ref(&name).await);
-            }
-            DataEngineCmd::ListDagRefs { reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; try again after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.list_dag_refs().await);
-            }
-            DataEngineCmd::DagLog {
-                ref_name,
-                limit,
-                reply,
-            } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; try again after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.dag_log(ref_name.as_deref(), limit).await);
-            }
+            // ── Execution audit trail (async, may hold lock across await) ──
             DataEngineCmd::DagRunsLog {
                 ref_name,
                 limit,
@@ -925,102 +776,6 @@ impl AgentEngineActor {
                 };
                 let _ = reply.send(result);
             }
-            DataEngineCmd::ExportRun {
-                run_id,
-                format,
-                out_dir,
-                reply,
-            } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; try again after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let result = match crate::dag::ExportFormat::parse(&format) {
-                    Ok(format) => engine.export_run(&run_id, format, out_dir).await,
-                    Err(error) => Err(crate::error::Error::Custom(error)),
-                };
-                let _ = reply.send(result);
-            }
-            DataEngineCmd::CheckoutDag { snapshot_id, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for completion before checkout".to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.checkout_dag(&snapshot_id).await);
-            }
-            DataEngineCmd::BranchFromSnapshot {
-                snapshot_id,
-                ref_name,
-                reply,
-            } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; wait for completion before branching"
-                            .to_string(),
-                    )));
-                    return;
-                }
-                let mut engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.branch_from_snapshot(&snapshot_id, &ref_name).await);
-            }
-            DataEngineCmd::GetDagRef { reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; try again after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(Ok(engine.history_ref().to_string()));
-            }
-            DataEngineCmd::GetSnapshot { snapshot_id, reply } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; try again after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.get_snapshot(&snapshot_id).await);
-            }
-            DataEngineCmd::DiffSnapshots {
-                old_id,
-                new_id,
-                reply,
-            } => {
-                if self.running.load(Ordering::SeqCst) {
-                    let _ = reply.send(Err(crate::error::Error::Custom(
-                        "DAG is currently running; try again after completion".to_string(),
-                    )));
-                    return;
-                }
-                let engine = self
-                    .engine
-                    .try_lock()
-                    .expect("uncontended: running flag is false");
-                let _ = reply.send(engine.diff_snapshots(&old_id, &new_id).await);
-            }
         }
     }
 }
@@ -1036,24 +791,6 @@ fn flow_content_hash(flow: &crate::workflow::FlowGraph) -> String {
 // ═══════════════════════════════════════════════════════════════════════
 // Session workspace auto-restore
 // ═══════════════════════════════════════════════════════════════════════
-
-/// Env gate for the actor-start workspace auto-restore (default on). Set
-/// `AUTONOMICS_SESSION_AUTO_RESTORE=0|false|off|disabled` to start every
-/// agent with an empty DAG regardless of snapshot history.
-const SESSION_AUTO_RESTORE_ENV: &str = "AUTONOMICS_SESSION_AUTO_RESTORE";
-
-fn agent_workspace_auto_restore_enabled() -> bool {
-    agent_workspace_auto_restore_from(std::env::var_os(SESSION_AUTO_RESTORE_ENV).as_deref())
-}
-
-fn agent_workspace_auto_restore_from(value: Option<&std::ffi::OsStr>) -> bool {
-    !value.is_some_and(|value| {
-        matches!(
-            value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "off" | "disabled"
-        )
-    })
-}
 
 // ═══════════════════════════════════════════════════════════════════════
 // Client (Layer 1: metadata bypass)
@@ -1229,70 +966,7 @@ impl DataEngineClient {
         .await
     }
 
-    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
-    /// `format` is `prov` or `crate`; `out_dir` must be absolute.
-    pub async fn export_run(
-        &self,
-        run_id: String,
-        format: String,
-        out_dir: std::path::PathBuf,
-    ) -> Result<crate::dag::ExportSummary> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::ExportRun {
-                run_id,
-                format,
-                out_dir,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn checkout_dag(&self, snapshot_id: String) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::CheckoutDag {
-                snapshot_id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn get_dag_ref(&self) -> Result<String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(DataEngineCmd::GetDagRef { reply: reply_tx }, reply_rx)
-            .await
-    }
-
-    pub async fn get_snapshot(&self, snapshot_id: String) -> Result<Option<crate::dag::Snapshot>> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetSnapshot {
-                snapshot_id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn diff_snapshots(&self, old_id: String, new_id: String) -> Result<String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::DiffSnapshots {
-                old_id,
-                new_id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
+    /// Add one process to the session flow via its default input wiring.
     pub async fn add_node(&self, id: String, kind: String, spec: serde_json::Value) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
@@ -1368,20 +1042,6 @@ impl DataEngineClient {
     }
 
     /// Read the session's current authored flow.
-    /// Create a ref pointing at an existing snapshot.
-    pub async fn branch_from_snapshot(&self, snapshot_id: String, ref_name: String) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::BranchFromSnapshot {
-                snapshot_id,
-                ref_name,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
     pub async fn get_flow(&self) -> Result<crate::workflow::FlowGraph> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::GetFlow { reply: reply_tx }, reply_rx)
@@ -1394,18 +1054,6 @@ impl DataEngineClient {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(DataEngineCmd::GetFlowView { reply: reply_tx }, reply_rx)
             .await
-    }
-
-    pub async fn get_output(&self, id: String) -> Result<Option<crate::dag::graph::PortOutputs>> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::GetOutput {
-                id,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
     }
 
     /// Read artifact bytes for one output path (`vfs://` URI or absolute
@@ -1487,70 +1135,13 @@ impl DataEngineClient {
         .await
     }
 
-    pub async fn view_dag(&self) -> Result<String> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(DataEngineCmd::ViewDag { reply: reply_tx }, reply_rx)
-            .await
-    }
-
-    /// Return the structured snapshot consumed by interactive DAG rendering.
+    /// Return the structured snapshot consumed by interactive DAG rendering
+    /// (the session flow's live projection when a run exists, the authored
+    /// topology otherwise).
     pub async fn dag_tui_snapshot(&self) -> Result<crate::dag::DagTuiSnapshot> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
             DataEngineCmd::GetDagTuiSnapshot { reply: reply_tx },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn clear_dag(&self) -> Result<crate::data_engine::ClearDagOutcome> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(DataEngineCmd::ClearDag { reply: reply_tx }, reply_rx)
-            .await
-    }
-
-    pub async fn new_dag_ref(&self, name: String) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::NewDagRef {
-                name,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn switch_dag_ref(&self, name: String) -> Result<()> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::SwitchDagRef {
-                name,
-                reply: reply_tx,
-            },
-            reply_rx,
-        )
-        .await
-    }
-
-    pub async fn list_dag_refs(&self) -> Result<Vec<(String, String, bool)>> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(DataEngineCmd::ListDagRefs { reply: reply_tx }, reply_rx)
-            .await
-    }
-
-    pub async fn dag_log(
-        &self,
-        ref_name: Option<String>,
-        limit: usize,
-    ) -> Result<Vec<crate::dag::Snapshot>> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        self.request(
-            DataEngineCmd::DagLog {
-                ref_name,
-                limit,
-                reply: reply_tx,
-            },
             reply_rx,
         )
         .await
@@ -1578,7 +1169,7 @@ impl DataEngineClient {
         .await
     }
 
-    /// Export one recorded run as provenance evidence (PROV-JSON / RO-Crate).
+    /// Update one process's spec (validated against the registry schema).
     pub async fn update_node(&self, id: String, spec: serde_json::Value) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.request(
@@ -1608,7 +1199,6 @@ pub struct DataEngineManager {
     node_registry: Arc<NodeRegistry>,
     actors: std::sync::Mutex<HashMap<String, SessionHandle>>,
     activity: Arc<AgentActivityTracker>,
-    result_cache: Arc<ResultCache>,
     storage: Arc<StorageCoordinator>,
     policy: MaintenancePolicy,
 }
@@ -1650,10 +1240,6 @@ impl DataEngineManager {
             node_registry,
             actors: std::sync::Mutex::new(HashMap::new()),
             activity: Arc::new(AgentActivityTracker::default()),
-            result_cache: Arc::new(ResultCache::new(
-                policy.result_cache_max_entries,
-                Some(policy.result_cache_ttl),
-            )),
             storage: Arc::new(StorageCoordinator::new(work_root, receipt_root)),
             policy,
         }
@@ -1667,7 +1253,7 @@ impl DataEngineManager {
     }
 
     /// Replace factories declared by one runtime-ready manifest plugin.
-    pub fn reload_plugin(&self, plugin: container_plugin::factory::Plugin) {
+    pub fn reload_plugin(&self, plugin: plugin::factory::Plugin) {
         self.node_registry.reload_plugin(&plugin);
     }
 
@@ -1715,13 +1301,13 @@ impl DataEngineManager {
         }
 
         // Slow path: create new actor.
-        // Use the caller-provided history_ref so each agent gets its own
-        // snapshot lineage instead of all committing to "main".
+        // Use the caller-provided history_ref so each agent's run records
+        // default to its own audit lineage.
         let new_engine = self
             .template
             .new_isolated_engine()
             .with_history_ref(history_ref);
-        let live_view = new_engine.dag().live_view.clone();
+        let live_view = crate::dag::live::LiveDagView::default();
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
         let running = Arc::new(AtomicBool::new(false));
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -1760,38 +1346,6 @@ impl DataEngineManager {
 
     pub fn agent_count(&self) -> usize {
         self.actors.lock().expect("actors mutex poisoned").len()
-    }
-
-    /// Release retained outputs for idle actors without stopping them.
-    pub async fn release_idle_outputs(&self) -> usize {
-        let targets = {
-            let actors = self.actors.lock().expect("actors mutex poisoned");
-            actors
-                .iter()
-                .filter(|(id, handle)| {
-                    !handle.running.load(Ordering::SeqCst)
-                        && self.activity.is_idle(id, self.policy.output_cache_idle)
-                })
-                .map(|(id, handle)| (id.clone(), handle.tx.clone()))
-                .collect::<Vec<_>>()
-        };
-        let mut released = 0;
-        for (agent_id, tx) in targets {
-            let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-            if tx
-                .send(EngineMsg {
-                    cmd: DataEngineCmd::ReleaseOutputs { reply: reply_tx },
-                })
-                .is_err()
-            {
-                continue;
-            }
-            if matches!(reply_rx.await, Ok(Ok(true))) {
-                tracing::info!(agent_id, "released idle DAG output cache");
-                released += 1;
-            }
-        }
-        released
     }
 
     /// Stop idle engine actors. Active runs are never evicted.
@@ -1836,7 +1390,8 @@ impl DataEngineManager {
                 tracing::info!(agent_id, "evicted idle DAG engine actor");
             }
             // A client may have recreated the actor while the old one was
-            // acknowledging shutdown. Only clear shared refs if it did not.
+            // acknowledging shutdown; dropping activity only matters when it
+            // did not (a stale timestamp would re-evict the fresh actor).
             let recreated = self
                 .actors
                 .lock()
@@ -1844,7 +1399,6 @@ impl DataEngineManager {
                 .contains_key(&agent_id);
             if !recreated {
                 self.activity.forget(&agent_id);
-                self.storage.release_agent(&agent_id);
             }
         }
         evicted
@@ -1852,19 +1406,13 @@ impl DataEngineManager {
 
     /// Run one lifecycle pass and enforce the central local-storage budget.
     ///
-    /// Order is fixed: release idle output caches → evict idle actors →
-    /// prune the result cache (dropping its storage references) → enforce the
-    /// local budget with run-aware cleanup. VFS artifacts are only ever
-    /// reported by that cleanup, never deleted.
+    /// Order is fixed: evict idle actors → enforce the local budget with
+    /// run-aware cleanup. VFS artifacts are only ever reported by that
+    /// cleanup, never deleted.
     pub async fn maintain_once(
         &self,
     ) -> std::result::Result<(usize, usize, Option<RunAwareCleanReport>), String> {
-        let released = self.release_idle_outputs().await;
         let evicted = self.evict_idle_actors().await;
-        let retired = self.result_cache.prune_retired();
-        if !retired.is_empty() {
-            self.storage.release_cache_owner(&retired);
-        }
         let clean = if self.policy.storage_max_bytes > 0
             && let Some(history) = self.template.history()
         {
@@ -1882,21 +1430,7 @@ impl DataEngineManager {
         } else {
             None
         };
-        Ok((released, evicted, clean))
-    }
-
-    /// Point-in-time storage view: actors, result cache, local managed
-    /// bytes, tracked VFS artifacts and the reference index snapshot.
-    pub fn storage_status(&self) -> StorageStatus {
-        StorageStatus {
-            agent_count: self.agent_count(),
-            result_cache_entries: self.result_cache.len(),
-            local_bytes: self.storage.managed_bytes(),
-            artifact_count: self.storage.artifact_count(),
-            artifact_bytes: self.storage.artifact_bytes(),
-            references: self.storage.reference_snapshot(),
-            artifacts: self.storage.artifact_snapshot(),
-        }
+        Ok((0, evicted, clean))
     }
 
     /// Explicit run-aware clean. `keep_runs` protects the newest runs; a live
@@ -1927,9 +1461,8 @@ impl DataEngineManager {
             };
             loop {
                 match manager.maintain_once().await {
-                    Ok((released, evicted, clean)) => {
+                    Ok((_, evicted, clean)) => {
                         tracing::info!(
-                            output_caches_released = released,
                             actors_evicted = evicted,
                             storage_clean = ?clean,
                             "DAG lifecycle maintenance"
@@ -2406,7 +1939,7 @@ mod tests {
         .await
         .expect("live flow snapshot should be readable while the task runs");
         assert!(snapshot.run_id.is_some());
-        assert!(client.view_dag().await.unwrap().contains("slow"));
+        assert!(client.dag_tui_snapshot().await.unwrap().to_dot().contains("slow"));
         barrier.wait().await;
         assert!(task.await.unwrap().unwrap().ok);
         let finished = client.dag_tui_snapshot().await.unwrap();
@@ -2415,20 +1948,6 @@ mod tests {
             finished.node("slow").unwrap().status,
             crate::dag::runtime::RuntimeStatus::Success
         );
-    }
-
-    #[test]
-    fn auto_restore_env_defaults_on_and_parses_off_values() {
-        use std::ffi::OsStr;
-        assert!(agent_workspace_auto_restore_from(None));
-        assert!(agent_workspace_auto_restore_from(Some(OsStr::new("1"))));
-        assert!(agent_workspace_auto_restore_from(Some(OsStr::new(" on "))));
-        for off in ["0", "false", "OFF", "disabled", " off "] {
-            assert!(
-                !agent_workspace_auto_restore_from(Some(OsStr::new(off))),
-                "`{off}` must disable auto-restore"
-            );
-        }
     }
 
     #[tokio::test]
@@ -2454,7 +1973,7 @@ mod tests {
             client.get_node("first".into()).await.unwrap().unwrap().0,
             "echo"
         );
-        assert!(client.view_dag().await.unwrap().contains("second"));
+        assert!(client.dag_tui_snapshot().await.unwrap().to_dot().contains("second"));
         assert!(
             client
                 .add_edge("second".into(), "first".into())
@@ -2494,9 +2013,6 @@ mod tests {
     fn zero_idle_policy() -> MaintenancePolicy {
         MaintenancePolicy {
             agent_idle: std::time::Duration::ZERO,
-            output_cache_idle: std::time::Duration::ZERO,
-            result_cache_ttl: std::time::Duration::from_secs(60),
-            result_cache_max_entries: 16,
             maintenance_interval: None,
             clean_keep_runs: 2,
             storage_max_bytes: 0,

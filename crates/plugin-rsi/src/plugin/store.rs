@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use container_plugin::manifest::{
+use ::plugin::manifest::{
     ImageMetadata, PluginInstallationMetadata, PluginInstallationStatus, PluginLifecycleMetadata,
     PluginManifest, PluginStatus,
 };
@@ -171,18 +171,18 @@ impl PluginStore {
 
     /// Materialize the persistent registry into the plugin root.
     ///
-    /// `container-plugin` provides the low-level checkout tooling; this method
+    /// `plugin` provides the low-level checkout tooling; this method
     /// is the only system entry point that decides the root and protects an
     /// in-place update from being reset to the old pin.
-    pub fn materialize_registry(&self) -> Result<container_plugin::sync::SyncReport> {
-        container_plugin::sync::sync(&self.registry_path, &self.runtime_root)
+    pub fn materialize_registry(&self) -> Result<::plugin::sync::SyncReport> {
+        ::plugin::sync::sync(&self.registry_path, &self.runtime_root)
             .map_err(|error| Error::PluginRegistry(error.to_string()))
     }
 
     /// Read the persistent source declarations indexed by plugin name.
     pub fn registry_sources(
         &self,
-    ) -> Result<BTreeMap<String, container_plugin::sync::PluginSource>> {
+    ) -> Result<BTreeMap<String, ::plugin::sync::PluginSource>> {
         let text = match std::fs::read_to_string(&self.registry_path) {
             Ok(text) => text,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
@@ -195,7 +195,7 @@ impl PluginStore {
                 });
             }
         };
-        let config: container_plugin::sync::PluginsConfig =
+        let config: ::plugin::sync::PluginsConfig =
             toml::from_str(&text).map_err(|source| Error::ParseToml {
                 path: self.registry_path.clone(),
                 source,
@@ -1179,8 +1179,8 @@ fn content_digest(bytes: &[u8]) -> String {
 /// plugin name (`-` → `_`) so scaffolded projects never collide, a file
 /// input port and a declared output make the inlet/outlet contract
 /// visible from the first edit.
-fn scaffold_node(plugin_name: &str) -> container_plugin::node_definition::NodeDefinition {
-    use container_plugin::node_definition::{
+fn scaffold_node(plugin_name: &str) -> ::plugin::node_definition::NodeDefinition {
+    use ::plugin::node_definition::{
         CommandSpec, NodeDefinition, OutputSpec, PortKind, PortLayout, PortSpec,
     };
     NodeDefinition {

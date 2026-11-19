@@ -1,8 +1,8 @@
 # Manifest Reference
 
 This is the normative reference for `manifest.toml` in schema version 1. The
-implementation authority is `crates/container-plugin/src/manifest.rs` and
-`crates/container-plugin/src/node_definition.rs`. Unknown fields are rejected,
+implementation authority is `crates/plugin/src/manifest.rs` and
+`crates/plugin/src/node_definition.rs`. Unknown fields are rejected,
 so a manifest that parses here is not forward-compatible with a future schema.
 
 ## Minimal Shape

@@ -104,9 +104,9 @@ pub fn build_default_registry_with_container_execution(
     // offending plugin. The root is admin-controlled host state: agents
     // have no path that reaches it.
     {
-        let root = plugins_root.unwrap_or_else(container_plugin::loader::default_plugins_root);
+        let root = plugins_root.unwrap_or_else(plugin::loader::default_plugins_root);
         if root.is_dir() {
-            let plugins = container_plugin::loader::load(
+            let plugins = plugin::loader::load(
                 &root,
                 Arc::clone(&container_execution.runtime),
                 Arc::clone(&container_execution.panel_cache),
@@ -413,7 +413,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            ldsc_dir.join(container_plugin::loader::MANIFEST_FILE),
+            ldsc_dir.join(plugin::loader::MANIFEST_FILE),
             r#"
 schema_version = 1
 plugin_name = "ldsc"

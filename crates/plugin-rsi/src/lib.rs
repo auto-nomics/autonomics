@@ -23,7 +23,7 @@ pub(crate) mod publication;
 pub(crate) mod runtime;
 pub(crate) mod vcs;
 
-pub use container_plugin::manifest::PluginStatus;
+pub use ::plugin::manifest::PluginStatus;
 pub use environment::catalog::{Environment, EnvironmentCatalog};
 pub use environment::development::{
     EnvironmentDevInfra, EnvironmentLocalActivationOutcome, EnvironmentValidationOutcome,
@@ -51,21 +51,21 @@ pub use foundation::names::validate_plugin_name;
 pub use foundation::report::{GateResult, GateStatus, ValidationReport};
 pub use foundation::workspace::PluginWorkspace;
 pub use intake::profile::AgentProfile;
-pub use plugin::distiller::{
+pub use crate::plugin::distiller::{
     DistillFailure, DistillationCandidate, PluginDistillReport, PluginDistiller,
 };
-pub use plugin::lifecycle::{LocalActivationOutcome, PluginLifecycle, ValidationOutcome};
-pub use plugin::source_registry::{
+pub use crate::plugin::lifecycle::{LocalActivationOutcome, PluginLifecycle, ValidationOutcome};
+pub use crate::plugin::source_registry::{
     GitInstalledPluginSource, InstalledPluginSource, LocalInstalledPluginSource,
     read_git_plugin_source, read_installed_plugin_source, remove_installed_plugin_source,
     write_git_plugin_source, write_local_plugin_source,
 };
-pub use plugin::store::{
+pub use crate::plugin::store::{
     GitPluginSourceFetcher, PLUGIN_DEVELOPMENT_VFS_ROOT, PluginCacheActiveSource,
     PluginCacheReport, PluginOperator, PluginProjectEntry, PluginScriptCache, PluginSourceFetcher,
     PluginStore,
 };
-pub use plugin::validation::workspace_validator::validate_workspace;
+pub use crate::plugin::validation::workspace_validator::validate_workspace;
 pub use publication::github::{
     GhPublisher, GhPublisherConfig, GhStatus, MergeOutcome, PluginPublisher,
     PluginPullRequestPublisher, PublishOutcome, PullRequestOutcome,

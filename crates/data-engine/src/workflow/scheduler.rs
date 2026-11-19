@@ -1212,7 +1212,7 @@ mod tests {
                     .unwrap_or("in");
                 name_parts.push(base.to_string());
                 if let Ok(text) =
-                    std::fs::read_to_string(file.path.strip_prefix("vfs://").unwrap_or(&file.path))
+                    std::fs::read_to_string(file.path.strip_prefix("local://").unwrap_or(&file.path))
                 {
                     content.push_str(&text);
                 }
@@ -1727,7 +1727,7 @@ mod tests {
     fn content_of(record: &InstanceRecord) -> String {
         match record.outputs.get(&0) {
             Some(NodeValue::File(file)) => {
-                std::fs::read_to_string(file.path.strip_prefix("vfs://").unwrap_or(&file.path))
+                std::fs::read_to_string(file.path.strip_prefix("local://").unwrap_or(&file.path))
                     .unwrap_or_else(|error| panic!("read {}: {error}", file.path))
             }
             other => panic!("expected a file output, got {other:?}"),
@@ -3682,7 +3682,7 @@ mod tests {
         let graph = FlowGraphBuilder::default()
             .source(Source::items(
                 "s",
-                vec![serde_json::json!({"reads":["vfs://data/a.fastq"]})],
+                vec![serde_json::json!({"reads":["local://data/a.fastq"]})],
             ))
             .process(Process::new(
                 "qc",

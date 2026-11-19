@@ -108,7 +108,7 @@ members = [
   "crates/node-bundles/nodes-rd",
   "stat_crates/dl",
   "crates/node-bundles/nodes-dl",
-  "crates/container-plugin",
+  "crates/plugin",
   "crates/plugin-rsi",
   "crates/text-embedding", "crates/browser-use", "crates/wiki",
   "crates/ppt-types",

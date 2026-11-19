@@ -51,7 +51,7 @@ const LZF_FILTER_VERSION: u32 = 4;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct H5adObsToDataFrameSpec {
-    /// Local or `vfs://` H5AD path. An upstream File input takes precedence.
+    /// Local or `local://` H5AD path. An upstream File input takes precedence.
     pub path: Option<String>,
     #[serde(default)]
     pub include_obsm: Vec<String>,
@@ -198,7 +198,7 @@ impl NodeFactory for H5adObsToDataFrameNodeFactory {
         obs index. Expression matrices are never loaded. Supported obs encodings \
         are numeric arrays, booleans, strings, string-valued categoricals, and nullable \
         integer/boolean/string arrays. An upstream H5AD File or `path` is required; \
-        `vfs://` inputs are streamed to a local temporary file for HDF5 random access."
+        `local://` inputs are streamed to a local temporary file for HDF5 random access."
     }
 
     fn spec_schema(&self) -> schemars::Schema {
@@ -1585,7 +1585,7 @@ mod tests {
             .unwrap();
         let mut node = H5adObsToDataFrameNodeFactory {}
             .build(
-                serde_json::json!({ "path": "vfs:///input.h5ad" }),
+                serde_json::json!({ "path": "local:///input.h5ad" }),
                 vfs_node_ctx(&storage),
             )
             .unwrap();

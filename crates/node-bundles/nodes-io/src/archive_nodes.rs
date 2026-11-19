@@ -1351,8 +1351,8 @@ mod tests {
             Some(storage.clone()),
         );
         let mut node = ArchiveExtractNode::new(ArchiveExtractSpec {
-            src: Some("vfs:///input.zip".into()),
-            destination_prefix: "vfs:///extracted".into(),
+            src: Some("local:///input.zip".into()),
+            destination_prefix: "local:///extracted".into(),
             ..ArchiveExtractSpec::default()
         });
         let outputs = node

@@ -108,6 +108,109 @@ impl crate::DagNode for EchoNode {
     }
 }
 
+
+/// Two-Any-input, Any-output stand-in for the removed legacy gather node:
+/// `prepare` must derive each input's transport contract from runtime values.
+struct AnyFanInNode {
+    ports: NodePorts,
+}
+
+impl AnyFanInNode {
+    fn new() -> Self {
+        let ports = NodePorts::new()
+            .add_input_port_of_type(None, PortType::Any)
+            .add_input_port_of_type(None, PortType::Any)
+            .add_output_port_of_type(None, PortType::Any);
+        Self { ports }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::DagNode for AnyFanInNode {
+    fn ports(&self) -> &NodePorts {
+        &self.ports
+    }
+    async fn execute(
+        &mut self,
+        _: &NodeCtx,
+        inputs: &[NodeInput],
+        _: &NodeReporter,
+    ) -> Result<PortOutputs, DagError> {
+        let mut inputs = inputs.to_vec();
+        inputs.sort_by_key(|input| input.port);
+        let mut outputs = PortOutputs::new();
+        if inputs.iter().all(|input| input.data.as_dataframe().is_ok()) {
+            let mut gathered: Option<datafusion::prelude::DataFrame> = None;
+            for input in inputs {
+                let NodeValue::DataFrame(frame) = input.data else {
+                    unreachable!("checked above")
+                };
+                gathered = Some(match gathered {
+                    Some(current) => current.union(frame).map_err(|error| {
+                        DagError::Schedule(format!("cannot fan in DataFrames: {error}"))
+                    })?,
+                    None => frame,
+                });
+            }
+            if let Some(gathered) = gathered {
+                outputs.insert(0, NodeValue::DataFrame(gathered));
+            }
+        } else {
+            let mut files = Vec::new();
+            for input in inputs {
+                match input.data {
+                    NodeValue::File(file) => files.push(file),
+                    NodeValue::FileSet(set) => files.extend(set),
+                    other => {
+                        return Err(DagError::Schedule(format!(
+                            "any_fan_in cannot merge {other:?}"
+                        )))
+                    }
+                }
+            }
+            outputs.insert(0, NodeValue::FileSet(files));
+        }
+        Ok(outputs)
+    }
+    fn clone_box(&self) -> Box<dyn crate::DagNode> {
+        Box::new(AnyFanInNode { ports: self.ports.clone() })
+    }
+    fn kind(&self) -> &'static str {
+        "any_fan_in"
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+
+struct AnyFanInFactory;
+
+impl crate::registry::NodeFactory for AnyFanInFactory {
+    fn kind(&self) -> &'static str {
+        "any_fan_in"
+    }
+    fn desc(&self) -> &'static str {
+        "test fan-in"
+    }
+    fn doc(&self) -> &'static str {
+        "test fan-in"
+    }
+    fn spec_schema(&self) -> schemars::Schema {
+        schemars::schema_for!(serde_json::Value)
+    }
+    fn ports(&self) -> NodePorts {
+        NodePorts::new()
+    }
+    fn build(
+        &self,
+        _: serde_json::Value,
+        _: NodeCtx,
+    ) -> RegistryResult<Box<dyn crate::DagNode>> {
+        Ok(Box::new(AnyFanInNode::new()))
+    }
+}
+
 struct EchoFactory;
 impl NodeFactory for EchoFactory {
     fn kind(&self) -> &'static str {
@@ -248,7 +351,7 @@ async fn spec_file_is_staged_from_coordinator_vfs_and_rebound_without_a_node_por
     let mut invocation = execution();
     invocation.submission.spec = task("file");
     invocation.submission.spec.inputs.clear();
-    invocation.submission.spec.spec["path"] = serde_json::json!("vfs:///方案.tar.gz");
+    invocation.submission.spec.spec["path"] = serde_json::json!("local:///方案.tar.gz");
     invocation.submission.spec.spec["destination"] = serde_json::json!("unchanged-output");
     invocation.submission.inputs.clear();
     invocation.node = registry()
@@ -274,7 +377,7 @@ async fn spec_file_is_staged_from_coordinator_vfs_and_rebound_without_a_node_por
     let envelope: TypedWorkerEnvelope =
         serde_json::from_value(invocation.submission.spec.spec["typed_dispatch"].clone()).unwrap();
     assert!(envelope.task.inputs.is_empty());
-    assert_eq!(envelope.task.spec["path"], "vfs:///方案.tar.gz");
+    assert_eq!(envelope.task.spec["path"], "local:///方案.tar.gz");
     let name = &envelope.spec_files["/path"];
     assert_eq!(invocation.submission.spec.inputs.len(), 1);
     let mut coordinator = super::super::workspace::LocalTaskWorkspace::create(
@@ -870,7 +973,7 @@ fn structured_input_is_declared_in_worker_envelope() {
         NodeValue::Structured(crate::dag::execution::ChannelTransportValue::Tuple(vec![
             crate::dag::execution::ChannelTransportValue::Json(serde_json::json!("sample")),
             crate::dag::execution::ChannelTransportValue::File(FileRef::new(
-                "vfs:///research/input.tsv",
+                "local:///research/input.tsv",
                 Some("tsv".into()),
             )),
         ]));
@@ -880,7 +983,7 @@ fn structured_input_is_declared_in_worker_envelope() {
     assert_eq!(envelope.task.inputs[0].payload, "structured_channel");
     assert_eq!(
         envelope.input_files[&0][0].path,
-        "vfs:///research/input.tsv"
+        "local:///research/input.tsv"
     );
 }
 
@@ -897,7 +1000,7 @@ impl crate::DagNode for PreparedTupleEcho {
         inputs[0].data = NodeValue::Structured(Value::Tuple(vec![
             Value::Json(serde_json::json!("sample")),
             Value::File(FileRef::new(
-                "vfs:///research/input.tsv",
+                "local:///research/input.tsv",
                 Some("tsv".into()),
             )),
         ]));
@@ -949,7 +1052,7 @@ fn remote_lowering_prepares_tuple_before_recording_file_artifacts() {
     assert_eq!(envelope.task.inputs[0].payload, "structured_channel");
     assert_eq!(
         envelope.input_files[&0][0].path,
-        "vfs:///research/input.tsv"
+        "local:///research/input.tsv"
     );
 }
 
@@ -1085,7 +1188,7 @@ impl crate::TaskArtifactStore for AlreadyRemoteStore {
         artifact: FileRef,
         _: Option<&vfs::OpendalFileStorage>,
     ) -> Result<Option<FileRef>, DagError> {
-        assert_eq!(artifact.path, "vfs:///research/input.tsv");
+        assert_eq!(artifact.path, "local:///research/input.tsv");
         Ok(Some(FileRef::new(
             "/cluster/data/input.tsv",
             Some("tsv".into()),
@@ -1107,7 +1210,7 @@ async fn remote_file_staging_never_opens_cluster_paths_on_the_coordinator() {
         resources: TaskResources::default(),
         inputs: vec![NodeInput::file(
             0,
-            FileRef::new("vfs:///research/input.tsv", Some("tsv".into())),
+            FileRef::new("local:///research/input.tsv", Some("tsv".into())),
         )],
     };
     let mut workspace =
@@ -1183,8 +1286,8 @@ async fn native_gather_infers_concrete_contract_and_roundtrips_homogeneous_input
     for payload in ["dataframe", "file", "file_set"] {
         let temp = tempfile::tempdir().unwrap();
         let mut invocation = execution();
-        invocation.node = Box::new(crate::dag::GatherNode::default());
-        invocation.submission.spec.kind = "logical_gather".into();
+        invocation.node = Box::new(AnyFanInNode::new());
+        invocation.submission.spec.kind = "any_fan_in".into();
         invocation.submission.spec.spec = serde_json::json!({});
         invocation.submission.spec.outputs[0].payload = "any".into();
         invocation.submission.inputs.clear();
@@ -1241,9 +1344,13 @@ async fn native_gather_infers_concrete_contract_and_roundtrips_homogeneous_input
         };
         assert_eq!(envelope.task.outputs[0].payload, expected);
         assert_eq!(invocation.submission.spec.outputs[0].payload, expected);
-        let empty_registry =
+        // The worker rebuilds non-channel kinds strictly through a registry;
+        // register the test node's factory the way production workers get
+        // the real bundle registry.
+        let mut worker_registry =
             NodeRegistry::new(NodeCtx::new(SessionContext::new().runtime_env(), None));
-        execute_typed_worker(&envelope, &empty_registry, paths, temp.path())
+        worker_registry.register(Box::new(AnyFanInFactory));
+        execute_typed_worker(&envelope, &worker_registry, paths, temp.path())
             .await
             .unwrap();
         let output = temp.path().join("typed-outputs/port-0");
@@ -1272,11 +1379,11 @@ async fn native_gather_infers_concrete_contract_and_roundtrips_homogeneous_input
 }
 
 #[test]
-fn gather_rejects_empty_mixed_and_non_gather_any_contracts() {
-    assert!(gather_output_payload(std::iter::empty()).is_err());
-    assert!(gather_output_payload(["file", "file_set"]).is_err());
-    assert!(gather_output_payload(["dataframe", "file"]).is_err());
-    assert!(gather_output_payload(["channel"]).is_err());
+fn any_output_contract_rejects_empty_mixed_and_non_transport_payloads() {
+    assert!(inferred_output_payload(std::iter::empty()).is_err());
+    assert!(inferred_output_payload(["file", "file_set"]).is_err());
+    assert!(inferred_output_payload(["dataframe", "file"]).is_err());
+    assert!(inferred_output_payload(["channel"]).is_err());
     let remote = TypedRemoteTaskExecutor::new(
         Arc::new(CaptureExecutor {
             calls: Arc::new(AtomicUsize::new(0)),

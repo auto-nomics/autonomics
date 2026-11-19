@@ -19,7 +19,7 @@ pub struct DataFusionSqlSpec {
     pub sql: String,
     #[serde(default = "default_table_name")]
     pub table_name: String,
-    /// Absolute local, `file://`, or `vfs://` output Parquet path.
+    /// Absolute local, `file://`, or domain-URI (`local://`) output Parquet path.
     pub output_path: String,
 }
 
@@ -72,7 +72,7 @@ pub fn validate(spec: &DataFusionSqlSpec) -> Result<(), String> {
         && vfs::uri::storage_path(&spec.output_path).is_none()
         && !spec.output_path.starts_with("file://")
     {
-        return Err("output_path must be an absolute local, file://, or vfs:// path".into());
+        return Err("output_path must be an absolute local, file://, or domain-URI (`local://`) path".into());
     }
     if !spec.output_path.to_ascii_lowercase().ends_with(".parquet") {
         return Err("output_path must end in .parquet".into());

@@ -1,6 +1,6 @@
 //! Deterministic manifest-to-container-spec compilation.
 
-use container_plugin::{
+use ::plugin::{
     compile::{compile_schema, spec_compile::compile_container_spec},
     manifest::PluginManifest,
     node_definition::{self, NodeDefinition},

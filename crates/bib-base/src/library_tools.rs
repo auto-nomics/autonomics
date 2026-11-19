@@ -888,7 +888,7 @@ struct GetArticleResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     fulltext_source: Option<String>,
     /// The agent-readable full-text object: the canonical extracted text
-    /// (`vfs:///literature/{id}/extracted/fulltext.{md|txt}`) for
+    /// (`local://literature/{id}/extracted/fulltext.{md|txt}`) for
     /// extracted rows with binary originals, or the stored file itself
     /// when it is already readable text. Read with the `vfs` tool.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2407,7 +2407,7 @@ mod tests {
         bib.upsert_fulltext(&bib_types::FullText {
             article_id: article.id.clone(),
             attachment_key: None,
-            file_path: "vfs:///literature/seeded/paper.pdf".to_owned(),
+            file_path: "local://literature/seeded/paper.pdf".to_owned(),
             file_format: bib_types::FileFormat::Pdf,
             text_content: None,
             source: bib_types::FullTextSource::UserUpload,
@@ -2588,7 +2588,7 @@ mod tests {
         bib.upsert_fulltext(&bib_types::FullText {
             article_id: article.id.clone(),
             attachment_key: None,
-            file_path: "vfs:///literature/x/paper.txt".into(),
+            file_path: "local://literature/x/paper.txt".into(),
             file_format: bib_types::FileFormat::Txt,
             text_content: None,
             source: bib_types::FullTextSource::UserUpload,
@@ -2631,7 +2631,7 @@ mod tests {
         bib.upsert_fulltext(&bib_types::FullText {
             article_id: article.id.clone(),
             attachment_key: None,
-            file_path: "vfs:///literature/x/paper.txt".into(),
+            file_path: "local://literature/x/paper.txt".into(),
             file_format: bib_types::FileFormat::Txt,
             text_content: None,
             source: bib_types::FullTextSource::UserUpload,

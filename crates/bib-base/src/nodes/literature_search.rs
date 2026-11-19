@@ -40,9 +40,11 @@ pub struct LiteratureSearchSpec {
     /// of valid names.
     #[serde(default)]
     pub sources: Option<Vec<String>>,
-    /// Destination for the evidence JSON artifact. Prefers a `vfs://` URI
+    /// Destination for the evidence JSON artifact. Prefers a domain URI
+    /// (`local://`)
     /// for cross-process artifacts; a bare absolute path is auto-rewritten
-    /// to `vfs:///...` so the engine and the agent share one mounted
+    /// bare absolute paths are rewritten to `local:///...` so the engine and
+    /// the agent share one mounted
     /// object-store namespace. Overwritten on re-run. Give each evidence
     /// node its own path — the engine does not detect write-write collisions.
     pub path: String,
@@ -257,8 +259,8 @@ impl NodeFactory for LiteratureSearchNodeFactory {
          failed. Cross-source duplicates (same DOI/PMID/arXiv id) are merged, \
          first occurrence wins.\n\
          \n\
-         `path` accepts a `vfs://` URI or a bare absolute path; bare absolute \
-         paths are auto-rewritten to `vfs:///...` so the engine and the agent \
+         `path` accepts a domain URI (`local://`) or a bare absolute path; bare absolute \
+         paths are auto-rewritten to `local:///...` so the engine and the agent \
          share one mounted object-store namespace. Overwritten on re-run; give \
          each evidence node a distinct path. Inspect the artifact with \
          get_output — evidence files render as a compact citation list."
@@ -362,7 +364,7 @@ mod tests {
 
     fn tmp_path(tag: &str) -> String {
         // Absolute so `validate_output_path` accepts it; `write_artifact`
-        // rewrites it to `vfs:///tmp/...` and the virtual path resolves
+        // rewrites it to `local:///tmp/...` and the virtual path resolves
         // inside the test's VFS temp root, hermetic and parallel-safe.
         format!("/tmp/lit-node-{tag}-{}.json", uuid::Uuid::new_v4())
     }
@@ -421,7 +423,7 @@ mod tests {
             "{fingerprint:?}"
         );
         assert!(fingerprint.immutable_remote);
-        // The recorded path is the canonical vfs:// URI, not the bare
+        // The recorded path is the canonical local-domain URI, not the bare
         // absolute path the spec used.
         assert!(
             vfs::uri::storage_path(&file.path).is_some(),

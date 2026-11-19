@@ -434,7 +434,7 @@ mod tests {
             .upsert_articles(&[target.clone(), source.clone()])
             .await
             .unwrap();
-        let raw = "vfs:///literature/source/original.txt";
+        let raw = "local://literature/source/original.txt";
         storage
             .write_bytes(
                 &bib_base::vfs_virtual_path(raw).unwrap(),
@@ -540,8 +540,8 @@ mod tests {
             .unwrap();
         let error = copy_optional_asset(
             &storage,
-            "vfs:///literature/source/asset.txt",
-            "vfs:///literature/target/asset.txt",
+            "local://literature/source/asset.txt",
+            "local://literature/target/asset.txt",
         )
         .await
         .unwrap_err();

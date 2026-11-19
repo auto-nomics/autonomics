@@ -110,7 +110,7 @@ pub(super) async fn load_retained_arrow(
     };
     let paths = listing.table_paths();
     if paths.len() != 1
-        || paths[0].get_url().scheme() != "vfs"
+        || !matches!(paths[0].get_url().scheme(), "vfs" | "local")
         || paths[0].is_collection()
         || paths[0].get_glob().is_some()
         || !listing.options().format.as_any().is::<ArrowFormat>()

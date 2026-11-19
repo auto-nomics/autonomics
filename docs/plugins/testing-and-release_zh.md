@@ -18,7 +18,7 @@
 
 ```bash
 NODE_PLUGINS_ROOT=/mnt/projects/node-plugins \
-  cargo test -p container-plugin --test clusterprofiler_plugin
+  cargo test -p plugin --test clusterprofiler_plugin
 ```
 
 测试只可在可选插件 checkout 缺失时跳过。解析或编译失败必须让测试失败。

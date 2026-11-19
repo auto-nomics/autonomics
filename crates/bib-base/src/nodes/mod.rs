@@ -32,11 +32,12 @@ use dag_core::registry::NodeCtx;
 use dag_core::value::{FileFingerprint, FileRef};
 use sha2::{Digest, Sha256};
 
-/// Validate a node output path: `vfs://` URI, `file://` URI, or absolute
+/// Validate a node output path: domain URI (`local://`, legacy `vfs://`),
+/// `file://` URI, or absolute
 /// host path. Relative paths are rejected (mirror of
 /// `nodes-io::file_reference::local_path` — that helper is `pub(crate)` and
 /// cannot be shared across crates). All three forms are *normalized to* a
-/// `vfs://` URI by [`to_vfs_uri`] before any I/O is attempted; the engine
+/// domain URI by [`to_vfs_uri`] before any I/O is attempted; the engine
 /// has no other writable namespace.
 pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
     if vfs::uri::storage_path(path).is_some() || path.starts_with("file://") {
@@ -44,7 +45,7 @@ pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
     }
     if !std::path::Path::new(path).is_absolute() {
         return Err(DagError::Schedule(format!(
-            "output path must be a `vfs://` URI or an absolute path (auto-routed \
+            "output path must be a domain URI (`local://`) or an absolute path (auto-routed \
              through the mounted runtime VFS so the agent and engine share one \
              object-store namespace); got `{path}`"
         )));
@@ -52,9 +53,9 @@ pub(crate) fn validate_output_path(path: &str) -> Result<(), DagError> {
     Ok(())
 }
 
-/// Resolve a node output path to its canonical `vfs://` form so the engine
+/// Resolve a node output path to its canonical local-domain form so the engine
 /// and the agent share one mounted object-store namespace. Bare absolute
-/// paths are transparently re-prefixed with `vfs://`; the legacy `file://`
+/// paths are transparently re-prefixed with `local://`; the legacy `file://`
 /// prefix is normalized identically (it was never anything other than an
 /// alias for an absolute host path). Relative paths fall through to the
 /// caller unchanged so the validation error stays informative.
@@ -80,7 +81,7 @@ pub(crate) fn to_vfs_uri(path: &str) -> String {
 /// Read file bytes through the node context.
 ///
 /// Routing, in order:
-/// 1. An explicit `vfs://` URI **requires** the mounted opendal storage
+/// 1. An explicit domain URI (`local://`) **requires** the mounted opendal storage
 ///    (fail-closed: the caller asked for the shared namespace by name).
 /// 2. Any other accepted path form (bare absolute, `file://`) routes
 ///    through the mounted VFS when one exists — the engine and the agent
@@ -113,7 +114,7 @@ pub(crate) async fn read_file_bytes(ctx: &NodeCtx, path: &str) -> Result<Vec<u8>
 /// content-addressed identity downstream nodes rely on for incremental
 /// invalidation.
 ///
-/// Routing mirrors [`read_file_bytes`]: an explicit `vfs://` URI requires
+/// Routing mirrors [`read_file_bytes`]: an explicit domain URI (`local://`) requires
 /// the mounted storage; a bare absolute path routes through the mounted
 /// VFS when one exists (canonical — object-store artifacts are immutable
 /// by construction, mtimes are worker-local and meaningless, so the
@@ -235,13 +236,14 @@ mod tests {
     }
 
     #[test]
-    fn absolute_path_normalizes_to_vfs_uri() {
-        assert_eq!(to_vfs_uri("/abs/out.json"), "vfs:///abs/out.json");
+    fn absolute_path_normalizes_to_the_canonical_domain_uri() {
+        assert_eq!(to_vfs_uri("/abs/out.json"), "local:///abs/out.json");
+        // Legacy and file spellings upgrade to the canonical local domain.
         assert_eq!(
             to_vfs_uri("vfs://artifacts/out.json"),
-            "vfs://artifacts/out.json"
+            "local://artifacts/out.json"
         );
-        assert_eq!(to_vfs_uri("file:///abs/out.json"), "vfs:///abs/out.json");
+        assert_eq!(to_vfs_uri("file:///abs/out.json"), "local:///abs/out.json");
         // Relative paths fall through so the validator's error stays informative.
         assert_eq!(to_vfs_uri("rel.json"), "rel.json");
     }
@@ -258,7 +260,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(file.format.as_deref(), Some("evidence"));
-        // The FileRef's path is the canonical vfs:// URI the agent and engine share.
+        // The FileRef's path is the canonical local-domain URI the agent and
+        // engine share.
         assert!(vfs::uri::storage_path(&file.path).is_some());
         let fingerprint = file.fingerprint.expect("fingerprint attached");
         assert_eq!(fingerprint.size, 7);
@@ -282,16 +285,21 @@ mod tests {
             datafusion::prelude::SessionContext::new().runtime_env(),
             None,
         );
-        // Explicit vfs:// on an unmounted engine: fail closed.
+        // Explicit domain URI on an unmounted engine: fail closed.
         let err = write_artifact(
             &ctx,
-            "vfs://artifacts/out.json",
+            "local://artifacts/out.json",
             br#"{}"#.to_vec(),
             "evidence",
         )
         .await
         .unwrap_err();
         assert!(err.to_string().contains("mounted runtime VFS"));
+        let err = read_file_bytes(&ctx, "local://artifacts/none.json")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("mounted runtime VFS"));
+        // Legacy spelling fails closed identically.
         let err = read_file_bytes(&ctx, "vfs://artifacts/none.json")
             .await
             .unwrap_err();

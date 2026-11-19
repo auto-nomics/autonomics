@@ -4,7 +4,7 @@
 //! later converts durable local snapshots into reviewed GitHub sources without
 //! making agents wait for repository publication or PR merge.
 
-use container_plugin::manifest::{PluginInstallationStatus, PluginManifest};
+use ::plugin::manifest::{PluginInstallationStatus, PluginManifest};
 
 use crate::{PluginInfra, PluginStatus, Result, ValidationOutcome};
 

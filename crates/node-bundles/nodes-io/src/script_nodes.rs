@@ -1177,7 +1177,7 @@ mod tests {
         let mut inputs = vec![NodeInput {
             port: 0,
             data: dag_core::value::NodeValue::Channel(dag_core::value::ChannelValue {
-                items: vec![serde_json::json!([42, "vfs:///reads.fastq"])],
+                items: vec![serde_json::json!([42, "local:///reads.fastq"])],
             }),
         }];
         node.prepare_task_inputs(&mut inputs).unwrap();
@@ -1185,7 +1185,7 @@ mod tests {
             panic!("tuple expected")
         };
         assert!(matches!(&items[0], Value::Json(value) if value == 42));
-        assert!(matches!(&items[1], Value::File(file) if file.path == "vfs:///reads.fastq"));
+        assert!(matches!(&items[1], Value::File(file) if file.path == "local:///reads.fastq"));
     }
 
     #[test]
@@ -1217,20 +1217,20 @@ mod tests {
         };
 
         let two = build("2");
-        let mut wrong = input(serde_json::json!("vfs:///a"));
+        let mut wrong = input(serde_json::json!("local:///a"));
         assert!(
             two.prepare_task_inputs(&mut wrong)
                 .unwrap_err()
                 .to_string()
                 .contains("incorrect number of input files")
         );
-        let mut pair = input(serde_json::json!(["vfs:///a", "vfs:///b"]));
+        let mut pair = input(serde_json::json!(["local:///a", "local:///b"]));
         two.prepare_task_inputs(&mut pair).unwrap();
         assert!(
             matches!(&pair[0].data, NodeValue::Structured(Value::Tuple(items)) if matches!(&items[0], Value::List(files) if files.len() == 2))
         );
 
-        let mut one = input(serde_json::json!(["vfs:///a"]));
+        let mut one = input(serde_json::json!(["local:///a"]));
         build("1").prepare_task_inputs(&mut one).unwrap();
         assert!(
             matches!(&one[0].data, NodeValue::Structured(Value::Tuple(items)) if matches!(&items[0], Value::File(_)))

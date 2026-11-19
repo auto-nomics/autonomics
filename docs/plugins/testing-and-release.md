@@ -20,7 +20,7 @@ process-wide plugin root:
 
 ```bash
 NODE_PLUGINS_ROOT=/mnt/projects/node-plugins \
-  cargo test -p container-plugin --test clusterprofiler_plugin
+  cargo test -p plugin --test clusterprofiler_plugin
 ```
 
 Tests may skip only when the optional plugin checkout is absent. A parse or

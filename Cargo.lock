@@ -1203,7 +1203,6 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
- "container-plugin",
  "container-runtime",
  "crossterm",
  "dag-core",
@@ -1213,6 +1212,7 @@ dependencies = [
  "manuscript-engine",
  "nodes-io",
  "opengwas",
+ "plugin",
  "plugin-rsi",
  "ratatui",
  "rpassword",
@@ -2945,31 +2945,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
-name = "container-plugin"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "clap",
- "container-runtime",
- "dag-core",
- "data-catalog",
- "datafusion",
- "fs4",
- "futures",
- "libc",
- "nodes-io",
- "schemars 1.2.2",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "toml 1.1.6+spec-1.1.0",
- "vfs",
-]
-
-[[package]]
 name = "container-runtime"
 version = "0.1.0"
 dependencies = [
@@ -3697,7 +3672,6 @@ dependencies = [
  "arrow-schema 58.4.0",
  "async-trait",
  "chrono",
- "container-plugin",
  "container-runtime",
  "csv",
  "dag-core",
@@ -3725,6 +3699,7 @@ dependencies = [
  "num-traits",
  "parking_lot 0.12.5",
  "parquet",
+ "plugin",
  "regex",
  "rustpython-ast",
  "rustpython-parser",
@@ -5788,7 +5763,6 @@ dependencies = [
  "bib-base",
  "bib-types",
  "chrono",
- "container-plugin",
  "container-runtime",
  "dag-core",
  "data-engine",
@@ -5801,6 +5775,7 @@ dependencies = [
  "json5",
  "libc",
  "percent-encoding",
+ "plugin",
  "plugin-rsi",
  "portable-pty",
  "ppt-base",
@@ -11820,6 +11795,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "container-runtime",
+ "dag-core",
+ "data-catalog",
+ "datafusion",
+ "fs4",
+ "futures",
+ "libc",
+ "nodes-io",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml 1.1.6+spec-1.1.0",
+ "vfs",
+]
+
+[[package]]
 name = "plugin-rsi"
 version = "0.1.0"
 dependencies = [
@@ -11828,8 +11828,8 @@ dependencies = [
  "agentik-sdk",
  "apply-patch",
  "async-trait",
- "container-plugin",
  "container-runtime",
+ "plugin",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -13388,7 +13388,6 @@ dependencies = [
  "browser-use",
  "chembl",
  "chrono",
- "container-plugin",
  "container-runtime",
  "dag-core",
  "data-catalog",
@@ -13405,6 +13404,7 @@ dependencies = [
  "opendal",
  "opengwas",
  "opentargets",
+ "plugin",
  "plugin-rsi",
  "ppt-base",
  "rcsb",
