@@ -12,7 +12,6 @@
 //!
 //! | Kind | Input | Output |
 //! |------|-------|--------|
-//! | `source_alphagenome_scores` | variant list in spec | variant × scorer × track rows |
 //! | `alphagenome_scores` | DataFrame variant column | variant × scorer × track rows |
 //! | `source_alphagenome_interval_avi` | genomic window in spec | top SNVs by AVI with Phred |
 
@@ -28,7 +27,6 @@ impl NodePlugin for Plugin {
         "alphagenome"
     }
     fn register(&self, registry: &mut NodeRegistry) {
-        registry.register(Box::new(scores::AlphagenomeScoresSourceNodeFactory));
         registry.register(Box::new(scores::AlphagenomeScoresNodeFactory));
         registry.register(Box::new(interval_avi::AlphagenomeIntervalAviNodeFactory));
     }
@@ -123,14 +121,10 @@ mod tests {
 
     #[test]
     fn scores_specs_deserialise() {
-        let spec: crate::scores::AlphagenomeScoresSourceSpec = serde_json::from_value(
-            serde_json::json!({"variants": ["chr22:36201698:A>C"]}),
-        )
-        .unwrap();
-        assert_eq!(spec.scorers.scorers, vec!["AVI_SCORE"]);
         let spec: crate::scores::AlphagenomeScoresSpec =
             serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(spec.variant_column, "variant");
+        assert_eq!(spec.scorers, vec!["AVI_SCORE"]);
         let spec: crate::interval_avi::AlphagenomeIntervalAviSpec = serde_json::from_value(
             serde_json::json!({"interval": "chr11:5225727-5226575"}),
         )
