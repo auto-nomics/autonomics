@@ -119,6 +119,7 @@ impl NodeRegistry {
 | **nodes-causal** | mediation, causal, cmest (6 variants) | statkit, epi | 2,200 |
 | **nodes-survival** | survival, fine_gray, cuminc | cmprsk | 1,400 |
 | **nodes-genetics** | magma_kegg_align | — | ~600 |
+| **nodes-alphagenome** | source_alphagenome_scores, alphagenome_scores, source_alphagenome_interval_avi | alphagenome | ~700 |
 | **nodes-epi** | epi_rcs, epi_roc, epi_lasso, epi_wqs, evalue | epi, evalue | 1,900 |
 | **nodes-lcmm** | hlme, hlme_predict, hlme_compare | lcmm | 2,100 |
 | **nodes-survey** | survey_* (30 nodes) | survey | 6,000 |
