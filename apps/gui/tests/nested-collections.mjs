@@ -102,7 +102,17 @@ try {
   await page.waitForFunction(()=>!document.querySelector('[data-slot=context-menu-content]'));
   assert.equal(collections.find(c=>c.id==='child').deleted,false);
   const filter=page.getByLabel('Filter collections');
-  await filter.fill('single');
+  await filter.click();
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.imeSetComposition', { text: 'dan', selectionStart: 3, selectionEnd: 3 });
+  assert.equal(await filter.inputValue(), 'dan', 'IME preedit stays visible');
+  assert.ok(await tree.getByRole('treeitem', { name: 'Research', exact: true }).isVisible(), 'preedit does not filter the tree');
+  await page.keyboard.insertText('单');
+  assert.equal(await filter.inputValue(), '单', 'IME text is committed');
+  await page.getByText('No matching collections').waitFor();
+  await filter.press('Escape');
+  await page.keyboard.type('single');
+  assert.equal(await filter.inputValue(), 'single');
   await tree.getByRole('treeitem',{name:'Single cell',exact:true}).waitFor();
   assert.ok(await tree.getByRole('treeitem',{name:'Research',exact:true}).isVisible(),'matching leaves keep their ancestors visible');
   assert.equal(await tree.getByRole('treeitem',{name:'Evidence',exact:true}).count(),0,'non-matching collections are hidden');

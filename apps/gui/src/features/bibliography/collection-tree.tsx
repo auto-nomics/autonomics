@@ -31,6 +31,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [emptyTrashOpen, setEmptyTrashOpen] = useState(false);
+  const [filterDraft, setFilterDraft] = useState("");
   const [filter, setFilter] = useState("");
   const composingFilter = useRef(false);
   const tree = useRef<HTMLDivElement>(null);
@@ -81,6 +82,10 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
     const node = Array.from(tree.current?.querySelectorAll<HTMLElement>("[data-collection-id]") ?? []).find(n => n.dataset.collectionId === id);
     node?.focus();
   }
+  function clearFilter() {
+    setFilterDraft("");
+    setFilter("");
+  }
   async function action(input: CollectionAction) {
     setBusy(true); setError("");
     try { await onAction(input); } catch (e) { setError(String(e)); throw e; } finally { setBusy(false); }
@@ -125,17 +130,26 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
         <Input
           aria-label="Filter collections"
           placeholder="Filter collections"
-          value={filter}
+          value={filterDraft}
           className="h-7 pl-7 pr-6 text-xs"
-          onChange={event => { if (!composingFilter.current) setFilter(event.target.value); }}
+          onChange={event => {
+            const value = event.currentTarget.value;
+            setFilterDraft(value);
+            if (!composingFilter.current) setFilter(value);
+          }}
           onCompositionStart={() => { composingFilter.current = true; }}
-          onCompositionEnd={event => { composingFilter.current = false; setFilter(event.currentTarget.value); }}
+          onCompositionEnd={event => {
+            composingFilter.current = false;
+            setFilterDraft(event.currentTarget.value);
+            setFilter(event.currentTarget.value);
+          }}
           onKeyDown={event => {
-            if (event.key === "Escape") setFilter("");
+            if (composingFilter.current || event.nativeEvent.isComposing) return;
+            if (event.key === "Escape") clearFilter();
             if (event.key === "ArrowDown" && rows[0]) { event.preventDefault(); focus(rows[0].collection.id); }
           }}
         />
-        {filter && <button type="button" tabIndex={-1} aria-label="Clear collection filter" className="absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground" onClick={() => setFilter("")}><X className="size-3" /></button>}
+        {filterDraft && <button type="button" tabIndex={-1} aria-label="Clear collection filter" className="absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground" onClick={clearFilter}><X className="size-3" /></button>}
       </div>
       <Button size="icon-xs" variant="ghost" aria-label="New collection" onClick={() => open("create", null)}><Plus /></Button>
     </div>
