@@ -36,7 +36,7 @@ impl NodePlugin for Plugin {
 mod tests {
     use alphagenome::types::{VariantEcho, VariantScoreArray, VariantScores};
 
-    use super::shared::{build_filter, build_score_batch, error_row, flatten_scores, ScoreRow};
+    use super::shared::{ScoreRow, build_filter, build_score_batch, error_row, flatten_scores};
 
     fn fake_scores() -> VariantScores {
         VariantScores {
@@ -125,10 +125,9 @@ mod tests {
             serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(spec.variant_column, "variant");
         assert_eq!(spec.scorers, vec!["AVI_SCORE"]);
-        let spec: crate::interval_avi::AlphagenomeIntervalAviSpec = serde_json::from_value(
-            serde_json::json!({"interval": "chr11:5225727-5226575"}),
-        )
-        .unwrap();
+        let spec: crate::interval_avi::AlphagenomeIntervalAviSpec =
+            serde_json::from_value(serde_json::json!({"interval": "chr11:5225727-5226575"}))
+                .unwrap();
         assert_eq!(spec.top_k, 25);
         assert_eq!(spec.page_size, 256);
     }

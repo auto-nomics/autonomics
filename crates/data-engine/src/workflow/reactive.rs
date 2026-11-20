@@ -5,9 +5,8 @@ use crate::workflow::{
     error::Error,
     instance::{InstanceId, render_spec},
     model::{ErrorMode, FlowGraph},
-    plan::SourceResolution,
     scheduler::{FlowRunConfig, FlowRunReport, FlowScheduler, InstanceRecord, ProcessRunSummary},
-    source::SourceStreams,
+    source::{SourceResolution, SourceStreams},
 };
 use dag_core::dag::execution::{
     TaskExecution, TaskInputBinding, TaskInputSource, TaskOutputBinding, TaskSpec, TaskSubmission,

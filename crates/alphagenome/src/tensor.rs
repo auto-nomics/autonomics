@@ -10,7 +10,10 @@ use crate::pb::v1 as pb;
 /// the flat buffer into byte ranges, compresses each chunk independently
 /// (zstd or none), and streams the chunks after the message that carries the
 /// `Tensor` header with `chunk_count` set.
-pub fn decode_tensor(tensor: &pb::Tensor, chunks: &[pb::TensorChunk]) -> Result<(Vec<usize>, Vec<f32>)> {
+pub fn decode_tensor(
+    tensor: &pb::Tensor,
+    chunks: &[pb::TensorChunk],
+) -> Result<(Vec<usize>, Vec<f32>)> {
     let shape: Vec<usize> = tensor.shape.iter().map(|&d| d as usize).collect();
     let flat_len: usize = shape.iter().product();
 
@@ -98,7 +101,8 @@ mod tests {
             pb::DataType::Float32,
             &[2, 2],
             pb::tensor::Payload::Array(pb::TensorChunk {
-                data: 1.0f32.to_le_bytes()
+                data: 1.0f32
+                    .to_le_bytes()
                     .iter()
                     .chain(2.5f32.to_le_bytes().iter())
                     .chain((-1.0f32).to_le_bytes().iter())
@@ -155,10 +159,7 @@ mod tests {
         ];
         let (shape, values) = decode_tensor(&t, &chunks).unwrap();
         assert_eq!(shape, vec![64]);
-        assert_eq!(
-            values,
-            (0..64u32).map(f32::from_bits).collect::<Vec<_>>()
-        );
+        assert_eq!(values, (0..64u32).map(f32::from_bits).collect::<Vec<_>>());
     }
 
     #[test]

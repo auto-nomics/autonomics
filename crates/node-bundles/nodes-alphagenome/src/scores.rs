@@ -11,9 +11,7 @@ use dag_core::node::{DagNode, NodeInput, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 use dag_core::value::PortType;
 
-use crate::shared::{
-    build_filter, flatten_scores, make_client, score_rows_to_output, ScoreRow,
-};
+use crate::shared::{ScoreRow, build_filter, flatten_scores, make_client, score_rows_to_output};
 
 const KIND: &str = "alphagenome_scores";
 
@@ -140,11 +138,8 @@ impl DagNode for AlphagenomeScoresNode {
             .collect()
             .await
             .map_err(|e| err(format!("failed to collect input DataFrame: {e}")))?;
-        let variants = crate::shared::string_column_values(
-            KIND,
-            &batches,
-            &self.spec.variant_column,
-        )?;
+        let variants =
+            crate::shared::string_column_values(KIND, &batches, &self.spec.variant_column)?;
         if variants.is_empty() {
             return Err(err(format!(
                 "column '{}' contains no usable variant strings",

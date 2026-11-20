@@ -188,10 +188,7 @@ mod tests {
     #[test]
     fn parses_alphagenome_spelling() {
         let v: VariantQuery = "chr22:36201698:A>C".parse().unwrap();
-        assert_eq!(
-            v,
-            VariantQuery::new("chr22", 36201698, "A", "C")
-        );
+        assert_eq!(v, VariantQuery::new("chr22", 36201698, "A", "C"));
     }
 
     #[test]

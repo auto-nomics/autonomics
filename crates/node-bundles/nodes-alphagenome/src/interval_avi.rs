@@ -10,7 +10,7 @@ use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::{DagNode, NodePorts};
 use dag_core::registry::{NodeCtx, NodeFactory};
 
-use crate::shared::{build_filter, make_client, single_output_port, ScoreRow};
+use crate::shared::{ScoreRow, build_filter, make_client, single_output_port};
 
 const KIND: &str = "source_alphagenome_interval_avi";
 
@@ -120,7 +120,9 @@ impl DagNode for AlphagenomeIntervalAviNode {
         let all = client
             .atlas_interval_scores(&interval, Some(&filter), self.spec.page_size)
             .await
-            .map_err(|e| DagError::Schedule(format!("AlphaGenome Atlas interval query failed: {e}")))?;
+            .map_err(|e| {
+                DagError::Schedule(format!("AlphaGenome Atlas interval query failed: {e}"))
+            })?;
 
         let mut rows: Vec<ScoreRow> = Vec::new();
         for scores in &all {

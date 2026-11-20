@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
+use alphagenome::{AlphaGenomeClient, VariantScores};
 use arrow_array::{
     Array, BooleanArray, Float64Array, Int64Array, RecordBatch, StringArray, UInt32Array,
 };
 use arrow_schema::{DataType, Field, Schema};
-use alphagenome::{AlphaGenomeClient, VariantScores};
 
 use dag_core::dag::{DagError, graph::PortOutputs};
 use dag_core::node::NodePorts;
@@ -52,31 +52,25 @@ pub(crate) fn string_column_values(
                     .join(", ")
             ))
         })?;
-        let values: Vec<Option<&str>> =
-            if let Some(a) = arr.as_any().downcast_ref::<StringArray>() {
-                (0..a.len())
-                    .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
-                    .collect()
-            } else if let Some(a) = arr
-                .as_any()
-                .downcast_ref::<arrow_array::LargeStringArray>()
-            {
-                (0..a.len())
-                    .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
-                    .collect()
-            } else if let Some(a) = arr
-                .as_any()
-                .downcast_ref::<arrow_array::StringViewArray>()
-            {
-                (0..a.len())
-                    .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
-                    .collect()
-            } else {
-                return Err(err(format!(
-                    "column '{column}' must be a string column (Utf8/LargeUtf8/Utf8View), found {}",
-                    arr.data_type()
-                )));
-            };
+        let values: Vec<Option<&str>> = if let Some(a) = arr.as_any().downcast_ref::<StringArray>()
+        {
+            (0..a.len())
+                .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
+                .collect()
+        } else if let Some(a) = arr.as_any().downcast_ref::<arrow_array::LargeStringArray>() {
+            (0..a.len())
+                .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
+                .collect()
+        } else if let Some(a) = arr.as_any().downcast_ref::<arrow_array::StringViewArray>() {
+            (0..a.len())
+                .map(|i| if a.is_null(i) { None } else { Some(a.value(i)) })
+                .collect()
+        } else {
+            return Err(err(format!(
+                "column '{column}' must be a string column (Utf8/LargeUtf8/Utf8View), found {}",
+                arr.data_type()
+            )));
+        };
         for v in values.into_iter().flatten() {
             let v = v.trim();
             if !v.is_empty() && seen.insert(v.to_string()) {
@@ -90,10 +84,7 @@ pub(crate) fn string_column_values(
 /// Build the AIP-160 Atlas filter from scorer names and optional ontology
 /// CURIEs, mirroring the Python SDK's `atlas_utils.build_filter`. Ontology
 /// filters are relaxed for scorers without ontology metadata.
-pub(crate) fn build_filter(
-    scorers: &[String],
-    ontology_terms: &[String],
-) -> String {
+pub(crate) fn build_filter(scorers: &[String], ontology_terms: &[String]) -> String {
     let mut clauses: Vec<String> = Vec::new();
 
     if !scorers.is_empty() {
@@ -195,10 +186,7 @@ pub(crate) fn error_row(
 pub(crate) fn flatten_scores(scores: &VariantScores) -> Vec<ScoreRow> {
     let mut rows = Vec::new();
     for score in &scores.scores {
-        let calibrated_len = score
-            .calibrated_values
-            .as_ref()
-            .map_or(0, |c| c.len());
+        let calibrated_len = score.calibrated_values.as_ref().map_or(0, |c| c.len());
         for index in 0..score.values.len().max(calibrated_len) {
             let raw = score.values.get(index).map(|v| *v as f64);
             let quantile = score
@@ -259,10 +247,7 @@ pub(crate) fn build_score_batch(rows: &[ScoreRow]) -> Result<RecordBatch, DagErr
     // required String field.
     macro_rules! str_col {
         ($field:ident) => {{
-            let vals: Vec<Option<&str>> = rows
-                .iter()
-                .map(|r| r.$field.as_deref())
-                .collect();
+            let vals: Vec<Option<&str>> = rows.iter().map(|r| r.$field.as_deref()).collect();
             Arc::new(StringArray::from(vals)) as Arc<dyn Array>
         }};
     }
@@ -315,7 +300,11 @@ pub(crate) fn build_avi_batch(
 ) -> Result<RecordBatch, DagError> {
     let base = build_score_batch(rows)?;
     let mut fields: Vec<Arc<Field>> = base.schema().fields().to_vec();
-    fields.push(Arc::new(Field::new("tail_quantile", DataType::Float64, true)));
+    fields.push(Arc::new(Field::new(
+        "tail_quantile",
+        DataType::Float64,
+        true,
+    )));
     fields.push(Arc::new(Field::new("phred", DataType::Float64, true)));
     let mut arrays: Vec<Arc<dyn Array>> = base.columns().to_vec();
     arrays.push(Arc::new(Float64Array::from(tails.to_vec())));

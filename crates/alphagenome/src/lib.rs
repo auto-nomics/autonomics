@@ -42,7 +42,7 @@ pub mod query;
 pub mod tensor;
 pub mod types;
 
-pub use client::{DEFAULT_ENDPOINT, ENV_API_KEY, AlphaGenomeClient};
+pub use client::{AlphaGenomeClient, DEFAULT_ENDPOINT, ENV_API_KEY};
 pub use error::{Error, Result};
 pub use pb::v1::{Organism, OutputType};
 pub use query::{IntervalQuery, VariantQuery};

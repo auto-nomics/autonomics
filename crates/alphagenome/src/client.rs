@@ -1,6 +1,6 @@
-use tonic::transport::{Channel, ClientTlsConfig};
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
+use tonic::transport::{Channel, ClientTlsConfig};
 
 use crate::error::{Error, Result};
 use crate::pb::atlas as atlas_pb;
@@ -34,7 +34,10 @@ struct ApiKeyInterceptor {
 }
 
 impl Interceptor for ApiKeyInterceptor {
-    fn call(&mut self, mut request: tonic::Request<()>) -> std::result::Result<tonic::Request<()>, tonic::Status> {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> std::result::Result<tonic::Request<()>, tonic::Status> {
         request.metadata_mut().insert(
             "x-goog-api-key",
             self.api_key.parse().map_err(|_| {
@@ -53,7 +56,8 @@ impl AlphaGenomeClient {
 
     /// Connects using the `ALPHAGENOME_API_KEY` environment variable.
     pub async fn from_env() -> Result<Self> {
-        let key = std::env::var(ENV_API_KEY).map_err(|_| Error::MissingApiKey(ENV_API_KEY.to_owned()))?;
+        let key =
+            std::env::var(ENV_API_KEY).map_err(|_| Error::MissingApiKey(ENV_API_KEY.to_owned()))?;
         Self::new(key).await
     }
 
@@ -68,16 +72,18 @@ impl AlphaGenomeClient {
             .map_err(|e| Error::Grpc(tonic::Status::internal(format!("TLS config: {e}"))))?
             .connect()
             .await
-            .map_err(|e| {
-                Error::Grpc(tonic::Status::unavailable(format!("connect failed: {e}")))
-            })?;
-        let interceptor = ApiKeyInterceptor { api_key: api_key.into() };
+            .map_err(|e| Error::Grpc(tonic::Status::unavailable(format!("connect failed: {e}"))))?;
+        let interceptor = ApiKeyInterceptor {
+            api_key: api_key.into(),
+        };
         Ok(Self {
             atlas: atlas_pb::atlas_service_client::AtlasServiceClient::with_interceptor(
-                channel.clone(), interceptor.clone(),
+                channel.clone(),
+                interceptor.clone(),
             ),
             model: pb::dna_model_service_client::DnaModelServiceClient::with_interceptor(
-                channel, interceptor,
+                channel,
+                interceptor,
             ),
         })
     }
@@ -124,8 +130,16 @@ impl AlphaGenomeClient {
                     num_values = Some(tracks.len());
                 }
                 ScorerMetadataEntry {
-                    name: m.variant_scorer.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
-                    is_signed: m.variant_scorer.as_ref().map(|s| s.is_signed).unwrap_or(false),
+                    name: m
+                        .variant_scorer
+                        .as_ref()
+                        .map(|s| s.name.clone())
+                        .unwrap_or_default(),
+                    is_signed: m
+                        .variant_scorer
+                        .as_ref()
+                        .map(|s| s.is_signed)
+                        .unwrap_or(false),
                     num_values: num_values.unwrap_or(1),
                     tracks,
                 }
@@ -248,16 +262,23 @@ impl AlphaGenomeClient {
             .into_inner();
 
         let mut outputs = Vec::new();
-        let mut pending: Option<(pb::Tensor, Vec<pb::TensorChunk>, Vec<usize>, Vec<TrackInfo>, Vec<GeneInfo>, pb::Variant)> = None;
+        let mut pending: Option<(
+            pb::Tensor,
+            Vec<pb::TensorChunk>,
+            Vec<usize>,
+            Vec<TrackInfo>,
+            Vec<GeneInfo>,
+            pb::Variant,
+        )> = None;
         while let Some(message) = stream.message().await.map_err(Error::from_status)? {
             match message.payload {
                 Some(Payload::Output(output)) => {
                     if let Some(entry) = pending.take() {
                         outputs.push(finish_output(entry)?);
                     }
-                    let variant_data = output
-                        .variant_data
-                        .ok_or_else(|| Error::Decode("score output without variant data".to_owned()))?;
+                    let variant_data = output.variant_data.ok_or_else(|| {
+                        Error::Decode("score output without variant data".to_owned())
+                    })?;
                     let metadata = variant_data.metadata.clone().unwrap_or_default();
                     let tensor = variant_data.values.ok_or_else(|| {
                         Error::Decode("score output without a values tensor".to_owned())
@@ -266,15 +287,26 @@ impl AlphaGenomeClient {
                         tensor,
                         Vec::new(),
                         shape_of(&metadata),
-                        metadata.track_metadata.iter().map(crate::types::track_info).collect(),
-                        metadata.gene_metadata.iter().map(crate::types::gene_info).collect(),
-                        metadata.variant.clone().unwrap_or_else(|| variant.to_proto()),
+                        metadata
+                            .track_metadata
+                            .iter()
+                            .map(crate::types::track_info)
+                            .collect(),
+                        metadata
+                            .gene_metadata
+                            .iter()
+                            .map(crate::types::gene_info)
+                            .collect(),
+                        metadata
+                            .variant
+                            .clone()
+                            .unwrap_or_else(|| variant.to_proto()),
                     ));
                 }
                 Some(Payload::TensorChunk(chunk)) => {
-                    let entry = pending
-                        .as_mut()
-                        .ok_or_else(|| Error::Decode("tensor chunk without a pending output".to_owned()))?;
+                    let entry = pending.as_mut().ok_or_else(|| {
+                        Error::Decode("tensor chunk without a pending output".to_owned())
+                    })?;
                     entry.1.push(chunk);
                 }
                 None => {}
@@ -302,13 +334,23 @@ fn shape_of(metadata: &pb::VariantMetadata) -> Vec<usize> {
     // Values are (num_tracks|num_genes, 1)-ish; the true shape comes from the
     // tensor header itself, which finish_output reads. This helper is only
     // used for metadata bookkeeping.
-    let n = metadata.track_metadata.len().max(metadata.gene_metadata.len());
+    let n = metadata
+        .track_metadata
+        .len()
+        .max(metadata.gene_metadata.len());
     if n > 0 { vec![n] } else { vec![1] }
 }
 
 #[allow(clippy::type_complexity)]
 fn finish_output(
-    entry: (pb::Tensor, Vec<pb::TensorChunk>, Vec<usize>, Vec<TrackInfo>, Vec<GeneInfo>, pb::Variant),
+    entry: (
+        pb::Tensor,
+        Vec<pb::TensorChunk>,
+        Vec<usize>,
+        Vec<TrackInfo>,
+        Vec<GeneInfo>,
+        pb::Variant,
+    ),
 ) -> Result<ScoredOutput> {
     let (t, chunks, _meta_shape, tracks, genes, variant) = entry;
     let (shape, values) = tensor::decode_tensor(&t, &chunks)?;
@@ -346,11 +388,16 @@ fn dense_to_scores(dense: atlas_pb::DenseVariantScores) -> VariantScores {
             }
             let scorer_info = s.variant_scorer;
             VariantScoreArray {
-                scorer: scorer_info.as_ref().map(|v| v.name.clone()).unwrap_or_default(),
+                scorer: scorer_info
+                    .as_ref()
+                    .map(|v| v.name.clone())
+                    .unwrap_or_default(),
                 is_signed: scorer_info.map(|v| v.is_signed).unwrap_or(false),
                 shape: shape.clone(),
                 values: decode_f32(&s.scores, shape.iter().product()),
-                calibrated_values: s.calibrated_scores.map(|b| decode_f32(&b, shape.iter().product())),
+                calibrated_values: s
+                    .calibrated_scores
+                    .map(|b| decode_f32(&b, shape.iter().product())),
                 tracks,
                 genes,
             }
@@ -386,7 +433,10 @@ impl VariantScores {
 }
 
 /// Look up a scorer's per-track index by ontology CURIE (e.g. `UBERON:0001157`).
-pub fn tracks_by_curie<'a>(scores: &'a VariantScoreArray, curie: &str) -> Vec<(usize, &'a TrackInfo)> {
+pub fn tracks_by_curie<'a>(
+    scores: &'a VariantScoreArray,
+    curie: &str,
+) -> Vec<(usize, &'a TrackInfo)> {
     scores
         .tracks
         .iter()
@@ -414,7 +464,12 @@ mod tests {
 
     #[test]
     fn decode_f32_truncates_to_shape() {
-        let bytes = 1.0f32.to_le_bytes().iter().copied().chain(2.0f32.to_le_bytes().iter().copied()).collect::<Vec<u8>>();
+        let bytes = 1.0f32
+            .to_le_bytes()
+            .iter()
+            .copied()
+            .chain(2.0f32.to_le_bytes().iter().copied())
+            .collect::<Vec<u8>>();
         assert_eq!(decode_f32(&bytes, 1), vec![1.0]);
     }
 
@@ -426,5 +481,4 @@ mod tests {
         // 1-based closed interval whose 0-based half-open form is centered.
         assert_eq!(i.to_proto().start, v.position - 1 - (1 << 19));
     }
-
 }

@@ -18,8 +18,28 @@ use tokio::{sync::mpsc, task::JoinSet};
 use vfs::OpendalFileStorage;
 
 use crate::workflow::error::Error;
-use crate::workflow::model::{FlowGraph, PathType, SourceSpec};
-use crate::workflow::plan::SourceResolution;
+use crate::workflow::model::{FlowGraph, PathType, ProcessName, SourceSpec};
+
+/// Item sets for every source, enumerated before a run. Must contain an entry
+/// for **every** source and nothing else; the reactive scheduler consumes it
+/// through [`SourceStreams::from_resolution`].
+#[derive(Debug, Default)]
+pub struct SourceResolution(BTreeMap<ProcessName, Vec<serde_json::Value>>);
+
+impl SourceResolution {
+    pub fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    /// Record the enumerated items of one source.
+    pub fn resolve(&mut self, source: impl Into<ProcessName>, items: Vec<serde_json::Value>) {
+        self.0.insert(source.into(), items);
+    }
+
+    pub(crate) fn get(&self, source: &str) -> Option<&Vec<serde_json::Value>> {
+        self.0.get(source)
+    }
+}
 
 /// Bounded source readers. Dropping this value cancels outstanding enumerations.
 pub struct SourceStreams {
@@ -594,7 +614,7 @@ async fn stream_glob(
 }
 
 /// Resolve every fanout source of the graph into a [`SourceResolution`],
-/// ready for [`crate::workflow::plan::build_plan`]. `Items` sources pass through
+/// ready for the reactive scheduler. `Items` sources pass through
 /// untouched; `Glob` sources are enumerated through `storage`.
 ///
 /// Fails when a glob source exists but no storage is configured, or when
@@ -1237,9 +1257,12 @@ mod tests {
             .unwrap();
         let resolution = resolve_sources(&graph, Some(&storage)).await.unwrap();
         // Glob enumerated through the VFS; items passed through as declared.
-        let plan = crate::workflow::plan::build_plan(&graph, &resolution).unwrap();
-        assert_eq!(plan.processes["qc"].instances.len(), 3);
-        assert_eq!(plan.processes["manual"].instances.len(), 1);
+        assert_eq!(
+            resolution.get("glob_reads").unwrap().len(),
+            3,
+            "glob resolved one item per VFS match"
+        );
+        assert_eq!(resolution.get("manual_reads").unwrap().len(), 1);
     }
 
     #[tokio::test]

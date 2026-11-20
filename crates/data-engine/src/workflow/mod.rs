@@ -16,11 +16,10 @@
 //!    deliveries and never modify the authored graph. Eligible results can
 //!    be cached for later runs.
 //!
-//! # Planning and routing
+//! # Scheduling and routing
 //!
 //! The reactive scheduler consumes sources incrementally, creates tasks as
-//! inputs arrive, and closes downstream channels after producers finish. The
-//! older batch planner remains available for its existing callers.
+//! inputs arrive, and closes downstream channels after producers finish.
 
 pub mod cache;
 pub mod channel;
@@ -28,12 +27,11 @@ pub mod dataflow;
 pub mod error;
 pub mod instance;
 pub mod model;
-pub mod plan;
 mod reactive;
 pub mod scheduler;
 pub mod source;
 
-pub use cache::{CachedInstance, CachedOutput, InstanceCache, plan_fingerprint};
+pub use cache::{CachedInstance, CachedOutput, InstanceCache};
 pub use error::{Error, Result};
 pub use instance::{
     INSTANCE_ID_SEPARATOR, Instance, InstanceId, UpstreamBinding, instance_fingerprint, item_key,
@@ -43,11 +41,11 @@ pub use model::{
     ErrorMode, ErrorStrategy, FlowGraph, FlowGraphBuilder, PathPatterns, PortIndex, Process,
     ProcessName, Source, SourceSpec, Wire, WireOp,
 };
-pub use plan::{ExecutionPlan, InstanceRoute, ProcessPlan, SourceResolution, build_plan};
 pub use scheduler::{
     ChannelBinaryFunction, ChannelFunction, FlowRunConfig, FlowRunReport, FlowScheduler,
     InstanceRecord, NodeBuilder, ProcessRunSummary,
 };
 pub use source::{
-    SourceStreams, enumerate_glob, resolve_sources, stream_sources, stream_sources_with_functions,
+    SourceResolution, SourceStreams, enumerate_glob, resolve_sources, stream_sources,
+    stream_sources_with_functions,
 };

@@ -215,6 +215,13 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
     });
   }
 
+  const identifierLabels: Record<string, string> = {
+    pmid: "PubMed entry",
+    doi: "DOI entry",
+    pmc: "PMC entry",
+    arxiv: "arXiv entry",
+    openalex: "OpenAlex entry",
+  };
   const identifierKinds = ["pmid", "doi", "pmc", "arxiv", "openalex"];
   for (const kind of identifierKinds) {
     const value = articleIdentifier(article, kind);
@@ -223,11 +230,10 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
     entries.push({
       key: `identifier-${kind}`,
       kind: "link",
-      label: `${kind === "pmid" ? "PubMed" : kind} entry`,
+      label: identifierLabels[kind] ?? `${kind} entry`,
       caption: value,
       href,
     });
-    break;
   }
 
   if (detail?.annotations.length) {

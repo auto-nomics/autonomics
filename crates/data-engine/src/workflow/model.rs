@@ -3,7 +3,7 @@
 //! This is the **only** editable, persisted, snapshotted representation of a
 //! workflow (see the crate-level invariant). One [`Process`] corresponds to one
 //! workflow process — never to one item. Item instances are run-scoped and live
-//! in [`crate::workflow::instance`] / [`crate::workflow::plan`].
+//! in [`crate::workflow::instance`] / [`crate::workflow::source`].
 //!
 //! Serialization: [`FlowGraph`] round-trips through JSON so snapshots, refs,
 //! and history can store authored state at process granularity regardless of
@@ -248,7 +248,7 @@ impl ErrorStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A process declares WHAT runs, never HOW MANY times — Nextflow semantics:
 /// the instance count is derived from the deliveries on its input channels
-/// (see [`crate::workflow::plan`]).
+/// (see [`crate::workflow::source`]).
 pub struct Process {
     pub id: ProcessName,
     pub kind: String,
@@ -273,7 +273,7 @@ impl Process {
     }
 }
 
-/// Edge operator. Routing semantics are resolved by [`crate::workflow::plan`]; the
+/// Edge operator. Routing semantics are resolved by [`crate::workflow::source`]; the
 /// model only records intent and enforces the structural rules below.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

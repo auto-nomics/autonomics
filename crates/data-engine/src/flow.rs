@@ -410,36 +410,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reactive_resume_reuses_file_outputs_through_runner() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("input.txt");
-        std::fs::write(&path, "test").unwrap();
-        let flow = FlowGraph::builder()
-            .source(Source::items(
-                "files",
-                vec![serde_json::json!(path.to_string_lossy())],
-            ))
-            .process(Process::new(
-                "file",
-                "file_reference",
-                serde_json::json!({"path": "{{item}}"}),
-            ))
-            .wire(Wire::direct("files", 0, "file", 0))
-            .build()
-            .unwrap();
-        let engine = engine();
-        let runner = engine.flow_runner();
-        let opts = FlowOptions {
-            resume: Some(true),
-            ..Default::default()
-        };
-        let first = runner.run(&flow, &opts, None).await.unwrap();
-        assert_eq!(first.processes["file"].reused, 0);
-        let second = runner.run(&flow, &opts, None).await.unwrap();
-        assert_eq!(second.processes["file"].reused, 1);
-    }
-
-    #[tokio::test]
     async fn isolated_agents_do_not_share_run_locks_or_cached_results() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("input.txt");

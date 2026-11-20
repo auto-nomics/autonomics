@@ -152,7 +152,7 @@ pub struct Instance {
 
 impl Instance {
     /// Materialize the single instance of a process with no driving input
-    /// (derived singleton — see [`crate::workflow::plan`]).
+    /// (derived singleton — see [`crate::workflow::source`]).
     pub fn singleton(process: &Process) -> Result<Self, Error> {
         Ok(Self {
             id: InstanceId::new(&process.id, None),

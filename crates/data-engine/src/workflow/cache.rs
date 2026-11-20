@@ -28,9 +28,6 @@ use dag_core::dag::PortOutputs;
 use dag_core::value::{FileRef, NodeValue};
 use vfs::OpendalFileStorage;
 
-use crate::workflow::instance::{InstanceId, UpstreamBinding, instance_fingerprint_of};
-use crate::workflow::plan::ExecutionPlan;
-
 /// One cached output port. Equality is structural on paths (FileRef does
 /// not implement `PartialEq`), which is what cache tests need to assert.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -180,46 +177,6 @@ impl InstanceCache {
     pub fn from_json(value: serde_json::Value) -> Option<Self> {
         serde_json::from_value(value).ok()
     }
-}
-
-/// Compute the fingerprint of one instance from plan state. Upstream
-/// bindings derive from the plan's routes; `effective` carries the
-/// fingerprint of every upstream instance (reused or freshly executed) in
-/// dependency order, which the scheduler guarantees has been settled.
-pub fn plan_fingerprint(
-    plan: &ExecutionPlan,
-    id: &InstanceId,
-    effective: &BTreeMap<InstanceId, String>,
-) -> Option<String> {
-    let (process, spec) = plan
-        .processes
-        .values()
-        .find(|process_plan| process_plan.instances.iter().any(|i| &i.id == id))
-        .map(|process_plan| (process_plan.process.clone(), process_plan.spec.clone()))?;
-    let instance = plan
-        .processes
-        .get(&process)
-        .and_then(|process_plan| process_plan.instances.iter().find(|i| &i.id == id))?
-        .clone();
-    let mut upstream = Vec::new();
-    for route in plan.routes_to(id) {
-        let fingerprint = effective.get(&route.from).cloned()?;
-        upstream.push(UpstreamBinding {
-            // Same derivation as the executor submission's input binding
-            // names — renaming an input invalidates dependents, matching
-            // Nextflow hashing input names.
-            name: format!("port_{}", route.to_port),
-            fingerprint,
-        });
-    }
-    Some(instance_fingerprint_of(
-        &process,
-        &spec,
-        &instance,
-        &upstream,
-        dag_core::engine_version(),
-        dag_core::source_revision(),
-    ))
 }
 
 #[cfg(test)]

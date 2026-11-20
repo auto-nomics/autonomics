@@ -207,14 +207,18 @@ body {
   }
 }
 
-/* ── transcript markdown typography ── */
-.md {
+/* ── shared markdown typography ──
+   One typography layer for every markdown surface: reading views (.md) and
+   the vditor editor (.wiki-vditor .vditor-reset renders the same elements
+   inside its contenteditable/preview panes). Selector list keeps a single
+   source of truth so edit and read modes cannot drift apart. */
+:is(.md, .wiki-vditor .vditor-reset) {
   font-size: 0.875rem;
   line-height: 1.65;
   overflow-wrap: break-word;
 }
-.md > :first-child { margin-top: 0; }
-.md > :last-child { margin-bottom: 0; }
+:is(.md, .wiki-vditor .vditor-reset) > :first-child { margin-top: 0; }
+:is(.md, .wiki-vditor .vditor-reset) > :last-child { margin-bottom: 0; }
 /* Streaming cursor rides the tail of the last rendered block — inline with
    the newest text, not on a line of its own below the message. */
 .md-streaming > :last-child::after {
@@ -231,39 +235,39 @@ body {
 @keyframes md-cursor-pulse {
   50% { opacity: 0.35; }
 }
-.md p { margin: 0.5em 0; }
-.md h1, .md h2, .md h3, .md h4 {
+:is(.md, .wiki-vditor .vditor-reset) p { margin: 0.5em 0; }
+:is(.md, .wiki-vditor .vditor-reset) :is(h1, h2, h3, h4) {
   margin: 1em 0 0.4em;
   font-weight: 600;
   line-height: 1.3;
 }
-.md h1 { color: var(--md-h1-color); font-size: 1.25em; }
-.md h2 { color: var(--md-h2-color); font-size: 1.15em; }
-.md h3 { color: var(--md-h3-color); font-size: 1.05em; }
-.md h4 { color: var(--md-h4-color); }
-.md h5 { color: var(--md-h5-color); }
-.md h6 { color: var(--md-h6-color); }
-.md ul, .md ol { margin: 0.5em 0; padding-left: 1.4em; }
-.md ul { list-style: disc; }
-.md ol { list-style: decimal; }
-.md li { margin: 0.2em 0; }
-.md a {
+:is(.md, .wiki-vditor .vditor-reset) h1 { color: var(--md-h1-color); font-size: 1.25em; }
+:is(.md, .wiki-vditor .vditor-reset) h2 { color: var(--md-h2-color); font-size: 1.15em; }
+:is(.md, .wiki-vditor .vditor-reset) h3 { color: var(--md-h3-color); font-size: 1.05em; }
+:is(.md, .wiki-vditor .vditor-reset) h4 { color: var(--md-h4-color); }
+:is(.md, .wiki-vditor .vditor-reset) h5 { color: var(--md-h5-color); }
+:is(.md, .wiki-vditor .vditor-reset) h6 { color: var(--md-h6-color); }
+:is(.md, .wiki-vditor .vditor-reset) :is(ul, ol) { margin: 0.5em 0; padding-left: 1.4em; }
+:is(.md, .wiki-vditor .vditor-reset) ul { list-style: disc; }
+:is(.md, .wiki-vditor .vditor-reset) ol { list-style: decimal; }
+:is(.md, .wiki-vditor .vditor-reset) li { margin: 0.2em 0; }
+:is(.md, .wiki-vditor .vditor-reset) a {
   color: var(--primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.md blockquote {
+:is(.md, .wiki-vditor .vditor-reset) blockquote {
   margin: 0.6em 0;
   padding: 0.1em 0.9em;
   border-left: 3px solid var(--border);
   color: var(--muted-foreground);
 }
-.md hr {
+:is(.md, .wiki-vditor .vditor-reset) hr {
   margin: 1em 0;
   border: 0;
   border-top: 1px solid var(--border);
 }
-.md table {
+:is(.md, .wiki-vditor .vditor-reset) table {
   margin: 0.6em 0;
   border-collapse: collapse;
   font-size: 0.85em;
@@ -271,30 +275,30 @@ body {
   overflow-x: auto;
   max-width: 100%;
 }
-.md th, .md td {
+:is(.md, .wiki-vditor .vditor-reset) :is(th, td) {
   border: 1px solid var(--border);
   padding: 0.3em 0.65em;
   text-align: left;
 }
-.md th {
+:is(.md, .wiki-vditor .vditor-reset) th {
   background: var(--muted);
   font-weight: 600;
 }
-.md :not(pre, pre *) > code {
+:is(.md, .wiki-vditor .vditor-reset) :not(pre, pre *) > code {
   padding: 0.15em 0.35em;
   border-radius: 4px;
   background: var(--inline-code-bg);
   font-size: 0.85em;
   font-family: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
 }
-.md pre {
+:is(.md, .wiki-vditor .vditor-reset) pre {
   margin: 0;
   padding: 0.75em 0.9em;
   overflow-x: auto;
   font-size: 0.8em;
   line-height: 1.55;
 }
-.md pre code {
+:is(.md, .wiki-vditor .vditor-reset) pre code {
   font-family: ui-monospace, "JetBrains Mono", "Fira Code", monospace;
   background: none;
   padding: 0;
@@ -357,7 +361,7 @@ body {
 .md-wikilink--missing:hover {
   color: var(--foreground);
 }
-.md img {
+:is(.md, .wiki-vditor .vditor-reset) img {
   max-width: 100%;
   border-radius: 0.5em;
 }
@@ -525,15 +529,14 @@ body {
 .wiki-vditor .wiki-vditor-body :is(.vditor-ir, .vditor-wysiwyg) > .vditor-reset { height: auto; min-height: 260px; overflow: visible; }
 .wiki-vditor .wiki-vditor-body > .vditor-sv { flex-basis: 50%; min-height: 260px; overflow: hidden; }
 .wiki-vditor .vditor-content > .vditor-hint { transform: translateY(var(--wiki-editor-hint-offset, 0px)); }
-.wiki-vditor .vditor-reset { color: var(--foreground); font-family: inherit; font-size: 15px; line-height: 1.75; }
+/* Typography (font size, colors, tables, code, lists…) comes from the shared
+   markdown layer above via :is(.md, .wiki-vditor .vditor-reset) — only the
+   editor-specific chrome and layout live here. */
+.wiki-vditor .vditor-reset { color: var(--foreground); font-family: inherit; }
 .wiki-vditor :is(.vditor-ir, .vditor-wysiwyg) .vditor-reset { padding: 20px max(48px, calc((100% - 768px) / 2)) !important; }
 .wiki-vditor .vditor-sv { color: var(--foreground); background: var(--background); padding: 20px 24px; }
-.wiki-vditor .vditor-reset :is(pre, code) { background-color: var(--muted); }
 .wiki-vditor .vditor-reset img { max-width: 100%; height: auto; }
+/* Code blocks in the editor have no .md-code shell; reuse the reading-mode
+   code background so both modes render the same surface. */
+.wiki-vditor .vditor-reset pre { background: var(--code-block-bg); border-radius: 0.5em; }
 .wiki-vditor .vditor-hint { background: var(--popover); color: var(--popover-foreground); }
-.wiki-vditor .vditor-reset table { color: var(--foreground); border-color: var(--border); background-color: var(--background); }
-.wiki-vditor .vditor-reset table :is(th, td) { color: inherit; border-color: var(--border); background-color: inherit; }
-.wiki-vditor .vditor-reset table tr { border-color: var(--border); background-color: var(--background); }
-.wiki-vditor .vditor-reset table tbody tr:nth-child(2n) { background-color: var(--muted); }
-.wiki-vditor .vditor-reset table thead th { background-color: var(--muted); }
-.wiki-vditor .vditor-reset table tbody tr:hover { background-color: var(--accent); }
