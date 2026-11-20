@@ -774,3 +774,295 @@ fn flow_content_hash(flow: &crate::workflow::FlowGraph) -> String {
     let bytes = serde_json::to_vec(flow).unwrap_or_default();
     format!("{:x}", Sha256::digest(bytes))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use crate::data_engine::DataEngine;
+
+    /// Barrier executor used to hold a flow run open while the test inspects
+    /// live actor state through the client.
+    struct RendezvousExecutor {
+        barrier: Arc<tokio::sync::Barrier>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        inner: Arc<dyn dag_core::TaskExecutor>,
+    }
+    #[async_trait::async_trait]
+    impl dag_core::TaskExecutor for RendezvousExecutor {
+        fn name(&self) -> &'static str {
+            "rendezvous-test"
+        }
+        async fn run(
+            &self,
+            execution: dag_core::TaskExecution,
+        ) -> dag_core::dag::node_event::JobResult {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.barrier.wait().await;
+            self.inner.run(execution).await
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn zero_idle_policy() -> crate::runtime::MaintenancePolicy {
+        crate::runtime::MaintenancePolicy {
+            agent_idle: std::time::Duration::ZERO,
+            maintenance_interval: None,
+            clean_keep_runs: 2,
+            storage_max_bytes: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn latest_failed_run_does_not_restore_an_older_report() {
+        let directory = tempfile::tempdir().unwrap();
+        let history =
+            dag_core::dag::history::DagHistory::open(&directory.path().join("history.db"))
+                .await
+                .unwrap();
+        let manager = crate::runtime::DataEngineManager::with_policy_and_roots(
+            DataEngine::builder().build().with_history(history.clone()),
+            zero_idle_policy(),
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_agent("a");
+        let graph = crate::workflow::FlowGraph::builder()
+            .process(crate::workflow::Process::new(
+                "hello",
+                "echo",
+                serde_json::json!({}),
+            ))
+            .build()
+            .unwrap();
+        assert!(
+            client
+                .run_flow(Some(graph), crate::flow::FlowOptions::default())
+                .await
+                .unwrap()
+                .ok
+        );
+        let mut failed = history
+            .list_runs(1, Some("flow"))
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        failed.id = uuid::Uuid::new_v4().to_string();
+        failed.started_at = "9999-01-01T00:00:00Z".into();
+        failed.ok = false;
+        failed.error = Some("execution failed".into());
+        failed.run_report_json = None;
+        history.record_run(&failed).await.unwrap();
+        assert_eq!(manager.evict_idle_actors().await, 1);
+        assert!(
+            manager
+                .client_for_agent("a")
+                .get_flow_view()
+                .await
+                .unwrap()
+                .last_run
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_flow_run_is_recorded_in_history() {
+        let history = dag_core::dag::history::DagHistory::open_in_memory()
+            .await
+            .unwrap();
+        let (client, _handle) = crate::runtime::spawn_with_engine(
+            DataEngine::builder().build().with_history(history.clone()),
+        );
+        let graph = crate::workflow::FlowGraph::builder()
+            .process(crate::workflow::Process::new(
+                "broken",
+                "missing_kind",
+                serde_json::json!({}),
+            ))
+            .build()
+            .unwrap();
+        let error = client
+            .run_flow(Some(graph), crate::flow::FlowOptions::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("missing_kind"));
+        let runs = history.list_runs(10, Some("flow")).await.unwrap();
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].ok && !runs[0].cancelled);
+        assert!(runs[0].error.as_deref().unwrap().contains("missing_kind"));
+        assert!(runs[0].run_report_json.is_none());
+    }
+
+    #[tokio::test]
+    async fn flow_view_tracks_last_run_and_clears_after_edit() {
+        let (client, _handle) = crate::runtime::spawn_with_engine(DataEngine::builder().build());
+        let graph = crate::workflow::FlowGraph::builder()
+            .process(crate::workflow::Process::new(
+                "hello",
+                "echo",
+                serde_json::json!({}),
+            ))
+            .build()
+            .unwrap();
+        client.set_flow(graph.clone()).await.unwrap();
+        assert!(client.get_flow_view().await.unwrap().last_run.is_none());
+        let report = client
+            .run_flow(None, crate::flow::FlowOptions::default())
+            .await
+            .unwrap();
+        assert!(report.ok);
+        let view = client.get_flow_view().await.unwrap();
+        let summary = view.last_run.unwrap();
+        assert!(summary.ok);
+        assert_eq!(summary.processes["hello"].succeeded, 1);
+        let preview = client
+            .run_dag_shell("node('more', 'echo', {})\ncommit()".into(), true, None)
+            .await
+            .unwrap();
+        assert!(preview.ok && !preview.applied);
+        assert!(client.get_flow_view().await.unwrap().last_run.is_some());
+        client.set_flow(graph).await.unwrap();
+        assert!(client.get_flow_view().await.unwrap().last_run.is_some());
+        let edit = client
+            .run_dag_shell("node('more', 'echo', {})\ncommit()".into(), false, None)
+            .await
+            .unwrap();
+        assert!(edit.applied);
+        assert!(client.get_flow_view().await.unwrap().last_run.is_none());
+    }
+
+    #[tokio::test]
+    async fn snapshot_and_dot_remain_available_during_flow_execution() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.txt");
+        std::fs::write(&path, "payload").unwrap();
+        let flow = crate::workflow::FlowGraph::builder()
+            .process(crate::workflow::Process::new(
+                "slow",
+                "file_reference",
+                serde_json::json!({"path":path.to_string_lossy()}),
+            ))
+            .build()
+            .unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let mut template = DataEngine::builder().build();
+        template.set_task_executor(Arc::new(RendezvousExecutor {
+            barrier: barrier.clone(),
+            calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            inner: dag_core::local_task_executor(),
+        }));
+        let manager = crate::runtime::DataEngineManager::with_policy_and_roots(
+            template,
+            zero_idle_policy(),
+            directory.path().join("work"),
+            directory.path().join("receipts"),
+        );
+        let client = manager.client_for_agent("live-test");
+        let running_client = client.clone();
+        let task = tokio::spawn(async move {
+            running_client
+                .run_flow(Some(flow), crate::flow::FlowOptions::default())
+                .await
+        });
+        let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let snapshot = client.dag_tui_snapshot().await.unwrap();
+                if snapshot.running
+                    && snapshot
+                        .node("slow")
+                        .is_some_and(|n| n.status == crate::dag::runtime::RuntimeStatus::Running)
+                {
+                    break snapshot;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("live flow snapshot should be readable while the task runs");
+        assert!(snapshot.run_id.is_some());
+        assert!(
+            client
+                .dag_tui_snapshot()
+                .await
+                .unwrap()
+                .to_dot()
+                .contains("slow")
+        );
+        barrier.wait().await;
+        assert!(task.await.unwrap().unwrap().ok);
+        let finished = client.dag_tui_snapshot().await.unwrap();
+        assert!(!finished.running);
+        assert_eq!(
+            finished.node("slow").unwrap().status,
+            crate::dag::runtime::RuntimeStatus::Success
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_edit_commands_use_the_session_flow() {
+        let (client, _handle) = crate::runtime::spawn_with_engine(DataEngine::builder().build());
+        client
+            .add_node("first".into(), "echo".into(), serde_json::json!({}))
+            .await
+            .unwrap();
+        client
+            .add_node("second".into(), "echo".into(), serde_json::json!({}))
+            .await
+            .unwrap();
+        client
+            .add_edge("first".into(), "second".into())
+            .await
+            .unwrap();
+        let flow = client.get_flow().await.unwrap();
+        assert!(flow.process("first").is_some());
+        assert_eq!(flow.wires().len(), 1);
+        assert!(client.node_exists("first".into()).await.unwrap());
+        assert_eq!(
+            client.get_node("first".into()).await.unwrap().unwrap().0,
+            "echo"
+        );
+        assert!(
+            client
+                .dag_tui_snapshot()
+                .await
+                .unwrap()
+                .to_dot()
+                .contains("second")
+        );
+        assert!(
+            client
+                .add_edge("second".into(), "first".into())
+                .await
+                .is_err()
+        );
+        assert_eq!(client.get_flow().await.unwrap().wires().len(), 1);
+        client.remove_node("first".into()).await.unwrap();
+        let flow = client.get_flow().await.unwrap();
+        assert!(flow.process("first").is_none());
+        assert!(flow.wires().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_node_client_rejects_generic_container_kind() {
+        let engine = DataEngine::builder().build();
+        let (client, _handle) = crate::runtime::spawn_with_engine(engine);
+
+        let error = client
+            .add_node(
+                "generic_container".to_string(),
+                "container_command".to_string(),
+                serde_json::json!({}),
+            )
+            .await
+            .expect_err("container_command creation must be rejected");
+
+        assert!(
+            error.to_string().contains(
+                "node kind 'container_command' is disabled; use a registered dedicated node instead"
+            ),
+            "unexpected error: {error}"
+        );
+    }
+}

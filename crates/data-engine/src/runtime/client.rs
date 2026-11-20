@@ -417,3 +417,56 @@ impl DataEngineClient {
         .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Layer 1 regression: metadata queries resolve the `channel` pseudo-kind
+    /// from the client side, and the advertised operator set matches the
+    /// runtime's inline channel primitives.
+    #[tokio::test]
+    async fn channel_metadata_describes_runtime_operators() {
+        let (client, _handle) =
+            crate::runtime::spawn_with_engine(crate::data_engine::DataEngine::builder().build());
+        assert!(
+            client
+                .list_node_factories()
+                .unwrap()
+                .iter()
+                .any(|node| node.kind == "channel")
+        );
+        let schema = serde_json::to_value(client.get_node_spec("channel").unwrap()).unwrap();
+        let variants = schema["oneOf"].as_array().unwrap();
+        for operator in [
+            "collect",
+            "transpose",
+            "buffer",
+            "if_empty",
+            "concat",
+            "to_sorted_list",
+        ] {
+            assert!(
+                variants
+                    .iter()
+                    .any(|v| v["properties"]["operator"]["const"] == operator),
+                "{operator}"
+            );
+        }
+        let ports = client
+            .get_node_ports_for_spec("channel", serde_json::json!({"operator":"join"}))
+            .unwrap();
+        assert_eq!(ports.input_ports().len(), 2);
+        assert_eq!(ports.output_ports().len(), 1);
+        let branch = client
+            .get_node_ports_for_spec(
+                "channel",
+                serde_json::json!({"operator":"branch", "branches":[{"name":"a"}, {"name":"b"}]}),
+            )
+            .unwrap();
+        assert_eq!(branch.output_ports().len(), 2);
+        assert!(
+            client
+                .get_node_ports_for_spec("channel", serde_json::json!({"operator":"missing"}))
+                .is_err()
+        );
+    }
+}
