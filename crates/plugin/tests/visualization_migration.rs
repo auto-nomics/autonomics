@@ -243,8 +243,7 @@ fn visualization_plugin_schema_requires_data_format_and_bounds_dimensions() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "visualization");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // data_format is the only required param (no default, not optional);
     // width/height/dpi carry defaults and the legacy "finite and > 0" rule.
     assert_eq!(

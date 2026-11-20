@@ -211,8 +211,7 @@ fn timesfm_forecast_plugin_schema_matches_the_legacy_param_surface() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "timesfm_forecast");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Both legacy params have serde defaults, so nothing is required.
     // Deliberate delta: the legacy schema also advertised
     // `artifact_prefix` and `timeout_secs` (harness metadata the runner

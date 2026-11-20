@@ -411,9 +411,7 @@ fn node_by_kind<'a>(
 /// shape_topology, perturb) carry required identity strings with no
 /// default, so the default-value contract compile needs stand-ins for them.
 /// They are all unbounded strings, so a constant filler never trips bounds.
-fn stand_in_required_values(
-    node: &plugin::node_definition::NodeDefinition,
-) -> serde_json::Value {
+fn stand_in_required_values(node: &plugin::node_definition::NodeDefinition) -> serde_json::Value {
     use plugin::node_definition::ParamType;
     let mut values = serde_json::Map::new();
     for (name, spec) in &node.params {
@@ -705,8 +703,7 @@ fn pyradiomics_extract_schema_marks_identity_required_and_rest_defaulted() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "pyradiomics_extract");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     let mut required = schema["required"]
         .as_array()
         .unwrap()

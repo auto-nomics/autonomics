@@ -219,8 +219,7 @@ fn lava_plugin_schema_marks_the_two_required_params_and_array_bounds() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "lava");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // The legacy spec's two non-defaulted fields.
     let required = schema["required"].as_array().unwrap();
     assert_eq!(required, &vec![json!("analysis"), json!("phenotypes")]);
@@ -356,8 +355,7 @@ fn lava_scan_plugin_schema_marks_phenotypes_required_with_bounds() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "lava_scan");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     let required = schema["required"].as_array().unwrap();
     assert_eq!(required, &vec![json!("phenotypes")]);
     assert_eq!(schema["properties"]["phenotypes"]["minItems"], 2.0);

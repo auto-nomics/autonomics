@@ -264,11 +264,7 @@ fn all_wave_families_install_from_git_and_register() {
     let report = plugin::sync::sync(&config_path, &root).unwrap();
     assert_eq!(report.outcomes.len(), FAMILIES.len());
     for (name, outcome) in &report.outcomes {
-        assert_eq!(
-            *outcome,
-            plugin::sync::EntryOutcome::Installed,
-            "{name}"
-        );
+        assert_eq!(*outcome, plugin::sync::EntryOutcome::Installed, "{name}");
     }
 
     // 2. Load: one Plugin per family, all kinds present.

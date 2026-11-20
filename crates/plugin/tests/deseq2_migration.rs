@@ -283,8 +283,7 @@ fn deseq2_de_plugin_schema_matches_the_legacy_param_surface() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "deseq2_de");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // BTreeMap order: exactly the two legacy non-defaulted fields.
     let required = schema["required"].as_array().unwrap();
     assert_eq!(

@@ -585,7 +585,6 @@ impl DataEngine {
     }
 
     // ── incremental execution API ──────────────────────────────────────
-
 }
 
 /// Builder for the process-wide [`DataEngine`].

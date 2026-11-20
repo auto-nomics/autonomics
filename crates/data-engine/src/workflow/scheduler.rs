@@ -1211,9 +1211,9 @@ mod tests {
                     .and_then(|stem| stem.to_str())
                     .unwrap_or("in");
                 name_parts.push(base.to_string());
-                if let Ok(text) =
-                    std::fs::read_to_string(file.path.strip_prefix("local://").unwrap_or(&file.path))
-                {
+                if let Ok(text) = std::fs::read_to_string(
+                    file.path.strip_prefix("local://").unwrap_or(&file.path),
+                ) {
                     content.push_str(&text);
                 }
             }

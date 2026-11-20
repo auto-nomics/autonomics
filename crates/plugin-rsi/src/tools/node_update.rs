@@ -6,10 +6,10 @@
 //! shrink, and every candidate manifest is validated and compiled before it
 //! lands; a rejected edit leaves the file untouched.
 
+use ::plugin::{manifest::PluginManifest, node_definition};
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
-use ::plugin::{manifest::PluginManifest, node_definition};
 use serde_json::json;
 use toml::Value as TomlValue;
 

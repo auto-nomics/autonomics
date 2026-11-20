@@ -697,7 +697,6 @@ impl ChannelNode {
     }
 }
 
-
 /// Render `{{item}}` / `{{item.field…}}` template tokens against one channel
 /// item. Strict: any other `{{…}}` token is an error, not an escape hatch.
 pub(crate) fn render_spec(

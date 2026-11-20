@@ -180,9 +180,7 @@ impl PluginStore {
     }
 
     /// Read the persistent source declarations indexed by plugin name.
-    pub fn registry_sources(
-        &self,
-    ) -> Result<BTreeMap<String, ::plugin::sync::PluginSource>> {
+    pub fn registry_sources(&self) -> Result<BTreeMap<String, ::plugin::sync::PluginSource>> {
         let text = match std::fs::read_to_string(&self.registry_path) {
             Ok(text) => text,
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {

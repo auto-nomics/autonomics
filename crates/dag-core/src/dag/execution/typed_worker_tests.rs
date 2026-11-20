@@ -108,7 +108,6 @@ impl crate::DagNode for EchoNode {
     }
 }
 
-
 /// Two-Any-input, Any-output stand-in for the removed legacy gather node:
 /// `prepare` must derive each input's transport contract from runtime values.
 struct AnyFanInNode {
@@ -164,7 +163,7 @@ impl crate::DagNode for AnyFanInNode {
                     other => {
                         return Err(DagError::Schedule(format!(
                             "any_fan_in cannot merge {other:?}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -173,7 +172,9 @@ impl crate::DagNode for AnyFanInNode {
         Ok(outputs)
     }
     fn clone_box(&self) -> Box<dyn crate::DagNode> {
-        Box::new(AnyFanInNode { ports: self.ports.clone() })
+        Box::new(AnyFanInNode {
+            ports: self.ports.clone(),
+        })
     }
     fn kind(&self) -> &'static str {
         "any_fan_in"
@@ -182,7 +183,6 @@ impl crate::DagNode for AnyFanInNode {
         self
     }
 }
-
 
 struct AnyFanInFactory;
 
@@ -202,11 +202,7 @@ impl crate::registry::NodeFactory for AnyFanInFactory {
     fn ports(&self) -> NodePorts {
         NodePorts::new()
     }
-    fn build(
-        &self,
-        _: serde_json::Value,
-        _: NodeCtx,
-    ) -> RegistryResult<Box<dyn crate::DagNode>> {
+    fn build(&self, _: serde_json::Value, _: NodeCtx) -> RegistryResult<Box<dyn crate::DagNode>> {
         Ok(Box::new(AnyFanInNode::new()))
     }
 }

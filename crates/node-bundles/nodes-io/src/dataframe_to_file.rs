@@ -172,7 +172,9 @@ impl DataFrameToFileNode {
     ) -> Result<(), DataFrameToFileError> {
         let Some(virtual_path) = vfs::uri::storage_path(path) else {
             return Err(DataFrameToFileError::InvalidInput {
-                message: format!("expected a storage-domain partitioned output path (`local://`), got `{path}`"),
+                message: format!(
+                    "expected a storage-domain partitioned output path (`local://`), got `{path}`"
+                ),
             });
         };
         let Some(storage) = node_ctx.opendal.as_ref() else {

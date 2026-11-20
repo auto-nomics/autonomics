@@ -329,8 +329,7 @@ fn susie_rss_plugin_schema_marks_optionals_and_bounds() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "susie_rss");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Every param has a default or is optional (n): nothing is required.
     let required = schema["required"].as_array().unwrap();
     assert!(required.is_empty());

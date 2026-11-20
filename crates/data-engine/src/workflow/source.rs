@@ -1026,7 +1026,10 @@ mod tests {
         }
         for (path_type, expected) in [
             (PathType::File, vec!["local://data/root.txt"]),
-            (PathType::Dir, vec!["local://data/other", "local://data/sample"]),
+            (
+                PathType::Dir,
+                vec!["local://data/other", "local://data/sample"],
+            ),
             (
                 PathType::Any,
                 vec![
@@ -1065,7 +1068,10 @@ mod tests {
         for (depth, expected) in [
             (-1, vec![]),
             (0, vec!["local://data/root.fastq"]),
-            (1, vec!["local://data/a/one.fastq", "local://data/root.fastq"]),
+            (
+                1,
+                vec!["local://data/a/one.fastq", "local://data/root.fastq"],
+            ),
             (
                 2,
                 vec![
@@ -1119,7 +1125,10 @@ mod tests {
         let items = enumerate_glob("local://data/sample_%3F.fastq", &storage)
             .await
             .unwrap();
-        assert_eq!(items, vec![serde_json::json!("local://data/sample_1.fastq")]);
+        assert_eq!(
+            items,
+            vec![serde_json::json!("local://data/sample_1.fastq")]
+        );
     }
 
     #[tokio::test]

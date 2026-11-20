@@ -77,9 +77,7 @@ fn sync_plugins(config: &gateway::RuntimeConfig) -> Result<Vec<Plugin>> {
         .ensure_v2_directories()
         .map_err(|error| color_eyre::eyre::eyre!("invalid plugin layout: {error}"))?;
     let root = layout.runtime_root();
-    let config_path = config
-        .state_dir
-        .join(plugin::sync::PLUGIN_CONFIG_FILE);
+    let config_path = config.state_dir.join(plugin::sync::PLUGIN_CONFIG_FILE);
     if !config_path.is_file() {
         println!(
             "plugins: {} not present — built-in nodes only",

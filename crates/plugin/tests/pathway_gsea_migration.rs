@@ -233,8 +233,7 @@ fn pathway_gsea_plugin_schema_defaults_every_param() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "pathway_gsea");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Every legacy spec field carried a serde default, so nothing is
     // required.
     let required = schema["required"].as_array().unwrap();

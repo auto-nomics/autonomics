@@ -471,8 +471,7 @@ fn twosamplemr_plugin_schema_and_bounds_reject_the_legacy_invalid_specs() {
     // Main node: the four labels were required (no serde default) on
     // TwoSampleMrContainerSpec; every other field had a default or was
     // Option.
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     let required = schema["required"].as_array().unwrap();
     assert_eq!(
         required

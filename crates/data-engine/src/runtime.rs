@@ -39,8 +39,7 @@ pub mod storage;
 pub mod types;
 
 pub use storage::{
-    AgentActivityTracker, ArtifactEntry, MaintenancePolicy, RunAwareCleanReport,
-    StorageCoordinator,
+    AgentActivityTracker, ArtifactEntry, MaintenancePolicy, RunAwareCleanReport, StorageCoordinator,
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1939,7 +1938,14 @@ mod tests {
         .await
         .expect("live flow snapshot should be readable while the task runs");
         assert!(snapshot.run_id.is_some());
-        assert!(client.dag_tui_snapshot().await.unwrap().to_dot().contains("slow"));
+        assert!(
+            client
+                .dag_tui_snapshot()
+                .await
+                .unwrap()
+                .to_dot()
+                .contains("slow")
+        );
         barrier.wait().await;
         assert!(task.await.unwrap().unwrap().ok);
         let finished = client.dag_tui_snapshot().await.unwrap();
@@ -1973,7 +1979,14 @@ mod tests {
             client.get_node("first".into()).await.unwrap().unwrap().0,
             "echo"
         );
-        assert!(client.dag_tui_snapshot().await.unwrap().to_dot().contains("second"));
+        assert!(
+            client
+                .dag_tui_snapshot()
+                .await
+                .unwrap()
+                .to_dot()
+                .contains("second")
+        );
         assert!(
             client
                 .add_edge("second".into(), "first".into())

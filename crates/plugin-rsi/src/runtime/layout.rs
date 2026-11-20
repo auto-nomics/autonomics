@@ -109,8 +109,7 @@ impl PluginStateLayout {
     }
 
     pub fn registry_path(&self) -> PathBuf {
-        self.state_dir
-            .join(::plugin::sync::PLUGIN_CONFIG_FILE)
+        self.state_dir.join(::plugin::sync::PLUGIN_CONFIG_FILE)
     }
 
     pub fn workspace_path(&self, plugin_name: &str) -> Result<PathBuf> {

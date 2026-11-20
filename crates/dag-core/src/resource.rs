@@ -333,8 +333,7 @@ mod capacity_tests {
 
         // Membership in a cgroup without a memory.max falls back to the
         // system total.
-        let bytes =
-            memory_capacity_bytes_at(&dir, "0::/unlimited\n", meminfo).unwrap();
+        let bytes = memory_capacity_bytes_at(&dir, "0::/unlimited\n", meminfo).unwrap();
         assert_eq!(bytes, 8 * 1024 * 1024 * 1024);
 
         // A cgroup limit below the system total wins.

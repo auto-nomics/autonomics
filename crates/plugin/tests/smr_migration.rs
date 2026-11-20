@@ -292,8 +292,7 @@ fn smr_heidi_plugin_schema_requires_only_chr() {
         let manifest = load_manifest(&root);
         let node = node_by_kind(&manifest, kind);
 
-        let schema =
-            serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+        let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
         let required = schema["required"].as_array().unwrap();
         assert_eq!(required, &[json!("chr")], "{kind}: only chr is required");
         assert_eq!(schema["properties"]["chr"]["type"], "integer");

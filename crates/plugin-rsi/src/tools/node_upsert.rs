@@ -3,10 +3,10 @@ use super::{
     helpers::{resolve_target, tool_error},
     manifest::{editable_manifest, save_manifest},
 };
+use ::plugin::node_definition::NodeDefinition;
 use agentik_core::tools::{ToolError, ToolFunction, ToolResult};
 use agentik_proc::tool;
 use async_trait::async_trait;
-use ::plugin::node_definition::NodeDefinition;
 
 #[tool(
     name = "plugin_node_upsert",

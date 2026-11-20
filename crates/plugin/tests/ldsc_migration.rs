@@ -143,8 +143,7 @@ fn ldsc_h2_plugin_schema_marks_optionals_not_required() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "ldsc_h2");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     let required = schema["required"].as_array().unwrap();
     assert!(required.is_empty());
     assert_eq!(schema["properties"]["n_blocks"]["type"], "integer");

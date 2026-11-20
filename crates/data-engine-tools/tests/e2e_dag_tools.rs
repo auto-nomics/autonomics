@@ -45,8 +45,6 @@ fn result_json(result: &ToolResult) -> serde_json::Value {
     }
 }
 
-
-
 /// Hermetic per-test storage: a tempdir-backed mount at `/`, the shape
 /// production engines run with. Fixture files are written into `files`
 /// (the mount source) with `std::fs`; nodes address them by their virtual
@@ -181,8 +179,6 @@ async fn dag_shell_builds_then_removes_edge_and_node() {
     .await;
     assert_eq!(removed["graph"]["process_count"], json!(1));
 }
-
-
 
 #[tokio::test]
 async fn test_dag_runs_log_records_execution_audit_trail() {

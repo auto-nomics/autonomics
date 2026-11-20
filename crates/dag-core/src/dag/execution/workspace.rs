@@ -975,7 +975,10 @@ mod typed_channel_staging_tests {
         let local = temp.path().join("local.txt");
         std::fs::write(&local, b"local").unwrap();
         let mut value = ChannelTransportValue::Tuple(vec![
-            ChannelTransportValue::File(FileRef::new("local:///data/remote.tsv", Some("tsv".into()))),
+            ChannelTransportValue::File(FileRef::new(
+                "local:///data/remote.tsv",
+                Some("tsv".into()),
+            )),
             ChannelTransportValue::File(FileRef::local(&local, None).unwrap()),
         ]);
         let (staged, remote) = LocalTaskWorkspace::stage_channel_value(

@@ -37,15 +37,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agentik_core::tools::{
-    ProgressBuffer, ProgressLog, ProgressRecord, ToolContext, ToolRegistry, ToolRegistration,
+    ProgressBuffer, ProgressLog, ProgressRecord, ToolContext, ToolRegistration, ToolRegistry,
 };
 use agentik_types::tools::{ToolInputSchema, ToolResult, ToolResultBlock, ToolResultContent};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, Implementation, ListResourcesResult,
     ListToolsResult, PaginatedRequestParams, ProgressNotification, ProgressNotificationParam,
     ProgressToken, ReadResourceRequestParams, ReadResourceResult, RequestParamsMeta, Resource,
-    ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig, ServerNotification,
-    Tool,
+    ResourceContents, ResourceTemplate, ServerCapabilities, ServerConfig, ServerNotification, Tool,
 };
 use rmcp::service::{Peer, RequestContext, RoleServer};
 use rmcp::{ErrorData as McpError, ServerHandler};
@@ -232,14 +231,12 @@ async fn progress_forwarder(
         if total > seen {
             seen = total;
             if let Some(record) = newest {
-                let mut param =
-                    ProgressNotificationParam::new(token.clone(), seen as f64);
+                let mut param = ProgressNotificationParam::new(token.clone(), seen as f64);
                 if let Some(message) = progress_message(&record) {
                     param = param.with_message(message);
                 }
-                let notification = ServerNotification::ProgressNotification(
-                    ProgressNotification::new(param),
-                );
+                let notification =
+                    ServerNotification::ProgressNotification(ProgressNotification::new(param));
                 if peer.send_notification(notification).await.is_err() {
                     // Client went away; stop forwarding.
                     return;
@@ -283,7 +280,9 @@ fn tool_result_content_to_blocks(content: &ToolResultContent) -> Vec<ContentBloc
     match content {
         ToolResultContent::Text(text) => vec![ContentBlock::text(text.clone())],
         ToolResultContent::Json(value) => {
-            vec![ContentBlock::text(serde_json::to_string_pretty(value).unwrap_or_default())]
+            vec![ContentBlock::text(
+                serde_json::to_string_pretty(value).unwrap_or_default(),
+            )]
         }
         ToolResultContent::Blocks(blocks) => blocks
             .iter()
@@ -366,8 +365,9 @@ fn entry_to_resource(entry: &VfsEntry) -> Resource {
     let uri = format!("local://{}", entry.path.trim_end_matches('/'));
     let mut resource = Resource::new(uri, entry.name.clone());
     if entry.is_dir {
-        resource.description =
-            Some("directory — children are listed by paginating with its path as the cursor".to_string());
+        resource.description = Some(
+            "directory — children are listed by paginating with its path as the cursor".to_string(),
+        );
     } else {
         resource.mime_type = guess_mime(&entry.name).map(str::to_string);
         resource.size = Some(entry.size);
@@ -435,7 +435,12 @@ impl ServerHandler for McpTools {
             .map(|token| (token, context.peer.clone()));
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         let result = self
-            .call(request.name.as_ref(), arguments, context.ct.clone(), progress)
+            .call(
+                request.name.as_ref(),
+                arguments,
+                context.ct.clone(),
+                progress,
+            )
             .await;
         Ok(result.into())
     }
@@ -465,9 +470,7 @@ impl ServerHandler for McpTools {
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
-        Ok(resource_read(self.vfs.as_ref(), &request.uri)
-            .await?
-            .into())
+        Ok(resource_read(self.vfs.as_ref(), &request.uri).await?.into())
     }
 }
 
@@ -576,8 +579,8 @@ async fn resource_read(
 /// same daemon token frontends use. The service itself keeps rmcp's
 /// loopback-only default `Host` validation (the daemon binds loopback).
 pub fn router(infra: &SharedInfra, auth: Arc<super::auth::AuthContext>) -> axum::Router {
-    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
     use rmcp::transport::streamable_http_server::StreamableHttpService;
+    use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 
     let handler = Arc::new(McpTools::from_infra(infra));
     let session_manager = Arc::new(LocalSessionManager::default());
@@ -674,7 +677,12 @@ mod tests {
     #[tokio::test]
     async fn call_routes_to_implementation_without_progress() {
         let result = bridge()
-            .call("echo", json!({"message": "hi"}), CancellationToken::new(), None)
+            .call(
+                "echo",
+                json!({"message": "hi"}),
+                CancellationToken::new(),
+                None,
+            )
             .await;
         // rmcp's `success()` constructor sets `is_error: Some(false)`.
         assert!(
@@ -773,7 +781,10 @@ mod tests {
     #[test]
     fn mime_guessing() {
         assert_eq!(guess_mime("notes.md"), Some("text/markdown"));
-        assert_eq!(guess_mime("panel.parquet"), Some("application/vnd.apache.parquet"));
+        assert_eq!(
+            guess_mime("panel.parquet"),
+            Some("application/vnd.apache.parquet")
+        );
         assert_eq!(guess_mime("archive.tar.gz"), None);
         assert_eq!(guess_mime("noextension"), None);
     }

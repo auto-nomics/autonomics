@@ -285,8 +285,7 @@ fn twas_fusion_plugin_schema_marks_tissue_and_chr_required() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "twas_fusion");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // BTreeMap order: the two legacy required fields stay required; every
     // defaulted or optional field drops out of `required`.
     let required = schema["required"].as_array().unwrap();

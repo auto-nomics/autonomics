@@ -154,8 +154,7 @@ async fn mcp_resources_list_and_read_vfs() {
     };
 
     // resources/list: root page contains the seeded file.
-    let body = request(json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list"}))
-        .await;
+    let body = request(json!({"jsonrpc": "2.0", "id": 2, "method": "resources/list"})).await;
     assert!(
         body.contains("local:///mcp-e2e-note.md"),
         "listing missing the file: {body}"

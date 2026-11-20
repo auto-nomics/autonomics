@@ -255,10 +255,7 @@ async fn dedicated_retained_namespace_does_not_narrow_admitted_input_root() {
         .validate_vfs(&storage)
         .unwrap();
     let remote = store
-        .remote_input(
-            FileRef::new("hpc-b://input.tsv", None),
-            Some(&storage),
-        )
+        .remote_input(FileRef::new("hpc-b://input.tsv", None), Some(&storage))
         .await
         .unwrap()
         .unwrap();

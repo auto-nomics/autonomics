@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 
 use color_eyre::Result;
 
+use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
 use plugin::bundles::{
     self, BUNDLE_CONCURRENCY, PanelBundleEvent, PanelBundleOutcome, PanelBundleReport,
 };
 use plugin::loader;
-use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
 
 use crate::cli::{PanelsAction, PanelsArgs};
 
@@ -55,9 +55,7 @@ async fn sync_command(state_dir: &Path) -> Result<()> {
 /// Shared by the `panels sync` command and `serve`'s preflight so both
 /// walk the same manifests. The connection and panel cache constructed
 /// here are only carried for factory construction — nothing executes.
-pub(crate) fn load_installed_plugins(
-    state_dir: &Path,
-) -> Result<Vec<plugin::factory::Plugin>> {
+pub(crate) fn load_installed_plugins(state_dir: &Path) -> Result<Vec<plugin::factory::Plugin>> {
     let root = plugin_rsi::PluginStateLayout::open(state_dir).runtime_root();
     let connection: std::sync::Arc<dyn container_runtime::PodmanConnection> = std::sync::Arc::new(
         container_runtime::PodmanRuntime::new(container_runtime::PodmanConfig {

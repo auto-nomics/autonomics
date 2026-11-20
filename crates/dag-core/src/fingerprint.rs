@@ -121,7 +121,11 @@ mod tests {
             .expect("hash a local file");
         assert_eq!(size, 10);
         assert_eq!(digest.len(), 64, "bare lowercase hex digest");
-        assert!(digest.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(
+            digest
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        );
         assert!(
             file_sha256(directory.path().join("missing.bin").to_str().unwrap(), None)
                 .await

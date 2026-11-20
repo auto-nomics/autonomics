@@ -303,8 +303,7 @@ fn music_deconvolution_plugin_schema_matches_the_legacy_param_surface() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "music_deconvolution");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Every legacy spec field carried a serde default, so nothing is
     // required.
     let required = schema["required"].as_array().unwrap();

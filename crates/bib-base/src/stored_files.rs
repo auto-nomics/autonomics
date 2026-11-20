@@ -75,9 +75,7 @@ pub fn vfs_virtual_path(uri: &str) -> Option<String> {
         }
         return Some(uri.to_string());
     }
-    let path = uri
-        .strip_prefix(LEGACY_VFS_PREFIX)?
-        .trim_start_matches('/');
+    let path = uri.strip_prefix(LEGACY_VFS_PREFIX)?.trim_start_matches('/');
     (!path.is_empty()).then(|| format!("/{path}"))
 }
 
@@ -269,7 +267,10 @@ mod tests {
         let a = stored_fulltext("doi:10.1000/x", "paper one.pdf", b"content");
         let b = stored_fulltext("doi:10.1000/x", "paper one.pdf", b"changed");
         assert_ne!(a.path, b.path);
-        assert!(a.path.starts_with("local://literature/doi%253A10.1000%252Fx/"));
+        assert!(
+            a.path
+                .starts_with("local://literature/doi%253A10.1000%252Fx/")
+        );
         assert!(a.path.ends_with("-paper%2520one.pdf"));
         assert_eq!(a.file_hash.len(), 64);
     }

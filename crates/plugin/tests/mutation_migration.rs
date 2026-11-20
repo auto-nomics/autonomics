@@ -310,8 +310,7 @@ fn mutation_analysis_plugin_schema_marks_provenance_labels_per_spec() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mutation_analysis");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Only the required legacy Spec field is required; clinical_path is the
     // Option -> optional mapping.
     let required = schema["required"].as_array().unwrap();

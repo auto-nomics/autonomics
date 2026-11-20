@@ -173,9 +173,7 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
         return Category::Failed(format!("invalid plugin layout: {error}"));
     }
     let root = layout.runtime_root();
-    let config_path = config
-        .state_dir
-        .join(plugin::sync::PLUGIN_CONFIG_FILE);
+    let config_path = config.state_dir.join(plugin::sync::PLUGIN_CONFIG_FILE);
     if !config_path.is_file() {
         return Category::Skipped(format!(
             "{} not present — built-in nodes only",
@@ -195,9 +193,7 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
             let (kind, label) = match entry.outcome {
                 plugin::sync::CheckOutcome::Ok => unreachable!(),
                 plugin::sync::CheckOutcome::Missing => (GapKind::Missing, "missing"),
-                plugin::sync::CheckOutcome::Inconsistent => {
-                    (GapKind::Inconsistent, "inconsistent")
-                }
+                plugin::sync::CheckOutcome::Inconsistent => (GapKind::Inconsistent, "inconsistent"),
             };
             Gap {
                 subject: format!("plugin '{}'", entry.name),

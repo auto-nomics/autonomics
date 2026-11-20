@@ -221,8 +221,7 @@ fn hdl_l_plugin_schema_marks_required_params_and_bounds() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "hdl_l");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // BTreeMap order: exactly the four legacy non-defaulted fields.
     let required = schema["required"].as_array().unwrap();
     assert_eq!(
@@ -371,8 +370,7 @@ fn hdl_l_scan_plugin_schema_leaves_pieces_optional() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "hdl_l_scan");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     let required = schema["required"].as_array().unwrap();
     assert_eq!(
         required,

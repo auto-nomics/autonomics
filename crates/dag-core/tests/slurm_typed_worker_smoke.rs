@@ -73,7 +73,9 @@ impl dag_core::DagNode for AnyFanInNode {
         Ok(outputs)
     }
     fn clone_box(&self) -> Box<dyn dag_core::DagNode> {
-        Box::new(AnyFanInNode { ports: self.ports.clone() })
+        Box::new(AnyFanInNode {
+            ports: self.ports.clone(),
+        })
     }
     fn kind(&self) -> &'static str {
         "any_fan_in"
@@ -82,7 +84,6 @@ impl dag_core::DagNode for AnyFanInNode {
         self
     }
 }
-
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

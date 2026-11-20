@@ -275,8 +275,7 @@ fn coloc_abf_plugin_schema_marks_optionals_not_required() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "coloc_abf");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Only the four always-present legacy fields are required: the two
     // trait types and the two SNP columns. Everything else was
     // Option<T> or defaulted in ColocAbfContainerSpec.

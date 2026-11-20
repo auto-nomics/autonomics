@@ -261,8 +261,7 @@ fn mrpresso_plugin_schema_marks_column_params_required() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mrpresso");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // BTreeMap order: the four legacy required fields stay required; every
     // defaulted field drops out of `required`.
     let required = schema["required"].as_array().unwrap();

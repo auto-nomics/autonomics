@@ -265,8 +265,7 @@ fn mtag_plugin_schema_marks_optionals_not_required() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "mtag");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Every legacy spec field had a default or was serde-defaulted, so
     // nothing is required.
     let required = schema["required"].as_array().unwrap();

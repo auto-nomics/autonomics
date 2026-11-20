@@ -584,10 +584,7 @@ mod tests {
         let path = dir.path().join("strict-history.db");
         {
             let history = DagHistory::open_strict(&path).await.unwrap();
-            history
-                .record_run(&sample_run("111", true))
-                .await
-                .unwrap();
+            history.record_run(&sample_run("111", true)).await.unwrap();
         }
         let reopened = DagHistory::open_strict(&path).await.unwrap();
         assert!(reopened.is_strict_evidence());
@@ -636,14 +633,8 @@ mod tests {
     #[tokio::test]
     async fn record_run_and_list_runs_roundtrip() {
         let history = DagHistory::open_in_memory().await.unwrap();
-        history
-            .record_run(&sample_run("111", true))
-            .await
-            .unwrap();
-        history
-            .record_run(&sample_run("222", false))
-            .await
-            .unwrap();
+        history.record_run(&sample_run("111", true)).await.unwrap();
+        history.record_run(&sample_run("222", false)).await.unwrap();
 
         let runs = history.list_runs(10, None).await.unwrap();
         assert_eq!(runs.len(), 2);
@@ -692,7 +683,10 @@ mod tests {
             .await
             .unwrap();
         assert!(miss.is_none());
-        let hit = history.latest_flow_run("researcher", "flowhash").await.unwrap();
+        let hit = history
+            .latest_flow_run("researcher", "flowhash")
+            .await
+            .unwrap();
         assert_eq!(hit.unwrap().id, "111");
     }
 }

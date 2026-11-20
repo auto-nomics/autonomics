@@ -436,15 +436,16 @@ pub(super) fn lower_worker_task(
         {
             return Err(failure("Any output requires output port zero only"));
         }
-        let payload = inferred_output_payload(execution.submission.inputs.iter().map(
-            |input| match &input.data {
-                NodeValue::DataFrame(_) => "dataframe",
-                NodeValue::File(_) => "file",
-                NodeValue::FileSet(_) => "file_set",
-                NodeValue::Channel(_) => "channel",
-                NodeValue::Structured(_) => "structured_channel",
-            },
-        ))?;
+        let payload =
+            inferred_output_payload(execution.submission.inputs.iter().map(
+                |input| match &input.data {
+                    NodeValue::DataFrame(_) => "dataframe",
+                    NodeValue::File(_) => "file",
+                    NodeValue::FileSet(_) => "file_set",
+                    NodeValue::Channel(_) => "channel",
+                    NodeValue::Structured(_) => "structured_channel",
+                },
+            ))?;
         execution.submission.spec.outputs[0].payload = payload.into();
     }
     let original_vfs_principal = execution

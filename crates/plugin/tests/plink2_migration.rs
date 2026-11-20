@@ -266,8 +266,7 @@ fn plink2_clump_plugin_schema_marks_optionals_not_required() {
     let manifest = load_manifest(&root);
     let node = node_by_kind(&manifest, "plink2_clump");
 
-    let schema =
-        serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
+    let schema = serde_json::to_value(plugin::compile::compile_schema(&node.params)).unwrap();
     // Every legacy spec field had a serde default (or was Option), so the
     // compiled schema leaves `required` empty — same ergonomics as before.
     let required = schema["required"].as_array().unwrap();

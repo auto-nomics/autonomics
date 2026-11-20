@@ -157,7 +157,9 @@ async fn cmd_runs(history: &DagHistory, rest: &[String]) -> Result<()> {
 
 /// `run <run_id>` — 查看单次运行详情。
 async fn cmd_run(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let id = rest.first().ok_or_else(|| BoxErr::from("run 需要 run id"))?;
+    let id = rest
+        .first()
+        .ok_or_else(|| BoxErr::from("run 需要 run id"))?;
 
     let run = history
         .get_run(id.trim())
@@ -168,7 +170,10 @@ async fn cmd_run(history: &DagHistory, rest: &[String]) -> Result<()> {
     println!("Run id:         {}", run.id);
     println!("Ref:            {}", run.ref_name);
     println!("Manifest hash:  {}", run.manifest_hash);
-    println!("Trigger:        {}", run.trigger.as_deref().unwrap_or("(internal)"));
+    println!(
+        "Trigger:        {}",
+        run.trigger.as_deref().unwrap_or("(internal)")
+    );
     println!("Started:        {}", run.started_at);
     println!("Finished:       {}", run.finished_at);
     println!("OK:             {}（cancelled: {}）", run.ok, run.cancelled);
@@ -178,7 +183,10 @@ async fn cmd_run(history: &DagHistory, rest: &[String]) -> Result<()> {
     if let Some(message) = &run.message {
         println!("Message:        {message}");
     }
-    println!("Engine version: {}（rev {}）", run.engine_version, run.source_revision);
+    println!(
+        "Engine version: {}（rev {}）",
+        run.engine_version, run.source_revision
+    );
 
     match &run.run_report_json {
         Some(json) => {
@@ -193,7 +201,10 @@ async fn cmd_run(history: &DagHistory, rest: &[String]) -> Result<()> {
                     println!(
                         "  process '{name}': total={}, ok={}, failed={}, skipped={}, reused={}",
                         summary.get("total").and_then(|v| v.as_u64()).unwrap_or(0),
-                        summary.get("succeeded").and_then(|v| v.as_u64()).unwrap_or(0),
+                        summary
+                            .get("succeeded")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
                         summary.get("failed").and_then(|v| v.as_u64()).unwrap_or(0),
                         summary.get("skipped").and_then(|v| v.as_u64()).unwrap_or(0),
                         summary.get("reused").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -210,7 +221,9 @@ async fn cmd_run(history: &DagHistory, rest: &[String]) -> Result<()> {
 
 /// `flow <agent_id>` — 打印持久化的 authored flow。
 async fn cmd_flow(history: &DagHistory, rest: &[String]) -> Result<()> {
-    let agent = rest.first().ok_or_else(|| BoxErr::from("flow 需要 agent id"))?;
+    let agent = rest
+        .first()
+        .ok_or_else(|| BoxErr::from("flow 需要 agent id"))?;
     let flow = history
         .load_flow_workspace(agent)
         .await
@@ -231,10 +244,7 @@ async fn cmd_flow_cache(history: &DagHistory, rest: &[String]) -> Result<()> {
     let agent = rest
         .first()
         .ok_or_else(|| BoxErr::from("flow-cache 需要 agent id"))?;
-    let cache = history
-        .load_flow_cache(agent)
-        .await
-        .map_err(err_to_box)?;
+    let cache = history.load_flow_cache(agent).await.map_err(err_to_box)?;
     match cache {
         Some(json) => {
             let value: serde_json::Value = serde_json::from_str(&json)
