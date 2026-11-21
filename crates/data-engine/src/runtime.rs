@@ -41,6 +41,4 @@ pub mod types;
 
 pub use client::{CancelOnDropReceiver, DataEngineClient};
 pub use manager::{DataEngineManager, spawn_with_engine};
-pub use storage::{
-    AgentActivityTracker, ArtifactEntry, MaintenancePolicy, RunAwareCleanReport, StorageCoordinator,
-};
+pub use storage::{AgentActivityTracker, ArtifactEntry, RunAwareCleanReport, StorageCoordinator};

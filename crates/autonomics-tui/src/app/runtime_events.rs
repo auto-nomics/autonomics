@@ -1058,7 +1058,7 @@ impl App {
     }
 
     /// Helper: spawn a client-call background task on the app runtime.
-    /// Mirrors the old `agentik_core::supervise::spawn_safe_on_drop`
+    /// Mirrors the `agentik_core::supervise::spawn_safe`
     /// pattern used for host calls.
     pub(super) fn spawn_client_task<F, Fut>(&self, name: &str, make: F)
     where
@@ -1066,7 +1066,7 @@ impl App {
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         let task = make();
-        agentik_core::supervise::spawn_safe_on_drop(&self.runtime_handle, name, task);
+        let _ = agentik_core::supervise::spawn_safe(&self.runtime_handle, name, task);
     }
 }
 

@@ -5,7 +5,7 @@
 //! provides **full cross-agent isolation**: a long DAG run in agent-A's
 //! actor never blocks agent-B's commands, and a panic in one agent's
 //! handler does not affect others. The manager also owns the agent
-//! activity tracker and the storage maintenance policy.
+//! activity tracker.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,9 +18,7 @@ use crate::data_engine::DataEngine;
 use crate::node_registry::NodeRegistry;
 use crate::runtime::actor::AgentEngineActor;
 use crate::runtime::client::DataEngineClient;
-use crate::runtime::storage::{
-    AgentActivityTracker, MaintenancePolicy, RunAwareCleanReport, StorageCoordinator,
-};
+use crate::runtime::storage::{AgentActivityTracker, RunAwareCleanReport, StorageCoordinator};
 use crate::runtime::types::{DataEngineCmd, EngineMsg};
 
 pub(super) struct SessionHandle {
@@ -32,13 +30,26 @@ pub(super) struct SessionHandle {
     _task: JoinHandle<()>,
 }
 
+/// Lifecycle manager of per-agent DAG engine actors.
+///
+/// The manager owns the shared template engine, the node registry, and the
+/// activity tracker. It lazily spawns a dedicated tokio task per agent, and
+/// provides a channel-based client to send commands to that actor. Each
+/// agent's actor derives its own isolated engine from the shared template,
+/// so that each agent's DAG runs and shell commands are fully isolated from
+/// other agents.
+///
+/// - Global singleton: the manager is a singleton in the gateway process, and all agents share the same template engine and node registry.
+/// - Per-agent isolation: each agent's actor has its own engine derived from the template, so that DAG runs and shell commands are fully isolated from other agents.
 pub struct DataEngineManager {
-    template: DataEngine,
+    /// Shared template every actor derives its isolated engine from. Shared
+    /// by `Arc` so an actor can build its own engine without the manager
+    /// giving up the template.
+    template: Arc<DataEngine>,
     node_registry: Arc<NodeRegistry>,
     actors: std::sync::Mutex<HashMap<String, SessionHandle>>,
     activity: Arc<AgentActivityTracker>,
     storage: Arc<StorageCoordinator>,
-    policy: MaintenancePolicy,
 }
 
 impl DataEngineManager {
@@ -46,31 +57,25 @@ impl DataEngineManager {
     /// `NodeRegistry`, `RuntimeEnv`, `DagHistory`, etc. are shared across all
     /// lazily-created actors via `Arc` / `Clone`.
     pub fn new(engine: DataEngine) -> Self {
-        Self::with_policy(engine, MaintenancePolicy::from_env())
-    }
-
-    pub fn with_policy(engine: DataEngine, policy: MaintenancePolicy) -> Self {
         let work_root = container_runtime::PodmanConfig::from_env().workspace_root;
         let receipt_root = dag_core::dag_tasks_root();
-        Self::with_policy_and_roots(engine, policy, work_root, receipt_root)
+        Self::with_policy_and_roots(engine, work_root, receipt_root)
     }
 
-    /// [`Self::with_policy`] with explicit managed roots — used by tests and
+    /// [`Self::new`] with explicit managed roots — used by tests and
     /// embedders that do not derive storage roots from the environment.
     pub fn with_policy_and_roots(
         engine: DataEngine,
-        policy: MaintenancePolicy,
         work_root: impl Into<PathBuf>,
         receipt_root: impl Into<PathBuf>,
     ) -> Self {
         let node_registry = Arc::clone(engine.node_registry());
         Self {
-            template: engine,
+            template: Arc::new(engine),
             node_registry,
             actors: std::sync::Mutex::new(HashMap::new()),
             activity: Arc::new(AgentActivityTracker::default()),
             storage: Arc::new(StorageCoordinator::new(work_root, receipt_root)),
-            policy,
         }
     }
 
@@ -130,23 +135,19 @@ impl DataEngineManager {
         }
 
         // Slow path: create new actor.
-        // Use the caller-provided history_ref so each agent's run records
-        // default to its own audit lineage.
-        let new_engine = self
-            .template
-            .new_isolated_engine()
-            .with_history_ref(history_ref);
+        // The actor derives its own isolated engine from the shared template
+        // and applies the caller-provided history_ref, so each agent's run
+        // records default to its own audit lineage.
         let live_view = crate::dag::live::LiveDagView::default();
         let (tx, rx) = mpsc::unbounded_channel::<EngineMsg>();
         let running = Arc::new(AtomicBool::new(false));
-        let shutdown = Arc::new(AtomicBool::new(false));
         let closing = Arc::new(AtomicBool::new(false));
         let server = AgentEngineActor::new(
             agent_id.to_string(),
-            Arc::new(tokio::sync::Mutex::new(new_engine)),
+            &self.template,
+            history_ref,
             live_view,
             Arc::clone(&running),
-            Arc::clone(&shutdown),
             Arc::clone(&closing),
             rx,
         );
@@ -176,20 +177,20 @@ impl DataEngineManager {
         self.actors.lock().expect("actors mutex poisoned").len()
     }
 
-    /// Stop idle engine actors. Active runs are never evicted.
+    /// Stop idle engine actors. Active runs are never evicted. An actor is
+    /// idle when its last command is older than `idle` (`Duration::ZERO`
+    /// evicts every non-running actor — what tests use to force a rebuild).
     ///
     /// Only the current generation is evicted: targets are marked `closing`
     /// under the actors lock, so any client asking for the same agent id
     /// afterwards receives a freshly created actor whose storage references
     /// are never released by the old actor's shutdown.
-    pub async fn evict_idle_actors(&self) -> usize {
+    pub async fn evict_idle_actors(&self, idle: std::time::Duration) -> usize {
         let targets = {
             let mut actors = self.actors.lock().expect("actors mutex poisoned");
             let mut targets = Vec::new();
             for (id, handle) in actors.iter_mut() {
-                if !handle.running.load(Ordering::SeqCst)
-                    && self.activity.is_idle(id, self.policy.agent_idle)
-                {
+                if !handle.running.load(Ordering::SeqCst) && self.activity.is_idle(id, idle) {
                     // Mark closing inside the lock: a client racing this
                     // eviction will create a new generation instead of
                     // queueing work on the doomed actor.
@@ -232,35 +233,6 @@ impl DataEngineManager {
         evicted
     }
 
-    /// Run one lifecycle pass and enforce the central local-storage budget.
-    ///
-    /// Order is fixed: evict idle actors → enforce the local budget with
-    /// run-aware cleanup. VFS artifacts are only ever reported by that
-    /// cleanup, never deleted.
-    pub async fn maintain_once(
-        &self,
-    ) -> std::result::Result<(usize, usize, Option<RunAwareCleanReport>), String> {
-        let evicted = self.evict_idle_actors().await;
-        let clean = if self.policy.storage_max_bytes > 0
-            && let Some(history) = self.template.history()
-        {
-            let history = history.clone();
-            Some(
-                self.storage
-                    .run_aware_clean_once(
-                        self.policy.clean_keep_runs,
-                        self.policy.storage_max_bytes,
-                        false,
-                        &history,
-                    )
-                    .await?,
-            )
-        } else {
-            None
-        };
-        Ok((0, evicted, clean))
-    }
-
     /// Explicit run-aware clean. `keep_runs` protects the newest runs; a live
     /// `dry_run` reports candidates and protected directories without
     /// touching the disk. VFS artifacts are never deleted.
@@ -277,32 +249,6 @@ impl DataEngineManager {
         self.storage
             .clean_history(&history, keep_runs, dry_run)
             .await
-    }
-
-    /// Start the daemon maintenance loop. Interval `None` performs no work.
-    pub fn spawn_maintenance(self: &Arc<Self>) -> JoinHandle<()> {
-        let manager = Arc::clone(self);
-        let interval = manager.policy.maintenance_interval;
-        tokio::spawn(async move {
-            let Some(interval) = interval else {
-                return;
-            };
-            loop {
-                match manager.maintain_once().await {
-                    Ok((_, evicted, clean)) => {
-                        tracing::info!(
-                            actors_evicted = evicted,
-                            storage_clean = ?clean,
-                            "DAG lifecycle maintenance"
-                        );
-                    }
-                    Err(error) => {
-                        tracing::warn!(error = %error, "DAG lifecycle maintenance failed");
-                    }
-                }
-                tokio::time::sleep(interval).await;
-            }
-        })
     }
 }
 
@@ -355,16 +301,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn zero_idle_policy() -> MaintenancePolicy {
-        MaintenancePolicy {
-            agent_idle: std::time::Duration::ZERO,
-            maintenance_interval: None,
-            clean_keep_runs: 2,
-            storage_max_bytes: 0,
-        }
-    }
-
     #[tokio::test]
     async fn agents_run_concurrently_through_the_shared_configured_executor() {
         let directory = tempfile::tempdir().unwrap();
@@ -387,7 +323,6 @@ mod tests {
         }));
         let manager = DataEngineManager::with_policy_and_roots(
             template,
-            zero_idle_policy(),
             directory.path().join("work"),
             directory.path().join("receipts"),
         );
@@ -430,7 +365,6 @@ mod tests {
         let history = dag_core::dag::history::DagHistory::open(&db).await.unwrap();
         let manager = DataEngineManager::with_policy_and_roots(
             DataEngine::builder().build().with_history(history),
-            zero_idle_policy(),
             directory.path().join("work-a"),
             directory.path().join("receipts-a"),
         );
@@ -469,7 +403,10 @@ mod tests {
             file.to_string_lossy().as_ref()
         );
         assert!(persisted["nodes"][0]["execution"]["workspace"].is_string());
-        assert_eq!(manager.evict_idle_actors().await, 1);
+        assert_eq!(
+            manager.evict_idle_actors(std::time::Duration::ZERO).await,
+            1
+        );
         let recreated = manager.client_for_agent("resume-agent-a");
         let restored_view = recreated.get_flow_view().await.unwrap();
         assert_eq!(
@@ -481,7 +418,6 @@ mod tests {
         let reopened = dag_core::dag::history::DagHistory::open(&db).await.unwrap();
         let restarted = DataEngineManager::with_policy_and_roots(
             DataEngine::builder().build().with_history(reopened),
-            zero_idle_policy(),
             directory.path().join("work-b"),
             directory.path().join("receipts-b"),
         );
@@ -519,7 +455,6 @@ mod tests {
                 .unwrap();
         let manager = DataEngineManager::with_policy_and_roots(
             DataEngine::builder().build().with_history(history),
-            zero_idle_policy(),
             directory.path().join("work"),
             directory.path().join("receipts"),
         );
@@ -534,7 +469,10 @@ mod tests {
             .await
             .unwrap();
         assert!(dry.ok && !dry.applied);
-        assert_eq!(manager.evict_idle_actors().await, 1);
+        assert_eq!(
+            manager.evict_idle_actors(std::time::Duration::ZERO).await,
+            1
+        );
         let reopened = manager.client_for_agent("shell-agent");
         let restored = reopened.get_flow().await.unwrap();
         assert!(restored.source("reads").is_some());
@@ -544,7 +482,10 @@ mod tests {
             .await
             .unwrap();
         assert!(changed.applied);
-        assert_eq!(manager.evict_idle_actors().await, 1);
+        assert_eq!(
+            manager.evict_idle_actors(std::time::Duration::ZERO).await,
+            1
+        );
         let again = manager
             .client_for_agent("shell-agent")
             .get_flow()
@@ -554,7 +495,10 @@ mod tests {
         let other = manager.client_for_agent("other-agent");
         assert!(other.get_flow().await.unwrap().is_empty());
         other.set_flow(again.clone()).await.unwrap();
-        assert_eq!(manager.evict_idle_actors().await, 2);
+        assert_eq!(
+            manager.evict_idle_actors(std::time::Duration::ZERO).await,
+            2
+        );
         let restored_other = manager
             .client_for_agent("other-agent")
             .get_flow()

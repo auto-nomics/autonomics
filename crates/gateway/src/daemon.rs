@@ -239,9 +239,13 @@ pub async fn run_daemon(
     // by a previous session) — MinerU sweep, previously kicked off by the
     // TUI's HTTP server startup. Fire-and-forget: the semaphore inside
     // BibShared caps the concurrency.
-    agentik_core::supervise::spawn_safe_drop("bib-extraction-sweep", async move {
-        bib_base::sweep_pending(&sweep_shared).await;
-    });
+    agentik_core::supervise::spawn_safe(
+        &tokio::runtime::Handle::current(),
+        "bib-extraction-sweep",
+        async move {
+            bib_base::sweep_pending(&sweep_shared).await;
+        },
+    );
 
     // ── Driver loop (sole consumer of the host) ──────────────────────
     let mut host = driver::run(host, hub, contexts, shutdown.clone()).await;

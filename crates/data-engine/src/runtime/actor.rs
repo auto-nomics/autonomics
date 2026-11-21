@@ -25,7 +25,10 @@ pub(super) struct AgentEngineActor {
     live_view: crate::dag::live::LiveDagView,
     live_valid: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
+    /// Set by this actor's own `Shutdown` command. Actor-local: the manager
+    /// never observes it and only this task reads and writes it, so it needs
+    /// no cross-thread ordering — `Relaxed` is sufficient.
+    shutdown: AtomicBool,
     /// Set by the manager when this actor generation is being evicted.
     /// Queued runs are rejected instead of executing on an actor the manager
     /// has already removed from its map.
@@ -34,22 +37,30 @@ pub(super) struct AgentEngineActor {
 }
 
 impl AgentEngineActor {
+    /// Build an actor with its own isolated engine.
+    ///
+    /// The engine is derived here from the shared template so the pairing of
+    /// an agent with its audit lineage (`history_ref`) cannot be half-applied
+    /// by a caller: the isolated session and its history ref are always set
+    /// together. Every heavy resource (node registry, runtime env, storage,
+    /// executor, history DB) stays shared with the template.
     pub(super) fn new(
         agent_id: String,
-        engine: Arc<tokio::sync::Mutex<DataEngine>>,
+        template: &DataEngine,
+        history_ref: &str,
         live_view: crate::dag::live::LiveDagView,
         running: Arc<AtomicBool>,
-        shutdown: Arc<AtomicBool>,
         closing: Arc<AtomicBool>,
         rx: mpsc::UnboundedReceiver<EngineMsg>,
     ) -> Self {
+        let engine = template.new_isolated_engine().with_history_ref(history_ref);
         Self {
             agent_id,
-            engine,
+            engine: Arc::new(tokio::sync::Mutex::new(engine)),
             live_view,
             live_valid: Arc::new(AtomicBool::new(false)),
             running,
-            shutdown,
+            shutdown: AtomicBool::new(false),
             closing,
             rx,
         }
@@ -67,7 +78,7 @@ impl AgentEngineActor {
                     panic
                 );
             }
-            if self.shutdown.load(Ordering::SeqCst) {
+            if self.shutdown.load(Ordering::Relaxed) {
                 break;
             }
         }
@@ -642,7 +653,7 @@ impl AgentEngineActor {
                 // Shared storage references are released by the manager after
                 // the shutdown ack, guarded against a newer actor generation
                 // having recreated this agent id in the meantime.
-                self.shutdown.store(true, Ordering::SeqCst);
+                self.shutdown.store(true, Ordering::Relaxed);
                 let _ = reply.send(Ok(true));
             }
 
@@ -804,16 +815,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
-    fn zero_idle_policy() -> crate::runtime::MaintenancePolicy {
-        crate::runtime::MaintenancePolicy {
-            agent_idle: std::time::Duration::ZERO,
-            maintenance_interval: None,
-            clean_keep_runs: 2,
-            storage_max_bytes: 0,
-        }
-    }
-
     #[tokio::test]
     async fn latest_failed_run_does_not_restore_an_older_report() {
         let directory = tempfile::tempdir().unwrap();
@@ -823,7 +824,6 @@ mod tests {
                 .unwrap();
         let manager = crate::runtime::DataEngineManager::with_policy_and_roots(
             DataEngine::builder().build().with_history(history.clone()),
-            zero_idle_policy(),
             directory.path().join("work"),
             directory.path().join("receipts"),
         );
@@ -855,7 +855,10 @@ mod tests {
         failed.error = Some("execution failed".into());
         failed.run_report_json = None;
         history.record_run(&failed).await.unwrap();
-        assert_eq!(manager.evict_idle_actors().await, 1);
+        assert_eq!(
+            manager.evict_idle_actors(std::time::Duration::ZERO).await,
+            1
+        );
         assert!(
             manager
                 .client_for_agent("a")
@@ -955,7 +958,6 @@ mod tests {
         }));
         let manager = crate::runtime::DataEngineManager::with_policy_and_roots(
             template,
-            zero_idle_policy(),
             directory.path().join("work"),
             directory.path().join("receipts"),
         );

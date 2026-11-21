@@ -302,7 +302,8 @@ impl Agent {
                     session.persist_tx = Some(tx.clone());
                 }
             }
-            crate::supervise::spawn_safe_drop(
+            crate::supervise::spawn_safe(
+                &tokio::runtime::Handle::current(),
                 "persist_worker",
                 persist_worker(persist_rx, Arc::clone(&storage)),
             );
@@ -315,7 +316,8 @@ impl Agent {
                     let storage = crate::memory::agent_storage_memory_source(storage);
                     let memory = Arc::clone(memory);
                     let model = Arc::clone(&self.shared.model);
-                    crate::supervise::spawn_safe_drop(
+                    crate::supervise::spawn_safe(
+                        &tokio::runtime::Handle::current(),
                         "memory_startup_pipeline",
                         crate::memory::run_memory_pipeline(agent_id, storage, memory, model),
                     );

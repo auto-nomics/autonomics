@@ -34,7 +34,7 @@ impl RuntimeHost {
             created_at: snapshot.created_at,
             updated_at: snapshot.updated_at,
         };
-        agentik_core::supervise::spawn_safe_on(
+        let _ = agentik_core::supervise::spawn_safe(
             &self.infra.runtime_handle,
             &format!("persist_delegation::{delegation_id}"),
             async move {
@@ -59,7 +59,7 @@ impl RuntimeHost {
             return;
         };
         let storage = self.infra.storage.clone();
-        agentik_core::supervise::spawn_safe_on(
+        let _ = agentik_core::supervise::spawn_safe(
             &self.infra.runtime_handle,
             &format!("persist_turn_start::{turn_id}"),
             async move {
@@ -110,7 +110,7 @@ impl RuntimeHost {
             agentik_types::TurnExecutionStatus::Failed => "failed",
             agentik_types::TurnExecutionStatus::Pause => "paused",
         };
-        agentik_core::supervise::spawn_safe_on(
+        let _ = agentik_core::supervise::spawn_safe(
             &self.infra.runtime_handle,
             &format!("persist_turn_finish::{turn_id}"),
             async move {

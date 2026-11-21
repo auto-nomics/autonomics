@@ -259,50 +259,6 @@ pub struct RunAwareCleanReport {
     pub errors: Vec<String>,
 }
 
-/// Runtime lifecycle policy, resolved from the environment.
-#[derive(Debug, Clone, Copy)]
-pub struct MaintenancePolicy {
-    pub agent_idle: Duration,
-    pub maintenance_interval: Option<Duration>,
-    pub clean_keep_runs: usize,
-    pub storage_max_bytes: u64,
-}
-
-impl Default for MaintenancePolicy {
-    fn default() -> Self {
-        Self::from_env()
-    }
-}
-
-impl MaintenancePolicy {
-    pub fn from_env() -> Self {
-        let secs = |name: &str, default: u64| {
-            std::env::var(name)
-                .ok()
-                .and_then(|raw| raw.trim().parse::<u64>().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(default)
-        };
-        Self {
-            agent_idle: Duration::from_secs(secs("AUTONOMICS_DAG_SESSION_IDLE_SECS", 24 * 3600)),
-            maintenance_interval: match std::env::var("AUTONOMICS_DAG_MAINTENANCE_INTERVAL_SECS") {
-                Ok(raw) => raw
-                    .trim()
-                    .parse::<u64>()
-                    .ok()
-                    .filter(|value| *value > 0)
-                    .map(Duration::from_secs),
-                Err(_) => Some(Duration::from_secs(900)),
-            },
-            clean_keep_runs: secs("AUTONOMICS_DAG_CLEAN_KEEP_RUNS", 100) as usize,
-            storage_max_bytes: std::env::var("AUTONOMICS_DAG_STORAGE_MAX_BYTES")
-                .ok()
-                .and_then(|raw| raw.trim().parse::<u64>().ok())
-                .unwrap_or(0),
-        }
-    }
-}
-
 /// Tracks the most recent actor command per agent.
 #[derive(Debug, Default)]
 pub struct AgentActivityTracker {

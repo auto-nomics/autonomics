@@ -21,7 +21,7 @@ use crate::agent::InternalEvent;
 use crate::context::ContextProvider;
 use crate::error::{AgentError, Result, Retryable};
 use crate::prompt::system_prompt_builder;
-use crate::supervise::spawn_safe_drop;
+use crate::supervise::spawn_safe;
 use crate::tools::task_runtime::{TaskStatus, TaskStore};
 use agentik_sdk::AgentMessageExt;
 use agentik_types::{AgentPlan, TurnExecutionStatus};
@@ -214,6 +214,13 @@ impl Context {
             }
         }
 
+        // A drained `ResetCancelToken` cancelled this turn: stop before
+        // doing more work. The turn started from a resting lifecycle, so
+        // `Cancelled` here can only have been set by the drain above.
+        if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Cancelled {
+            return TurnOutcome::Cancelled;
+        }
+
         // Run one iteration of the agent workflow.
         let session_done = match self
             .agent_workflow(internal_event_tx, retry_feedback.take())
@@ -302,7 +309,13 @@ impl Context {
             self.core.send_event(AgentEvent::Done);
             return TurnOutcome::Finished;
         }
-
+        if *self.lifecycle.status() == agentik_types::AgentLifecycleStatus::Cancelled {
+            // A drained `ResetCancelToken` cancelled this turn (e.g. while
+            // a tool was running). Swapping the token already erased
+            // `is_cancelled()`, so route on the lifecycle instead and let
+            // the post-loop path close the turn.
+            return TurnOutcome::Cancelled;
+        }
         // The agent is still moving (tool calls ran; it needs another API
         // round). The turn stays open — the loop continues inside it.
         TurnOutcome::Continue
@@ -402,7 +415,16 @@ impl Context {
                     self.finish_turn(TurnExecutionStatus::Interrupted);
                     self.core.send_event(AgentEvent::Done);
                 } else {
-                    self.finish_turn(TurnExecutionStatus::Interrupted);
+                    // An ACTIVE turn (model stream or tool execution) was
+                    // interrupted. Only mark the lifecycle: the turn loop
+                    // observes it after its drains and reports
+                    // `TurnOutcome::Cancelled`, so the post-loop path
+                    // closes the turn exactly once. Closing the turn here
+                    // (as this branch once did) left the loop running with
+                    // the fresh, uncancelled token — the interrupted
+                    // tool's error result was fed back to the model and
+                    // the agent kept executing the turn.
+                    self.set_lifecycle(agentik_types::AgentLifecycleStatus::Cancelled);
                 }
                 self.cancel_token = token.clone();
                 self.toolset.cancel_all_tasks().await;
@@ -572,7 +594,8 @@ impl Context {
                 let retired = Arc::new(AtomicBool::new(false));
                 self.active_wait_watchers
                     .insert(task_seq, (cancel.clone(), Arc::clone(&retired)));
-                crate::supervise::spawn_safe_drop(
+                crate::supervise::spawn_safe(
+                    &tokio::runtime::Handle::current(),
                     "wait_watcher",
                     Self::wait_watcher(tasks, task_seq, timeout_secs, tx, cancel, retired),
                 );
@@ -1918,6 +1941,128 @@ mod tests {
             session.telemetry.turn_count, 1,
             "turn_count must count turns, not iterations"
         );
+    }
+
+    mod slow_tool {
+        use crate::tools::error::ToolError;
+
+        pub struct SlowTool {
+            pub started: std::sync::Arc<tokio::sync::Notify>,
+        }
+
+        #[agentik_proc::tool(name = "slow_tool", description = "blocks until cancelled")]
+        pub struct SlowToolInput {}
+
+        #[async_trait::async_trait]
+        impl crate::tools::ToolFunction for SlowTool {
+            type Input = SlowToolInput;
+
+            async fn run(
+                &self,
+                _input: SlowToolInput,
+            ) -> Result<agentik_sdk::types::ToolResult, ToolError> {
+                self.started.notify_one();
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                Ok(agentik_sdk::types::ToolResult::success("slow tool finished"))
+            }
+        }
+    }
+    use slow_tool::SlowTool;
+
+    /// Regression: cancelling while a tool is running must terminate the
+    /// turn (`TurnAborted` → `TurnCompleted(Interrupted)` → `Done`,
+    /// lifecycle `Cancelled`, exactly ONE model call) — not feed the
+    /// interrupted tool's error result back to the model and keep the
+    /// turn loop running. The old `ResetCancelToken` handler only closed
+    /// the turn for the `Waiting` state; an active turn swapped in the
+    /// fresh token and continued.
+    #[tokio::test]
+    async fn cancel_during_tool_terminates_the_turn() {
+        use crate::testing::dummy_model_info;
+        use agentik_sdk::provider::client::MockApiClient;
+        use agentik_sdk::streaming::MessageStream;
+        // One scripted response (the tool call); the mock counts calls so
+        // the test can assert the follow-up request NEVER happens.
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut mock = MockApiClient::new();
+        let response = Message::assistant_tool_use(
+            "call_slow",
+            "slow_tool",
+            serde_json::json!({}),
+        );
+        let counter = Arc::clone(&calls);
+        mock.expect_request_stream_with_system()
+            .times(1..)
+            .returning(move |_, _, _, _| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(MessageStream::from_events(Vec::new(), response.clone()))
+            });
+        let model = agentik_sdk::model::Model::with_client(dummy_model_info("turn-cancel"), mock);
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut registry = crate::tools::ToolRegistry::new();
+        let started = Arc::new(tokio::sync::Notify::new());
+        registry
+            .register_all(vec![crate::tools::ToolRegistration::from(SlowTool {
+                started: Arc::clone(&started),
+            })])
+            .unwrap();
+        let shared = turn_test_shared_with(model, tx, registry, None);
+        let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
+        session.remember(Message::user("run the slow tool")).unwrap();
+
+        let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cancel_tx = internal_tx.clone();
+        let cancel_token = session.cancel_token.clone();
+        let (ctx_tx, ctx_rx) = tokio::sync::oneshot::channel::<()>();
+        let runner = tokio::spawn(async move {
+            session
+                .run_context(&internal_tx, &mut internal_rx, None)
+                .await;
+            let _ = ctx_tx.send(());
+        });
+
+        // Wait until the tool is actually running, then replay exactly
+        // what AgentHandle::cancel does: cancel the live token AND queue
+        // ResetCancelToken with a fresh one.
+        started.notified().await;
+        cancel_token.cancel();
+        let fresh = tokio_util::sync::CancellationToken::new();
+        let _ = cancel_tx.send(crate::agent::InternalEvent::ResetCancelToken(fresh));
+
+        let done = tokio::time::timeout(std::time::Duration::from_secs(5), ctx_rx).await;
+        assert!(
+            done.is_ok(),
+            "cancel during a running tool must end the session loop, not continue it"
+        );
+        runner.await.unwrap();
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the interrupted tool's error result must not be fed back to the model"
+        );
+        // Single pass: turn_events consumes (and drops) unmatched variants,
+        // so count TurnAborted from the same drain.
+        let mut events = Vec::new();
+        let mut aborted = 0;
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                AgentEvent::TurnStarted { .. } => events.push("started".into()),
+                AgentEvent::TurnCompleted { status, .. } => {
+                    events.push(format!("completed:{status:?}"))
+                }
+                AgentEvent::Done => events.push("done".into()),
+                AgentEvent::TurnAborted => aborted += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(
+            events,
+            vec!["started", "completed:Interrupted", "done"],
+            "the turn must close exactly once, as Interrupted: {events:?}"
+        );
+        assert_eq!(aborted, 1, "exactly one TurnAborted must be emitted");
     }
 
     /// Parking on a background task reaches a resting lifecycle (`Waiting`),

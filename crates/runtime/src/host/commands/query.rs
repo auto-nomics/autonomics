@@ -28,7 +28,7 @@ impl RuntimeHost {
                 .and_then(|entry| entry.info.agent_id)
                 .map(|id| (path, id))
         });
-        agentik_core::supervise::spawn_safe_on(
+        let _ = agentik_core::supervise::spawn_safe(
             &self.infra.runtime_handle,
             "get_agent_history",
             async move {
@@ -109,7 +109,7 @@ impl RuntimeHost {
             })
             .unwrap_or(agent_name);
         let storage = self.infra.storage.clone();
-        agentik_core::supervise::spawn_safe_on(
+        let _ = agentik_core::supervise::spawn_safe(
             &self.infra.runtime_handle,
             "list_sub_agents",
             async move {

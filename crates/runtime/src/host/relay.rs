@@ -102,11 +102,17 @@ impl RuntimeHost {
         let event_tx = self.event_tx.clone();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<AgentCommand>();
 
-        let relay_task = agentik_core::supervise::spawn_safe_on(
+        let relay = AgentRelay {
+            handle,
+            cmd_rx,
+            event_tx,
+            name: relay_name.clone(),
+        };
+        let relay_task = agentik_core::supervise::spawn_safe(
             &self.infra.runtime_handle,
             &format!("relay::{relay_name}"),
             async move {
-                relay_loop(handle, cmd_rx, event_tx, relay_name).await;
+                relay.run().await;
             },
         );
 
@@ -300,68 +306,72 @@ impl RuntimeHost {
     }
 }
 
-/// Owns one [`AgentHandle`] and bridges:
+/// The per-agent messenger: owns one [`AgentHandle`] and bridges
 /// - **Inbound**: `AgentCommand`s from the host → `send_message`/`shutdown`
 /// - **Outbound**: `AgentEvent`s from the agent → tagged events to host
-async fn relay_loop(
-    mut handle: AgentHandle,
-    mut cmd_rx: UnboundedReceiver<AgentCommand>,
+struct AgentRelay {
+    handle: AgentHandle,
+    cmd_rx: UnboundedReceiver<AgentCommand>,
     event_tx: UnboundedSender<TaggedEvent>,
     name: String,
-) {
-    tracing::debug!(agent = %name, "relay task started");
+}
 
-    loop {
-        tokio::select! {
-            biased;
+impl AgentRelay {
+    async fn run(mut self) {
+        tracing::debug!(agent = %self.name, "relay task started");
 
-            cmd = cmd_rx.recv() => match cmd {
-                Some(AgentCommand::Message {
-                    text,
-                    delegation_id,
-                    origin,
-                }) => handle.send_with_origin(text, origin, delegation_id),
-                Some(AgentCommand::Cancel) => {
-                    handle.cancel();
-                }
-                Some(AgentCommand::ListContexts) => {
-                    handle.list_contexts();
-                }
-                Some(AgentCommand::SetModel(model)) => {
-                    handle.set_model(model);
-                }
-                Some(AgentCommand::Compact) => {
-                    handle.compact();
-                }
-                Some(AgentCommand::Shutdown) | None => {
-                    handle.shutdown();
-                    break;
-                }
-            },
+        loop {
+            tokio::select! {
+                biased;
 
-            // Events are checked AFTER commands so that a streaming
-            // event flood cannot starve Cancel / Shutdown.  Commands are
-            // infrequent, so prioritising them adds negligible latency
-            // to event forwarding while guaranteeing prompt interrupts.
-            event = handle.recv_event() => match event {
-                Some(ev) => {
-                    if event_tx.send((name.clone(), ev)).is_err() {
+                cmd = self.cmd_rx.recv() => match cmd {
+                    Some(AgentCommand::Message {
+                        text,
+                        delegation_id,
+                        origin,
+                    }) => self.handle.send_with_origin(text, origin, delegation_id),
+                    Some(AgentCommand::Cancel) => {
+                        self.handle.cancel();
+                    }
+                    Some(AgentCommand::ListContexts) => {
+                        self.handle.list_contexts();
+                    }
+                    Some(AgentCommand::SetModel(model)) => {
+                        self.handle.set_model(model);
+                    }
+                    Some(AgentCommand::Compact) => {
+                        self.handle.compact();
+                    }
+                    Some(AgentCommand::Shutdown) | None => {
+                        self.handle.shutdown();
                         break;
                     }
-                }
-                None => break,
-            },
+                },
+
+                // Events are checked AFTER commands so that a streaming
+                // event flood cannot starve Cancel / Shutdown.  Commands are
+                // infrequent, so prioritising them adds negligible latency
+                // to event forwarding while guaranteeing prompt interrupts.
+                event = self.handle.recv_event() => match event {
+                    Some(ev) => {
+                        if self.event_tx.send((self.name.clone(), ev)).is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+            }
         }
+
+        // After breaking out of the relay loop, wait for the agent's `run()`
+        // task to finish. The agent needs time to process the Shutdown event,
+        // pause all sessions (persist snapshots + end WAL sessions), and flush
+        // any remaining persist_worker messages. Without this await, dropping
+        // the runtime would kill the task mid-shutdown, causing data loss.
+        self.handle.join().await;
+
+        tracing::debug!(agent = %self.name, "relay task exited");
     }
-
-    // After breaking out of the relay loop, wait for the agent's `run()`
-    // task to finish. The agent needs time to process the Shutdown event,
-    // pause all sessions (persist snapshots + end WAL sessions), and flush
-    // any remaining persist_worker messages. Without this await, dropping
-    // the runtime would kill the task mid-shutdown, causing data loss.
-    handle.join().await;
-
-    tracing::debug!(agent = %name, "relay task exited");
 }
 
 // ═══════════════════════════════════════════════════════════════════════

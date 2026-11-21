@@ -186,7 +186,10 @@ impl TaskEntry {
         let spwan_ts_tx = tool_result_tx.clone();
         let task_id = id.clone();
         let task_seq = seq;
-        crate::supervise::spawn_safe_drop(&format!("task_monitor::{name}"), async move {
+        crate::supervise::spawn_safe(
+            &tokio::runtime::Handle::current(),
+            &format!("task_monitor::{name}"),
+            async move {
             match handle.await {
                 Ok(Ok(tool_result)) => {
                     // Store the real result for later retrieval.

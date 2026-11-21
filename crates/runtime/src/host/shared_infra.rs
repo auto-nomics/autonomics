@@ -464,7 +464,7 @@ impl SharedInfra {
         // loop (e.g. a bug in compact, tool execution, or message handling)
         // is logged with a backtrace instead of silently killing the task.
         let agent_path_str = agent_path.as_str().to_string();
-        let agent_task = agentik_core::supervise::spawn_safe_on(
+        let agent_task = agentik_core::supervise::spawn_safe(
             &self.runtime_handle,
             &format!("agent::{agent_path_str}"),
             async move {
@@ -990,7 +990,6 @@ async fn build_engine_manager(
 
     let engine_manager = Arc::new(DataEngineManager::with_policy_and_roots(
         engine,
-        data_engine::runtime::MaintenancePolicy::from_env(),
         container_execution.config.workspace_root.clone(),
         receipt_root,
     ));

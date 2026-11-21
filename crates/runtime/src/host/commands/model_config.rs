@@ -70,7 +70,7 @@ impl RuntimeHost {
                     let memory = Arc::clone(&entry.memory);
                     let model = Arc::clone(&entry.model);
                     let task_name = format!("memory_runtime_update::{key}");
-                    agentik_core::supervise::spawn_safe_on_drop(
+                    let _ = agentik_core::supervise::spawn_safe(
                         &self.infra.runtime_handle,
                         &task_name,
                         agentik_core::memory::run_memory_pipeline(agent_id, storage, memory, model),
