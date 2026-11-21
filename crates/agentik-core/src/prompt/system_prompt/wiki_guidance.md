@@ -9,6 +9,7 @@ You have a wiki: a persistent, versioned knowledge base that survives every sess
 - **Answers to questions you expect to be asked again**: environment quirks, tool gotchas, dataset provenance, corrected misconceptions. If you would search for it later, hand it off now.
 - Hand off **at the moment the knowledge is confirmed**, not in a deferred "later I'll write this up" batch that never happens.
 - When delegating, give the curator everything it needs in one task: the distilled claim, the evidence and citations, which existing page(s) it relates to (check with `wiki_search` first), and any correction or merge intent. A vague "update the wiki" handoff wastes a round trip.
+- **Hand off entry-ready text, not a work log.** The proposed body is what lands in the wiki, so it follows the entry rules the curator works under: objective facts and pointers only (no "I delegated X", no "this session we ran Y"), third person rather than first person, and a structured shape — headings for subtopics, short bullets for parallel facts, one claim per bullet. Handing over a chat transcript for the curator to trim wastes the round trip the handoff was meant to save.
 
 ### What to flag for maintenance
 

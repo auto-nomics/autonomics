@@ -16,7 +16,9 @@ use crate::storage::types::KnowledgeEntryData;
     name = "wiki_create",
     description = "Create a wiki entry. Use [[entry title]] in content for wiki links — \
                    links resolve by exact title or alias automatically; dangling \
-                   targets are ignored. Title must be unique (trimmed)."
+                   targets are ignored. Title must be unique (trimmed). Content holds \
+                   objective facts and pointers — not a session log — in the third \
+                   person, structured with headings and short bullets."
 )]
 pub struct WikiCreateInput {
     #[desc = "Unique entry title (trimmed; whitespace-only rejected)"]

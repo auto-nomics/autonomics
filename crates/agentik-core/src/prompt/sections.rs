@@ -233,3 +233,35 @@ mod filesystem_prompt_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod wiki_entry_content_tests {
+    use crate::profile::AgentKind;
+
+    /// The curator is the only role that writes entries, so it is the only
+    /// one that gets the entry-content rules.
+    #[test]
+    fn curator_gets_entry_content_rules() {
+        let prompt = super::build_system_prompt(&AgentKind::Curator);
+        assert!(prompt.contains("### Entry content rules"), "{prompt}");
+        assert!(prompt.contains("Facts and pointers, not a work log"), "{prompt}");
+        assert!(prompt.contains("No first person"), "{prompt}");
+        assert!(prompt.contains("Structure carries the hierarchy"), "{prompt}");
+    }
+
+    /// Non-curators propose entry text to the curator, so they must not be
+    /// handed the write-path rules (they have no write tools).
+    #[test]
+    fn non_curator_kinds_do_not_get_entry_content_rules() {
+        for kind in AgentKind::ALL {
+            if kind == AgentKind::Curator {
+                continue;
+            }
+            let prompt = super::build_system_prompt(&kind);
+            assert!(
+                !prompt.contains("### Entry content rules"),
+                "{kind:?} must not receive write-path rules"
+            );
+        }
+    }
+}

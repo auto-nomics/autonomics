@@ -123,4 +123,19 @@ mod tests {
             "wiki guidance renders before tool-use guidance"
         );
     }
+
+    /// Everyone reads the wiki, so the shared guidance must also constrain
+    /// the shape of handoff text — non-curators author the proposed bodies
+    /// that the curator writes.
+    #[test]
+    fn wiki_guidance_constrains_handoff_entry_shape() {
+        let with_wiki = SystemPromptBuilder::default()
+            .with_identity("id")
+            .build_wiki_guidance()
+            .parse();
+        assert!(
+            with_wiki.contains("Hand off entry-ready text, not a work log"),
+            "{with_wiki}"
+        );
+    }
 }
