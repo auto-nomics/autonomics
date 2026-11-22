@@ -351,52 +351,6 @@ impl BibCore {
             .await?;
         }
 
-        // --- article citekeys ----------------------------------------------
-        // Databases created before stable citation keys lack the column.
-        // Detect-and-ALTER, then backfill each existing article with a
-        // `stable_citekey` (semantic stem + random 4-char suffix, unique by
-        // construction). Keys are assigned once and never recomputed.
-        let mut has_citekey = false;
-        {
-            let mut rows = conn
-                .query("PRAGMA table_info(articles)", turso::params![])
-                .await?;
-            while let Some(row) = rows.next().await? {
-                if row.get::<String>(1)? == "citekey" {
-                    has_citekey = true;
-                }
-            }
-        }
-        if !has_citekey {
-            conn.execute_batch(
-                "ALTER TABLE articles ADD COLUMN citekey TEXT; \
-                 CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_citekey ON articles(citekey);",
-            )
-            .await?;
-            // Backfill from hydrated articles (cite_key needs first author
-            // + year + first title word, all from child/joined rows).
-            let ids = {
-                let mut rows = conn
-                    .query("SELECT id FROM articles", turso::params![])
-                    .await?;
-                let mut ids = Vec::new();
-                while let Some(row) = rows.next().await? {
-                    ids.push(row.get::<String>(0)?);
-                }
-                ids
-            };
-            for id in ids {
-                if let Some(article) = Self::get_article_on(&conn, &id).await? {
-                    let key = bib_types::evidence::stable_citekey(&article);
-                    conn.execute(
-                        "UPDATE articles SET citekey = ?1 WHERE id = ?2",
-                        turso::params![key, id],
-                    )
-                    .await?;
-                }
-            }
-        }
-
         // --- annotation PDF anchors --------------------------------------
         // Databases created before PDF-reader highlights lack normalized
         // geometry and color. Existing notes remain valid with both null.
@@ -456,6 +410,52 @@ impl BibCore {
         self.conn()
             .execute_batch(crate::reliability::SCHEMA)
             .await?;
+
+        // --- article citekeys ----------------------------------------------
+        // Databases created before stable citation keys lack the column.
+        // Detect-and-ALTER, then backfill each existing article with a
+        // `stable_citekey` (semantic stem + random 4-char suffix, unique by
+        // construction). Keys are assigned once and never recomputed.
+        let mut has_citekey = false;
+        {
+            let mut rows = conn
+                .query("PRAGMA table_info(articles)", turso::params![])
+                .await?;
+            while let Some(row) = rows.next().await? {
+                if row.get::<String>(1)? == "citekey" {
+                    has_citekey = true;
+                }
+            }
+        }
+        if !has_citekey {
+            conn.execute_batch(
+                "ALTER TABLE articles ADD COLUMN citekey TEXT; \
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_citekey ON articles(citekey);",
+            )
+            .await?;
+            // Backfill from hydrated articles (cite_key needs first author
+            // + year + first title word, all from child/joined rows).
+            let ids = {
+                let mut rows = conn
+                    .query("SELECT id FROM articles", turso::params![])
+                    .await?;
+                let mut ids = Vec::new();
+                while let Some(row) = rows.next().await? {
+                    ids.push(row.get::<String>(0)?);
+                }
+                ids
+            };
+            for id in ids {
+                if let Some(article) = Self::get_article_on(&conn, &id).await? {
+                    let key = bib_types::evidence::stable_citekey(&article);
+                    conn.execute(
+                        "UPDATE articles SET citekey = ?1 WHERE id = ?2",
+                        turso::params![key, id],
+                    )
+                    .await?;
+                }
+            }
+        }
 
         crate::saved_searches::ensure(&conn).await?;
         crate::saved_searches::ensure(&self.conn()).await?;
@@ -738,6 +738,34 @@ impl BibCore {
             conn.execute("INSERT INTO articleExtraFields(articleID,data) VALUES (?1,?2) ON CONFLICT(articleID) DO UPDATE SET data=excluded.data", turso::params![article.id.as_str(),serde_json::to_string(&article.extra_fields)?]).await?;
         }
         Ok(())
+    }
+
+    /// Light-weight citekey lookup for a batch of article ids — no child-row
+    /// hydration. Used to annotate search results without full loads.
+    pub(crate) async fn get_citekeys(&self, ids: &[String]) -> Result<Vec<Option<String>>> {
+        let conn = self.conn();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let mut rows = conn
+                .query(
+                    "SELECT citekey FROM articles WHERE id = ?1",
+                    turso::params![id.clone()],
+                )
+                .await?;
+            let key = match rows.next().await? {
+                Some(row) => {
+                    let k = row.get::<Option<String>>(0)?;
+                    drop(rows);
+                    k
+                }
+                None => {
+                    drop(rows);
+                    None
+                }
+            };
+            out.push(key);
+        }
+        Ok(out)
     }
 
     /// Look up a single article by its internal ID.
@@ -1054,6 +1082,15 @@ impl BibBase {
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
         self.call(|reply| BibCommand::DeleteArticle {
             id: id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Light-weight batch citekey lookup (see [`BibCore::get_citekeys`]).
+    pub async fn get_citekeys(&self, ids: &[String]) -> Result<Vec<Option<String>>> {
+        self.call(|reply| BibCommand::GetCitekeys {
+            ids: ids.to_owned(),
             reply,
         })
         .await

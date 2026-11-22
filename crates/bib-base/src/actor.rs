@@ -136,6 +136,10 @@ pub(crate) enum BibCommand {
         articles: Vec<Article>,
         reply: oneshot::Sender<Result<()>>,
     },
+    GetCitekeys {
+        ids: Vec<String>,
+        reply: oneshot::Sender<Result<Vec<Option<String>>>>,
+    },
     GetArticle {
         id: String,
         reply: oneshot::Sender<Result<Option<Article>>>,
@@ -558,6 +562,9 @@ impl BibCommand {
             }
             Self::UpsertArticles { articles, reply } => {
                 let _ = reply.send(core.upsert_articles(&articles).await);
+            }
+            Self::GetCitekeys { ids, reply } => {
+                let _ = reply.send(core.get_citekeys(&ids).await);
             }
             Self::GetArticle { id, reply } => {
                 let _ = reply.send(core.get_article(&id).await);

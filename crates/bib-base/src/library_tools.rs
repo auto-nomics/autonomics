@@ -835,11 +835,18 @@ impl BibSearchLibraryTool {
             }
         };
 
+        // Annotate hits with their stable citekeys so the agent can cite and
+        // address articles by the short key from here on.
+        let ids: Vec<String> = hits.iter().map(|h| h.article_id.clone()).collect();
+        let citekeys = self.bib.get_citekeys(&ids).await.unwrap_or_default();
+
         let results: Vec<serde_json::Value> = hits
             .iter()
-            .map(|h| {
+            .enumerate()
+            .map(|(i, h)| {
                 serde_json::json!({
                     "article_id": h.article_id,
+                    "citekey": citekeys.get(i).cloned().flatten(),
                     "title": h.title,
                     "snippet": h.snippet,
                 })
@@ -856,6 +863,27 @@ impl BibSearchLibraryTool {
     }
 }
 
+
+/// Resolve an article reference for tool inputs: exact internal id first,
+/// then the stable citekey. Returns the hydrated article so callers can use
+/// `article.id` for downstream operations.
+pub(crate) async fn resolve_article_ref(
+    bib: &BibBase,
+    reference: &str,
+) -> Result<Option<bib_types::Article>, ToolError> {
+    let reference = reference.trim();
+    if let Some(a) = bib
+        .get_article(reference)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed { source: e.to_string().into() })?
+    {
+        return Ok(Some(a));
+    }
+    bib.find_by_citekey(reference)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed { source: e.to_string().into() })
+}
+
 // ===========================================================================
 // bib_get_article — full metadata + full-text file refs from local library (batch)
 // ===========================================================================
@@ -866,6 +894,8 @@ impl BibSearchLibraryTool {
 #[derive(serde::Serialize)]
 struct GetArticleResult {
     article_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    citekey: Option<String>,
     found: bool,
     title: Option<String>,
     authors: Vec<String>,
@@ -925,6 +955,7 @@ impl GetArticleResult {
     fn err(article_id: impl Into<String>, found: bool, msg: impl Into<String>) -> Self {
         Self {
             article_id: article_id.into(),
+            citekey: None,
             found,
             title: None,
             authors: Vec::new(),
@@ -963,8 +994,10 @@ impl GetArticleResult {
                   reference** (VFS path, format, sha256, extraction status) when one is \
                   stored. \
                   \
-                  Pass a list of article IDs — each is fetched concurrently from the \
-                  local database. Articles must have been saved via a `bib_save` DAG \
+                  Pass a list of article references — internal IDs or stable \
+                  citekeys (e.g. `smith2024a-k3x9`, returned as `citekey` by \
+                  import/search) — each is fetched concurrently from the local \
+                  database. Articles must have been saved via a `bib_save` DAG \
                   node first; missing IDs are returned with `found: false` rather \
                   than failing the whole call. \
                   \
@@ -979,7 +1012,7 @@ impl GetArticleResult {
                   • article_ids=[\"a1\", \"a2\", \"a3\"] — batch (fetched concurrently)"
 )]
 pub struct BibGetArticleInput {
-    #[desc = "One or more article IDs (from a `bib_save` DAG node or `bib_search_library` results)"]
+    #[desc = "One or more article references: internal IDs or citekeys (from `bib_save`, `bib_search_library`, or `literature_import`)"]
     pub article_ids: Vec<String>,
 }
 
@@ -1032,20 +1065,23 @@ impl BibGetArticleTool {
     /// Never errors — failures are captured in `GetArticleResult::error` so
     /// one bad ID doesn't abort the batch.
     async fn get_one(&self, article_id: &str) -> GetArticleResult {
-        let article = match self.bib.get_article(article_id).await {
+        let article = match resolve_article_ref(&self.bib, article_id).await {
             Ok(Some(a)) => a,
             Ok(None) => {
                 return GetArticleResult::err(
                     article_id,
                     false,
                     format!(
-                        "Article '{article_id}' not found in local library. \
+                        "Article '{article_id}' not found in local library \
+                         (looked up by internal ID, then citekey). \
                          Import it with a `bib_save` DAG node first."
                     ),
                 );
             }
             Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
         };
+        // Downstream operations key on the canonical internal id.
+        let article_id = &article.id;
 
         // The full-text row is the pointer: VFS path (or a legacy synthetic
         // pointer), format, hash, size, and the extraction lifecycle. The
@@ -1125,6 +1161,7 @@ impl BibGetArticleTool {
 
         GetArticleResult {
             article_id: article.id.clone(),
+            citekey: article.citekey.clone(),
             found: true,
             title: Some(article.title),
             authors,
@@ -1246,7 +1283,7 @@ impl ToolFunction for BibRequestFulltextTool {
                   quote or open Reading Mode to regenerate the source map before retrying."
 )]
 pub struct BibAddNoteInput {
-    #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
+    #[desc = "Article reference: internal ID or citekey (from `bib_save`, `bib_search_library`, or `literature_import`)"]
     pub article_id: String,
     #[desc = "Verbatim passage from the article's full text this note is attached to"]
     pub quote: String,
@@ -1272,11 +1309,21 @@ impl ToolFunction for BibAddNoteTool {
     type Input = BibAddNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let article = resolve_article_ref(&self.bib, &input.article_id)
+            .await
+            .map_err(box_error)?
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                source: format!(
+                    "article '{}' not found (looked up by internal ID, then citekey)",
+                    input.article_id
+                )
+                .into(),
+            })?;
         let anchored = self
             .bib
             .add_anchored_annotation(crate::annotations::AnchoredNoteInput {
                 pdf_storage: self.storage.clone(),
-                article_id: input.article_id.clone(),
+                article_id: article.id.clone(),
                 quote: input.quote,
                 note: Some(input.note),
                 near_line: input.near_line,
@@ -1289,7 +1336,8 @@ impl ToolFunction for BibAddNoteTool {
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "annotation_id": anchored.annotation.id,
-            "article_id": input.article_id,
+            "article_id": article.id,
+            "citekey": article.citekey,
             "kind": anchored.annotation.kind.as_str(),
             "content": anchored.annotation.content,
             "comment": anchored.annotation.comment,
@@ -1440,7 +1488,15 @@ impl ToolFunction for BibDeleteTool {
         }
 
         if let Some(internal) = &input.article_ids {
-            resolved.extend(internal.iter().cloned());
+            for reference in internal {
+                // Resolve citekeys to internal ids; unresolved references flow
+                // through unchanged so the preview below reports them as
+                // `found: false` instead of silently dropping them.
+                match resolve_article_ref(&self.bib, reference).await {
+                    Ok(Some(art)) => resolved.push(art.id),
+                    _ => resolved.push(reference.trim().to_owned()),
+                }
+            }
         }
 
         // Deduplicate while preserving call order.
