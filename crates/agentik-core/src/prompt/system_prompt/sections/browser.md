@@ -47,7 +47,11 @@ When your task involves finding papers (journal pages, preprint servers, lab
 websites) and you extract a real article's metadata (title, authors, year,
 DOI/PMID), save it directly with `literature_import_manual` (title required;
 identifiers deduplicate — an article already in the library comes back as
-`already_present` with its citekey). The returned `citekey` goes in your final
+`already_present` with its citekey). Set `archive_current_page=true` on the
+same call: the server captures the live page's HTML itself and stores it as
+the article's attachment (no need to paste page content into the call), so
+the evidence — not just the metadata — is preserved and full-text extraction
+runs on it. The returned `citekey` goes in your final
 summary so the caller can cite `[@citekey]` in wiki entries without re-search.
 Extraction tip: DOI/PMID are usually in the page head (`browser_evaluate` on
 `document.querySelector('meta[name="citation_doi"]')` and friends) rather

@@ -36,12 +36,14 @@ use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bib_types::{
-    AddedBy, Article, ArticleRole, ArticleSource, CollectionStatus, FetchStatus, IdKind,
-    Identifier, TextFormat,
+    AddedBy, Article, ArticleRole, ArticleSource, CollectionStatus, ExtractStatus, FetchStatus,
+    FileFormat, FullText, FullTextSource, IdKind, Identifier, TextFormat,
 };
 
 use crate::bib_base::BibBase;
+use crate::Error;
 use crate::collections::CollectionAddOutcome;
+use crate::managed_fulltext::{ImportMode, ManagedImport};
 
 // ===========================================================================
 // bib_create_collection
@@ -1864,7 +1866,6 @@ pub fn bib_library_registrations(
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibResolveCitekeysTool { bib: bib.clone() }),
-        R::from(LiteratureImportManualTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool {
             bib: bib.clone(),
@@ -1909,7 +1910,14 @@ pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
     // Literature *retrieval* now flows through the DAG evidence channel
     // (source_literature / source_literature_fetch / citation-graph nodes);
     // this registration covers only the local-library management tools.
-    bib_library_registrations(shared.bib.clone(), file_storage)
+    let mut tools = bib_library_registrations(shared.bib.clone(), file_storage);
+    tools.push(agentik_core::tools::ToolRegistration::from(
+        LiteratureImportManualTool {
+            shared: shared.clone(),
+            page: None,
+        },
+    ));
+    tools
 }
 
 
@@ -2045,10 +2053,25 @@ pub struct LiteratureImportManualInput {
     pub url: Option<String>,
     #[desc = "Abstract text if available"]
     pub abstract_text: Option<String>,
+    #[desc = "Archive the current browser page's HTML as the article's attachment (browser agents only; needs a live session)"]
+    pub archive_current_page: Option<bool>,
 }
 
 pub struct LiteratureImportManualTool {
-    pub bib: Arc<BibBase>,
+    pub shared: Arc<BibShared>,
+    /// Server-side page capture (the browser agent's live session). When
+    /// attached and `archive_current_page` is set, the tool pulls the page
+    /// HTML itself — the agent never re-sends bytes it already extracted.
+    pub page: Option<Arc<dyn CurrentPageSource>>,
+}
+
+/// A live page the importing agent is looking at (its browser session's
+/// active tab). Implemented by the runtime over `BrowserSession`; keeps
+/// `bib-base` free of any browser dependency.
+#[async_trait]
+pub trait CurrentPageSource: Send + Sync {
+    /// `(url, title, html)` of the active tab.
+    async fn current_page(&self) -> Result<(String, String, String), String>;
 }
 
 #[async_trait]
@@ -2062,6 +2085,30 @@ impl ToolFunction for LiteratureImportManualTool {
                 message: "title is required".into(),
             });
         }
+
+        // Optional server-side page capture, taken BEFORE any dedup short-
+        // circuit so already-present articles archive their page too.
+        let snapshot = if input.archive_current_page.unwrap_or(false) {
+            let source = self.page.as_ref().ok_or_else(|| ToolError::ValidationFailed {
+                message: "archive_current_page needs a live browser session \
+                          (only browser agents have one)".into(),
+            })?;
+            let (url, page_title, html) = source
+                .current_page()
+                .await
+                .map_err(|e| ToolError::ExecutionFailed { source: e.into() })?;
+            if html.trim().is_empty() {
+                return Err(ToolError::ExecutionFailed {
+                    source: "current page has no HTML content to archive".into(),
+                });
+            }
+            Some((url, page_title, html))
+        } else {
+            None
+        };
+        let archive = |article_id: String, snap: Option<(String, String, String)>| async move {
+            archive_page_attachment(&self.shared, &article_id, snap).await
+        };
 
         // Structured identifiers: trim, keep only non-empty ones, in
         // descending dedup priority.
@@ -2084,17 +2131,28 @@ impl ToolFunction for LiteratureImportManualTool {
         // literature_import).
         for (kind, value) in &identifiers {
             if let Some(existing) = self
+                .shared
                 .bib
                 .find_by_identifier(*kind, value)
                 .await
                 .map_err(box_error)?
             {
+                let attachment = if snapshot.is_some() {
+                    Some(
+                        archive(existing.id.clone(), snapshot.clone())
+                            .await
+                            .map_err(box_error)?,
+                    )
+                } else {
+                    None
+                };
                 return Ok(AgentToolResult::success_json(serde_json::json!({
                     "status": "already_present",
                     "article_id": existing.id,
                     "citekey": existing.citekey,
                     "title": existing.title,
                     "matched_identifier": kind.as_str(),
+                    "attachment": attachment,
                     "message": format!(
                         "already in the library (matched {} {}); nothing was changed",
                         kind.as_str(),
@@ -2131,12 +2189,14 @@ impl ToolFunction for LiteratureImportManualTool {
             article.extra_fields.insert("url".into(), url.to_owned());
         }
 
-        self.bib
+        self.shared
+            .bib
             .upsert_article(&article)
             .await
             .map_err(box_error)?;
         // The citekey is assigned inside the storage layer; read it back.
         let saved = self
+            .shared
             .bib
             .get_article(&article.id)
             .await
@@ -2145,18 +2205,114 @@ impl ToolFunction for LiteratureImportManualTool {
                 source: "article vanished right after insert".into(),
             })?;
 
+        let attachment = if snapshot.is_some() {
+            Some(archive(saved.id.clone(), snapshot).await.map_err(box_error)?)
+        } else {
+            None
+        };
         Ok(AgentToolResult::success_json(serde_json::json!({
             "status": "imported",
             "article_id": saved.id,
             "citekey": saved.citekey,
             "title": saved.title,
-            "matched_identifier": (),
+            "attachment": attachment,
             "message": format!(
                 "imported; cite with [@{}]",
                 saved.citekey.as_deref().unwrap_or("?")
             ),
         })))
     }
+}
+
+
+/// Write the captured page HTML into managed attachment storage and commit
+/// it as the article's attachment (HTML extraction queued in the backgound),
+/// mirroring [`crate::attach_tool`]'s import path.
+async fn archive_page_attachment(
+    shared: &Arc<BibShared>,
+    article_id: &str,
+    snapshot: Option<(String, String, String)>,
+) -> crate::Result<serde_json::Value> {
+    let Some((url, page_title, html)) = snapshot else {
+        return Err(Error::Unknown("no page snapshot to archive".into()));
+    };
+    let storage = shared
+        .file_storage
+        .as_ref()
+        .ok_or_else(|| Error::Unknown("bibliography VFS storage is not configured".into()))?;
+
+    // File name: slug of the page title (fallback: URL host+path), .html.
+    let slug_base = if !page_title.trim().is_empty() {
+        page_title.trim().to_string()
+    } else {
+        url.trim_start_matches("https://").trim_start_matches("http://").to_string()
+    };
+    let mut slug: String = slug_base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { ' ' })
+        .collect();
+    slug = slug.split_whitespace().collect::<Vec<_>>().join("-");
+    slug.truncate(80);
+    let filename = format!("{}.html", if slug.is_empty() { "page".to_string() } else { slug });
+
+    let bytes = html.into_bytes();
+    if bytes.is_empty() {
+        return Err(Error::Unknown("captured page HTML is empty".into()));
+    }
+    let key = uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase();
+    let stored = crate::stored_attachment(article_id, &key, &filename, &bytes)
+        .canonicalized(storage)
+        .map_err(|e| Error::Unknown(e.to_string()))?;
+    let path = crate::vfs_virtual_path(&stored.path)
+        .ok_or_else(|| Error::Unknown("invalid managed storage URI".into()))?;
+    let fulltext = FullText {
+        article_id: article_id.to_owned(),
+        attachment_key: Some(key.clone()),
+        file_path: stored.path.clone(),
+        file_format: FileFormat::Html,
+        text_content: None,
+        source: FullTextSource::UserUpload,
+        file_hash: Some(stored.file_hash),
+        file_size: Some(bytes.len() as i64),
+        uploaded_at: Some(chrono::Utc::now()),
+        extract_status: Some(ExtractStatus::Pending),
+        text_format: None,
+        extracted_by: None,
+        extract_error: None,
+    };
+    storage
+        .write_bytes(&path, bytes)
+        .await
+        .map_err(|e| Error::Unknown(e.to_string()))?;
+    let result = shared
+        .bib
+        .commit_managed_import(ManagedImport {
+            fulltext,
+            filename: filename.clone(),
+            source_url: Some(url.clone()),
+            mode: ImportMode::Attach {
+                title: Some(format!("Archived page: {}", page_title.is_empty().then(|| url.as_str()).unwrap_or(&page_title))),
+                content_type: "text/html".into(),
+                make_preferred: false,
+            },
+        })
+        .await;
+    match result {
+        Ok(Some(_)) => {}
+        other => {
+            let _ = storage.delete_object(&path).await;
+            other?;
+            return Err(Error::Unknown("attachment import did not commit".into()));
+        }
+    }
+    crate::spawn_attachment_extraction(shared.as_ref().clone(), article_id.to_owned(), key.clone());
+    Ok(serde_json::json!({
+        "attachment_key": key,
+        "filename": filename,
+        "file_path": stored.path,
+        "source_url": url,
+        "extraction_queued": true,
+    }))
 }
 
 /// `Last First` display string → [`Author`] (same split as the HTTP layer).
