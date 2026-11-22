@@ -850,6 +850,7 @@ fn article_from_input(
 
     Ok(Article {
         id,
+        citekey: None,
         title: input.title.trim().to_owned(),
         authors,
         identifiers,
@@ -1059,12 +1060,18 @@ async fn get_article(
     Path(id): Path<String>,
     Query(page_query): Query<FulltextPageQuery>,
 ) -> ApiResult {
-    let article = shared
-        .bib
-        .get_article(&id)
-        .await
-        .map_err(internal)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?;
+    // The path segment is the internal id OR a stable citekey — the wiki
+    // citation chips navigate by citekey.
+    let article = match shared.bib.get_article(&id).await.map_err(internal)? {
+        Some(a) => a,
+        None => shared
+            .bib
+            .find_by_citekey(&id)
+            .await
+            .map_err(internal)?
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, format!("article {id} not found")))?,
+    };
+    let id = article.id.clone();
     let (offset, limit) = page_query.normalized();
     let fulltext_page = shared
         .bib

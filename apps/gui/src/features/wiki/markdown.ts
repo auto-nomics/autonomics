@@ -70,6 +70,43 @@ const wikilinkPlugin = defineComarkPlugin(() => ({
   ],
 }));
 
+// ── citations ─────────────────────────────────────────────────────────
+
+const CITATION_TOKEN_RE = /^\[\@([A-Za-z0-9_][A-Za-z0-9_.\-]*(?:[ \t]*;[ \t]*\@[A-Za-z0-9_][A-Za-z0-9_.\-]*)*)\]/;
+
+/**
+ * Pandoc-style citations `[@smith2024a-k3x9]` / `[@k1; @k2]`. Each key in
+ * the group renders as its own chip (`a[data-citekey]`); the bracket glue
+ * stays as plain text so the citation reads as one group. Click routing is
+ * delegated like wikilinks — see reading-view (the value is a citekey; the
+ * bib record endpoint resolves citekeys transparently).
+ */
+const citationPlugin = defineComarkPlugin(() => ({
+  name: "citation",
+  markdownItPlugins: [
+    (md: MarkdownExit) => {
+      md.inline.ruler.before("escape", "citation", ((state: StateInline, silent: boolean) => {
+        const match = CITATION_TOKEN_RE.exec(state.src.slice(state.pos, state.posMax));
+        if (!match) return false;
+        if (!silent) {
+          let token = state.push("html_inline", "", 0);
+          token.content = '<span class="md-citation-group">';
+          for (const raw of match[1].split(";")) {
+            const key = raw.trim().replace(/^\@/, "");
+            if (!key) continue;
+            token = state.push("html_inline", "", 0);
+            token.content = `<a data-citekey="${escapeHtml(key)}" class="md-citation">@${escapeHtml(key)}</a>`;
+          }
+          token = state.push("html_inline", "", 0);
+          token.content = "</span>";
+        }
+        state.pos += match[0].length;
+        return true;
+      }) as RuleInline);
+    },
+  ],
+}));
+
 // Upload markers are document-local placeholders, replaced by the editor after upload.
 const IMAGE_UPLOAD_TOKEN_RE = /^<!--wiki-image-upload:([0-9a-f-]{36})-->[ \t]*$/i;
 
@@ -95,7 +132,7 @@ const imageUploadPlugin = defineComarkPlugin(() => ({
 
 // ── pipeline ──────────────────────────────────────────────────────────
 
-const wikiPlugins = [...comarkBasePlugins, wikilinkPlugin(), imageUploadPlugin()];
+const wikiPlugins = [...comarkBasePlugins, wikilinkPlugin(), citationPlugin(), imageUploadPlugin()];
 
 function wikiComponents(entryId?: string) {
   return {
