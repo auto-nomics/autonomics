@@ -8,7 +8,7 @@ use agentik_types::tools::ToolResult;
 use async_trait::async_trait;
 use serde_json::json;
 
-use super::resolve_entry;
+use super::{resolve_entry, tool_err};
 use crate::service::WikiHandle;
 
 #[tool(
@@ -33,12 +33,18 @@ impl ToolFunction for WikiGetTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let e = resolve_entry(&self.handle, input.id, input.title).await?;
+        let citations = self
+            .handle
+            .get_citations(&e.id)
+            .await
+            .map_err(tool_err)?;
         Ok(ToolResult::success_json(json!({
             "id": e.id,
             "title": e.title,
             "alias": e.alias,
             "tags": e.tags,
             "content": e.content,
+            "citations": citations,
             "ctime": e.ctime,
             "mtime": e.mtime,
         })))

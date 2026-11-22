@@ -71,3 +71,31 @@ async fn bib_get_article_reports_misses_for_unknown_citekeys() {
     let results = payload["results"].as_array().unwrap();
     assert_eq!(results[0]["found"], serde_json::json!(false));
 }
+
+#[tokio::test]
+async fn bib_resolve_citekeys_reports_metadata_and_misses() {
+    use agentik_sdk::types::ToolResultContent;
+    use bib_base::library_tools::{BibResolveCitekeysInput, BibResolveCitekeysTool};
+
+    let (db, key) = seeded_db().await;
+    let tool = BibResolveCitekeysTool {
+        bib: std::sync::Arc::new(db),
+    };
+    let out = tool
+        .run(BibResolveCitekeysInput {
+            citekeys: vec![key.clone(), "ghost2000missing".into()],
+        })
+        .await
+        .unwrap();
+    let payload = match out.content {
+        ToolResultContent::Json(v) => v,
+        other => panic!("expected json, got {other:?}"),
+    };
+    assert_eq!(payload["found"], serde_json::json!(1));
+    assert_eq!(payload["missing"], serde_json::json!(1));
+    let results = payload["results"].as_array().unwrap();
+    assert_eq!(results[0]["found"], serde_json::json!(true));
+    assert_eq!(results[0]["title"], serde_json::json!("Citekey resolution paper"));
+    assert_eq!(results[0]["citekey"], serde_json::json!(key));
+    assert_eq!(results[1]["found"], serde_json::json!(false));
+}

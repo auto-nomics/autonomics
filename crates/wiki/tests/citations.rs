@@ -92,3 +92,35 @@ async fn code_block_citations_not_indexed() {
     .await;
     assert_eq!(h.get_citations(&id).await.unwrap(), vec!["real2020yy"]);
 }
+
+#[tokio::test]
+async fn wiki_citations_tool_both_directions() {
+    use wiki::tools::{WikiCitationsInput, WikiCitationsTool};
+
+    let h = handle().await;
+    let id = create(&h, "工具测试", "引用 [@tool2024key]。").await;
+
+    let tool = WikiCitationsTool { handle: h.clone() };
+    // 正向
+    let out = json_of(
+        tool.execute(json!({ "id": id }))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(out["citekeys"][0], "tool2024key");
+    // 反向
+    let out = json_of(
+        tool.execute(json!({ "citekey": "tool2024key" }))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(out["citing_entries"][0]["title"], "工具测试");
+    // wiki_get 现在带 citations
+    let got = json_of(
+        wiki::tools::WikiGetTool { handle: h }
+            .execute(json!({ "id": id }))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(got["citations"][0], "tool2024key");
+}

@@ -683,6 +683,14 @@ impl SharedInfra {
         // 长期记忆保持只读,知识维护走一条可审计的路径。
         if kind.enable_wiki_read() {
             tools.extend(wiki::tools::wiki_read_registrations(self.wiki.clone()));
+            // wiki ↔ bib 桥:词条里的 [@citekey] 引用解析到文献元数据。
+            // 只读,与 wiki 读组同粒度挂给所有 kind(读 wiki 必然要能
+            // 解析其中的引用)。
+            tools.push(agentik_core::tools::ToolRegistration::from(
+                bib_base::library_tools::BibResolveCitekeysTool {
+                    bib: self.bib.bib.clone(),
+                },
+            ));
         }
         if kind.enable_wiki_write() {
             tools.extend(wiki::tools::wiki_write_registrations(self.wiki.clone()));

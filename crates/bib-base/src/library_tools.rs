@@ -1862,6 +1862,7 @@ pub fn bib_library_registrations(
         R::from(BibListCollectionTool { bib: bib.clone() }),
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
+        R::from(BibResolveCitekeysTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool {
             bib: bib.clone(),
@@ -1907,6 +1908,100 @@ pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
     // (source_literature / source_literature_fetch / citation-graph nodes);
     // this registration covers only the local-library management tools.
     bib_library_registrations(shared.bib.clone(), file_storage)
+}
+
+
+// ===========================================================================
+// bib_resolve_citekeys — citekey → article metadata bridge (batch, read-only)
+// ===========================================================================
+
+#[tool(
+    name = "bib_resolve_citekeys",
+    description = "Resolve stable citation keys (e.g. smith2024a-k3x9) to article metadata \
+                  — the bridge between wiki citations ([@citekey] in entry bodies, \
+                  returned by wiki_get / wiki_citations) and the literature library. \
+                  Returns, per key: {citekey, found, article_id, title, authors, year, \
+                  journal, doi, pmid} — enough to render a reference or verify a claim \
+                  without loading the full record. Unresolved (not yet imported) keys \
+                  come back with found: false, not an error; import them with \
+                  literature_search + literature_import."
+)]
+pub struct BibResolveCitekeysInput {
+    #[desc = "One or more citekeys (from wiki_get/wiki_citations output or literature_import results)"]
+    pub citekeys: Vec<String>,
+}
+
+pub struct BibResolveCitekeysTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[derive(serde::Serialize)]
+struct ResolvedCitekey {
+    citekey: String,
+    found: bool,
+    article_id: Option<String>,
+    title: Option<String>,
+    authors: Vec<String>,
+    year: Option<u16>,
+    journal: Option<String>,
+    doi: Option<String>,
+    pmid: Option<String>,
+}
+
+#[async_trait]
+impl ToolFunction for BibResolveCitekeysTool {
+    type Input = BibResolveCitekeysInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        if input.citekeys.is_empty() {
+            return Err(ToolError::ValidationFailed {
+                message: "at least one citekey is required".into(),
+            });
+        }
+        let mut results = Vec::with_capacity(input.citekeys.len());
+        let mut missing = 0usize;
+        for key in &input.citekeys {
+            let key = key.trim();
+            match self.bib.find_by_citekey(key).await.map_err(box_error)? {
+                Some(a) => {
+                    let doi = a.doi().map(str::to_owned);
+                    let pmid = a.pmid().map(str::to_owned);
+                    results.push(ResolvedCitekey {
+                        citekey: key.to_owned(),
+                        found: true,
+                        article_id: Some(a.id),
+                        title: Some(a.title),
+                        authors: a.authors.iter().map(|x| x.display_name()).collect(),
+                        year: a.year,
+                        journal: a.journal,
+                        doi,
+                        pmid,
+                    })
+                }
+                None => {
+                    missing += 1;
+                    results.push(ResolvedCitekey {
+                        citekey: key.to_owned(),
+                        found: false,
+                        article_id: None,
+                        title: None,
+                        authors: Vec::new(),
+                        year: None,
+                        journal: None,
+                        doi: None,
+                        pmid: None,
+                    });
+                }
+            }
+        }
+        let total = results.len();
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "total": total,
+            "found": total - missing,
+            "missing": missing,
+            "results": results,
+        })))
+    }
 }
 
 // ===========================================================================

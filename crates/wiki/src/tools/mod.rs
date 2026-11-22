@@ -9,6 +9,7 @@
 //! `title` 二选一([`resolve_entry`]),标题精确匹配未删除词条。
 
 mod attachments;
+mod citations;
 mod create;
 mod delete;
 mod edit;
@@ -32,6 +33,7 @@ pub use create::{WikiCreateInput, WikiCreateTool};
 pub use delete::{WikiDeleteInput, WikiDeleteTool};
 pub use edit::{WikiEditInput, WikiEditTool};
 pub use get::{WikiGetInput, WikiGetTool};
+pub use citations::{WikiCitationsInput, WikiCitationsTool};
 pub use links::{WikiLinksInput, WikiLinksTool};
 pub use list::{WikiListInput, WikiListTool};
 pub use mentions::{WikiMentionsInput, WikiMentionsTool};
@@ -164,6 +166,10 @@ pub fn wiki_read_registrations(handle: Arc<WikiHandle>) -> Vec<ToolRegistration>
         }
         .into(),
         WikiLinksTool {
+            handle: handle.clone(),
+        }
+        .into(),
+        WikiCitationsTool {
             handle: handle.clone(),
         }
         .into(),
