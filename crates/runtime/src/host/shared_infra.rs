@@ -577,6 +577,14 @@ impl SharedInfra {
                 .browser_session_for(agent_path.as_str(), self.browser_options_template.clone())
                 .await?;
             tools.extend(browser_use::tools::registrations(session));
+            // 浏览器提取的文献直接进库:browser agent 拿到唯一的 bib 写
+            // 入点(手工导入,带 DOI/PMID 去重)。这是它除 vfs 之外唯一
+            // 的持久化通道 —— 完整的 bib 工具组仍只属于文献 kind。
+            tools.push(agentik_core::tools::ToolRegistration::from(
+                bib_base::library_tools::LiteratureImportManualTool {
+                    bib: self.bib.bib.clone(),
+                },
+            ));
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));

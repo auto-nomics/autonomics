@@ -99,3 +99,75 @@ async fn bib_resolve_citekeys_reports_metadata_and_misses() {
     assert_eq!(results[0]["citekey"], serde_json::json!(key));
     assert_eq!(results[1]["found"], serde_json::json!(false));
 }
+
+#[tokio::test]
+async fn literature_import_manual_dedupes_and_assigns_citekey() {
+    use agentik_sdk::types::ToolResultContent;
+    use bib_base::library_tools::{LiteratureImportManualInput, LiteratureImportManualTool};
+
+    let (db, _) = seeded_db().await;
+    let tool = LiteratureImportManualTool {
+        bib: std::sync::Arc::new(db),
+    };
+
+    let json = |out: agentik_sdk::types::ToolResult| match out.content {
+        ToolResultContent::Json(v) => v,
+        other => panic!("expected json, got {other:?}"),
+    };
+
+    // 新文章:导入并分配 citekey
+    let first = json(
+        tool.run(LiteratureImportManualInput {
+            title: "Browser-discovered paper".into(),
+            authors: Some(vec!["Chen Wei".into(), "Park Soo".into()]),
+            year: Some(2025),
+            journal: Some("Nature Methods".into()),
+            doi: Some("10.9999/browser-find".into()),
+            pmid: None,
+            arxiv: None,
+            url: Some("https://example.org/paper".into()),
+            abstract_text: Some("Found on a journal page.".into()),
+        })
+        .await
+        .unwrap(),
+    );
+    assert_eq!(first["status"], serde_json::json!("imported"));
+    let key = first["citekey"].as_str().unwrap().to_string();
+    assert!(key.starts_with("chen2025browserdiscovered-"), "{first}");
+
+    // 同 DOI 再导:already_present,不覆盖
+    let second = json(
+        tool.run(LiteratureImportManualInput {
+            title: "Renamed later version".into(),
+            authors: None,
+            year: None,
+            journal: None,
+            doi: Some("10.9999/browser-find".into()),
+            pmid: None,
+            arxiv: None,
+            url: None,
+            abstract_text: None,
+        })
+        .await
+        .unwrap(),
+    );
+    assert_eq!(second["status"], serde_json::json!("already_present"));
+    assert_eq!(second["citekey"].as_str(), Some(key.as_str()));
+    assert_eq!(second["title"], serde_json::json!("Browser-discovered paper"));
+
+    // 空标题拒绝
+    let err = tool
+        .run(LiteratureImportManualInput {
+            title: "   ".into(),
+            authors: None,
+            year: None,
+            journal: None,
+            doi: None,
+            pmid: None,
+            arxiv: None,
+            url: None,
+            abstract_text: None,
+        })
+        .await;
+    assert!(err.is_err());
+}

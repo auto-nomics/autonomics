@@ -36,7 +36,8 @@ use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bib_types::{
-    AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind, Identifier, TextFormat,
+    AddedBy, Article, ArticleRole, ArticleSource, CollectionStatus, FetchStatus, IdKind,
+    Identifier, TextFormat,
 };
 
 use crate::bib_base::BibBase;
@@ -1863,6 +1864,7 @@ pub fn bib_library_registrations(
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
         R::from(BibResolveCitekeysTool { bib: bib.clone() }),
+        R::from(LiteratureImportManualTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool {
             bib: bib.clone(),
@@ -2002,6 +2004,179 @@ impl ToolFunction for BibResolveCitekeysTool {
             "results": results,
         })))
     }
+}
+
+
+// ===========================================================================
+// literature_import_manual — structured metadata straight into the library
+// (browser-extracted papers and other out-of-band finds)
+// ===========================================================================
+
+#[tool(
+    name = "literature_import_manual",
+    description = "Save an article to the local library from structured metadata — \
+                  the import path for articles found outside the search channel \
+                  (extracted from a web page by a browser agent, dictated by the \
+                  user, or copied from a reference list). Provide title (required) \
+                  plus whatever identifiers the source exposed (doi / pmid / arxiv); \
+                  identifiers are preferred because they deduplicate: an article \
+                  already in the library is returned as already_present with its \
+                  existing citekey, never overwritten. Returns the assigned \
+                  citekey — cite the article in wiki entries with [@citekey]. \
+                  For articles found through literature_search, use \
+                  literature_import instead."
+)]
+pub struct LiteratureImportManualInput {
+    #[desc = "Article title (required)"]
+    pub title: String,
+    #[desc = "Authors as display strings ('Smith John', 'Garcia M') — first token is the last name"]
+    pub authors: Option<Vec<String>>,
+    #[desc = "Publication year"]
+    pub year: Option<u16>,
+    #[desc = "Journal or venue name"]
+    pub journal: Option<String>,
+    #[desc = "DOI (preferred identifier — strongest dedup)"]
+    pub doi: Option<String>,
+    #[desc = "PubMed ID"]
+    pub pmid: Option<String>,
+    #[desc = "arXiv ID"]
+    pub arxiv: Option<String>,
+    #[desc = "Source URL of the page the metadata was extracted from (kept as provenance)"]
+    pub url: Option<String>,
+    #[desc = "Abstract text if available"]
+    pub abstract_text: Option<String>,
+}
+
+pub struct LiteratureImportManualTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[async_trait]
+impl ToolFunction for LiteratureImportManualTool {
+    type Input = LiteratureImportManualInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let title = input.title.trim();
+        if title.is_empty() {
+            return Err(ToolError::ValidationFailed {
+                message: "title is required".into(),
+            });
+        }
+
+        // Structured identifiers: trim, keep only non-empty ones, in
+        // descending dedup priority.
+        let mut identifiers: Vec<(IdKind, String)> = Vec::new();
+        for (kind, raw) in [
+            (IdKind::Doi, input.doi.as_deref()),
+            (IdKind::Pmid, input.pmid.as_deref()),
+            (IdKind::Arxiv, input.arxiv.as_deref()),
+        ] {
+            let value = raw.map(str::trim).filter(|v| !v.is_empty());
+            if let Some(value) = value {
+                if !identifiers.iter().any(|(_, v)| v == value) {
+                    identifiers.push((kind, value.to_owned()));
+                }
+            }
+        }
+
+        // Dedup: a known identifier means the article is already in the
+        // library — report it, never overwrite (same contract as
+        // literature_import).
+        for (kind, value) in &identifiers {
+            if let Some(existing) = self
+                .bib
+                .find_by_identifier(*kind, value)
+                .await
+                .map_err(box_error)?
+            {
+                return Ok(AgentToolResult::success_json(serde_json::json!({
+                    "status": "already_present",
+                    "article_id": existing.id,
+                    "citekey": existing.citekey,
+                    "title": existing.title,
+                    "matched_identifier": kind.as_str(),
+                    "message": format!(
+                        "already in the library (matched {} {}); nothing was changed",
+                        kind.as_str(),
+                        value
+                    ),
+                })));
+            }
+        }
+
+        let mut article = Article::new(
+            identifiers
+                .first()
+                .map(|(kind, value)| format!("{}:{value}", kind.as_str()))
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            title,
+        );
+        article.authors = input
+            .authors
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|display| parse_display_author(display))
+            .collect();
+        article.year = input.year;
+        article.journal = input.journal.map(|j| j.trim().to_owned()).filter(|j| !j.is_empty());
+        article.abstract_text = input
+            .abstract_text
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty());
+        article.source = ArticleSource::Manual;
+        article
+            .identifiers
+            .extend(identifiers.iter().map(|(k, v)| Identifier::new(*k, v.clone())));
+        if let Some(url) = input.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            article.extra_fields.insert("url".into(), url.to_owned());
+        }
+
+        self.bib
+            .upsert_article(&article)
+            .await
+            .map_err(box_error)?;
+        // The citekey is assigned inside the storage layer; read it back.
+        let saved = self
+            .bib
+            .get_article(&article.id)
+            .await
+            .map_err(box_error)?
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                source: "article vanished right after insert".into(),
+            })?;
+
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "status": "imported",
+            "article_id": saved.id,
+            "citekey": saved.citekey,
+            "title": saved.title,
+            "matched_identifier": (),
+            "message": format!(
+                "imported; cite with [@{}]",
+                saved.citekey.as_deref().unwrap_or("?")
+            ),
+        })))
+    }
+}
+
+/// `Last First` display string → [`Author`] (same split as the HTTP layer).
+fn parse_display_author(display: &str) -> Option<bib_types::Author> {
+    let display = display.trim();
+    if display.is_empty() {
+        return None;
+    }
+    let (last_name, fore_name) = match display.split_once(' ') {
+        Some((last, fore)) => (last.to_owned(), Some(fore.trim().to_owned())),
+        None => (display.to_owned(), None),
+    };
+    Some(bib_types::Author {
+        last_name,
+        fore_name,
+        initials: None,
+        affiliation: None,
+        orcid: None,
+        corresponding: false,
+    })
 }
 
 // ===========================================================================

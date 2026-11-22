@@ -41,3 +41,14 @@ click, type, scroll, or navigate you MUST call `browser_extract_text` or
 auto-report page content. A click that starts a download should be followed by
 `browser_wait_for_download`; then report the returned `local://browser-downloads/...`
 path.
+
+### Saving discovered literature
+When your task involves finding papers (journal pages, preprint servers, lab
+websites) and you extract a real article's metadata (title, authors, year,
+DOI/PMID), save it directly with `literature_import_manual` (title required;
+identifiers deduplicate — an article already in the library comes back as
+`already_present` with its citekey). The returned `citekey` goes in your final
+summary so the caller can cite `[@citekey]` in wiki entries without re-search.
+Extraction tip: DOI/PMID are usually in the page head (`browser_evaluate` on
+`document.querySelector('meta[name="citation_doi"]')` and friends) rather
+than the visible text.
