@@ -212,3 +212,45 @@ async fn upsert_replaces_child_rows() {
         "old identifiers should be replaced"
     );
 }
+
+#[tokio::test]
+async fn citekey_assigned_once_and_stable_across_updates() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    let article = sample_article();
+    db.upsert_article(&article).await.unwrap();
+
+    let loaded = db.get_article("test-1").await.unwrap().unwrap();
+    let key = loaded.citekey.expect("citekey assigned on insert");
+    assert!(
+        key.starts_with("smith2024a-"),
+        "stem + suffix, got {key}"
+    );
+    let suffix = key.rsplit('-').next().unwrap();
+    assert_eq!(suffix.len(), 4, "4-char base36 suffix");
+
+    // find_by_citekey resolves the same record.
+    let found = db.find_by_citekey(&key).await.unwrap().unwrap();
+    assert_eq!(found.id, "test-1");
+
+    // A metadata refresh (title change) must NOT rotate the key.
+    let mut refreshed = sample_article();
+    refreshed.title = "A renamed breakthrough".into();
+    db.upsert_article(&refreshed).await.unwrap();
+    let reloaded = db.get_article("test-1").await.unwrap().unwrap();
+    assert_eq!(reloaded.citekey.as_deref(), Some(key.as_str()));
+}
+
+#[tokio::test]
+async fn two_namesakes_get_distinct_citekeys() {
+    let db = BibBase::open_in_memory().await.unwrap();
+    let mut a = sample_article();
+    a.id = "paper-a".into();
+    let mut b = sample_article();
+    b.id = "paper-b".into();
+    db.upsert_article(&a).await.unwrap();
+    db.upsert_article(&b).await.unwrap();
+
+    let ka = db.get_article("paper-a").await.unwrap().unwrap().citekey;
+    let kb = db.get_article("paper-b").await.unwrap().unwrap().citekey;
+    assert_ne!(ka, kb, "identical stems must diverge via suffix");
+}

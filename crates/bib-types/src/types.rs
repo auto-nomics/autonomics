@@ -21,6 +21,13 @@ pub struct Article {
     /// Internal unique identifier (UUID or opaque string).
     pub id: String,
 
+    /// Stable short citation key (`author+year+word-xxxx`), assigned once at
+    /// library insertion and never recomputed — wiki entries and tool calls
+    /// reference articles through it. `None` for records that have not been
+    /// persisted to the library yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citekey: Option<String>,
+
     /// Canonical title.
     pub title: String,
 
@@ -114,6 +121,7 @@ impl Article {
         Self {
             id: id.into(),
             title: title.into(),
+            citekey: None,
             authors: Vec::new(),
             identifiers: Vec::new(),
             abstract_text: None,

@@ -11,6 +11,7 @@ utoipa = { version = "5", features = ["axum_extras", "chrono"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 schemars.workspace = true
 
 [lints]

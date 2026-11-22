@@ -145,6 +145,10 @@ pub(crate) enum BibCommand {
         value: String,
         reply: oneshot::Sender<Result<Option<Article>>>,
     },
+    FindByCitekey {
+        citekey: String,
+        reply: oneshot::Sender<Result<Option<Article>>>,
+    },
     DeleteArticle {
         id: String,
         reply: oneshot::Sender<Result<u64>>,
@@ -560,6 +564,9 @@ impl BibCommand {
             }
             Self::FindByIdentifier { kind, value, reply } => {
                 let _ = reply.send(core.find_by_identifier(kind, &value).await);
+            }
+            Self::FindByCitekey { citekey, reply } => {
+                let _ = reply.send(core.find_by_citekey(&citekey).await);
             }
             Self::DeleteArticle { id, reply } => {
                 let _ = reply.send(core.delete_article(&id).await);
