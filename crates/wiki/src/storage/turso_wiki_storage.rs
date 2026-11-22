@@ -64,6 +64,14 @@ CREATE TABLE IF NOT EXISTS entry_links (
 
 CREATE INDEX IF NOT EXISTS idx_entry_links_to ON entry_links(to_id);
 
+CREATE TABLE IF NOT EXISTS entry_citations (
+    entry_id TEXT NOT NULL,
+    citekey  TEXT NOT NULL,
+    PRIMARY KEY (entry_id, citekey)
+);
+
+CREATE INDEX IF NOT EXISTS idx_entry_citations_citekey ON entry_citations(citekey);
+
 CREATE TABLE IF NOT EXISTS search_docs (
     entry_id TEXT PRIMARY KEY NOT NULL,
     length   INTEGER NOT NULL
@@ -596,6 +604,37 @@ impl WikiIndexStorage for TursoWikiStorage {
 
     async fn get_out_links_batch(&self, ids: &[String]) -> Result<Vec<Vec<String>>> {
         fetch_adjacency(&self.conn, ids, "from_id", "to_id").await
+    }
+
+    async fn get_citations(&self, id: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().await;
+        // 回收站词条的引用同样不可见,与 links 的口径一致。
+        let mut rows = conn
+            .query(
+                "SELECT citekey FROM entry_citations WHERE entry_id = ?1                  AND (SELECT deleted_at FROM entries WHERE id = ?1) IS NULL",
+                turso::params![id.to_string()],
+            )
+            .await?;
+        let mut keys = Vec::new();
+        while let Some(row) = rows.next().await? {
+            keys.push(text_col(&row, 0)?);
+        }
+        Ok(keys)
+    }
+
+    async fn get_citing_entries(&self, citekey: &str) -> Result<Vec<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT c.entry_id FROM entry_citations c                  JOIN entries e ON e.id = c.entry_id                  WHERE c.citekey = ?1 AND e.deleted_at IS NULL                  ORDER BY c.entry_id",
+                turso::params![citekey.to_string()],
+            )
+            .await?;
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await? {
+            ids.push(text_col(&row, 0)?);
+        }
+        Ok(ids)
     }
 
     async fn get_mentions(&self, id: &str) -> Result<Vec<String>> {
@@ -1229,7 +1268,36 @@ async fn rebuild_out_links(conn: &Connection, entry: &KnowledgeEntryData) -> Res
             }
         }
     }
-    set_out_links(conn, &entry.id, &targets).await
+    set_out_links(conn, &entry.id, &targets).await?;
+
+    // 引用边:pandoc `[@citekey]` 提取,按 citekey 去重;citekey 不在
+    // entries 表里解析(resolve_target 不适用),悬空键照存 —— 引用的
+    // 文献可能尚未导入,导入后反查即可命中。
+    let mut citekeys: Vec<String> = Vec::new();
+    let mut cited: HashSet<String> = HashSet::new();
+    for citation in Parser::new().extract_citations(&entry.content) {
+        if cited.insert(citation.key.clone()) && citekeys.len() < 200 {
+            citekeys.push(citation.key);
+        }
+    }
+    set_out_citations(conn, &entry.id, &citekeys).await
+}
+
+/// 覆盖式写引用边。
+async fn set_out_citations(conn: &Connection, from: &str, citekeys: &[String]) -> Result<()> {
+    conn.execute(
+        "DELETE FROM entry_citations WHERE entry_id = ?1",
+        turso::params![from],
+    )
+    .await?;
+    for key in citekeys {
+        conn.execute(
+            "INSERT OR IGNORE INTO entry_citations (entry_id, citekey) VALUES (?1, ?2)",
+            turso::params![from, key.as_str()],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// 内链目标解析:先按标题(未删除),再按别名(未删除)。

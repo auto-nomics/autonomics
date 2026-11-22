@@ -22,6 +22,27 @@ pub enum LinkKind {
     External,
 }
 
+/// 单条文献引用键(pandoc 语法 `[@citekey]` / `[@k1; @k2]`)。
+///
+/// citekey 指向 bib 库的稳定引用键(如 `smith2024a-k3x9`),目标不在
+/// wiki entries 表里,所以不走 [`LinkKind`]/链接索引,而是单独的引用
+/// 边表(见 storage 的 `entry_citations`)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedCitation {
+    /// 引用键原文(`@` 后的部分,已 trim)。
+    pub key: String,
+}
+
+/// 合法引用键字符:字母数字开头,后接字母数字/下划线/点/连字符
+/// (覆盖 `smith2024a-k3x9` 这类 词干-后缀 键)。
+fn is_valid_citekey_char(c: char, first: bool) -> bool {
+    if first {
+        c.is_ascii_alphanumeric() || c == '_'
+    } else {
+        c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')
+    }
+}
+
 /// 一次链接提取结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedLink {
@@ -118,6 +139,38 @@ impl Parser {
         links
     }
 
+    /// 从 markdown 内容提取全部文献引用键(pandoc 语法),保持出现顺序,
+    /// 不去重。
+    ///
+    /// `[@smith2024a-k3x9]` 与多键组 `[@smith2024a-k3x9; @jones2021ab]`
+    /// 都支持;键之间以 `;` 分隔,每键以 `@` 起头。代码块与行内代码里的
+    /// 字面 `[@…]` 不提取(与 wikilink 同规则):通过 pulldown-cmark 事件
+    /// 流过滤,只对普通文本段做扫描。
+    pub fn extract_citations(&self, content: &str) -> Vec<ExtractedCitation> {
+        let mut plain = String::with_capacity(content.len());
+        let mut in_code_block = false;
+        for event in pulldown_cmark::Parser::new_ext(content, Options::ENABLE_WIKILINKS) {
+            match event {
+                Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+                Event::End(TagEnd::CodeBlock) => in_code_block = false,
+                // 行内代码整段自成事件,不需要状态。
+                Event::Code(_) | Event::Html(_) | Event::InlineHtml(_) => {}
+                Event::Text(t) => {
+                    if !in_code_block {
+                        plain.push_str(&t);
+                    }
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    if !in_code_block {
+                        plain.push('\n');
+                    }
+                }
+                _ => {}
+            }
+        }
+        scan_citations(&plain)
+    }
+
     /// 把正文中目标为 `from` 的内链改写为 `to`(改名时保链接不断)。
     ///
     /// 纯文本扫描 `[[…]]`:目标段(`|` 前、去首尾空白)等于 `from` 才
@@ -164,6 +217,56 @@ impl Parser {
         out.push_str(&content[copied..]);
         out
     }
+}
+
+/// 扫描纯文本里的 pandoc 引用组。引用组从 `[@` 开始到最近的 `]`,
+/// 组内按 `;` 拆分,每项 trim 后必须 `@` 起头且键字符合法,否则整项
+/// 丢弃(宁缺勿滥:普通方括号文本如 `[a@b]` 不该被当引用)。
+fn scan_citations(plain: &str) -> Vec<ExtractedCitation> {
+    let mut out = Vec::new();
+    let bytes = plain.as_bytes();
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'[' && bytes[i + 1] == b'@' {
+            // 找最近的 `]`;跨行的组仍接受(pandoc 允许换行),但键本身
+            // 不含换行。
+            let Some(rel) = plain[i + 2..].find(']') else {
+                break;
+            };
+            let group = &plain[i + 2..i + 2 + rel];
+            for (n, item) in group.split(';').enumerate() {
+                let item = item.trim();
+                // The opening `[@` already consumed the first item's `@`;
+                // later items must carry their own. A space between `[@` and
+                // the key (e.g. `[@ bad]`) is not a citation.
+                if n == 0 && !group.starts_with(item) {
+                    continue;
+                }
+                let key = if n == 0 {
+                    item.strip_prefix('@').unwrap_or(item)
+                } else {
+                    match item.strip_prefix('@') {
+                        Some(k) => k,
+                        None => continue,
+                    }
+                };
+                let mut chars = key.chars();
+                match chars.next() {
+                    Some(first) if is_valid_citekey_char(first, true) => {}
+                    _ => continue,
+                }
+                if chars.all(|c| is_valid_citekey_char(c, false)) {
+                    out.push(ExtractedCitation {
+                        key: key.to_string(),
+                    });
+                }
+            }
+            i += 2 + rel + 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -307,5 +410,51 @@ mod tests {
         );
         // from == to 直接短路。
         assert_eq!(p.rewrite_wiki_link_target("[[A]]", "A", "A"), "[[A]]");
+    }
+
+    #[test]
+    fn single_pandoc_citation() {
+        let cites = Parser::new().extract_citations("结论见 [@smith2024a-k3x9]。");
+        assert_eq!(cites.len(), 1);
+        assert_eq!(cites[0].key, "smith2024a-k3x9");
+    }
+
+    #[test]
+    fn multi_key_group() {
+        let cites = Parser::new().extract_citations("[@smith2024a-k3x9; @jones2021.ab] 复核");
+        assert_eq!(
+            cites.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+            vec!["smith2024a-k3x9", "jones2021.ab"]
+        );
+    }
+
+    #[test]
+    fn code_blocks_and_inline_code_ignored() {
+        let content = "```\n[@inblock]\n```\n行内 `[@inline]` 与真引用 [@real2020key]";
+        let cites = Parser::new().extract_citations(content);
+        assert_eq!(cites.len(), 1);
+        assert_eq!(cites[0].key, "real2020key");
+    }
+
+    #[test]
+    fn plain_brackets_not_citations() {
+        // 不以 @ 起头的方括号、键字符合法但前缀不对的,全部忽略。
+        assert!(Parser::new().extract_citations("[普通] [@ bad] [a@b] [@]").is_empty());
+    }
+
+    #[test]
+    fn citations_keep_order_and_allow_repeats() {
+        let cites = Parser::new().extract_citations("[@a2020x] 中 [@b2021y] 重复 [@a2020x]");
+        assert_eq!(cites.len(), 3);
+        assert_eq!(cites[2].key, "a2020x");
+    }
+
+    #[test]
+    fn semicolon_items_require_at_prefix() {
+        let cites = Parser::new().extract_citations("[@good2020key; bad; @also-good]");
+        assert_eq!(
+            cites.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+            vec!["good2020key", "also-good"]
+        );
     }
 }

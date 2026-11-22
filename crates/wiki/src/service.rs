@@ -80,6 +80,14 @@ pub enum WikiCommand {
         ids: Vec<String>,
         reply: oneshot::Sender<Result<Vec<Vec<String>>>>,
     },
+    GetCitations {
+        id: String,
+        reply: oneshot::Sender<Result<Vec<String>>>,
+    },
+    GetCitingEntries {
+        citekey: String,
+        reply: oneshot::Sender<Result<Vec<String>>>,
+    },
     GetMentions {
         id: String,
         reply: oneshot::Sender<Result<Vec<String>>>,
@@ -210,6 +218,13 @@ impl<T: WikiStorage + ?Sized> WikiWorker<T> {
                             .await
                             .map_err(Error::from),
                     );
+                }
+                WikiCommand::GetCitations { id, reply } => {
+                    let _ = reply.send(self.store.get_citations(&id).await.map_err(Error::from));
+                }
+                WikiCommand::GetCitingEntries { citekey, reply } => {
+                    let _ =
+                        reply.send(self.store.get_citing_entries(&citekey).await.map_err(Error::from));
                 }
                 WikiCommand::GetMentions { id, reply } => {
                     let _ = reply.send(self.store.get_mentions(&id).await.map_err(Error::from));
@@ -468,6 +483,20 @@ impl WikiHandle {
     pub async fn get_out_links_batch(&self, ids: &[String]) -> Result<Vec<Vec<String>>> {
         let ids = ids.to_vec();
         self.call(|reply| WikiCommand::GetOutLinksBatch { ids, reply })
+            .await
+    }
+
+    /// 词条正文引用的文献键(pandoc `[@citekey]`)。
+    pub async fn get_citations(&self, id: &str) -> Result<Vec<String>> {
+        let id = id.to_string();
+        self.call(|reply| WikiCommand::GetCitations { id, reply })
+            .await
+    }
+
+    /// 反查:引用了该文献键的词条 id(文献导入前的悬空键也可查)。
+    pub async fn get_citing_entries(&self, citekey: &str) -> Result<Vec<String>> {
+        let citekey = citekey.to_string();
+        self.call(|reply| WikiCommand::GetCitingEntries { citekey, reply })
             .await
     }
 
