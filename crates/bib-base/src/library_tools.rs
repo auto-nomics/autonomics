@@ -40,8 +40,8 @@ use bib_types::{
     FileFormat, FullText, FullTextSource, IdKind, Identifier, TextFormat,
 };
 
-use crate::bib_base::BibBase;
 use crate::Error;
+use crate::bib_base::BibBase;
 use crate::collections::CollectionAddOutcome;
 use crate::managed_fulltext::{ImportMode, ManagedImport};
 
@@ -866,7 +866,6 @@ impl BibSearchLibraryTool {
     }
 }
 
-
 /// Resolve an article reference for tool inputs: exact internal id first,
 /// then the stable citekey. Returns the hydrated article so callers can use
 /// `article.id` for downstream operations.
@@ -878,13 +877,17 @@ pub(crate) async fn resolve_article_ref(
     if let Some(a) = bib
         .get_article(reference)
         .await
-        .map_err(|e| ToolError::ExecutionFailed { source: e.to_string().into() })?
+        .map_err(|e| ToolError::ExecutionFailed {
+            source: e.to_string().into(),
+        })?
     {
         return Ok(Some(a));
     }
     bib.find_by_citekey(reference)
         .await
-        .map_err(|e| ToolError::ExecutionFailed { source: e.to_string().into() })
+        .map_err(|e| ToolError::ExecutionFailed {
+            source: e.to_string().into(),
+        })
 }
 
 // ===========================================================================
@@ -1920,7 +1923,6 @@ pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
     tools
 }
 
-
 // ===========================================================================
 // bib_resolve_citekeys — citekey → article metadata bridge (batch, read-only)
 // ===========================================================================
@@ -2014,7 +2016,6 @@ impl ToolFunction for BibResolveCitekeysTool {
     }
 }
 
-
 // ===========================================================================
 // literature_import_manual — structured metadata straight into the library
 // (browser-extracted papers and other out-of-band finds)
@@ -2089,10 +2090,14 @@ impl ToolFunction for LiteratureImportManualTool {
         // Optional server-side page capture, taken BEFORE any dedup short-
         // circuit so already-present articles archive their page too.
         let snapshot = if input.archive_current_page.unwrap_or(false) {
-            let source = self.page.as_ref().ok_or_else(|| ToolError::ValidationFailed {
-                message: "archive_current_page needs a live browser session \
-                          (only browser agents have one)".into(),
-            })?;
+            let source = self
+                .page
+                .as_ref()
+                .ok_or_else(|| ToolError::ValidationFailed {
+                    message: "archive_current_page needs a live browser session \
+                          (only browser agents have one)"
+                        .into(),
+                })?;
             let (url, page_title, html) = source
                 .current_page()
                 .await
@@ -2176,16 +2181,26 @@ impl ToolFunction for LiteratureImportManualTool {
             .filter_map(|display| parse_display_author(display))
             .collect();
         article.year = input.year;
-        article.journal = input.journal.map(|j| j.trim().to_owned()).filter(|j| !j.is_empty());
+        article.journal = input
+            .journal
+            .map(|j| j.trim().to_owned())
+            .filter(|j| !j.is_empty());
         article.abstract_text = input
             .abstract_text
             .map(|a| a.trim().to_owned())
             .filter(|a| !a.is_empty());
         article.source = ArticleSource::Manual;
-        article
-            .identifiers
-            .extend(identifiers.iter().map(|(k, v)| Identifier::new(*k, v.clone())));
-        if let Some(url) = input.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+        article.identifiers.extend(
+            identifiers
+                .iter()
+                .map(|(k, v)| Identifier::new(*k, v.clone())),
+        );
+        if let Some(url) = input
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+        {
             article.extra_fields.insert("url".into(), url.to_owned());
         }
 
@@ -2206,7 +2221,11 @@ impl ToolFunction for LiteratureImportManualTool {
             })?;
 
         let attachment = if snapshot.is_some() {
-            Some(archive(saved.id.clone(), snapshot).await.map_err(box_error)?)
+            Some(
+                archive(saved.id.clone(), snapshot)
+                    .await
+                    .map_err(box_error)?,
+            )
         } else {
             None
         };
@@ -2223,7 +2242,6 @@ impl ToolFunction for LiteratureImportManualTool {
         })))
     }
 }
-
 
 /// Write the captured page HTML into managed attachment storage and commit
 /// it as the article's attachment (HTML extraction queued in the backgound),
@@ -2245,15 +2263,30 @@ async fn archive_page_attachment(
     let slug_base = if !page_title.trim().is_empty() {
         page_title.trim().to_string()
     } else {
-        url.trim_start_matches("https://").trim_start_matches("http://").to_string()
+        url.trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .to_string()
     };
     let mut slug: String = slug_base
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
     slug = slug.split_whitespace().collect::<Vec<_>>().join("-");
     slug.truncate(80);
-    let filename = format!("{}.html", if slug.is_empty() { "page".to_string() } else { slug });
+    let filename = format!(
+        "{}.html",
+        if slug.is_empty() {
+            "page".to_string()
+        } else {
+            slug
+        }
+    );
 
     let bytes = html.into_bytes();
     if bytes.is_empty() {
@@ -2291,7 +2324,13 @@ async fn archive_page_attachment(
             filename: filename.clone(),
             source_url: Some(url.clone()),
             mode: ImportMode::Attach {
-                title: Some(format!("Archived page: {}", page_title.is_empty().then(|| url.as_str()).unwrap_or(&page_title))),
+                title: Some(format!(
+                    "Archived page: {}",
+                    page_title
+                        .is_empty()
+                        .then(|| url.as_str())
+                        .unwrap_or(&page_title)
+                )),
                 content_type: "text/html".into(),
                 make_preferred: false,
             },

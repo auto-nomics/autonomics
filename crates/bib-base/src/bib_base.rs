@@ -604,9 +604,7 @@ impl BibCore {
                     candidate = bib_types::evidence::stable_citekey(article);
                 }
                 if taken {
-                    return Err(Error::Unknown(
-                        "could not allocate a unique citekey".into(),
-                    ));
+                    return Err(Error::Unknown("could not allocate a unique citekey".into()));
                 }
                 Some(candidate)
             }

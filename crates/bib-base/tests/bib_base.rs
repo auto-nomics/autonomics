@@ -221,10 +221,7 @@ async fn citekey_assigned_once_and_stable_across_updates() {
 
     let loaded = db.get_article("test-1").await.unwrap().unwrap();
     let key = loaded.citekey.expect("citekey assigned on insert");
-    assert!(
-        key.starts_with("smith2024a-"),
-        "stem + suffix, got {key}"
-    );
+    assert!(key.starts_with("smith2024a-"), "stem + suffix, got {key}");
     let suffix = key.rsplit('-').next().unwrap();
     assert_eq!(suffix.len(), 4, "4-char base36 suffix");
 

@@ -380,10 +380,13 @@ impl ToolFunction for LiteratureImportTool {
             .collect();
         let mut citekey_map: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        for (id, key) in saved_ids
-            .iter()
-            .zip(self.shared.bib.get_citekeys(&saved_ids).await.unwrap_or_default())
-        {
+        for (id, key) in saved_ids.iter().zip(
+            self.shared
+                .bib
+                .get_citekeys(&saved_ids)
+                .await
+                .unwrap_or_default(),
+        ) {
             if let Some(k) = key {
                 citekey_map.insert(id.clone(), k);
             }

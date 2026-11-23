@@ -1041,7 +1041,6 @@ async fn open_memory(config: &RuntimeConfig) -> Result<Arc<MemoryBackend>> {
     )))
 }
 
-
 /// [`bib_base::library_tools::CurrentPageSource`] over the browser agent's
 /// live session: captures the active tab's URL/title/HTML without the agent
 /// round-tripping bytes back through the tool call.
@@ -1053,8 +1052,16 @@ struct BrowserPageSource {
 impl bib_base::library_tools::CurrentPageSource for BrowserPageSource {
     async fn current_page(&self) -> std::result::Result<(String, String, String), String> {
         let tab = self.session.tab(None).await.map_err(|e| e.to_string())?;
-        let url = tab.url().await.map_err(|e| e.to_string())?.unwrap_or_default();
-        let title = tab.title().await.map_err(|e| e.to_string())?.unwrap_or_default();
+        let url = tab
+            .url()
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let title = tab
+            .title()
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
         let html = tab.html().await.map_err(|e| e.to_string())?;
         Ok((url, title, html))
     }

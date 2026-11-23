@@ -21,9 +21,7 @@ fn json_of(result: agentik_types::tools::ToolResult) -> Value {
 }
 
 async fn create(h: &Arc<WikiHandle>, title: &str, content: &str) -> String {
-    let tool = WikiCreateTool {
-        handle: h.clone(),
-    };
+    let tool = WikiCreateTool { handle: h.clone() };
     let out = json_of(
         tool.execute(json!({
             "title": title,
@@ -56,7 +54,12 @@ async fn citations_indexed_and_queryable_both_ways() {
     assert!(citing.contains(&other));
 
     // 悬空键(文献未导入)反查为空。
-    assert!(h.get_citing_entries("nobody2099unknown").await.unwrap().is_empty());
+    assert!(
+        h.get_citing_entries("nobody2099unknown")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -65,9 +68,7 @@ async fn edit_updates_citation_index() {
     let id = create(&h, "初始", "引用 [@old2020key]。").await;
     assert_eq!(h.get_citations(&id).await.unwrap(), vec!["old2020key"]);
 
-    let edit = WikiEditTool {
-        handle: h.clone(),
-    };
+    let edit = WikiEditTool { handle: h.clone() };
     json_of(
         edit.execute(json!({
             "id": id,
@@ -84,12 +85,7 @@ async fn edit_updates_citation_index() {
 #[tokio::test]
 async fn code_block_citations_not_indexed() {
     let h = handle().await;
-    let id = create(
-        &h,
-        "示例",
-        "```\n[@incode2020xx]\n```\n正文 [@real2020yy]",
-    )
-    .await;
+    let id = create(&h, "示例", "```\n[@incode2020xx]\n```\n正文 [@real2020yy]").await;
     assert_eq!(h.get_citations(&id).await.unwrap(), vec!["real2020yy"]);
 }
 
@@ -102,11 +98,7 @@ async fn wiki_citations_tool_both_directions() {
 
     let tool = WikiCitationsTool { handle: h.clone() };
     // 正向
-    let out = json_of(
-        tool.execute(json!({ "id": id }))
-            .await
-            .unwrap(),
-    );
+    let out = json_of(tool.execute(json!({ "id": id })).await.unwrap());
     assert_eq!(out["citekeys"][0], "tool2024key");
     // 反向
     let out = json_of(

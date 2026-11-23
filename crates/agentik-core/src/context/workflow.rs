@@ -1963,7 +1963,9 @@ mod tests {
             ) -> Result<agentik_sdk::types::ToolResult, ToolError> {
                 self.started.notify_one();
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-                Ok(agentik_sdk::types::ToolResult::success("slow tool finished"))
+                Ok(agentik_sdk::types::ToolResult::success(
+                    "slow tool finished",
+                ))
             }
         }
     }
@@ -1985,11 +1987,7 @@ mod tests {
         // the test can assert the follow-up request NEVER happens.
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut mock = MockApiClient::new();
-        let response = Message::assistant_tool_use(
-            "call_slow",
-            "slow_tool",
-            serde_json::json!({}),
-        );
+        let response = Message::assistant_tool_use("call_slow", "slow_tool", serde_json::json!({}));
         let counter = Arc::clone(&calls);
         mock.expect_request_stream_with_system()
             .times(1..)
@@ -2009,7 +2007,9 @@ mod tests {
             .unwrap();
         let shared = turn_test_shared_with(model, tx, registry, None);
         let mut session = Context::new_for_tests(shared, agentik_types::AgentPath::root());
-        session.remember(Message::user("run the slow tool")).unwrap();
+        session
+            .remember(Message::user("run the slow tool"))
+            .unwrap();
 
         let (internal_tx, mut internal_rx) = tokio::sync::mpsc::unbounded_channel();
         let cancel_tx = internal_tx.clone();

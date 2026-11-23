@@ -244,9 +244,15 @@ mod wiki_entry_content_tests {
     fn curator_gets_entry_content_rules() {
         let prompt = super::build_system_prompt(&AgentKind::Curator);
         assert!(prompt.contains("### Entry content rules"), "{prompt}");
-        assert!(prompt.contains("Facts and pointers, not a work log"), "{prompt}");
+        assert!(
+            prompt.contains("Facts and pointers, not a work log"),
+            "{prompt}"
+        );
         assert!(prompt.contains("No first person"), "{prompt}");
-        assert!(prompt.contains("Structure carries the hierarchy"), "{prompt}");
+        assert!(
+            prompt.contains("Structure carries the hierarchy"),
+            "{prompt}"
+        );
     }
 
     /// Non-curators propose entry text to the curator, so they must not be

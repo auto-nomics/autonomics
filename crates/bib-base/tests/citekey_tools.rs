@@ -33,7 +33,9 @@ async fn seeded_db() -> (BibBase, String) {
 #[tokio::test]
 async fn bib_get_article_resolves_citekey_and_echoes_it() {
     let (db, key) = seeded_db().await;
-    let tool = BibGetArticleTool { bib: std::sync::Arc::new(db) };
+    let tool = BibGetArticleTool {
+        bib: std::sync::Arc::new(db),
+    };
 
     let out = tool
         .run(BibGetArticleInput {
@@ -55,7 +57,9 @@ async fn bib_get_article_resolves_citekey_and_echoes_it() {
 #[tokio::test]
 async fn bib_get_article_reports_misses_for_unknown_citekeys() {
     let (db, _) = seeded_db().await;
-    let tool = BibGetArticleTool { bib: std::sync::Arc::new(db) };
+    let tool = BibGetArticleTool {
+        bib: std::sync::Arc::new(db),
+    };
 
     let out = tool
         .run(BibGetArticleInput {
@@ -95,7 +99,10 @@ async fn bib_resolve_citekeys_reports_metadata_and_misses() {
     assert_eq!(payload["missing"], serde_json::json!(1));
     let results = payload["results"].as_array().unwrap();
     assert_eq!(results[0]["found"], serde_json::json!(true));
-    assert_eq!(results[0]["title"], serde_json::json!("Citekey resolution paper"));
+    assert_eq!(
+        results[0]["title"],
+        serde_json::json!("Citekey resolution paper")
+    );
     assert_eq!(results[0]["citekey"], serde_json::json!(key));
     assert_eq!(results[1]["found"], serde_json::json!(false));
 }
@@ -157,7 +164,10 @@ async fn literature_import_manual_dedupes_and_assigns_citekey() {
     );
     assert_eq!(second["status"], serde_json::json!("already_present"));
     assert_eq!(second["citekey"].as_str(), Some(key.as_str()));
-    assert_eq!(second["title"], serde_json::json!("Browser-discovered paper"));
+    assert_eq!(
+        second["title"],
+        serde_json::json!("Browser-discovered paper")
+    );
 
     // 空标题拒绝
     let err = tool
@@ -228,7 +238,10 @@ async fn manual_import_archives_current_page_html_as_attachment() {
     let key = attachment["attachment_key"].as_str().unwrap();
     assert!(!key.is_empty());
     assert!(attachment["filename"].as_str().unwrap().ends_with(".html"));
-    assert_eq!(attachment["source_url"], serde_json::json!("https://example.org/paper"));
+    assert_eq!(
+        attachment["source_url"],
+        serde_json::json!("https://example.org/paper")
+    );
     assert_eq!(attachment["extraction_queued"], serde_json::json!(true));
 
     // The attachment is real: fulltexts row + readable bytes.
@@ -240,7 +253,12 @@ async fn manual_import_archives_current_page_html_as_attachment() {
         .unwrap()
         .expect("article");
     let _ = got;
-    let ft = shared.bib.get_fulltext(article_id).await.unwrap().expect("fulltext row");
+    let ft = shared
+        .bib
+        .get_fulltext(article_id)
+        .await
+        .unwrap()
+        .expect("fulltext row");
     assert_eq!(ft.file_format.as_str(), "html");
     assert_eq!(ft.attachment_key.as_deref(), Some(key));
     // extraction races from pending to running/done in the background —

@@ -439,7 +439,11 @@ mod tests {
     #[test]
     fn plain_brackets_not_citations() {
         // 不以 @ 起头的方括号、键字符合法但前缀不对的,全部忽略。
-        assert!(Parser::new().extract_citations("[普通] [@ bad] [a@b] [@]").is_empty());
+        assert!(
+            Parser::new()
+                .extract_citations("[普通] [@ bad] [a@b] [@]")
+                .is_empty()
+        );
     }
 
     #[test]

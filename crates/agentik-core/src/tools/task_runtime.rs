@@ -190,40 +190,41 @@ impl TaskEntry {
             &tokio::runtime::Handle::current(),
             &format!("task_monitor::{name}"),
             async move {
-            match handle.await {
-                Ok(Ok(tool_result)) => {
-                    // Store the real result for later retrieval.
-                    spwan_ts_tx.send(Some(tool_result.clone())).ok();
-                    tx.send(TaskStatus::Done(tool_result)).ok();
-                }
-                Ok(Err(e)) => {
-                    if let Ok(mut buf) = out.lock() {
-                        buf.push(ProgressRecord::new("error").message(e.to_string()));
+                match handle.await {
+                    Ok(Ok(tool_result)) => {
+                        // Store the real result for later retrieval.
+                        spwan_ts_tx.send(Some(tool_result.clone())).ok();
+                        tx.send(TaskStatus::Done(tool_result)).ok();
                     }
-                    tx.send(TaskStatus::Failed(e)).ok();
-                }
-                Err(join_err) => {
-                    let msg = format!("task panicked: {join_err}");
-                    if let Ok(mut buf) = out.lock() {
-                        buf.push(ProgressRecord::new("error").message(msg));
+                    Ok(Err(e)) => {
+                        if let Ok(mut buf) = out.lock() {
+                            buf.push(ProgressRecord::new("error").message(e.to_string()));
+                        }
+                        tx.send(TaskStatus::Failed(e)).ok();
                     }
-                    tx.send(TaskStatus::Failed(ToolError::ExecutionFailed {
-                        source: Box::new(join_err),
-                    }))
-                    .ok();
+                    Err(join_err) => {
+                        let msg = format!("task panicked: {join_err}");
+                        if let Ok(mut buf) = out.lock() {
+                            buf.push(ProgressRecord::new("error").message(msg));
+                        }
+                        tx.send(TaskStatus::Failed(ToolError::ExecutionFailed {
+                            source: Box::new(join_err),
+                        }))
+                        .ok();
+                    }
                 }
-            }
-            // Notify the agent's event loop when an async task finishes so
-            // it can pull the result. notify_tx is Some only for async tools
-            // — sync tools are consumed inline by execute() and never need
-            // a wake-up.
-            if let Some(notify) = bg_notify {
-                let _ = notify.send(InternalEvent::BgTaskComplete {
-                    id: task_id,
-                    seq: task_seq,
-                });
-            }
-        });
+                // Notify the agent's event loop when an async task finishes so
+                // it can pull the result. notify_tx is Some only for async tools
+                // — sync tools are consumed inline by execute() and never need
+                // a wake-up.
+                if let Some(notify) = bg_notify {
+                    let _ = notify.send(InternalEvent::BgTaskComplete {
+                        id: task_id,
+                        seq: task_seq,
+                    });
+                }
+            },
+        );
 
         Self {
             seq,

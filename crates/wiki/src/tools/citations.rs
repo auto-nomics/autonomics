@@ -40,7 +40,12 @@ impl ToolFunction for WikiCitationsTool {
     type Input = WikiCitationsInput;
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
-        if let Some(citekey) = input.citekey.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        if let Some(citekey) = input
+            .citekey
+            .as_deref()
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+        {
             if input.id.is_some() || input.title.is_some() {
                 return Err(ToolError::ValidationFailed {
                     message: "pass either `citekey` (reverse lookup) or `id`/`title` \
@@ -60,11 +65,7 @@ impl ToolFunction for WikiCitationsTool {
         }
 
         let e = resolve_entry(&self.handle, input.id, input.title).await?;
-        let citekeys = self
-            .handle
-            .get_citations(&e.id)
-            .await
-            .map_err(tool_err)?;
+        let citekeys = self.handle.get_citations(&e.id).await.map_err(tool_err)?;
         Ok(ToolResult::success_json(json!({
             "entry": { "id": e.id, "title": e.title },
             "citekeys": citekeys,

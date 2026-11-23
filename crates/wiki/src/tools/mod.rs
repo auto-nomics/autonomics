@@ -29,11 +29,11 @@ pub use attachments::{
     WikiAttachImageInput, WikiAttachImageTool, WikiAttachmentsInput, WikiAttachmentsTool,
     WikiDetachInput, WikiDetachTool, WikiGetAttachmentInput, WikiGetAttachmentTool,
 };
+pub use citations::{WikiCitationsInput, WikiCitationsTool};
 pub use create::{WikiCreateInput, WikiCreateTool};
 pub use delete::{WikiDeleteInput, WikiDeleteTool};
 pub use edit::{WikiEditInput, WikiEditTool};
 pub use get::{WikiGetInput, WikiGetTool};
-pub use citations::{WikiCitationsInput, WikiCitationsTool};
 pub use links::{WikiLinksInput, WikiLinksTool};
 pub use list::{WikiListInput, WikiListTool};
 pub use mentions::{WikiMentionsInput, WikiMentionsTool};

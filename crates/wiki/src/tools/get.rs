@@ -33,11 +33,7 @@ impl ToolFunction for WikiGetTool {
 
     async fn run(&self, input: Self::Input) -> Result<ToolResult, ToolError> {
         let e = resolve_entry(&self.handle, input.id, input.title).await?;
-        let citations = self
-            .handle
-            .get_citations(&e.id)
-            .await
-            .map_err(tool_err)?;
+        let citations = self.handle.get_citations(&e.id).await.map_err(tool_err)?;
         Ok(ToolResult::success_json(json!({
             "id": e.id,
             "title": e.title,

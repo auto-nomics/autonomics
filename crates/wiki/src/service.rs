@@ -223,8 +223,12 @@ impl<T: WikiStorage + ?Sized> WikiWorker<T> {
                     let _ = reply.send(self.store.get_citations(&id).await.map_err(Error::from));
                 }
                 WikiCommand::GetCitingEntries { citekey, reply } => {
-                    let _ =
-                        reply.send(self.store.get_citing_entries(&citekey).await.map_err(Error::from));
+                    let _ = reply.send(
+                        self.store
+                            .get_citing_entries(&citekey)
+                            .await
+                            .map_err(Error::from),
+                    );
                 }
                 WikiCommand::GetMentions { id, reply } => {
                     let _ = reply.send(self.store.get_mentions(&id).await.map_err(Error::from));
