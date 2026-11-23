@@ -211,6 +211,28 @@ mod spawn_tests {
     use super::super::test_support::config;
     use crate::host::RuntimeHost;
 
+    #[tokio::test]
+    async fn wiki_citekey_resolver_is_registered_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = RuntimeHost::open(&config(&dir)).await.unwrap();
+
+        for kind in [AgentKind::Researcher, AgentKind::Developer] {
+            let path =
+                agentik_types::AgentPath::try_from(format!("/root/{}", kind.name())).unwrap();
+            let tools = host.infra().tools_from_profile(&path, kind).await.unwrap();
+
+            assert_eq!(
+                tools
+                    .iter()
+                    .filter(|tool| tool.definition.name == "bib_resolve_citekeys")
+                    .count(),
+                1,
+                "{} should be able to resolve wiki citations",
+                kind.name()
+            );
+        }
+    }
+
     /// Guard for the spawn payload narrowing: the per-agent config handed to
     /// `spawn_agent` — including `preferred_model` — must land in
     /// `agents.config_json` so restarts restore the preference.
