@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { wikiAttachmentRef } from "@/lib/wiki-attachment-ref";
+import i18n from "@/i18n";
 import { attachmentRawUrl } from "./wiki-api";
 
 // Share in-flight desktop downloads, and release every object URL after its last view closes.
@@ -37,7 +39,7 @@ export function loadWikiImages(root: HTMLElement, onLoad?: () => void) {
     img.hidden = true;
     const message = document.createElement("span");
     message.className = "wiki-image-error";
-    message.textContent = `图片不存在或无法访问：${img.alt}`;
+    message.textContent = i18n.t("wiki:images.notFound", { alt: img.alt });
     img.after(message); errors.push(message);
     onLoad?.();
   };
@@ -67,6 +69,7 @@ export function loadWikiImages(root: HTMLElement, onLoad?: () => void) {
 
 export function useWikiImages(ref: RefObject<HTMLElement | null>, revision: string, preview = false) {
   const [opened, setOpened] = useState<{ src: string; alt: string } | null>(null);
+  const { t } = useTranslation("wiki");
   useEffect(() => {
     const root = ref.current;
     if (!root) return;
@@ -82,7 +85,7 @@ export function useWikiImages(ref: RefObject<HTMLElement | null>, revision: stri
   }, [ref, revision, preview]);
   return <Dialog open={opened !== null} onOpenChange={open => { if (!open) setOpened(null); }}>
     <DialogContent className="max-w-[90vw]">
-      <DialogHeader><DialogTitle>{opened?.alt || "图片预览"}</DialogTitle><DialogDescription>原始图片</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>{opened?.alt || t("images.previewTitle")}</DialogTitle><DialogDescription>{t("images.original")}</DialogDescription></DialogHeader>
       {opened && <img src={opened.src} alt={opened.alt} className="max-h-[80vh] max-w-full object-contain" />}
     </DialogContent>
   </Dialog>;

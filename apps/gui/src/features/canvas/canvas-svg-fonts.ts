@@ -1,4 +1,5 @@
 import { convertToExcalidrawElements, exportToSvg } from "@excalidraw/excalidraw";
+import i18n from "@/i18n";
 
 /** Make local Helvetica runs (including native frame names) portable in SVG.
  * Liberation's compatible Latin metrics are already the pinned scientific font;
@@ -16,7 +17,7 @@ export async function embedLocalSvgFonts(svg: SVGSVGElement) {
     appState: { exportWithDarkMode: false }, files: {},
   });
   const styles = [...subset.querySelectorAll("style")].map(style => style.textContent ?? "").filter(css => css.includes("@font-face"));
-  if (!styles.length) throw new Error("SVG 本地文字字体嵌入失败，请重试导出。");
+  if (!styles.length) throw new Error(i18n.t("canvas:svgFonts.embedFailed"));
   const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
   style.textContent = styles.join("\n").replaceAll(/font-family\s*:\s*[^;{}]+/g, `font-family: "${alias}"`);
   svg.prepend(style);

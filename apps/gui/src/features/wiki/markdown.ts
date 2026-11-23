@@ -23,6 +23,7 @@
  * lexer stays marked while rendering moves to Comark.
  */
 import { useEffect, useState } from "react";
+import i18n from "@/i18n";
 import { renderHtml } from "@comark/html";
 import { defineComarkPlugin } from "comark";
 import DOMPurify from "dompurify";
@@ -121,7 +122,7 @@ const imageUploadPlugin = defineComarkPlugin(() => ({
         if (!match) return false;
         if (silent) return true;
         const token: Token = state.push("html_block", "", 0);
-        token.content = '<p class="wiki-image-pending" role="status">图片待插入…</p>';
+        token.content = `<p class="wiki-image-pending" role="status">${i18n.t("wiki:images.pending")}</p>`;
         token.map = [startLine, startLine + 1];
         state.line = startLine + 1;
         return true;
@@ -146,7 +147,7 @@ function wikiComponents(entryId?: string) {
       const ref = wikiAttachmentRef(src, entryId);
       const url = ref ? wikiAttachmentUrl(ref.entryId, ref.attachmentId) : src;
       if (url.startsWith("wiki-attach:")) {
-        return `<span class="wiki-image-error">图片引用无效：${escapeHtml(alt)}</span>`;
+        return `<span class="wiki-image-error">${i18n.t("wiki:images.invalidRef", { alt: escapeHtml(alt) })}</span>`;
       }
       const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
       return `<img${desktop ? "" : ` src="${escapeHtml(url)}"`} alt="${escapeHtml(alt)}"${title} loading="lazy" decoding="async"${ref ? ` data-wiki-entry="${escapeHtml(ref.entryId)}" data-wiki-attachment="${escapeHtml(ref.attachmentId)}"` : ""}>`;

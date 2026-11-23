@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, StatefulWidgetRef, Widget},
 };
+use i18n::t;
 
 use crate::theme;
 
@@ -470,7 +471,7 @@ impl HpcPanelState {
         {
             return Err((
                 0,
-                "ID must contain 1–64 letters, digits, underscores or dashes".into(),
+                t!("tui.hpc.errIdChars").to_string(),
             ));
         }
         if self
@@ -478,21 +479,21 @@ impl HpcPanelState {
             .iter()
             .any(|target| target["id"] == id)
         {
-            return Err((0, "Target ID already exists".into()));
+            return Err((0, t!("tui.hpc.errIdExists").to_string()));
         }
         let kind = value(2);
         if !matches!(kind, "ssh" | "slurm") {
-            return Err((2, "Choose SSH or Slurm".into()));
+            return Err((2, t!("tui.hpc.errChooseBackend").to_string()));
         }
         let host = settings_index("ssh_host");
         if value(host).is_empty() {
-            return Err((host, "SSH host is required".into()));
+            return Err((host, t!("tui.hpc.errSshHostRequired").to_string()));
         }
         let data_alias = settings_index("data_ssh_host");
         if !value(data_alias).is_empty() && value(DATA_ROOT).is_empty() {
             return Err((
                 DATA_ROOT,
-                "A data SSH alias requires a shared directory absolute path".into(),
+                t!("tui.hpc.errDataAliasNeedsRoot").to_string(),
             ));
         }
 
@@ -500,14 +501,14 @@ impl HpcPanelState {
             .map_err(|_| {
                 (
                     CONTAINER_RUNTIME,
-                    "Container runtime JSON is required".into(),
+                    t!("tui.hpc.errRuntimeJson").to_string(),
                 )
             })?;
         let runtime_type = if kind == "ssh" { "podman" } else { "sif" };
         if container_runtime["type"] != runtime_type {
             return Err((
                 CONTAINER_RUNTIME,
-                format!("{kind} requires a {runtime_type} container runtime"),
+                t!("tui.hpc.errRuntimeType", kind = kind, runtime = runtime_type).to_string(),
             ));
         }
 
@@ -543,13 +544,13 @@ impl HpcPanelState {
     fn dashboard_save(&self) -> Result<serde_json::Value, (usize, String)> {
         let name = self.dashboard_fields[1].trim();
         if name.is_empty() {
-            return Err((1, "Target name is required".into()));
+            return Err((1, t!("tui.hpc.errNameRequired").to_string()));
         }
         let mut backend = self.dashboard_draft["backend"].clone();
         if backend["type"] != "local" {
             let host = settings_index("ssh_host");
             if self.dashboard_fields[host].trim().is_empty() {
-                return Err((host, "SSH host is required".into()));
+                return Err((host, t!("tui.hpc.errSshHostRequired").to_string()));
             }
             for index in self
                 .dashboard_visible_fields()
@@ -809,7 +810,7 @@ impl HpcPanelState {
                 HpcTab::Config => {
                     if !self.target_editable {
                         self.status =
-                            Some("Select a Slurm compute target to edit its settings.".into());
+                            Some(t!("tui.hpc.selectToEdit").to_string());
                         return None;
                     }
                     let def = &FIELD_DEFS[self.selected_field];
@@ -940,7 +941,7 @@ impl HpcPanelState {
                     .and_then(|target| target["id"].as_str())
                     .map(|id| HpcPanelCommand::DeleteTarget(id.to_string()));
             }
-            self.status = Some("Delete cancelled".into());
+            self.status = Some(t!("tui.hpc.deleteCancelled").to_string());
             return None;
         }
         match key.code {
@@ -998,7 +999,7 @@ impl HpcPanelState {
                         .and_then(|t| t["backend"]["type"].as_str()),
                     Some("slurm" | "ssh")
                 ) {
-                    self.status = Some("Select a remote target to repair its worker".into());
+                    self.status = Some(t!("tui.hpc.selectRemoteToRepair").to_string());
                 } else {
                     let id = self.dashboard_targets[self.selected_target]["id"]
                         .as_str()
@@ -1048,12 +1049,12 @@ impl HpcPanelState {
                     && (key.code == KeyCode::Char('d') || ctrl) =>
             {
                 self.dashboard_confirm_delete = true;
-                self.status = Some(format!(
-                    "Delete {}? y or Ctrl+X confirms; any other key cancels",
-                    self.dashboard_targets[self.selected_target]["id"]
-                        .as_str()
-                        .unwrap_or("?")
-                ));
+                self.status = Some(format!("{}", t!(
+                        "tui.hpc.deleteConfirm",
+                        name = self.dashboard_targets[self.selected_target]["id"]
+                            .as_str()
+                            .unwrap_or("?")
+                    )));
             }
             KeyCode::Char('x') if !self.dashboard_editing => {
                 return self
@@ -1101,7 +1102,7 @@ impl HpcPanelState {
             }
             KeyCode::Enter if self.dashboard_editing => {
                 if !self.dashboard_new && (self.dashboard_field == 0 || self.dashboard_field == 2) {
-                    self.status = Some("ID and backend are fixed for existing targets".into());
+                    self.status = Some(t!("tui.hpc.idBackendFixed").to_string());
                 } else if self.dashboard_new && self.dashboard_field == 2 {
                     self.dashboard_fields[2] = match self.dashboard_fields[2].as_str() {
                         "ssh" => "slurm",
@@ -1171,9 +1172,9 @@ impl StatefulWidgetRef for HpcPanelWidget {
             Span::styled(format!(" {label} "), style)
         };
         lines.push(Line::from(vec![
-            tab("Compute settings", state.tab == HpcTab::Config),
-            tab("Jobs", state.tab == HpcTab::Jobs),
-            tab("Targets", state.tab == HpcTab::Targets),
+            tab(&t!("tui.hpc.tabConfig"), state.tab == HpcTab::Config),
+            tab(&t!("tui.hpc.tabJobs"), state.tab == HpcTab::Jobs),
+            tab(&t!("tui.hpc.tabTargets"), state.tab == HpcTab::Targets),
         ]));
         lines.push(Line::from(Span::styled(
             "─".repeat(usize::from(area.width)),
@@ -1182,7 +1183,7 @@ impl StatefulWidgetRef for HpcPanelWidget {
 
         if state.loading {
             lines.push(Line::from(Span::styled(
-                "Loading…",
+                t!("tui.hpc.loading").to_string(),
                 Style::default().fg(theme.text_faint),
             )));
         } else {
@@ -1196,7 +1197,7 @@ impl StatefulWidgetRef for HpcPanelWidget {
         let mut footer: Vec<Line<'static>> = Vec::new();
         if !state.loading && state.tab == HpcTab::Config && state.target_editable {
             footer.push(Line::from(Span::styled(
-                "s save target",
+                t!("tui.hpc.saveTargetHint").to_string(),
                 Style::default().fg(theme.text_faint),
             )));
         }
@@ -1209,9 +1210,9 @@ impl StatefulWidgetRef for HpcPanelWidget {
         // Keymap hint — the panel's persistent footer.
         footer.push(Line::from(Span::styled(
             if state.tab == HpcTab::Targets {
-                "Enter select target · Tab switch · r reload gateway snapshot · Esc close"
+                t!("tui.hpc.footerTargets").to_string()
             } else {
-                "Tab switch · r reload gateway snapshot · Esc close"
+                t!("tui.hpc.footerDefault").to_string()
             },
             Style::default().fg(theme.text_faint),
         )));
@@ -1245,16 +1246,17 @@ impl HpcPanelWidget {
     fn render_dashboard(&self, area: Rect, buf: &mut Buffer, state: &HpcPanelState) {
         let theme = theme::current();
         let hint = if state.loading && state.repair_show_events {
-            "Esc close panel · operation continues"
+            t!("tui.hpc.hintOperation")
         } else if state.repair_show_events {
-            "Esc return to form or details"
+            t!("tui.hpc.hintEvents")
         } else if state.dashboard_editing {
-            "Tab/↑↓ field · Enter edit/toggle · Ctrl+S save · Esc cancel"
+            t!("tui.hpc.hintEditing")
         } else if state.tab == HpcTab::Jobs {
-            "Tab switch · ↑↓ jobs · r reload gateway snapshot · Esc close"
+            t!("tui.hpc.hintJobs")
         } else {
-            "Tab switch · ↑↓ move · n enroll · e edit · c check · R readiness · x select · w repair · Ctrl+X delete · r reload · Esc close"
-        };
+            t!("tui.hpc.hintTargets")
+        }
+        .to_string();
         let mut footer = Vec::new();
         if let Some(status) = &state.status {
             footer.push(Line::from(status.clone()));
@@ -1288,8 +1290,8 @@ impl HpcPanelWidget {
         };
         Paragraph::new(vec![
             Line::from(vec![
-                tab("Targets", state.tab == HpcTab::Targets),
-                tab("Jobs", state.tab == HpcTab::Jobs),
+                tab(&t!("tui.hpc.tabTargets"), state.tab == HpcTab::Targets),
+                tab(&t!("tui.hpc.tabJobs"), state.tab == HpcTab::Jobs),
             ]),
             Line::from(Span::styled(
                 "─".repeat(usize::from(rows[0].width)),
@@ -1311,7 +1313,7 @@ impl HpcPanelWidget {
             [empty, rows[1]]
         };
         let left = Block::default()
-            .title(" Compute targets ")
+            .title(t!("tui.hpc.targetsTitle").to_string())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if !state.dashboard_focus_form {
                 theme.accent_alt
@@ -1364,17 +1366,17 @@ impl HpcPanelWidget {
 
         let right = Block::default()
             .title(if state.repair_show_events && state.enrollment_progress {
-                " Enrollment progress "
+                t!("tui.hpc.enrollmentProgress").to_string()
             } else if state.repair_show_events {
-                " Connection recovery events "
+                t!("tui.hpc.recoveryEvents").to_string()
             } else if state.dashboard_show_jobs {
-                " Jobs "
+                t!("tui.hpc.jobsTitle").to_string()
             } else if state.dashboard_new {
-                " Enroll compute target "
+                t!("tui.hpc.enrollTitle").to_string()
             } else if state.dashboard_editing {
-                " Edit target "
+                t!("tui.hpc.editTitle").to_string()
             } else {
-                " Target details "
+                t!("tui.hpc.detailsTitle").to_string()
             })
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if state.dashboard_focus_form {
@@ -1405,26 +1407,26 @@ impl HpcPanelWidget {
         } else if state.dashboard_show_jobs {
             self.render_jobs(&mut form, state, &theme);
         } else if state.dashboard_fields.is_empty() {
-            form.push(Line::from("Press n to add a target"));
+            form.push(Line::from(t!("tui.hpc.pressNToAdd").to_string()));
         } else {
             if !state.dashboard_editing {
                 if let Some(source) = state.dashboard_draft["data_source"]["id"].as_str() {
-                    form.push(Line::from(format!("Data source: /data/{source}")));
+                    form.push(Line::from(t!("tui.hpc.dataSource", source = source).to_string()));
                 }
             }
-            let labels = ["ID", "Name", "Backend", "Enabled"];
+            let labels: [String; 4] = [t!("tui.hpc.fId").to_string(), t!("tui.hpc.fName").to_string(), t!("tui.hpc.fBackend").to_string(), t!("tui.hpc.fEnabled").to_string()];
             for i in state.dashboard_visible_fields() {
                 let value = &state.dashboard_fields[i];
-                let label = if i < 4 {
-                    labels[i]
+                let label: String = if i < 4 {
+                    labels[i].clone()
                 } else {
                     match i {
-                        DATA_ROOT => "Shared directory (absolute)",
-                        WORKER_PATH => "Remote worker path",
-                        DEPLOY_PACKAGE => "Gateway worker package",
-                        SELECT_AFTER_ENROLL => "Select after enrollment",
-                        CONTAINER_RUNTIME => "Container runtime JSON",
-                        _ => FIELD_DEFS[i - 4].label,
+                        DATA_ROOT => t!("tui.hpc.fSharedDir").to_string(),
+                        WORKER_PATH => t!("tui.hpc.fWorkerPath").to_string(),
+                        DEPLOY_PACKAGE => t!("tui.hpc.fDeployPackage").to_string(),
+                        SELECT_AFTER_ENROLL => t!("tui.hpc.fSelectAfterEnroll").to_string(),
+                        CONTAINER_RUNTIME => t!("tui.hpc.fContainerRuntime").to_string(),
+                        _ => FIELD_DEFS[i - 4].label.to_string(),
                     }
                 };
                 let display = if state.dashboard_editing
@@ -1448,7 +1450,7 @@ impl HpcPanelWidget {
                     }
                     marked
                 } else if value.is_empty() {
-                    "(default)".into()
+                    t!("tui.hpc.defaultTag").to_string()
                 } else {
                     value.clone()
                 };
@@ -1507,13 +1509,13 @@ impl HpcPanelWidget {
     ) {
         if !state.target_editable {
             lines.push(Line::from(
-                "Select a Slurm compute target to edit its settings.",
+                t!("tui.hpc.selectToEdit").to_string(),
             ));
             return;
         }
         lines.push(Line::from(format!(
-            "Target: {}",
-            state.target_id.as_deref().unwrap_or("?")
+            "{}",
+            t!("tui.hpc.targetLabel", id = state.target_id.as_deref().unwrap_or("?"))
         )));
         for (index, def) in FIELD_DEFS.iter().enumerate() {
             let value = state
@@ -1524,7 +1526,7 @@ impl HpcPanelWidget {
             let display = if def.kind == FieldKind::Bool {
                 value.to_string()
             } else if value.is_empty() {
-                "(default)".to_string()
+                t!("tui.hpc.defaultTag").to_string()
             } else {
                 value.to_string()
             };
@@ -1550,7 +1552,7 @@ impl HpcPanelWidget {
             if selected {
                 if let Some(buffer) = &state.edit_buffer {
                     lines.push(Line::from(Span::styled(
-                        format!("    edit: {buffer}_  (Enter commit · Esc cancel)"),
+                        t!("tui.hpc.editBuffer", buffer = buffer).to_string(),
                         Style::default().fg(theme.accent),
                     )));
                 }
@@ -1566,7 +1568,7 @@ impl HpcPanelWidget {
     ) {
         if state.jobs.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No monitored HPC jobs. Submissions from agents appear here.",
+                t!("tui.hpc.noJobs").to_string(),
                 Style::default().fg(theme.text_faint),
             )));
             return;
@@ -1615,7 +1617,7 @@ impl HpcPanelWidget {
     ) {
         if state.targets.is_empty() {
             lines.push(Line::from(Span::styled(
-                "No enrolled compute targets.",
+                t!("tui.hpc.noTargets").to_string(),
                 Style::default().fg(theme.text_faint),
             )));
             return;
@@ -1631,11 +1633,11 @@ impl HpcPanelWidget {
                 Style::default().fg(theme.text)
             };
             let state_tag = if target.selected {
-                " · SELECTED"
+                t!("tui.hpc.selectedTag").to_string()
             } else if !target.enabled {
-                " · disabled"
+                t!("tui.hpc.disabledTag").to_string()
             } else {
-                ""
+                String::new()
             };
             lines.push(Line::from(Span::styled(
                 format!("{marker}{} [{}]{}", target.id, target.backend, state_tag),
@@ -1644,7 +1646,7 @@ impl HpcPanelWidget {
             if selected_row {
                 if target.endpoints.is_empty() {
                     lines.push(Line::from(Span::styled(
-                        "    endpoints: (local, none frozen)".to_string(),
+                        t!("tui.hpc.endpointsLocal").to_string(),
                         Style::default().fg(theme.text_faint),
                     )));
                 }
@@ -1665,7 +1667,7 @@ impl HpcPanelWidget {
         if !state.mounts.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "VFS mount partitions:".to_string(),
+                t!("tui.hpc.vfsPartitions").to_string(),
                 Style::default().fg(theme.text_faint),
             )));
             for mount in &state.mounts {

@@ -3,6 +3,8 @@
 use super::overlays::Overlay;
 use super::*;
 
+use i18n::t;
+
 impl App {
     /// Render the delete-agent confirmation popup.
     fn render_delete_confirm_popup(
@@ -38,7 +40,7 @@ impl App {
         let block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .title(Span::styled(
-                " ! Delete Agent ",
+                format!(" ! {} ", t!("tui.deleteConfirm.title")),
                 Style::default()
                     .fg(theme.error)
                     .add_modifier(Modifier::BOLD),
@@ -49,31 +51,34 @@ impl App {
 
         let lines = vec![
             Line::from(vec![
-                Span::styled(" Permanently delete ", Style::default().fg(theme.text_dim)),
+                Span::styled(
+                    t!("tui.deleteConfirm.prompt").to_string(),
+                    Style::default().fg(theme.text_dim),
+                ),
                 Span::styled(
                     agent_name.to_string(),
                     Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("?", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.deleteConfirm.q").to_string(), Style::default().fg(theme.text_dim)),
             ]),
             Line::from(Span::styled(
-                " All conversation history will be erased.",
+                t!("tui.deleteConfirm.historyErased").to_string(),
                 Style::default().fg(theme.text_faint),
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled(" Press ", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.press").to_string(), Style::default().fg(theme.text_dim)),
                 Span::styled(
                     "y",
                     Style::default()
                         .fg(theme.error)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" to confirm, ", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.toConfirmComma").to_string(), Style::default().fg(theme.text_dim)),
                 Span::styled("n", Style::default().fg(theme.success)),
-                Span::styled(" or ", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.or").to_string(), Style::default().fg(theme.text_dim)),
                 Span::styled("Esc", Style::default().fg(theme.success)),
-                Span::styled(" to cancel", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.toCancel").to_string(), Style::default().fg(theme.text_dim)),
             ]),
         ];
 
@@ -128,18 +133,18 @@ impl App {
             )),
             Line::from(""),
             Line::from(vec![
-                Span::styled(" Press ", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.press").to_string(), Style::default().fg(theme.text_dim)),
                 Span::styled(
                     "y",
                     Style::default()
                         .fg(theme.warning)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" to apply, ", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.toApplyComma").to_string(), Style::default().fg(theme.text_dim)),
                 Span::styled("n", Style::default().fg(theme.success)),
-                Span::styled(" or ", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.or").to_string(), Style::default().fg(theme.text_dim)),
                 Span::styled("Esc", Style::default().fg(theme.success)),
-                Span::styled(" to cancel", Style::default().fg(theme.text_dim)),
+                Span::styled(t!("tui.confirm.toCancel").to_string(), Style::default().fg(theme.text_dim)),
             ]),
         ];
 
@@ -185,10 +190,12 @@ impl App {
             })
             .max()
             .unwrap_or(10);
+        let footer_close: &str = &t!("tui.leader.escClose");
+        let footer_back: &str = &t!("tui.leader.backspaceBack");
         let footer_w = if at_root {
-            "Esc close".width()
+            footer_close.width()
         } else {
-            "Esc close · ⌫ back".width()
+            footer_close.width() + 3 + footer_back.width()
         };
         let inner_w = (key_col + arrow_w + label_w).max(footer_w + 2);
         let width = (inner_w as u16 + 2)
@@ -210,7 +217,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(
-                " leader ",
+                t!("tui.leader.title").to_string(),
                 Style::default()
                     .fg(theme.on_accent)
                     .bg(theme.accent)
@@ -263,12 +270,12 @@ impl App {
 
         // Footer: close always; away from the root, the back key.
         let mut footer = vec![Span::styled(
-            "Esc close",
+            footer_close.to_string(),
             Style::default().fg(theme.text_faint),
         )];
         if !at_root {
             footer.push(Span::styled(" · ", Style::default().fg(theme.text_faint)));
-            footer.push(Span::styled("⌫ back", Style::default().fg(theme.warning)));
+            footer.push(Span::styled(footer_back.to_string(), Style::default().fg(theme.warning)));
         }
         Paragraph::new(Line::from(footer)).render(
             Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
@@ -376,8 +383,9 @@ impl App {
                 use ratatui::widgets::StatefulWidgetRef as _;
                 let popup_width = frame.area().width * 8 / 10;
                 let popup_height = frame.area().height * 9 / 10;
+                let title = t!("tui.hpc.title").to_string();
                 let popup = crate::widgets::popup::Popup::new(
-                    " Compute Dashboard ",
+                    &title,
                     crate::widgets::popup::PopupControls::default(),
                 )
                 .width(popup_width)
@@ -391,8 +399,9 @@ impl App {
                 use ratatui::widgets::StatefulWidgetRef as _;
                 let popup_width = frame.area().width * 9 / 10;
                 let popup_height = frame.area().height * 9 / 10;
+                let title = t!("tui.modelConfig.title").to_string();
                 let popup = crate::widgets::popup::Popup::new(
-                    " Model Config ",
+                    &title,
                     crate::widgets::popup::PopupControls::default(),
                 )
                 .width(popup_width)
@@ -413,8 +422,9 @@ impl App {
                 use ratatui::widgets::StatefulWidgetRef as _;
                 let popup_width = frame.area().width * 7 / 10;
                 let popup_height = frame.area().height * 8 / 10;
+                let title = t!("tui.embeddingConfig.title").to_string();
                 let popup = crate::widgets::popup::Popup::new(
-                    " Embedding Model ",
+                    &title,
                     crate::widgets::popup::PopupControls::default(),
                 )
                 .width(popup_width)

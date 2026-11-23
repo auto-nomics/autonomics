@@ -10,6 +10,7 @@ import type { LucideIcon } from "lucide-react";
  */
 
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { LogOut, Monitor, Moon, PanelBottom, PanelLeft, Search, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/hooks/use-theme";
@@ -29,11 +30,12 @@ import { ViewLocationMenu } from "../view-location-menu";
 
 
 function ContainerBody({ container }: { container: ContainerId; mobile: boolean; onSpawn: () => void }) {
+  const { t } = useTranslation("workbench");
   useWorkbenchViews();
   const layout = useViewLayout();
   const Body = workbenchView(container)?.body;
   if (!Body) return null;
-  if (workbenchViewLocation(container, layout) !== "primarySidebar") return <Button variant="ghost" onClick={() => moveWorkbenchView(container, "primarySidebar")}>将视图移回侧边栏</Button>;
+  if (workbenchViewLocation(container, layout) !== "primarySidebar") return <Button variant="ghost" onClick={() => moveWorkbenchView(container, "primarySidebar")}>{t("sidebar.moveBack")}</Button>;
   return <WorkbenchViewSlot id={container} />;
 }
 
@@ -44,6 +46,7 @@ export function SideBar(props: {
   onLogout: () => void;
   onSpawn: () => void;
 }) {
+  const { t } = useTranslation("workbench");
   const state = useWorkbenchState();
   const container = state.sidebar.container ?? "bibliography";
   const drawerOpen = props.mobile && !props.collapsed;
@@ -122,7 +125,7 @@ export function SideBar(props: {
         <button
           type="button"
           ref={drawerBackdropRef}
-          aria-label="收起侧栏"
+          aria-label={t("sidebar.collapseAria")}
           onClick={props.onToggleCollapsed}
           className={cn(
             "absolute inset-0 z-[35] bg-[var(--scrim)] outline-none",
@@ -132,7 +135,7 @@ export function SideBar(props: {
         />
         <aside {...viewDropTarget("primarySidebar")}
           ref={drawerRef}
-          aria-label="工作台侧栏"
+          aria-label={t("sidebar.sidebarAria")}
           data-slot="workbench-sidebar"
           className={cn(
             "absolute inset-y-0 left-0 z-40 flex w-[min(72vw,208px)] min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground shadow-2xl",
@@ -141,14 +144,14 @@ export function SideBar(props: {
           )}
         >
           <div data-tauri-drag-region="" className="flex min-h-12 w-full shrink-0 items-center gap-2 border-b px-2">
-            <Button size="icon-sm" variant="ghost" className="shrink-0" aria-label="折叠侧栏" title="折叠侧栏" onClick={props.onToggleCollapsed}><PanelLeft /></Button>
+            <Button size="icon-sm" variant="ghost" className="shrink-0" aria-label={t("sidebar.collapse")} title={t("sidebar.collapse")} onClick={props.onToggleCollapsed}><PanelLeft /></Button>
             <div className="grid min-w-0 flex-1 leading-tight">
               <span className="truncate text-sm font-semibold">Autonomics</span>
-              <span className="truncate text-xs text-muted-foreground">Research workspace</span>
+              <span className="truncate text-xs text-muted-foreground">{t("sidebar.tagline")}</span>
             </div>
           </div>
           <SideBarContent container={container} mobile={props.mobile} onSpawn={props.onSpawn} />
-          <Button variant="ghost" className="justify-start" onClick={() => { setContainer("projects"); openEditor({ kind: "plugin-projects" }); }}>插件管理</Button>
+          <Button variant="ghost" className="justify-start" onClick={() => { setContainer("projects"); openEditor({ kind: "plugin-projects" }); }}>{t("sidebar.plugins")}</Button>
           <MobileDrawerFooter onLogout={props.onLogout} />
         </aside>
       </>
@@ -157,7 +160,7 @@ export function SideBar(props: {
 
   return (
     <aside {...viewDropTarget("primarySidebar")}
-      aria-label="工作台侧栏"
+      aria-label={t("sidebar.sidebarAria")}
       data-slot="workbench-sidebar"
       className="flex h-full min-w-0 w-full flex-col border-r bg-sidebar text-sidebar-foreground"
     >
@@ -188,36 +191,37 @@ function SideBarContent({ container, mobile, onSpawn }: { container: ContainerId
   );
 }
 
-const THEME_META: Record<ThemeMode, { label: string; icon: LucideIcon }> = {
-  light: { label: "浅色主题", icon: Sun },
-  dark: { label: "深色主题", icon: Moon },
-  system: { label: "跟随系统", icon: Monitor },
+const THEME_META: Record<ThemeMode, { key: string; icon: LucideIcon }> = {
+  light: { key: "theme.light", icon: Sun },
+  dark: { key: "theme.dark", icon: Moon },
+  system: { key: "theme.system", icon: Monitor },
 };
 
 /** Mobile drawer footer: theme cycle + logout (desktop keeps them in the
  *  title bar). */
 function MobileDrawerFooter({ onLogout }: { onLogout: () => void }) {
+  const { t } = useTranslation("workbench");
   const { mode } = useTheme();
   const meta = THEME_META[mode];
   return (
     <div className="flex w-full shrink-0 flex-col gap-1 border-t p-2">
-      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label="搜索或输入命令" onClick={() => openPalette("all")}><Search /><span>搜索或输入命令</span></Button>
-      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label="切换底部面板" onClick={togglePanel}><PanelBottom /><span>切换底部面板</span></Button>
+      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label={t("activityBar.search")} onClick={() => openPalette("all")}><Search /><span>{t("activityBar.search")}</span></Button>
+      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label={t("activityBar.togglePanel")} onClick={togglePanel}><PanelBottom /><span>{t("activityBar.togglePanel")}</span></Button>
       {isTauri && <WindowControls />}
       <Button
         size="sm"
         variant="ghost"
         className="w-full justify-start gap-2"
-        aria-label={`色彩主题:${meta.label},点击切换`}
-        title={`色彩主题:${meta.label}(点击切换)`}
+        aria-label={t("activityBar.themeLabel", { mode: t(meta.key) })}
+        title={t("activityBar.themeTitle", { mode: t(meta.key) })}
         onClick={cycleThemeMode}
       >
         <meta.icon />
-        <span className="truncate">{meta.label}</span>
+        <span className="truncate">{t(meta.key)}</span>
       </Button>
-      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label="退出登录" onClick={onLogout}>
+      <Button size="sm" variant="ghost" className="w-full justify-start gap-2" aria-label={t("activityBar.logout")} onClick={onLogout}>
         <LogOut />
-        <span>退出登录</span>
+        <span>{t("activityBar.logout")}</span>
       </Button>
     </div>
   );

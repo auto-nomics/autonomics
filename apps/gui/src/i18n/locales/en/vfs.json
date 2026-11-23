@@ -1,0 +1,57 @@
+{
+  "editor": {
+    "ariaFile": "VFS file {{path}}",
+    "readOnlyMountTitle": "This file is on a read-only mount",
+    "readOnlyMount": "Read-only mount",
+    "charCount": "{{count}} chars",
+    "save": "Save",
+    "download": "Download",
+    "conflict": "The file changed on the server (or was modified outside the save window); this save was rejected. Reloading will discard local edits.",
+    "reload": "Reload",
+    "loading": "Loading…",
+    "truncatedNotice": "This file is large; only the beginning is shown. Download for the full contents.",
+    "viewFile": "View {{path}}",
+    "editFile": "Edit {{path}}",
+    "binaryHint": "This file is not UTF-8 text (or exceeds the text preview limit).",
+    "downloadFile": "Download file"
+  },
+  "sidebar": {
+    "renamePrompt": "Rename to:",
+    "confirmDeleteDir": "Delete directory {{path}} and all its contents?",
+    "confirmDeleteFile": "Delete file {{path}}?",
+    "downloadAria": "Download {{name}}",
+    "downloadTitle": "Download",
+    "renameAria": "Rename {{name}}",
+    "renameTitle": "Rename",
+    "deleteAria": "Delete {{name}}",
+    "deleteTitle": "Delete",
+    "readOnlyBadge": "Read-only mount",
+    "loading": "Loading…",
+    "empty": "(empty)",
+    "backendLocal": "Local",
+    "groupTitle": "{{name}} · {{backend}}",
+    "groupTitleReadOnly": "{{name}} · {{backend}} · read-only",
+    "newFolderPrompt": "Create a new folder under {{dir}}:",
+    "newFilePrompt": "Create a new file under {{dir}}:",
+    "newFolder": "New folder",
+    "newFolderTitle": "New folder under {{dir}}",
+    "newFile": "New file",
+    "newFileTitle": "New file under {{dir}}",
+    "upload": "Upload file",
+    "uploadTitle": "Upload to {{dir}}",
+    "refresh": "Reload",
+    "browserLabel": "VFS file browser",
+    "readOnlyNotice": "{{dir}} is on a read-only mount; browsing and download only.",
+    "treeLabel": "VFS directory tree"
+  },
+  "tree": {
+    "localTarget": "Local"
+  },
+  "api": {
+    "uploadFailed": "Upload failed ({{status}})",
+    "uploadDialogTitle": "Upload to VFS",
+    "desktopUploadNeedsPath": "Desktop upload requires a local file path",
+    "browserUploadNeedsFile": "Browser upload requires a file",
+    "downloadFailed": "Download failed ({{status}})"
+  }
+}

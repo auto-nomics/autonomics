@@ -2,6 +2,7 @@
 //! fan-out, and delegated-agent navigation.
 
 use super::*;
+use i18n::t;
 
 /// Resolve short names relative to the delegating parent, never globally.
 fn delegated_agent_index(sessions: &[AgentSession], parent: &str, target: &str) -> Option<usize> {
@@ -105,8 +106,8 @@ impl App {
             }
             PickerTarget::AllFiltered { agents } => {
                 self.state.bulk_confirm = Some(crate::state::BulkConfirm {
-                    title: "Switch model".into(),
-                    detail: format!("{spec} → {} filtered agents", agents.len()),
+                    title: t!("tui.workspace.switchModelTitle").to_string(),
+                    detail: t!("tui.workspace.filteredAgents", spec = spec, count = agents.len()).to_string(),
                     action: crate::state::BulkAction::SetModels { agents, spec },
                 });
             }
@@ -141,8 +142,8 @@ impl App {
             self.refresh_agent_model_info(agent);
         }
         self.state.toasts.success(
-            "Model",
-            Some(format!("{spec_for_toast} → {count} agent(s)")),
+            t!("tui.workspace.modelToastTitle").to_string(),
+            Some(t!("tui.workspace.appliedAgents", spec = spec_for_toast, count = count).to_string()),
         );
     }
 
@@ -183,11 +184,11 @@ impl App {
             self.refresh_agent_model_info(agent);
         }
         let detail = if skipped > 0 {
-            format!("{label} → {count} agent(s), {skipped} non-thinking skipped")
+            t!("tui.workspace.appliedAgentsSkipped", label = label, count = count, skipped = skipped).to_string()
         } else {
-            format!("{label} → {count} agent(s)")
+            t!("tui.workspace.appliedEffortAgents", label = label, count = count).to_string()
         };
-        self.state.toasts.success("Effort", Some(detail));
+        self.state.toasts.success(t!("tui.workspace.effortToastTitle").to_string(), Some(detail));
     }
 
     /// y/n confirmation for bulk operations (model / effort fan-out).
@@ -239,8 +240,8 @@ impl App {
                 let label = crate::widgets::agent_effort_picker::effort_stop_label(stop);
                 let count = pairs.len();
                 self.state.bulk_confirm = Some(crate::state::BulkConfirm {
-                    title: "Set effort (bulk)".into(),
-                    detail: format!("{label} → {count} filtered agents"),
+                    title: t!("tui.workspace.setEffortTitle").to_string(),
+                    detail: t!("tui.workspace.filteredAgentsLabel", label = label, count = count).to_string(),
                     action: crate::state::BulkAction::SetEffort {
                         agents: pairs,
                         stop,
@@ -300,7 +301,7 @@ impl App {
                 self.state.pending_profile = Some(kind);
                 self.state
                     .name_input
-                    .open(format!(" New Agent ({kind}) "), kind.name());
+                    .open(t!("tui.workspace.newAgentTitle", kind = kind.name()).to_string(), kind.name());
             }
             AgentsPopupKeyOutcome::Rename { agent_id, new_path } => {
                 self.rename_agent_record(agent_id, new_path);
@@ -385,8 +386,8 @@ impl App {
                     Some(index) => self.state.active_agent_idx = index,
                     None => {
                         self.state.toasts.info(
-                            "Agent unavailable",
-                            Some(format!("Delegated agent {target} is no longer open")),
+                            t!("tui.workspace.agentUnavailableTitle").to_string(),
+                            Some(t!("tui.workspace.delegatedNotOpen", target = target).to_string()),
                         );
                     }
                 }

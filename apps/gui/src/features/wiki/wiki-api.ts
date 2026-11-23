@@ -1,5 +1,6 @@
 /** Wiki REST client over gatewayRequest — mirrors `/api/v1/wiki`. */
 import { gatewayRequest } from "@/gateway";
+import i18n from "@/i18n";
 
 export interface WikiEntry {
   id: string;
@@ -180,7 +181,7 @@ export async function listAttachments(id: string): Promise<AttachmentMeta[]> {
 
 /** Browser and desktop share the same multipart endpoint and validation. */
 export async function uploadAttachment(id: string, file: File): Promise<AttachmentMeta> {
-  if (file.size > 50 * 1024 * 1024) throw new Error("图片超过 50 MiB 限制");
+  if (file.size > 50 * 1024 * 1024) throw new Error(i18n.t("wiki:api.imageTooLarge"));
   if ("__TAURI_INTERNALS__" in window) {
     const { invoke } = await import("@tauri-apps/api/core");
     const bytes = new Uint8Array(await file.arrayBuffer());

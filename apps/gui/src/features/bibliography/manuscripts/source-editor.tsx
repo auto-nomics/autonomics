@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import * as monaco from "monaco-editor";
 import "@/components/editor/monaco-workers";
 import { useTheme } from "@/hooks/use-theme";
@@ -54,6 +55,7 @@ export function SourceEditor({
   navigation?: { line: number; id: number };
   insertion?: { text: string; id: number };
 }) {
+  const { t } = useTranslation("bibliography");
   const host = useRef<HTMLDivElement>(null),
     editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const callbacks = useRef({ onChange, onSave, onSelection });
@@ -72,7 +74,7 @@ export function SourceEditor({
       wordWrap: "on",
       scrollBeyondLastLine: false,
       padding: { top: 18, bottom: 18 },
-      ariaLabel: `LaTeX source ${path}`,
+      ariaLabel: t("manuscripts.source.editorAria", { path }),
       tabSize: 2,
       quickSuggestions: false,
       wordBasedSuggestions: "off",
@@ -146,6 +148,7 @@ export function ProposalDiff({
   original: string;
   proposed: string;
 }) {
+  const { t } = useTranslation("bibliography");
   const host = useRef<HTMLDivElement>(null);
   const models = useRef<{
     before: monaco.editor.ITextModel;
@@ -166,7 +169,7 @@ export function ProposalDiff({
       minimap: { enabled: false },
       fontSize: 12,
       scrollBeyondLastLine: false,
-      ariaLabel: "Proposed changes",
+      ariaLabel: t("manuscripts.source.proposedChanges"),
     });
     editor.setModel({ original: before, modified: after });
     const changed = editor.onDidUpdateDiff(() => {
@@ -196,6 +199,6 @@ export function ProposalDiff({
     }
   }, [original, proposed]);
   return (
-    <div ref={host} className="manuscript-diff" aria-label="Proposed changes" />
+    <div ref={host} className="manuscript-diff" aria-label={t("manuscripts.source.proposedChanges")} />
   );
 }

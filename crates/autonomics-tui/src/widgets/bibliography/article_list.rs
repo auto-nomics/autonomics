@@ -1,6 +1,7 @@
 //! Middle pane: compact article rows and full-text state.
 
 use std::collections::HashMap;
+use i18n::t;
 
 use bib_base::{Article, FullText};
 use ratatui::{
@@ -32,7 +33,7 @@ impl StatefulWidget for ArticleList<'_> {
         });
         let block = Block::default()
             .title(Span::styled(
-                format!(" Articles ({}) ", self.visible.len()),
+                t!("tui.bib.articlesTitle", count = self.visible.len()).to_string(),
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
                 } else {

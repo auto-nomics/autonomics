@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use i18n::t;
+
 use opengwas::OpengwasClient;
 
 use crate::cli::{ClearOpengwasArgs, RefreshOpengwasArgs};
@@ -10,7 +12,7 @@ use crate::cli::{ClearOpengwasArgs, RefreshOpengwasArgs};
 /// the `runtime` crate and `OpengwasClient::new`.
 fn opengwas_token() -> color_eyre::Result<String> {
     std::env::var("OPENGWAS_TOKEN")
-        .map_err(|_| color_eyre::eyre::eyre!("OPENGWAS_TOKEN env var is not set"))
+        .map_err(|_| color_eyre::eyre::eyre!("{}", t!("cli.cache.tokenNotSet")))
 }
 
 pub fn run_refresh_opengwas(args: RefreshOpengwasArgs) -> color_eyre::Result<()> {
@@ -19,8 +21,8 @@ pub fn run_refresh_opengwas(args: RefreshOpengwasArgs) -> color_eyre::Result<()>
 
     if args.show_cache_path {
         println!(
-            "OpenGWAS cache file: {}",
-            client.cache_file_path().display()
+            "{}",
+            t!("cli.cache.cacheFile", path = client.cache_file_path().display())
         );
     }
 
@@ -29,9 +31,12 @@ pub fn run_refresh_opengwas(args: RefreshOpengwasArgs) -> color_eyre::Result<()>
 
     let refreshed = runtime.block_on(async { client.refresh_disk_cache().await })?;
     println!(
-        "OpenGWAS cache refreshed: {} dataset(s) persisted to {}",
-        refreshed.len(),
-        client.cache_file_path().display()
+        "{}",
+        t!(
+            "cli.cache.refreshed",
+            count = refreshed.len(),
+            path = client.cache_file_path().display()
+        )
     );
     Ok(())
 }
@@ -42,14 +47,11 @@ pub fn run_clear_opengwas(args: ClearOpengwasArgs) -> color_eyre::Result<()> {
     let path = client.cache_file_path();
 
     if !args.yes {
-        eprint!(
-            "About to delete OpenGWAS cache at {}. Continue? [y/N] ",
-            path.display()
-        );
+        eprint!("{}", t!("cli.cache.confirmDelete", path = path.display()));
         let mut buf = String::new();
         std::io::stdin().read_line(&mut buf)?;
         if !matches!(buf.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
-            println!("aborted");
+            println!("{}", t!("cli.cache.aborted"));
             return Ok(());
         }
     }
@@ -57,7 +59,7 @@ pub fn run_clear_opengwas(args: ClearOpengwasArgs) -> color_eyre::Result<()> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| color_eyre::eyre::eyre!("failed to build tokio runtime: {e}"))?;
     runtime.block_on(async { client.clear_disk_cache().await })?;
-    println!("OpenGWAS cache deleted: {}", path.display());
+    println!("{}", t!("cli.cache.deleted", path = path.display()));
     Ok(())
 }
 

@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph, Widget},
 };
+use i18n::t;
 
 pub(super) struct SearchBar<'a> {
     pub query: &'a str,
@@ -20,7 +21,7 @@ impl Widget for SearchBar<'_> {
         let dim = Style::new().fg(crate::theme::current().text_faint);
         let block = Block::default()
             .title(Span::styled(
-                " Search ",
+                t!("tui.bib.searchTitle").to_string(),
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
                 } else {
@@ -45,7 +46,7 @@ impl Widget for SearchBar<'_> {
             left_len += 1;
         }
 
-        let summary = format!("{} results ", self.result_count);
+        let summary = t!("tui.bib.resultsCount", count = self.result_count).to_string() + " ";
         let pad = inner
             .width
             .saturating_sub(left_len as u16 + summary.chars().count() as u16)

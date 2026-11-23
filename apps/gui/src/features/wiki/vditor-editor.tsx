@@ -3,6 +3,7 @@ import Vditor from "vditor";
 import { createPortal } from "react-dom";
 import "vditor/dist/index.css";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { escapeHtml } from "@/lib/markdown";
 import { wikiImageMarkdown } from "@/lib/wiki-attachment-ref";
 import { getResolvedTheme, subscribeTheme } from "@/lib/theme";
@@ -17,9 +18,9 @@ type ImageUpload = { token: string; file: File; error?: string };
 type EditingMode = ReturnType<Vditor["getCurrentMode"]>;
 const modePreferenceKey = "autonomics.wiki.editingMode";
 const editingModes = [
-  { value: "wysiwyg", label: "所见即所得", description: "直接编辑排版后的正文 · Alt+Ctrl+7" },
-  { value: "ir", label: "实时渲染", description: "编辑 Markdown，实时显示排版 · Alt+Ctrl+8" },
-  { value: "sv", label: "双列编辑", description: "左侧 Markdown 源码，右侧实时预览 · Alt+Ctrl+9" },
+  { value: "wysiwyg", labelKey: "vditor.modeWysiwyg", descriptionKey: "vditor.modeWysiwygDesc" },
+  { value: "ir", labelKey: "vditor.modeIr", descriptionKey: "vditor.modeIrDesc" },
+  { value: "sv", labelKey: "vditor.modeSv", descriptionKey: "vditor.modeSvDesc" },
 ] as const;
 
 function preferredEditingMode(): EditingMode {
@@ -50,6 +51,7 @@ export function VditorEditor({ entryId, initialContent, onChange, onUploadsChang
   const [metadataHost, setMetadataHost] = useState<HTMLElement | null>(null);
   const [uploads, setUploads] = useState<ImageUpload[]>([]);
   const actions = useRef({ retry: (_token: string) => {}, remove: (_token: string) => {} });
+  const { t } = useTranslation("wiki");
 
   useEffect(() => {
     const root = host.current;
@@ -122,7 +124,7 @@ export function VditorEditor({ entryId, initialContent, onChange, onUploadsChang
       } catch (error) {
         if (disposed || !jobs.has(job.token)) return;
         job.error = error instanceof Error ? error.message : String(error);
-        toast.error(`图片上传失败：${job.error}`);
+        toast.error(t("vditor.uploadToast", { error: job.error }));
       }
       if (!disposed) notify();
     };
@@ -166,7 +168,7 @@ export function VditorEditor({ entryId, initialContent, onChange, onUploadsChang
       theme: getResolvedTheme() === "dark" ? "dark" : "classic",
       height: "100%",
       minHeight: 260,
-      placeholder: "开始编写，输入 [[ 链接其他词条…",
+      placeholder: t("vditor.placeholder"),
       undoDelay: 100,
       toolbar: ["headings", "bold", "italic", "strike", "|", "list", "ordered-list", "check", "quote", "|", "code", "inline-code", "link", "upload", "table", "|", "undo", "redo", "|", "outline", "edit-mode"],
       preview: {
@@ -204,7 +206,7 @@ export function VditorEditor({ entryId, initialContent, onChange, onUploadsChang
         releaseImages = observeWikiEditorImages(root, entryId, instance.vditor.lute);
         releaseLinks = observeWikiEditorLinks(instance);
         lastNormalized = read();
-        root.querySelectorAll('[contenteditable="true"], textarea.vditor-sv').forEach(element => element.setAttribute("aria-label", "Wiki 正文"));
+        root.querySelectorAll('[contenteditable="true"], textarea.vditor-sv').forEach(element => element.setAttribute("aria-label", t("vditor.bodyAria")));
         setReady(true);
         control.current = {
           sync(value) {
@@ -303,23 +305,23 @@ export function VditorEditor({ entryId, initialContent, onChange, onUploadsChang
   useEffect(() => { control.current?.sync(callbacks.current.getContent()); }, [initialContent]);
   return <div className="wiki-vditor flex min-h-0 flex-1 flex-col">
     {metadataHost && createPortal(header, metadataHost)}
-    {toolbarHost && createPortal(<div className="wiki-vditor-modes" role="group" aria-label="Wiki 编辑方式">
+    {toolbarHost && createPortal(<div className="wiki-vditor-modes" role="group" aria-label={t("vditor.modesAria")}>
       {editingModes.map(mode => <button
         key={mode.value}
         type="button"
         data-wiki-mode={mode.value}
         aria-pressed={editingMode === mode.value}
-        title={mode.description}
+        title={t(mode.descriptionKey)}
         disabled={!ready}
         onMouseDown={event => event.preventDefault()}
         onClick={() => control.current?.switchMode(mode.value)}
-      >{mode.label}</button>)}
+      >{t(mode.labelKey)}</button>)}
     </div>, toolbarHost)}
     {uploads.length > 0 && <div className="shrink-0 space-y-1 px-6 py-2 text-xs" aria-live="polite">
       {uploads.map(job => <div key={job.token} className="flex flex-wrap items-center gap-2">
-        <span>{job.file.name || "粘贴的图片"}：{job.error ? `上传失败：${job.error}` : "上传中…"}</span>
-        {job.error && <button type="button" className="underline" onClick={() => actions.current.retry(job.token)}>重试</button>}
-        <button type="button" className="underline" onClick={() => actions.current.remove(job.token)}>移除占位</button>
+        <span>{job.file.name || t("vditor.pastedImage")}：{job.error ? t("vditor.uploadFailed", { error: job.error }) : t("vditor.uploading")}</span>
+        {job.error && <button type="button" className="underline" onClick={() => actions.current.retry(job.token)}>{t("vditor.retry")}</button>}
+        <button type="button" className="underline" onClick={() => actions.current.remove(job.token)}>{t("vditor.removePlaceholder")}</button>
       </div>)}
     </div>}
     <div ref={host} className="min-h-0 flex-1" aria-busy={!ready} />

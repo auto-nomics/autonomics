@@ -3,6 +3,7 @@ import { appendCanvasRequestDraft } from "./canvas-request-draft";
 import { svgPathReadInputs } from "./canvas-svg-path-context";
 import { useSvgPathInspection } from "./canvas-svg-path-channel";
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
 import { openAgentEditor } from "@/app/workbench/workbench-store";
 import { gatewayRequest } from "@/gateway";
@@ -17,27 +18,28 @@ export function CanvasPathAgent({ projectId, canvasId, elementId, revision, sha2
   capturePreview: () => Promise<boolean>; projectId: string; canvasId: string; elementId: string; revision: number; sha256: string; partId: string; partIndex: number;
   busy: boolean; unchanged: () => boolean; onBusy: (busy: boolean) => void; onError: (error: string) => void; onPrepared: () => void;
 }) {
+  const { t } = useTranslation("canvas");
   useSvgPathInspection({project_id:projectId,figure_id:canvasId,element_id:elementId,expected_revision:revision,sha256,part_id:partId,part_index:partIndex});
   const runtime = useWorkbenchRuntime();
   const runtimeRef = useRef(runtime); runtimeRef.current = runtime;
   const target = useCanvasIllustratorPath();
   const [request, setRequest] = useState("");
   const targetAvailable = runtime.agents.some(agent => agent.path === target);
-  return <section data-svg-part-id={partId} aria-label="交给 Agent 修改路径" className="mt-3 space-y-2 border-t pt-3 text-sm">
-    <p>将当前路径和修改要求放入 Agent 草稿，检查后再发送。未预览的手动修改不会自动传入。</p>
-    <textarea aria-label="路径修改要求" disabled={busy} value={request} className="min-h-20 w-full rounded border bg-background p-2" placeholder="例如：将这条路径改为蓝色，保留其他部分" onChange={event => setRequest(event.target.value)} />
+  return <section data-svg-part-id={partId} aria-label={t("pathAgent.sectionLabel")} className="mt-3 space-y-2 border-t pt-3 text-sm">
+    <p>{t("pathAgent.description")}</p>
+    <textarea aria-label={t("pathAgent.requestLabel")} disabled={busy} value={request} className="min-h-20 w-full rounded border bg-background p-2" placeholder={t("pathAgent.requestPlaceholder")} onChange={event => setRequest(event.target.value)} />
     <Button size="sm" disabled={busy || !targetAvailable || !request.trim()} onClick={async () => {
       if (busy || !targetAvailable || !request.trim()) return;
       onBusy(true); onError("");
       try {
-        if (!unchanged()) throw new Error("画布已变化，请重新读取路径后再准备草稿。");
-        if (!runtime.agents.some(agent => agent.path === target)) throw new Error("Agent 已不可用，请重新连接插画专家。");
+        if (!unchanged()) throw new Error(t("pathAgent.canvasChanged"));
+        if (!runtime.agents.some(agent => agent.path === target)) throw new Error(t("pathAgent.agentUnavailable"));
         const path = `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(canvasId)}`;
         const latest = await gatewayRequest("GET", `${path}/vector-parts?element_id=${encodeURIComponent(elementId)}&expected_revision=${revision}`) as PathInspection;
         const part = latest.parts.find(part => part.part_id === partId);
-        if (!unchanged() || latest.revision !== revision || latest.sha256 !== sha256 || latest.element_id !== elementId || !part) throw new Error("素材版本或路径已变化，请关闭面板并重新读取。");
+        if (!unchanged() || latest.revision !== revision || latest.sha256 !== sha256 || latest.element_id !== elementId || !part) throw new Error(t("pathAgent.versionChanged"));
         const previewAvailable = await capturePreview();
-        if (!unchanged()) throw new Error("生成预览期间画布已变化，请重新读取路径。");
+        if (!unchanged()) throw new Error(t("pathAgent.previewChanged"));
         const scope = { project_id: projectId, figure_id: canvasId, expected_revision: revision, element_id: elementId };
         const context = {
           prepared_request: request.trim(), preview_available: previewAvailable, scope: "saved_svg_path", ...scope, file_id: latest.file_id, sha256,
@@ -46,10 +48,10 @@ export function CanvasPathAgent({ projectId, canvasId, elementId, revision, sha2
           follow_up_inputs: svgPathReadInputs({project_id:projectId,figure_id:canvasId,element_id:elementId,expected_revision:revision,sha256,part_id:partId,part_index:partIndex},previewAvailable),
         };
         const prompt = ["按用户请求直接修改当前画布的指定 SVG 路径。先 read 和 parts 核对版本、sha256 与路径编号，需要控制点时读取 geometry。用 bioicons edit_parts 直接保存修改，继续使用返回的新 revision，修改后读取 parts 和画布 PNG。保留其他对象、路径、来源与许可，不将局部投影覆盖整图。路径编号不代表生物学身份。", JSON.stringify(context, null, 2)].join("\n\n");
-        if (!runtimeRef.current.agents.some(agent => agent.path === target)) throw new Error("Agent 已不可用，请重新连接插画专家；要求已保留。");
-        runtime.setDraftFor(target, previous => appendCanvasRequestDraft(previous, request, { title: `SVG 路径上下文 · 路径 ${part.index}`, source: `visualization:${projectId}/${canvasId}/images/${elementId}/parts/${partId}`, revision: `${revision}:${sha256}`, prompt }));
+        if (!runtimeRef.current.agents.some(agent => agent.path === target)) throw new Error(t("pathAgent.agentUnavailableKept"));
+        runtime.setDraftFor(target, previous => appendCanvasRequestDraft(previous, request, { title: t("pathAgent.draftTitle", { index: part.index }), source: `visualization:${projectId}/${canvasId}/images/${elementId}/parts/${partId}`, revision: `${revision}:${sha256}`, prompt }));
         runtime.selectAgent(target); openAgentEditor(target); onPrepared();
       } catch (cause) { onError(String(cause)); } finally { onBusy(false); }
-    }}>准备路径修改草稿</Button>
+    }}>{t("pathAgent.prepare")}</Button>
   </section>;
 }

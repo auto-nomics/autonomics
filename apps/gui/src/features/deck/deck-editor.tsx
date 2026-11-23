@@ -11,7 +11,9 @@
  * patchEditorState.
  */
 import { useEffect, useId, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Braces, FileCode2, Loader2, Presentation, RefreshCw, Save } from "lucide-react";
+import "./i18n";
 import { DeckRenderer } from "./render/deck-renderer";
 import { DeckCssEditor } from "./deck-css-editor";
 import { TextCodeEditor } from "@/components/editor/text-code-editor";
@@ -26,6 +28,7 @@ export interface DeckEditorBodyProps {
 
 export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBodyProps): React.ReactNode {
   const tabId = useId();
+  const { t } = useTranslation("deck");
   const { payload, error, loading, refresh: refreshPayload, source, savedSource, sourceError, sourceLoading, saving, setSource, loadSource, saveSource } = useDeckDocument(deckId);
   const [mode, setMode] = useState<"preview" | "source" | "css">("preview");
   const [currentSlide, setCurrentSlide] = useState(startSlide ?? 1);
@@ -33,9 +36,9 @@ export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBo
 
   type EditorMode = "preview" | "source" | "css";
   const modes: { id: EditorMode; label: string; icon: typeof Presentation }[] = [
-    { id: "preview", label: "预览", icon: Presentation },
-    { id: "source", label: "Markdown 源码", icon: FileCode2 },
-    { id: "css", label: "CSS 样式", icon: Braces },
+    { id: "preview", label: t("editor.preview"), icon: Presentation },
+    { id: "source", label: t("editor.markdownSource"), icon: FileCode2 },
+    { id: "css", label: t("editor.cssStyle"), icon: Braces },
   ];
   function selectMode(next: EditorMode) {
     setMode(next);
@@ -62,16 +65,16 @@ export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBo
     return (
       <div className="deck-editor deck-editor--loading">
         <Loader2 className="spin" size={18} />
-        <span>加载 deck…</span>
+        <span>{t("editor.loading")}</span>
       </div>
     );
   }
   if (error || !payload) {
     return (
       <div className="deck-editor deck-editor--error">
-        <span>加载失败:{error ?? "未知错误"}</span>
+        <span>{t("editor.loadFailed", { error: error ?? t("editor.unknownError") })}</span>
         <button type="button" className="deck-btn" onClick={() => void refreshPayload().catch(() => {})}>
-          <RefreshCw size={14} /> 重试
+          <RefreshCw size={14} /> {t("editor.retry")}
         </button>
       </div>
     );
@@ -80,22 +83,22 @@ export function DeckEditorBody({ deckId, startSlide, onSlideSeen }: DeckEditorBo
   return (
     <div className="deck-editor">
       <div className="deck-editor-toolbar">
-        <div className="deck-mode-tabs" role="tablist" aria-label="演示文稿视图" onKeyDown={onTabKeyDown}>
+        <div className="deck-mode-tabs" role="tablist" aria-label={t("editor.viewAria")} onKeyDown={onTabKeyDown}>
           {modes.map(({ id, label, icon: Icon }) => <button
             key={id} type="button" role="tab" id={`${tabId}-tab-${id}`}
             aria-selected={mode === id} aria-controls={`${tabId}-panel-${id}`}
             tabIndex={mode === id ? 0 : -1} className="deck-mode-tab" onClick={() => selectMode(id)}
-          ><Icon size={15} aria-hidden="true" /><span>{label}</span>{id === "source" && source !== null && source !== savedSource && <span className="deck-mode-dirty" aria-label="有未保存更改" />}</button>)}
+          ><Icon size={15} aria-hidden="true" /><span>{label}</span>{id === "source" && source !== null && source !== savedSource && <span className="deck-mode-dirty" aria-label={t("editor.dirtyAria")} />}</button>)}
         </div>
         {mode === "source" && <div className="deck-editor-actions">
-          {source !== null && source !== savedSource && <span className="deck-save-status">未保存</span>}
-          <button type="button" className="deck-save-btn" disabled={saving || sourceLoading || source === null || source === savedSource} onClick={() => void saveSource()}><Save size={14} aria-hidden="true" />{saving ? "保存中…" : "保存"}</button>
+          {source !== null && source !== savedSource && <span className="deck-save-status">{t("editor.unsaved")}</span>}
+          <button type="button" className="deck-save-btn" disabled={saving || sourceLoading || source === null || source === savedSource} onClick={() => void saveSource()}><Save size={14} aria-hidden="true" />{saving ? t("editor.saving") : t("editor.save")}</button>
         </div>}
       </div>
       <div className="deck-preview-panel" role="tabpanel" id={`${tabId}-panel-preview`} aria-labelledby={`${tabId}-tab-preview`} hidden={mode !== "preview"}>{mode === "preview" && <DeckRenderer payload={payload} dark={dark} startSlide={currentSlide} onSlideChange={setCurrentSlide} />}</div>
       <div className="deck-source-host" role="tabpanel" id={`${tabId}-panel-source`} aria-labelledby={`${tabId}-tab-source`} hidden={mode !== "source"}><div className="deck-source">
         {sourceError && <div role="alert">{sourceError}</div>}
-        {sourceLoading ? <p>加载源码…</p> : source === null ? <button type="button" className="deck-btn" onClick={() => void loadSource()}>重试</button> : <TextCodeEditor documentKey={`${deckId}/source.md`} language="markdown" label="Markdown 源码" value={source} readOnly={saving} onChange={setSource} onSave={() => { if (!saving && source !== savedSource) void saveSource(); }} />}
+        {sourceLoading ? <p>{t("editor.loadingSource")}</p> : source === null ? <button type="button" className="deck-btn" onClick={() => void loadSource()}>{t("editor.retry")}</button> : <TextCodeEditor documentKey={`${deckId}/source.md`} language="markdown" label={t("editor.markdownSource")} value={source} readOnly={saving} onChange={setSource} onSave={() => { if (!saving && source !== savedSource) void saveSource(); }} />}
       </div></div>
       <div className="deck-css-editor-host" role="tabpanel" id={`${tabId}-panel-css`} aria-labelledby={`${tabId}-tab-css`} hidden={mode !== "css"}><DeckCssEditor payload={payload} currentSlide={currentSlide} refresh={refreshPayload} /></div>
     </div>

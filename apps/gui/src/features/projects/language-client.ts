@@ -3,6 +3,7 @@ import { gatewayRequest } from "@/gateway";
 import { parseWorkspaceEdit, type FileEdits } from "./workspace-edit";
 import { subscribeProjectChanges, type ProjectFileChange } from "./watch-events";
 import picomatch from "picomatch";
+import i18n from "@/i18n";
 
 type Message = { jsonrpc?: string; id?: number | string; method?: string; params?: any; result?: any; error?: { code?: number; message?: string } };
 type Range = { start: { line: number; character: number }; end: { line: number; character: number } };
@@ -34,9 +35,9 @@ export class LanguageClient {
 
   async start() {
     try {
-      this.status("正在连接语言服务…");
+      this.status(i18n.t("projects:language.connecting"));
       const opened = await gatewayRequest("POST", this.base);
-      if (typeof opened.client !== "string" || !opened.client) throw new Error("服务器未返回语言服务会话");
+      if (typeof opened.client !== "string" || !opened.client) throw new Error(i18n.t("projects:language.noSession"));
       this.client = opened.client;
       if (this.stopped) { void gatewayRequest("DELETE", `${this.base}/${this.client}`).catch(() => {}); return; }
       this.disposables.push({ dispose: subscribeProjectChanges(this.project, changes => this.filesChanged(changes)) });
@@ -54,12 +55,12 @@ export class LanguageClient {
       this.registerProviders(init?.capabilities ?? {});
       this.saveOptions = typeof init?.capabilities?.textDocumentSync === "object" ? init.capabilities.textDocumentSync.save ?? false : false;
       this.ready = true;
-      this.status(`${this.language} 语言服务已连接`);
+      this.status(i18n.t("projects:language.connected", { language: this.language }));
     } catch (error) { this.fail(error); }
   }
 
   private send(message: Message): Promise<void> {
-    if (this.stopped || !this.client) return Promise.reject(new Error("语言服务未连接"));
+    if (this.stopped || !this.client) return Promise.reject(new Error(i18n.t("projects:language.notConnected")));
     const result = this.queue.then(() => gatewayRequest("POST", `${this.base}/${this.client}`, message)).then(() => {});
     this.queue = result.catch(() => {});
     return result;
@@ -68,7 +69,7 @@ export class LanguageClient {
   private request(method: string, params: any): Promise<any> {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => { this.pending.delete(id); reject(new Error(`${method} 超时`)); }, 15000);
+      const timer = window.setTimeout(() => { this.pending.delete(id); reject(new Error(i18n.t("projects:language.requestTimeout", { method }))); }, 15000);
       this.pending.set(id, { resolve, reject, timer });
       void this.send({ jsonrpc: "2.0", id, method, params }).catch(error => { window.clearTimeout(timer); this.pending.delete(id); reject(error); });
     });
@@ -77,10 +78,10 @@ export class LanguageClient {
     try {
       const result = await gatewayRequest("GET", `${this.base}/${this.client}?offset=${this.offset}`);
       if (this.stopped) return;
-      if (result.truncated) throw new Error("语言服务消息队列溢出，请重新连接");
+      if (result.truncated) throw new Error(i18n.t("projects:language.queueOverflow"));
       this.offset = result.offset;
       for (const message of result.messages as Message[]) this.handle(message);
-      if (result.exited) throw new Error("语言服务器已退出");
+      if (result.exited) throw new Error(i18n.t("projects:language.serverExited"));
       this.timer = window.setTimeout(() => void this.poll(), 120);
     } catch (error) { this.fail(error); }
   }
@@ -109,30 +110,30 @@ export class LanguageClient {
       void this.send(supported ? { jsonrpc: "2.0", id: message.id, result } : { jsonrpc: "2.0", id: message.id, error: { message: "Method not supported", code: -32601 } }).catch(error => this.fail(error));
     } else if (!message.method && typeof message.id === "number") {
       const pending = this.pending.get(message.id);
-      if (pending) { this.pending.delete(message.id); window.clearTimeout(pending.timer); message.error ? pending.reject(new Error(message.error.message ?? "语言服务请求失败")) : pending.resolve(message.result); }
+      if (pending) { this.pending.delete(message.id); window.clearTimeout(pending.timer); message.error ? pending.reject(new Error(message.error.message ?? i18n.t("projects:language.requestFailed"))) : pending.resolve(message.result); }
     }
   }
   private registerWatchers(registrations: any[]) {
-    if (!Array.isArray(registrations)) throw new Error("文件监控注册无效");
+    if (!Array.isArray(registrations)) throw new Error(i18n.t("projects:language.watcherInvalid"));
     const updates: [string, { match: (path: string) => boolean; kind: number }[]][] = [];
     for (const registration of registrations) {
       if (registration?.method !== "workspace/didChangeWatchedFiles") continue;
-      if (typeof registration.id !== "string" || !Array.isArray(registration.registerOptions?.watchers) || registration.registerOptions.watchers.length > 100) throw new Error("文件监控注册无效");
+      if (typeof registration.id !== "string" || !Array.isArray(registration.registerOptions?.watchers) || registration.registerOptions.watchers.length > 100) throw new Error(i18n.t("projects:language.watcherInvalid"));
       const watchers = registration.registerOptions.watchers.map((watcher: any) => {
         const glob = watcher?.globPattern;
         const pattern = typeof glob === "string" ? glob : glob?.pattern;
-        if (typeof pattern !== "string" || !pattern || pattern.length > 512) throw new Error("文件监控 glob 无效");
+        if (typeof pattern !== "string" || !pattern || pattern.length > 512) throw new Error(i18n.t("projects:language.watcherGlobInvalid"));
         const match = picomatch(pattern, { dot: true });
         let base = "";
         if (typeof glob !== "string") {
           const uri = typeof glob?.baseUri === "string" ? glob.baseUri : glob?.baseUri?.uri;
-          if (typeof uri !== "string") throw new Error("文件监控根目录无效");
+          if (typeof uri !== "string") throw new Error(i18n.t("projects:language.watcherBaseInvalid"));
           const parsed = monaco.Uri.parse(uri);
-          if (parsed.scheme !== "file" || parsed.authority || parsed.query || parsed.fragment || !(parsed.path === "/work" || parsed.path.startsWith("/work/")) || parsed.path.split("/").some(part => part === "." || part === "..")) throw new Error("文件监控根目录超出项目");
+          if (parsed.scheme !== "file" || parsed.authority || parsed.query || parsed.fragment || !(parsed.path === "/work" || parsed.path.startsWith("/work/")) || parsed.path.split("/").some(part => part === "." || part === "..")) throw new Error(i18n.t("projects:language.watcherBaseOutside"));
           base = parsed.path.slice(5).replace(/^\/+|\/+$/g, "");
         }
         const kind = watcher.kind ?? 7;
-        if (!Number.isInteger(kind) || kind < 1 || kind > 7) throw new Error("文件监控类型无效");
+        if (!Number.isInteger(kind) || kind < 1 || kind > 7) throw new Error(i18n.t("projects:language.watcherKindInvalid"));
         return { kind, match: (path: string) => {
           if (base && !path.startsWith(`${base}/`)) return false;
           const relative = base ? path.slice(base.length + 1) : path;
@@ -157,13 +158,13 @@ export class LanguageClient {
       const commandId = `container-lsp-action:${this.client}`;
       this.disposables.push(monaco.editor.registerCommand(commandId, (_accessor, action: any, version: number) => {
         void (async () => {
-          if (version !== this.version) throw new Error("文件已更改，请重新获取代码操作");
+          if (version !== this.version) throw new Error(i18n.t("projects:language.fileChanged"));
           if (capabilities.codeActionProvider?.resolveProvider && action.data !== undefined) action = await this.request("codeAction/resolve", action);
-          if (version !== this.version) throw new Error("文件已更改，请重新获取代码操作");
+          if (version !== this.version) throw new Error(i18n.t("projects:language.fileChanged"));
           if (action.edit) await this.applyWorkspaceEdit(action.edit, version);
           const command = typeof action.command === "string" ? action : action.command;
           if (command?.command) await this.request("workspace/executeCommand", { command: command.command, arguments: command.arguments ?? [] });
-        })().catch(error => this.status(`代码操作失败：${String(error)}`));
+        })().catch(error => this.status(i18n.t("projects:language.codeActionFailed", { error: String(error) })));
       }));
       this.disposables.push(monaco.languages.registerCodeActionProvider(selector, {
         provideCodeActions: async (model, selection, context) => {
@@ -231,20 +232,20 @@ export class LanguageClient {
   }
   private async applyWorkspaceEdit(value: unknown, expectedVersion = this.version) {
     const edits = parseWorkspaceEdit(value);
-    if (edits.some(edit => edit.version !== null && (edit.path !== this.path || edit.version !== expectedVersion))) throw new Error("语言服务文件版本已过期或无法验证");
+    if (edits.some(edit => edit.version !== null && (edit.path !== this.path || edit.version !== expectedVersion))) throw new Error(i18n.t("projects:language.versionStale"));
     await this.applyEdits(edits, () => !this.stopped && this.version === expectedVersion);
   }
   async rename(positionValue: monaco.Position, name: string) {
-    if (!this.ready || !this.canRename || this.stopped) { this.status("当前语言服务不支持重命名"); return; }
+    if (!this.ready || !this.canRename || this.stopped) { this.status(i18n.t("projects:language.renameUnsupported")); return; }
     const version = this.version;
     try {
       const edit = await this.request("textDocument/rename", { textDocument: { uri: this.uri }, position: position(positionValue), newName: name });
-      if (edit) { await this.applyWorkspaceEdit(edit, version); this.status("重命名已应用，请保存修改的文件"); }
-    } catch (error) { this.status(`重命名失败：${String(error)}`); }
+      if (edit) { await this.applyWorkspaceEdit(edit, version); this.status(i18n.t("projects:language.renameApplied")); }
+    } catch (error) { this.status(i18n.t("projects:language.renameFailed", { error: String(error) })); }
   }
   private fail(error: unknown) {
     if (this.stopped) return;
-    this.status(`语言服务不可用：${String(error)}`);
+    this.status(i18n.t("projects:language.unavailable", { error: String(error) }));
     this.dispose();
   }
   saved() {

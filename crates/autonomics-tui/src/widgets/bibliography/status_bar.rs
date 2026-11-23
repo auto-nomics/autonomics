@@ -6,6 +6,7 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
+use i18n::t;
 
 pub(super) struct StatusBar<'a> {
     pub focus: &'a str,
@@ -18,8 +19,9 @@ pub(super) struct StatusBar<'a> {
 impl Widget for StatusBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let theme = crate::theme::current();
-        let right = self.error.unwrap_or(if self.status.is_empty() {
-            "ready"
+        let ready = t!("tui.bib.ready").to_string();
+        let right: &str = self.error.unwrap_or(if self.status.is_empty() {
+            &ready
         } else {
             self.status
         });
@@ -29,11 +31,9 @@ impl Widget for StatusBar<'_> {
             Style::new().fg(theme.text_faint)
         };
 
-        let selected = self.selected_id.unwrap_or("none");
+        let selected = self.selected_id.map(str::to_string).unwrap_or_else(|| t!("tui.bib.none").to_string());
         let focus = format!("[{}] ", self.focus);
-        let full = format!(
-            "Tab switch · / search · j/k move · h/l tabs/tree · R descendants · r reload · q quit · selected {selected}"
-        );
+        let full = t!("tui.bib.helpSelected", selected = selected).to_string();
         // Narrow terminals keep the key hints and drop the verbose wording.
         let fits_full =
             focus.chars().count() + 1 + full.chars().count() + 2 + right.chars().count()
@@ -41,7 +41,7 @@ impl Widget for StatusBar<'_> {
         let hints = if fits_full {
             full
         } else {
-            format!("Tab / j/k h/l · R descendants · r reload · q quit · {selected}")
+            t!("tui.bib.helpShort", selected = selected).to_string()
         };
 
         let left_len = focus.chars().count() + 1 + hints.chars().count() + 2;

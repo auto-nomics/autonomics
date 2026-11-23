@@ -3,6 +3,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
 };
+use i18n::t;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::state::{ChatLine, CompactResult, DisplaySettings, TurnUsage};
@@ -264,7 +265,7 @@ fn render_tool_result(ok: bool, content: &str, width: u16) -> Vec<Line<'static>>
     )];
     if total > 1 {
         status_spans.push(Span::styled(
-            format!(" {total} lines"),
+            t!("tui.chat.lineCount", count = total).to_string(),
             Style::default().fg(theme.text_faint),
         ));
     }
@@ -301,7 +302,7 @@ fn render_tool_result(ok: bool, content: &str, width: u16) -> Vec<Line<'static>>
     }
     if total > take {
         lines.push(Line::from(Span::styled(
-            format!("  … +{} more lines", total - take),
+            t!("tui.chat.moreLines", count = total - take).to_string(),
             Style::default().fg(theme.text_faint),
         )));
     }
@@ -330,7 +331,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ChatLine::User { text, ts } => render_user_message(text, area.width, *ts),
         ChatLine::Assistant { text, usage, ts } => {
             let mut header_spans = vec![Span::styled(
-                "Assistant",
+                t!("tui.chat.assistant").to_string(),
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
             )];
             if let Some(caption) = clock_caption(*ts, theme.text_faint) {
@@ -370,7 +371,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ),
         ChatLine::ToolBackground { seq, name } => {
             vec![Line::from(Span::styled(
-                format!("⏳ {name} (background task #{seq})"),
+                t!("tui.chat.backgroundTask", name = name, seq = seq).to_string(),
                 Style::default()
                     .fg(theme.accent_alt)
                     .add_modifier(Modifier::DIM),
@@ -389,7 +390,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             let mut lines = Vec::new();
             let mut first = true;
             for line in text.lines() {
-                let prefix = if first { "x Error: " } else { "         " };
+                let prefix = if first { t!("tui.chat.errorPrefix").to_string() } else { "         ".to_string() };
                 lines.push(Line::from(Span::styled(
                     format!("{prefix}{line}"),
                     Style::default().fg(theme.error),
@@ -400,7 +401,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         }
         ChatLine::Cancelled => {
             vec![Line::from(Span::styled(
-                "⊘ Turn cancelled by user",
+                t!("tui.chat.cancelled").to_string(),
                 Style::default().fg(theme.text_faint),
             ))]
         }
@@ -409,7 +410,7 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
             attempt,
             max_retries,
         } => {
-            let header = format!("↻ Retry {attempt}/{max_retries}: ");
+            let header = t!("tui.chat.retry", attempt = attempt, max = max_retries).to_string() + ": ";
             let mut lines = Vec::new();
             let mut first = true;
             for line in message.lines() {
@@ -428,22 +429,23 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         }
         ChatLine::Compact(result) => vec![match result {
             CompactResult::Done(stats) => Line::from(Span::styled(
-                format!(
-                    "* compacted {} msgs → {} msgs · summary {} tok · freed {} · {:.1}s",
-                    stats.messages_before,
-                    stats.messages_after,
-                    format_tokens(stats.summary_tokens),
-                    format_tokens(stats.freed_tokens),
-                    stats.duration_ms as f64 / 1000.0,
-                ),
+                t!(
+                    "tui.chat.compactDone",
+                    before = stats.messages_before,
+                    after = stats.messages_after,
+                    summary = format_tokens(stats.summary_tokens),
+                    freed = format_tokens(stats.freed_tokens),
+                    secs = format!("{:.1}", stats.duration_ms as f64 / 1000.0),
+                )
+                .to_string(),
                 Style::default().fg(theme.accent_alt),
             )),
             CompactResult::Failed(error) => Line::from(Span::styled(
-                format!("x compaction failed: {error}"),
+                t!("tui.chat.compactFailed", error = error).to_string(),
                 Style::default().fg(theme.error),
             )),
             CompactResult::Skipped => Line::from(Span::styled(
-                "* compaction skipped — conversation too short",
+                t!("tui.chat.compactSkipped").to_string(),
                 Style::default().fg(theme.text_faint),
             )),
         }],
@@ -456,10 +458,10 @@ pub(crate) fn render_line_owned(msg: &ChatLine, area: Rect) -> Vec<Line<'static>
         ChatLine::Injected { origin, text, ts } => {
             let label = match origin {
                 agentik_types::MessageOrigin::Agent { path } => {
-                    format!("agent · {path}")
+                    t!("tui.chat.injectedAgent", path = path).to_string()
                 }
-                agentik_types::MessageOrigin::System => "system".to_string(),
-                agentik_types::MessageOrigin::User => "notice".to_string(),
+                agentik_types::MessageOrigin::System => t!("tui.chat.injectedSystem").to_string(),
+                agentik_types::MessageOrigin::User => t!("tui.chat.injectedUser").to_string(),
             };
             let mut header = format!("⌁ {label}");
             if let Some(caption) = clock_caption(*ts, theme.text_faint) {
@@ -512,7 +514,7 @@ pub(crate) fn render_line_with_settings(
         ChatLine::Thinking(text) if display.collapse_thinking => {
             let n = text.lines().count();
             vec![Line::from(Span::styled(
-                format!(" >> [thinking — {n} lines, collapsed]"),
+                t!("tui.chat.thinkingCollapsed", count = n).to_string(),
                 Style::default()
                     .fg(theme.text_faint)
                     .add_modifier(Modifier::DIM),
@@ -528,10 +530,7 @@ pub(crate) fn render_line_with_settings(
                 ("x", theme.error)
             };
             vec![Line::from(Span::styled(
-                format!(
-                    " {icon} Result · {} · collapsed",
-                    tool_output_summary(content)
-                ),
+                t!("tui.chat.resultCollapsed", icon = icon, summary = tool_output_summary(content)).to_string(),
                 Style::default().fg(color),
             ))]
         }
@@ -541,11 +540,11 @@ pub(crate) fn render_line_with_settings(
 
 fn tool_output_summary(content: &str) -> String {
     let lines = content.lines().count().max(1);
-    format!(
-        "{lines} line{} · {} chars",
-        if lines == 1 { "" } else { "s" },
-        content.chars().count()
-    )
+    if lines == 1 {
+        t!("tui.chat.summaryOne", chars = content.chars().count()).to_string()
+    } else {
+        t!("tui.chat.summaryMany", lines = lines, chars = content.chars().count()).to_string()
+    }
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { boundedContextText, useEditorContextSnapshot } from "@/app/workbench/editor-context-snapshots";
 import { FileText, Lock, RotateCw, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ type Load =
   | { state: "binary" };
 
 export function VfsFileEditorBody({ editor }: { editor: EditorRef }) {
+  const { t } = useTranslation("vfs");
   const path = String(editor.params.path ?? "");
   const readOnly = Boolean(editor.params.readOnly);
   const [load, setLoad] = useState<Load>({ state: "loading" });
@@ -118,7 +120,7 @@ export function VfsFileEditorBody({ editor }: { editor: EditorRef }) {
 
   return (
     <section
-      aria-label={`VFS 文件 ${path}`}
+      aria-label={t("editor.ariaFile", { path })}
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       onKeyDown={(event) => {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
@@ -131,43 +133,43 @@ export function VfsFileEditorBody({ editor }: { editor: EditorRef }) {
         <FileText className="size-4 shrink-0 text-primary" />
         <span className="min-w-0 flex-1 truncate font-mono text-xs" title={path} data-vfs-file-path={path}>{path}{dirty ? " •" : ""}</span>
         {readOnly && (
-          <span className="flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground" title="该文件位于只读挂载">
-            <Lock className="size-3" /> 只读挂载
+          <span className="flex shrink-0 items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground" title={t("editor.readOnlyMountTitle")}>
+            <Lock className="size-3" /> {t("editor.readOnlyMount")}
           </span>
         )}
         {load.state === "text" && (
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-            {formatBytes(load.size)} · {draft.length} 字符
+            {formatBytes(load.size)} · {t("editor.charCount", { count: draft.length })}
           </span>
         )}
         {load.state === "text" && !readOnly && (
           <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={() => void save()}>
-            <Save /> 保存
+            <Save /> {t("editor.save")}
           </Button>
         )}
-        <Button size="sm" variant="outline" disabled={saving} onClick={() => void download()}>下载</Button>
+        <Button size="sm" variant="outline" disabled={saving} onClick={() => void download()}>{t("editor.download")}</Button>
       </header>
       {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
       {conflict && (
         <div role="alert" className="flex items-center gap-2 border-b bg-amber-500/10 px-4 py-2 text-xs">
-          <span className="min-w-0 flex-1">文件在服务器上已变更(或保存窗口外被修改)，本次保存被拒绝。重新加载会丢弃本地修改。</span>
+          <span className="min-w-0 flex-1">{t("editor.conflict")}</span>
           <Button size="sm" variant="outline" onClick={() => void reload()}>
-            <RotateCw /> 重新加载
+            <RotateCw /> {t("editor.reload")}
           </Button>
         </div>
       )}
       <div className="flex min-h-0 flex-1 flex-col">
-        {load.state === "loading" && <p className="p-4 text-sm text-muted-foreground">加载中…</p>}
+        {load.state === "loading" && <p className="p-4 text-sm text-muted-foreground">{t("editor.loading")}</p>}
         {load.state === "error" && <p className="p-4 text-sm text-destructive" role="alert">{load.message}</p>}
         {load.state === "text" && (
           <>
             {load.truncated && (
               <div role="status" className="border-b bg-amber-500/10 px-4 py-1.5 text-xs">
-                文件较大，仅显示开头部分；完整内容请下载。
+                {t("editor.truncatedNotice")}
               </div>
             )}
             <textarea
-              aria-label={readOnly ? `查看 ${path}` : `编辑 ${path}`}
+              aria-label={readOnly ? t("editor.viewFile", { path }) : t("editor.editFile", { path })}
               readOnly={readOnly || load.truncated}
               spellCheck={false}
               data-vfs-editor={path}
@@ -184,8 +186,8 @@ export function VfsFileEditorBody({ editor }: { editor: EditorRef }) {
         )}
         {load.state === "binary" && (
           <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
-            <p>该文件不是 UTF-8 文本（或超出文本预览上限）。</p>
-            <Button size="sm" variant="outline" disabled={saving} onClick={() => void download()}>下载文件</Button>
+            <p>{t("editor.binaryHint")}</p>
+            <Button size="sm" variant="outline" disabled={saving} onClick={() => void download()}>{t("editor.downloadFile")}</Button>
           </div>
         )}
       </div>

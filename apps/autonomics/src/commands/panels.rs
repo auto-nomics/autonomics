@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use color_eyre::Result;
+use i18n::t;
 
 use data_catalog::{CatalogConfig, LocalCatalog, RemoteCatalog};
 use plugin::bundles::{
@@ -42,9 +43,20 @@ async fn sync_command(state_dir: &Path) -> Result<()> {
     if counts.unavailable > 0 {
         let missing = report.missing_repos().join(", ");
         return Err(color_eyre::eyre::eyre!(
-            "provisioning incomplete: {} bundle{} unavailable ({missing})",
-            counts.unavailable,
-            if counts.unavailable == 1 { "" } else { "s" },
+            "{}",
+            if counts.unavailable == 1 {
+                t!(
+                    "cli.prepare.bundlesUnavailableOne",
+                    count = counts.unavailable,
+                    missing = missing
+                )
+            } else {
+                t!(
+                    "cli.prepare.bundlesUnavailableMany",
+                    count = counts.unavailable,
+                    missing = missing
+                )
+            }
         ));
     }
     Ok(())
@@ -79,7 +91,7 @@ pub(crate) async fn provision_missing_bundles(state_dir: &Path) -> Result<PanelB
     let plugins = load_installed_plugins(state_dir)?;
     let bundle_ids = bundles::collect_panel_bundles(&plugins);
     if bundle_ids.is_empty() {
-        println!("panels: no data bundles declared by installed plugins");
+        println!("{}", t!("cli.panels.noBundlesDeclared"));
         return Ok(PanelBundleReport::default());
     }
 
@@ -104,13 +116,19 @@ pub(crate) async fn provision_missing_bundles(state_dir: &Path) -> Result<PanelB
     let local = LocalCatalog::open(data_catalog::default_panel_cache_root())
         .map_err(|error| color_eyre::eyre::eyre!("cannot open panel cache: {error}"))?;
     println!(
-        "panels: checking {} data bundle{} against the catalog cache{}",
-        bundle_ids.len(),
-        if bundle_ids.len() == 1 { "" } else { "s" },
-        match remote {
-            Some(_) => "",
-            None => " (no catalog configured — nothing can be fetched)",
-        }
+        "{}",
+        t!(
+            if bundle_ids.len() == 1 {
+                "cli.panels.checkingOne"
+            } else {
+                "cli.panels.checkingMany"
+            },
+            count = bundle_ids.len(),
+            remote = match remote {
+                Some(_) => String::new(),
+                None => t!("cli.panels.noCatalogSuffix").into_owned(),
+            }
+        )
     );
     // The renderer lives on the stack of this call and is borrowed by the
     // event callback; the mutex gives the `Fn + Send + Sync` callback
@@ -141,14 +159,20 @@ pub(crate) async fn provision_missing_bundles(state_dir: &Path) -> Result<PanelB
                     match &status.outcome {
                         PanelBundleOutcome::Cached => {}
                         PanelBundleOutcome::Installed { version } => {
-                            println!("  + {} ({})", status.repo, version)
+                            println!(
+                                "  {}",
+                                t!("cli.panels.bundleInstalled", repo = status.repo, version = version)
+                            )
                         }
                         PanelBundleOutcome::Missing => println!(
-                            "  ! {} not cached and no catalog is configured to fetch it",
-                            status.repo
+                            "  {}",
+                            t!("cli.panels.bundleMissing", repo = status.repo)
                         ),
                         PanelBundleOutcome::Failed(error) => {
-                            println!("  ! {} download failed: {error}", status.repo)
+                            println!(
+                                "  {}",
+                                t!("cli.panels.bundleFailed", repo = status.repo, error = error)
+                            )
                         }
                     }
                 }
@@ -160,12 +184,18 @@ pub(crate) async fn provision_missing_bundles(state_dir: &Path) -> Result<PanelB
 
     let counts = report.counts();
     println!(
-        "panels: {} data bundle{} — {} cached, {} downloaded, {} unavailable",
-        report.statuses.len(),
-        if report.statuses.len() == 1 { "" } else { "s" },
-        counts.cached,
-        counts.installed,
-        counts.unavailable
+        "{}",
+        t!(
+            if report.statuses.len() == 1 {
+                "cli.panels.summaryOne"
+            } else {
+                "cli.panels.summaryMany"
+            },
+            count = report.statuses.len(),
+            cached = counts.cached,
+            downloaded = counts.installed,
+            unavailable = counts.unavailable
+        )
     );
     Ok(report)
 }
@@ -286,11 +316,16 @@ impl ProgressLine {
             .collect::<Vec<_>>()
             .join(", ");
         print!(
-            "\r\x1b[2K  ⇒ {} downloading | {} / {} ({percent:.0}%) | {}/s | {per_bundle}",
-            self.per_bundle.len(),
-            fmt_bytes(done),
-            fmt_bytes(total),
-            fmt_bytes(speed_bytes_per_sec(self.samples.make_contiguous())),
+            "\r\x1b[2K  {}",
+            t!(
+                "cli.panels.progressLine",
+                count = self.per_bundle.len(),
+                done = fmt_bytes(done),
+                total = fmt_bytes(total),
+                percent = format!("{percent:.0}"),
+                speed = fmt_bytes(speed_bytes_per_sec(self.samples.make_contiguous())),
+                bundles = per_bundle
+            )
         );
         use std::io::Write;
         let _ = std::io::stdout().flush();

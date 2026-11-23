@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Play } from "lucide-react";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
+import { useTranslation } from "react-i18next";
 import { formatBytes } from "@/features/vfs";
 
 interface NodePort { label: string | null; type: string }
@@ -30,6 +31,7 @@ interface TestRunResult {
 }
 
 export function NodeTestRun({ project, nodes }: { project: string; nodes: ProjectNode[] }) {
+  const { t } = useTranslation("projects");
   const [kind, setKind] = useState(nodes[0]?.kind ?? "");
   const [inputs, setInputs] = useState<Record<string, string>>({});
   const [params, setParams] = useState("{}");
@@ -55,7 +57,7 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
       try {
         parsed = params.trim() ? JSON.parse(params) : {};
       } catch {
-        throw new Error("参数不是合法 JSON");
+        throw new Error(t("testRun.invalidJson"));
       }
       const response = await gatewayRequest(
         "POST",
@@ -71,15 +73,15 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
   }, [project, kind, inputs, params, running]);
 
   if (nodes.length === 0) {
-    return <p className="p-3 text-xs text-muted-foreground">manifest 里还没有节点声明。</p>;
+    return <p className="p-3 text-xs text-muted-foreground">{t("testRun.noNodes")}</p>;
   }
 
   return (
     <div className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto p-2 text-xs" data-test-run={project}>
       <label className="grid gap-1">
-        节点
+        {t("testRun.nodeLabel")}
         <select
-          aria-label="选择节点"
+          aria-label={t("testRun.selectNode")}
           className="h-8 rounded-md border bg-background px-2"
           value={kind}
           onChange={(event) => {
@@ -96,10 +98,10 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
 
       {selected?.inputs.map((input) => (
         <label key={input.label ?? "?"} className="grid gap-1">
-          入口 {input.label}
+          {t("testRun.inputPort", { label: input.label ?? "" })}
           {input.type === "file" ? (
             <textarea
-              aria-label={`入口 ${input.label}`}
+              aria-label={t("testRun.inputPort", { label: input.label ?? "" })}
               data-test-input={input.label}
               rows={3}
               className="rounded-md border bg-background p-2 font-mono"
@@ -107,15 +109,15 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
               onChange={(event) => setInputs((current) => ({ ...current, [input.label ?? ""]: event.target.value }))}
             />
           ) : (
-            <span className="text-muted-foreground">(tuple 端口暂不支持试跑)</span>
+            <span className="text-muted-foreground">{t("testRun.tupleUnsupported")}</span>
           )}
         </label>
       ))}
 
       <label className="grid gap-1">
-        参数 (JSON)
+        {t("testRun.paramsLabel")}
         <textarea
-          aria-label="节点参数 JSON"
+          aria-label={t("testRun.paramsAria")}
           rows={2}
           className="rounded-md border bg-background p-2 font-mono"
           value={params}
@@ -125,7 +127,7 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
 
       <div>
         <Button size="sm" disabled={running || !kind} onClick={() => void run()}>
-          <Play /> {running ? "运行中…" : "试跑"}
+          <Play /> {running ? t("testRun.running") : t("testRun.run")}
         </Button>
       </div>
 
@@ -135,7 +137,7 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
         <div data-test-run-result className="grid gap-2 rounded border p-2">
           <div className="flex items-center gap-2">
             <span data-exit-code={result.exit_code} className={result.exit_code === 0 ? "text-emerald-500" : "text-destructive"}>
-              退出码 {result.exit_code}
+              {t("testRun.exitCode", { code: result.exit_code })}
             </span>
             <span className="truncate text-muted-foreground" title={result.workdir}>workdir: {result.workdir}</span>
           </div>
@@ -154,9 +156,9 @@ export function NodeTestRun({ project, nodes }: { project: string; nodes: Projec
           {result.outputs.map((output) => (
             <div key={output.path} data-test-output={output.path} className="grid gap-1 rounded border p-2">
               <div className="flex items-center gap-2">
-                <span className="font-medium">出口 {output.path}</span>
+                <span className="font-medium">{t("testRun.output", { path: output.path })}</span>
                 <span className={output.present ? "text-emerald-500" : output.optional ? "text-muted-foreground" : "text-destructive"}>
-                  {output.present ? (output.truncated ? "已截断" : "已产出") : output.optional ? "可选未产出" : "缺失"}
+                  {output.present ? (output.truncated ? t("testRun.truncated") : t("testRun.produced")) : output.optional ? t("testRun.optionalMissing") : t("testRun.missing")}
                 </span>
                 {output.content && <span className="text-muted-foreground">{formatBytes(output.content.length)}</span>}
               </div>

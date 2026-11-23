@@ -6,6 +6,7 @@
 //! leader binding and its palette entry can never drift apart.
 
 use super::*;
+use i18n::t;
 use crate::widgets::command_palette::CommandAction;
 
 /// One node of the leader key tree.
@@ -37,170 +38,170 @@ impl LeaderNode {
 pub(super) const LEADER_ROOT: &[LeaderNode] = &[
     LeaderNode::Leaf {
         key: '|',
-        label: "Split right",
+        label: "tui.leader.splitRight",
         action: CommandAction::SplitVertical,
     },
     LeaderNode::Group {
         key: 'w',
-        label: "window",
+        label: "tui.leader.window",
         children: &[
             LeaderNode::Leaf {
                 key: 'v',
-                label: "Split right",
+                label: "tui.leader.splitRight",
                 action: CommandAction::SplitVertical,
             },
             LeaderNode::Leaf {
                 key: 's',
-                label: "Split below",
+                label: "tui.leader.splitBelow",
                 action: CommandAction::SplitHorizontal,
             },
             LeaderNode::Leaf {
                 key: 'w',
-                label: "Focus other",
+                label: "tui.leader.focusOther",
                 action: CommandAction::FocusOtherSplit,
             },
             LeaderNode::Leaf {
                 key: 'd',
-                label: "Close split",
+                label: "tui.leader.closeSplit",
                 action: CommandAction::CloseSplit,
             },
         ],
     },
     LeaderNode::Leaf {
         key: ' ',
-        label: "Command palette",
+        label: "tui.leader.commandPalette",
         action: CommandAction::OpenCommandPalette,
     },
     LeaderNode::Leaf {
         key: 'q',
-        label: "Quit",
+        label: "tui.leader.quit",
         action: CommandAction::Quit,
     },
     LeaderNode::Group {
         key: 'a',
-        label: "agent",
+        label: "tui.leader.agent",
         children: &[
             LeaderNode::Leaf {
                 key: 'n',
-                label: "New agent",
+                label: "tui.leader.newAgent",
                 action: CommandAction::NewAgent,
             },
             LeaderNode::Leaf {
                 key: 'r',
-                label: "Resume",
+                label: "tui.leader.resume",
                 action: CommandAction::ResumeAgent,
             },
             LeaderNode::Leaf {
                 key: 't',
-                label: "Switcher",
+                label: "tui.leader.switcher",
                 action: CommandAction::FocusAgentsPanel,
             },
             LeaderNode::Leaf {
                 key: 'c',
-                label: "Close",
+                label: "tui.leader.close",
                 action: CommandAction::CloseAgent,
             },
             LeaderNode::Leaf {
                 key: 'd',
-                label: "Delete",
+                label: "tui.leader.delete",
                 action: CommandAction::DeleteAgent,
             },
             LeaderNode::Leaf {
                 key: 'x',
-                label: "Cancel",
+                label: "tui.leader.cancel",
                 action: CommandAction::CancelAgent,
             },
         ],
     },
     LeaderNode::Group {
         key: 'v',
-        label: "view",
+        label: "tui.leader.view",
         children: &[
             LeaderNode::Leaf {
                 key: 'd',
-                label: "DAG",
+                label: "tui.leader.dag",
                 action: CommandAction::ViewDag,
             },
             LeaderNode::Leaf {
                 key: 'b',
-                label: "Bibliography",
+                label: "tui.leader.bibliography",
                 action: CommandAction::BibliographyPanel,
             },
             LeaderNode::Leaf {
                 key: 't',
-                label: "Chat-only view",
+                label: "tui.leader.chatOnlyView",
                 action: CommandAction::ToggleChatOnly,
             },
             LeaderNode::Leaf {
                 key: 'h',
-                label: "Collapse thinking",
+                label: "tui.leader.collapseThinking",
                 action: CommandAction::ToggleCollapseThinking,
             },
             LeaderNode::Leaf {
                 key: 'c',
-                label: "Collapse tool calls",
+                label: "tui.leader.collapseToolCalls",
                 action: CommandAction::ToggleCollapseToolCalls,
             },
             LeaderNode::Leaf {
                 key: 'r',
-                label: "Collapse tool results",
+                label: "tui.leader.collapseToolResults",
                 action: CommandAction::ToggleCollapseToolResults,
             },
         ],
     },
     LeaderNode::Leaf {
         key: 'm',
-        label: "Model config",
+        label: "tui.leader.modelConfig",
         action: CommandAction::ModelConfig,
     },
     LeaderNode::Leaf {
         key: 'P',
-        label: "Compute Dashboard",
+        label: "tui.leader.computeDashboard",
         action: CommandAction::HpcPanel,
     },
     LeaderNode::Leaf {
         key: 'e',
-        label: "Embedding config",
+        label: "tui.leader.embeddingConfig",
         action: CommandAction::EmbeddingConfig,
     },
     LeaderNode::Leaf {
         key: 'g',
-        label: "Agent config",
+        label: "tui.leader.agentConfig",
         action: CommandAction::AgentConfig,
     },
     LeaderNode::Leaf {
         key: 'h',
-        label: "History search",
+        label: "tui.leader.historySearch",
         action: CommandAction::HistorySearch,
     },
     LeaderNode::Leaf {
         key: 'y',
-        label: "Copy message",
+        label: "tui.leader.copyMessage",
         action: CommandAction::CopyMessage,
     },
     LeaderNode::Leaf {
         key: 'C',
-        label: "Compact context",
+        label: "tui.leader.compactContext",
         action: CommandAction::Compact,
     },
     LeaderNode::Leaf {
         key: 'G',
-        label: "Follow output",
+        label: "tui.leader.followOutput",
         action: CommandAction::ToggleAutoScroll,
     },
     LeaderNode::Leaf {
         key: 'p',
-        label: "Plan popup",
+        label: "tui.leader.planPopup",
         action: CommandAction::OpenPlanPopup,
     },
     LeaderNode::Leaf {
         key: 'T',
-        label: "Tasks popup",
+        label: "tui.leader.tasksPopup",
         action: CommandAction::OpenTasksPopup,
     },
     LeaderNode::Leaf {
         key: 'u',
-        label: "Toggle theme",
+        label: "tui.leader.toggleTheme",
         action: CommandAction::CycleTheme,
     },
 ];
@@ -246,7 +247,7 @@ pub(super) fn children_of(prefix: &[char]) -> Option<&'static [LeaderNode]> {
 /// One display row of the which-key panel.
 pub(super) struct WhichKeyRow {
     pub key: char,
-    pub label: &'static str,
+    pub label: std::borrow::Cow<'static, str>,
     pub is_group: bool,
     /// Group only: number of direct children.
     pub children: usize,
@@ -263,7 +264,7 @@ pub(super) fn whichkey_rows(prefix: &[char]) -> Vec<WhichKeyRow> {
         match node {
             LeaderNode::Leaf { key, label, .. } => rows.push(WhichKeyRow {
                 key: *key,
-                label,
+                label: t!(label),
                 is_group: false,
                 children: 0,
             }),
@@ -273,7 +274,7 @@ pub(super) fn whichkey_rows(prefix: &[char]) -> Vec<WhichKeyRow> {
                 children,
             } => rows.push(WhichKeyRow {
                 key: *key,
-                label,
+                label: t!(label),
                 is_group: true,
                 children: children.len(),
             }),
@@ -323,12 +324,14 @@ mod tests {
         let rows = whichkey_rows(&[]);
         assert!(rows.iter().take_while(|row| !row.is_group).count() >= 10);
         let groups: Vec<&WhichKeyRow> = rows.iter().filter(|row| row.is_group).collect();
-        // Exactly two groups at the root, with their child counts.
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].label, "agent");
-        assert_eq!(groups[0].children, 6);
-        assert_eq!(groups[1].label, "view");
-        assert_eq!(groups[1].children, 7);
+        // Exactly three groups at the root, with their child counts.
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].label, "window");
+        assert_eq!(groups[0].children, 4);
+        assert_eq!(groups[1].label, "agent");
+        assert_eq!(groups[1].children, 6);
+        assert_eq!(groups[2].label, "view");
+        assert_eq!(groups[2].children, 6);
         // A group prefix lists only leaves.
         let inner = whichkey_rows(&['a']);
         assert!(inner.iter().all(|row| !row.is_group));

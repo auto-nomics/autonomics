@@ -1,5 +1,7 @@
 //! Bibliography management commands.
 
+use i18n::t;
+
 use crate::cli::{
     BibAction, BibArgs, ExportArgs, InfoArgs, ListArgs, ReextractArgs, RequestsArgs, UploadArgs,
 };
@@ -23,9 +25,7 @@ pub async fn run_bib(bib: BibArgs) -> color_eyre::Result<()> {
             .await?
             .with_file_storage(file_storage);
         let count = bib_base::managed_fulltext::repair_legacy_open_access(&shared).await?;
-        println!(
-            "Repaired {count} legacy full-text attachments; original attachment keys and annotations preserved."
-        );
+        println!("{}", t!("cli.bib.repairDone", count = count));
         return Ok(());
     }
     let db = bib_base::BibBase::open(&db_path.to_string_lossy()).await?;
@@ -49,15 +49,19 @@ async fn run_bib_upload(
     // 1. Verify article exists.
     let article = db.get_article(&args.article_id).await?.ok_or_else(|| {
         color_eyre::eyre::eyre!(
-            "Article '{}' not found in library. \
-                 Run a `bib_save` DAG node to import it first.",
-            args.article_id,
+            "{}",
+            t!("cli.bib.articleNotFoundImport", id = args.article_id)
         )
     })?;
 
     // 2. Read the file.
     let content = std::fs::read(&args.pdf)
-        .map_err(|e| color_eyre::eyre::eyre!("Failed to read '{}': {e}", args.pdf.display()))?;
+        .map_err(|e| {
+            color_eyre::eyre::eyre!(
+                "{}",
+                t!("cli.bib.readFailed", path = args.pdf.display(), error = e)
+            )
+        })?;
     let file_size = content.len() as i64;
 
     // 3. Detect format from extension.
@@ -145,15 +149,24 @@ async fn run_bib_upload(
         )
         .await?;
         println!(
-            "✓ Full text uploaded for '{}' ({} bytes, {} chars extracted)\n  \
-             Collection '{}' status → fulltext_available",
-            article.title, file_size, text_len, cid
+            "{}",
+            t!(
+                "cli.bib.uploadedWithCollection",
+                title = article.title,
+                bytes = file_size,
+                chars = text_len,
+                cid = cid
+            )
         );
     } else {
         println!(
-            "✓ Full text uploaded for '{}' ({} bytes, {} chars extracted)\n  \
-             Tip: use --collection-id to also update the fetch_status.",
-            article.title, file_size, text_len
+            "{}",
+            t!(
+                "cli.bib.uploadedTip",
+                title = article.title,
+                bytes = file_size,
+                chars = text_len
+            )
         );
     }
 
@@ -170,7 +183,9 @@ async fn run_bib_reextract(
     let targets: Vec<String> = if let Some(article_id) = args.article_id.as_deref() {
         db.get_fulltext(article_id)
             .await?
-            .ok_or_else(|| color_eyre::eyre::eyre!("No full text stored for '{article_id}'."))?;
+            .ok_or_else(|| {
+            color_eyre::eyre::eyre!("{}", t!("cli.bib.noFullTextStored", id = article_id))
+        })?;
         vec![article_id.to_owned()]
     } else if args.all_missing {
         db.list_articles_needing_extraction()
@@ -179,13 +194,11 @@ async fn run_bib_reextract(
             .map(|pending| pending.article_id)
             .collect()
     } else {
-        return Err(color_eyre::eyre::eyre!(
-            "Specify --article-id <ID> or --all-missing."
-        ));
+        return Err(color_eyre::eyre::eyre!("{}", t!("cli.bib.specifyReextractTarget")));
     };
 
     if targets.is_empty() {
-        println!("No articles need re-extraction.");
+        println!("{}", t!("cli.bib.noReextractNeeded"));
         return Ok(());
     }
 
@@ -197,23 +210,32 @@ async fn run_bib_reextract(
             Ok(extracted) => {
                 succeeded += 1;
                 println!(
-                    "[{}/{}] {article_id} … done ({} chars, {})",
-                    index + 1,
-                    total,
-                    extracted.text.chars().count(),
-                    extracted.extractor
+                    "{}",
+                    t!(
+                        "cli.bib.reextractDone",
+                        index = index + 1,
+                        total = total,
+                        id = article_id,
+                        chars = extracted.text.chars().count(),
+                        extractor = extracted.extractor
+                    )
                 );
             }
             Err(message) => {
                 println!(
-                    "[{}/{}] {article_id} … failed ({message})",
-                    index + 1,
-                    total
+                    "{}",
+                    t!(
+                        "cli.bib.reextractFailed",
+                        index = index + 1,
+                        total = total,
+                        id = article_id,
+                        message = message
+                    )
                 );
             }
         }
     }
-    println!("\n{succeeded}/{total} extractions succeeded.");
+    println!("{}", t!("cli.bib.extractionsSucceeded", succeeded = succeeded, total = total));
     Ok(())
 }
 
@@ -223,19 +245,20 @@ async fn run_bib_requests(db: &bib_base::BibBase, args: RequestsArgs) -> color_e
         .await?;
 
     if requests.is_empty() {
-        println!("No pending full-text requests.");
+        println!("{}", t!("cli.bib.noPendingRequests"));
         return Ok(());
     }
 
-    println!("Pending full-text requests ({}):", requests.len());
+    println!("{}", t!("cli.bib.pendingRequestsHeader", count = requests.len()));
     println!("{:-<80}", "");
 
     for ca in &requests {
         let article = db.get_article(&ca.article_id).await.ok().flatten();
+        let metadata_missing = t!("cli.bib.metadataMissing");
         let title = article
             .as_ref()
             .map(|a| a.title.as_str())
-            .unwrap_or("(metadata missing)");
+            .unwrap_or(metadata_missing.as_ref());
         let doi = article.as_ref().and_then(|a| a.doi().map(String::from));
         let year = article.as_ref().and_then(|a| a.year);
 
@@ -254,9 +277,7 @@ async fn run_bib_requests(db: &bib_base::BibBase, args: RequestsArgs) -> color_e
         println!();
     }
 
-    println!(
-        "To upload: autonomics bib upload --pdf <file> --article-id <id> --collection-id <id>"
-    );
+    println!("{}", t!("cli.bib.requestsUploadHint"));
     Ok(())
 }
 
@@ -264,43 +285,45 @@ async fn run_bib_info(db: &bib_base::BibBase, args: InfoArgs) -> color_eyre::Res
     let article = db
         .get_article(&args.article_id)
         .await?
-        .ok_or_else(|| color_eyre::eyre::eyre!("Article '{}' not found.", args.article_id))?;
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("{}", t!("cli.bib.articleNotFound", id = args.article_id))
+        })?;
 
     let fulltext = db.get_fulltext(&args.article_id).await?;
 
-    println!("Article: {}", article.title);
+    println!("{}", t!("cli.bib.infoArticle", title = article.title));
     if let Some(ref journal) = article.journal {
-        println!("Journal: {journal}");
+        println!("{}", t!("cli.bib.infoJournal", journal = journal));
     }
     if let Some(year) = article.year {
-        println!("Year   : {year}");
+        println!("{}", t!("cli.bib.infoYear", year = year));
     }
     if let Some(ref doi) = article.doi() {
-        println!("DOI    : {doi}");
+        println!("{}", t!("cli.bib.infoDoi", doi = doi));
     }
     println!();
 
     match fulltext {
         Some(ft) => {
-            println!("Full text: ✓ available");
-            println!("  Format  : {}", ft.file_format.as_str());
-            println!("  Source  : {}", ft.source.as_str());
-            println!("  Path    : {}", ft.file_path);
+            println!("{}", t!("cli.bib.infoFulltextAvailable"));
+            println!("{}", t!("cli.bib.infoFormat", format = ft.file_format.as_str()));
+            println!("{}", t!("cli.bib.infoSource", source = ft.source.as_str()));
+            println!("{}", t!("cli.bib.infoPath", path = ft.file_path));
             if let Some(size) = ft.file_size {
-                println!("  Size    : {} bytes", size);
+                println!("{}", t!("cli.bib.infoSize", size = size));
             }
             if let Some(ref text) = ft.text_content {
-                println!("  Text    : {} chars", text.len());
+                println!("{}", t!("cli.bib.infoText", chars = text.len()));
                 let preview = if text.len() > 200 {
                     format!("{}…", &text[..200])
                 } else {
                     text.clone()
                 };
-                println!("  Preview : {preview}");
+                println!("{}", t!("cli.bib.infoPreview", preview = preview));
             }
         }
         None => {
-            println!("Full text: ✗ not uploaded");
+            println!("{}", t!("cli.bib.infoFulltextMissing"));
         }
     }
 
@@ -309,18 +332,24 @@ async fn run_bib_info(db: &bib_base::BibBase, args: InfoArgs) -> color_eyre::Res
 
 async fn run_bib_list(db: &bib_base::BibBase, args: ListArgs) -> color_eyre::Result<()> {
     let count = db.article_count().await?;
-    println!("Library: {} articles total\n", count);
+    println!("{}", t!("cli.bib.libraryCount", count = count));
 
     let limit = args.limit.unwrap_or(50).clamp(1, 500);
     let query = args.query.as_deref().unwrap_or("");
     let hits = db.search_articles(query, limit, 0).await?;
 
     if hits.is_empty() {
-        println!("No articles found.");
+        println!("{}", t!("cli.bib.noArticlesFound"));
         return Ok(());
     }
 
-    println!("{:<20} {:<6} {:<10}Title", "ID", "Year", "DOI");
+    println!(
+        "{:<20} {:<6} {:<10}{}",
+        t!("cli.bib.listHeaderId"),
+        t!("cli.bib.listHeaderYear"),
+        t!("cli.bib.listHeaderDoi"),
+        t!("cli.bib.listHeaderTitle")
+    );
     println!("{:-<80}", "");
 
     for hit in &hits {
@@ -362,7 +391,7 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
         .articles;
 
     if articles.is_empty() {
-        println!("No articles to export.");
+        println!("{}", t!("cli.bib.noArticlesToExport"));
         return Ok(());
     }
 
@@ -372,10 +401,13 @@ async fn run_bib_export(db: &bib_base::BibBase, args: ExportArgs) -> color_eyre:
         Some(path) => {
             std::fs::write(path, &rendered)?;
             println!(
-                "Exported {} articles to {} ({})",
-                articles.len(),
-                path.display(),
-                format.extension()
+                "{}",
+                t!(
+                    "cli.bib.exported",
+                    count = articles.len(),
+                    path = path.display(),
+                    format = format.extension()
+                )
             );
         }
         None => {

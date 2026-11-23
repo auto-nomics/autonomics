@@ -1,5 +1,6 @@
 type PreviewSource = HTMLCanvasElement | HTMLImageElement;
 type RenderPreview = (signal: AbortSignal) => Promise<HTMLCanvasElement>;
+import { i18next } from './i18n';
 
 /** A modal image viewer, independent of document zoom and reading position. */
 export class ReadingImagePreview {
@@ -19,21 +20,21 @@ export class ReadingImagePreview {
 
   constructor() {
     this.dialog.className = 'reader-image-preview';
-    this.dialog.setAttribute('aria-label', 'Image preview');
+    this.dialog.setAttribute('aria-label', i18next.t('reader:image.previewAria'));
     this.dialog.innerHTML = `
       <header class="reader-image-preview-toolbar">
-        <strong>Image preview</strong>
-        <button type="button" data-image-action="out" aria-label="Zoom out">−</button>
-        <output aria-live="polite" aria-label="Image zoom">100%</output>
-        <button type="button" data-image-action="in" aria-label="Zoom in">+</button>
-        <button type="button" data-image-action="fit">Fit to window</button>
+        <strong>${i18next.t('reader:image.previewTitle')}</strong>
+        <button type="button" data-image-action="out" aria-label="${i18next.t('reader:image.zoomOutAria')}">−</button>
+        <output aria-live="polite" aria-label="${i18next.t('reader:image.zoomAria')}">100%</output>
+        <button type="button" data-image-action="in" aria-label="${i18next.t('reader:image.zoomInAria')}">+</button>
+        <button type="button" data-image-action="fit">${i18next.t('reader:image.fit')}</button>
         <button type="button" data-image-action="actual">100%</button>
-        <button type="button" data-image-action="close" aria-label="Close image preview">✕</button>
+        <button type="button" data-image-action="close" aria-label="${i18next.t('reader:image.closeAria')}">✕</button>
       </header>
-      <div class="reader-image-preview-viewport" tabindex="0" aria-label="Image; drag to pan, scroll to zoom">
+      <div class="reader-image-preview-viewport" tabindex="0" aria-label="${i18next.t('reader:image.viewportAria')}">
         <div class="reader-image-preview-stage"></div>
       </div>
-      <p class="reader-image-preview-hint">Scroll to zoom · Drag to pan · Esc to close</p>`;
+      <p class="reader-image-preview-hint">${i18next.t('reader:image.hint')}</p>`;
     this.viewport = this.dialog.querySelector('.reader-image-preview-viewport')!;
     this.stage = this.dialog.querySelector('.reader-image-preview-stage')!;
     this.output = this.dialog.querySelector('output')!;
@@ -111,7 +112,7 @@ export class ReadingImagePreview {
       this.media.removeAttribute('id');
     }
     this.media.setAttribute('role', 'img');
-    this.media.setAttribute('aria-label', source.getAttribute('aria-label') || source.closest('figure')?.getAttribute('aria-label') || 'Enlarged image');
+    this.media.setAttribute('aria-label', source.getAttribute('aria-label') || source.closest('figure')?.getAttribute('aria-label') || i18next.t('reader:image.enlarged'));
     this.stage.replaceChildren(this.media);
     document.body.append(this.dialog);
     this.dialog.showModal();

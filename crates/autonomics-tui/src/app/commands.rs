@@ -1,6 +1,7 @@
 //! Command palette dispatch and shortcut actions.
 
 use super::history::compute_search_matches;
+use i18n::t;
 use super::*;
 
 impl App {
@@ -196,11 +197,15 @@ impl App {
                 // frame; force one so the switch is visible immediately.
                 self.dirty = true;
                 self.state.toasts.info(
-                    "Theme",
-                    Some(format!(
-                        "Switched to {} ({name})",
-                        crate::theme::active_label()
-                    )),
+                    t!("tui.cmd.themeTitle").to_string(),
+                    Some(
+                        t!(
+                            "tui.cmd.switchedTheme",
+                            variant = crate::theme::active_label(),
+                            name = name
+                        )
+                        .to_string(),
+                    ),
                 );
             }
             CommandAction::SplitVertical | CommandAction::SplitHorizontal => {
@@ -208,7 +213,7 @@ impl App {
                 if count < 2 {
                     self.state
                         .toasts
-                        .info("Split", Some("Open another agent first".into()));
+                        .info(t!("tui.cmd.splitTitle").to_string(), Some(t!("tui.cmd.splitDetail").to_string()));
                 } else {
                     let current = self.state.active_agent_idx;
                     let other = (current + 1) % count;

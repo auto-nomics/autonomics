@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /** Keep action components mounted so closing the popup never discards their dialogs. */
 export function CanvasActionMenu({ label, icon: Icon, children }: { label: string; icon: LucideIcon; children: ReactNode }) {
+  const { t } = useTranslation("canvas");
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLDivElement>(null);
@@ -20,7 +22,7 @@ export function CanvasActionMenu({ label, icon: Icon, children }: { label: strin
     if (event.key === "Escape") { setOpen(false); trigger.current?.querySelector("button")?.focus(); }
   }}>
     <div ref={trigger}><Button size="sm" variant={open ? "secondary" : "ghost"} aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(value => !value)}><Icon />{label}<ChevronDown className="size-3 opacity-60" /></Button></div>
-    <div id={id} role="group" aria-label={`${label}操作`} className={cn("canvas-action-popup absolute bottom-full right-0 mb-2 max-h-[min(65vh,34rem)] w-60 max-w-[calc(100cqw-1.5rem)] overflow-y-auto rounded-lg p-2", !open && "hidden")} onClick={event => {
+    <div id={id} role="group" aria-label={t("actionMenu.groupLabel", { label })} className={cn("canvas-action-popup absolute bottom-full right-0 mb-2 max-h-[min(65vh,34rem)] w-60 max-w-[calc(100cqw-1.5rem)] overflow-y-auto rounded-lg p-2", !open && "hidden")} onClick={event => {
       if (event.target instanceof Element && event.target.closest("button")) setOpen(false);
     }}>{children}</div>
   </div>;

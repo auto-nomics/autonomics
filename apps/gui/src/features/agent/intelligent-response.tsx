@@ -1,4 +1,5 @@
 import { Component, lazy, Suspense, useEffect, useMemo, useState, type ReactNode, type ErrorInfo } from "react";
+import { useTranslation } from "react-i18next";
 import { createResponseParser, type ResponsePart } from "./intelligent-response-parser";
 const GenerativeUI = lazy(() => import("./generative-ui/view"));
 
@@ -14,6 +15,7 @@ class Boundary extends Component<BoundaryProps, { failed: boolean }> {
 }
 
 export function IntelligentResponse({ text, streaming, fallback }: { text: string; streaming: boolean; fallback: ReactNode }) {
+  const { t } = useTranslation("agent");
   const parse = useMemo(createResponseParser, []);
   const [snapshot, setSnapshot] = useState<{ source: string; parts: ResponsePart[] } | null>(null);
   useEffect(() => {
@@ -33,8 +35,8 @@ export function IntelligentResponse({ text, streaming, fallback }: { text: strin
   if (!parts) return fallback;
   return <div className="min-w-0 space-y-3">{parts.map((part, index) => {
     if (part.kind === "markdown") return <div key={index} className={`md${streaming ? " md-streaming" : ""}`} dangerouslySetInnerHTML={{ __html: part.content }} />;
-    return <Boundary key={`${index}:${part.kind}`} resetKey={`${streaming}:${part.content}`} fallback={<div role="alert" className="text-sm text-muted-foreground">交互界面渲染失败。<details><summary>查看原始内容</summary><pre className="whitespace-pre-wrap break-words">{part.content}</pre></details></div>}>
-      <Suspense fallback={<p role="status" className="text-xs text-muted-foreground">正在加载交互界面…</p>}><GenerativeUI code={part.content} streaming={streaming} /></Suspense>
+    return <Boundary key={`${index}:${part.kind}`} resetKey={`${streaming}:${part.content}`} fallback={<div role="alert" className="text-sm text-muted-foreground">{t("generative.renderFailed")}<details><summary>{t("generative.showRaw")}</summary><pre className="whitespace-pre-wrap break-words">{part.content}</pre></details></div>}>
+      <Suspense fallback={<p role="status" className="text-xs text-muted-foreground">{t("generative.loading")}</p>}><GenerativeUI code={part.content} streaming={streaming} /></Suspense>
     </Boundary>;
   })}</div>;
 }

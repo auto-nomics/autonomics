@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { editorDrag, setEditorDrag } from "../editor-drag";
 import { ChevronDown, GripVertical, X } from "lucide-react";
 import { SplitSquareHorizontal, Columns2 } from "lucide-react";
@@ -16,6 +17,7 @@ import { useDirtyDocuments } from "../dirty-documents";
 import { activateEditor, moveEditor, closeEditor, closeSplit, splitEditor, getGroup, allGroups, mergeGroup, useWorkbenchState, type EditorGroup, type GroupId } from "../workbench-store";
 
 export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
+  const { t } = useTranslation("workbench");
   const dirtyDocuments = useDirtyDocuments();
   const state = useWorkbenchState();
   const [dropIndex, setDropIndex] = useState<number | null>(null);
@@ -110,7 +112,7 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
   return (
     <div
       role="tablist"
-      aria-label={isMain ? "编辑器标签" : "分屏编辑器标签"}
+      aria-label={isMain ? t("editorTabs.tabsAria") : t("editorTabs.splitTabsAria")}
       onDragOver={(event) => { if (!editorDrag) return; event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropIndex(props.group.editors.length); }}
       onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { stopDragScroll(); setDropIndex(null); } }}
       onDrop={(event) => { if (!editorDrag) return; event.preventDefault(); drop(dropIndex ?? props.group.editors.length); }}
@@ -171,11 +173,11 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
           >
             {Icon && <Icon className="size-3.5 shrink-0" aria-hidden />}
             <span className="min-w-0 truncate">{title}</span>
-            {dirty && <span aria-hidden="true" title="未保存修改" className="size-1.5 shrink-0 rounded-full bg-current" />}
+            {dirty && <span aria-hidden="true" title={t("editorTabs.unsaved")} className="size-1.5 shrink-0 rounded-full bg-current" />}
             <button
               type="button"
-              aria-label={`关闭 ${title}`}
-              title={`关闭 ${title}`}
+              aria-label={t("editorTabs.close", { title })}
+              title={t("editorTabs.close", { title })}
               disabled={editor.pinned}
               onClick={(event) => {
                 event.stopPropagation();
@@ -192,10 +194,10 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
       </div>
       </div>
       <div className="flex shrink-0 items-center gap-0.5 px-1.5">
-        {split && <button type="button" draggable aria-label="拖动编辑器组" title="拖动编辑器组" className="grid size-6 cursor-grab place-items-center rounded-sm text-muted-foreground hover:bg-accent" onDragStart={event => { setEditorDrag({ groupId: props.groupId, id: "" }); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", "editor-group"); }} onDragEnd={() => { setEditorDrag(null); stopDragScroll(); setDropIndex(null); }}><GripVertical className="size-3.5" /></button>}
+        {split && <button type="button" draggable aria-label={t("editorTabs.dragGroup")} title={t("editorTabs.dragGroup")} className="grid size-6 cursor-grab place-items-center rounded-sm text-muted-foreground hover:bg-accent" onDragStart={event => { setEditorDrag({ groupId: props.groupId, id: "" }); event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", "editor-group"); }} onDragEnd={() => { setEditorDrag(null); stopDragScroll(); setDropIndex(null); }}><GripVertical className="size-3.5" /></button>}
         {overflow && <details ref={menuRef} className="relative">
-          <summary aria-label="显示所有编辑器标签" title="显示所有编辑器标签" className="grid size-6 cursor-pointer list-none place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground [&::-webkit-details-marker]:hidden"><ChevronDown className="size-4" /></summary>
-          <div className="absolute right-0 top-full z-50 max-h-80 min-w-48 max-w-72 overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-lg" role="menu" aria-label="所有编辑器标签">
+          <summary aria-label={t("editorTabs.showAll")} title={t("editorTabs.showAll")} className="grid size-6 cursor-pointer list-none place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground [&::-webkit-details-marker]:hidden"><ChevronDown className="size-4" /></summary>
+          <div className="absolute right-0 top-full z-50 max-h-80 min-w-48 max-w-72 overflow-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-lg" role="menu" aria-label={t("editorTabs.allTabs")}>
             {props.group.editors.map((editor) => {
               const kind = editorKind(editor.kind);
               if (!kind) return null;
@@ -211,8 +213,8 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
         {state.groups.active === props.groupId && (
           <button
             type="button"
-            aria-label="拆分编辑器"
-            title="拆分编辑器"
+            aria-label={t("editorTabs.split")}
+            title={t("editorTabs.split")}
             disabled={!props.group.activeId || props.group.editors.length < 2}
             onClick={() => splitEditor(props.groupId)}
             className="grid size-6 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
@@ -223,8 +225,8 @@ export function EditorTabs(props: { groupId: GroupId; group: EditorGroup }) {
         {split && (
           <button
             type="button"
-            aria-label={props.groupId === "secondary" ? "关闭分屏" : "关闭编辑器组"}
-            title={props.groupId === "secondary" ? "关闭分屏" : "关闭编辑器组"}
+            aria-label={props.groupId === "secondary" ? t("editorTabs.closeSplit") : t("editorTabs.closeGroup")}
+            title={props.groupId === "secondary" ? t("editorTabs.closeSplit") : t("editorTabs.closeGroup")}
             onClick={() => closeSplit(props.groupId)}
             className="grid size-6 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
           >

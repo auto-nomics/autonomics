@@ -1,0 +1,23 @@
+_version: 2
+locale.name:
+  zh: 中文
+common.yes:
+  zh: 是
+common.no:
+  zh: 否
+common.cancel:
+  zh: 取消
+common.confirm:
+  zh: 确认
+common.close:
+  zh: 关闭
+common.retry:
+  zh: 重试
+common.loading:
+  zh: 加载中…
+common.error:
+  zh: 错误
+common.none:
+  zh: 无
+common.search:
+  zh: 搜索

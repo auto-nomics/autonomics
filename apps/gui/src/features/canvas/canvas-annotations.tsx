@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ export function CanvasAnnotations({ projectId, canvasId, getApi, getRevision, en
   elementIds?: readonly string[]; active?: boolean;
   preparing?: boolean; canPrepare?: boolean; onPrepare?: (annotation: Annotation) => Promise<boolean>;
 }) {
+  const { t } = useTranslation("canvas");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,29 +20,29 @@ export function CanvasAnnotations({ projectId, canvasId, getApi, getRevision, en
   const save = async (prepare: boolean) => {
       const api = getApi(); if (!api || busy || preparing) return;
       const targets = elementIds ? [...elementIds] : Object.keys(api.getAppState().selectedElementIds).filter(id => api.getAppState().selectedElementIds[id]);
-      if (!targets.length) { setError("请先在画布上选择需要批注的对象。"); return; }
+      if (!targets.length) { setError(t("annotations.selectFirst")); return; }
       setBusy(true); setError("");
       try {
-        if (!await ensureSaved()) throw new Error("请先解决画布保存错误。");
-        if (targets.some(id => !api.getSceneElements().some(element => element.id === id && !element.isDeleted))) throw new Error("批注对象已变化，请重新选择后批注。");
+        if (!await ensureSaved()) throw new Error(t("common.resolveSaveError"));
+        if (targets.some(id => !api.getSceneElements().some(element => element.id === id && !element.isDeleted))) throw new Error(t("annotations.targetsChanged"));
         const added = await gatewayRequest("POST", path, { expected_revision: getRevision(), element_ids: targets, note: note.trim() }) as Annotation;
         setNotes(items => [...items, added]); setNote("");
-        if (prepare && onPrepare && !await onPrepare(added)) setError("批注已保存，Agent 草稿未准备成功；请查看错误，修正后可从该批注重试。");
+        if (prepare && onPrepare && !await onPrepare(added)) setError(t("annotations.savedDraftFailed"));
       } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
 
   };
-  return <section aria-label="对象批注" className="canvas-annotations flex flex-col gap-2">
-    <p className="text-xs text-muted-foreground">选中画布对象后添加意见，批注不会进入图片导出。</p>
-    <textarea aria-label="批注意见" disabled={busy || preparing} maxLength={4000} className="min-h-20 rounded border bg-background p-2" value={note} onChange={event => setNote(event.target.value)} />
-    <Button size="sm" disabled={busy || preparing || !note.trim()} onClick={() => void save(false)}>批注选中对象</Button>
-    {onPrepare && <><Button size="sm" disabled={busy || preparing || !canPrepare || !note.trim()} onClick={() => void save(true)}>批注并准备 Agent 修改</Button><p className="text-xs text-muted-foreground">保存批注并将此处修改要求放入绑定的插画专家草稿，供你检查并发送。</p></>}
+  return <section aria-label={t("annotations.title")} className="canvas-annotations flex flex-col gap-2">
+    <p className="text-xs text-muted-foreground">{t("annotations.hint")}</p>
+    <textarea aria-label={t("annotations.noteLabel")} disabled={busy || preparing} maxLength={4000} className="min-h-20 rounded border bg-background p-2" value={note} onChange={event => setNote(event.target.value)} />
+    <Button size="sm" disabled={busy || preparing || !note.trim()} onClick={() => void save(false)}>{t("annotations.annotateSelection")}</Button>
+    {onPrepare && <><Button size="sm" disabled={busy || preparing || !canPrepare || !note.trim()} onClick={() => void save(true)}>{t("annotations.annotateAndPrepare")}</Button><p className="text-xs text-muted-foreground">{t("annotations.prepareHint")}</p></>}
     {error && <p role="alert" className="text-destructive">{error}</p>}
-    {notes.filter(item => !elementIds || item.element_ids.some(id => elementIds.includes(id))).map(item => <article key={item.id} className="rounded border p-2"><p className="whitespace-pre-wrap">{item.note}</p><p className="mt-1 text-xs text-muted-foreground">v{item.at_revision} · {item.status === "resolved" ? "已处理" : "待处理"}</p><div className="mt-2 flex flex-wrap gap-1"><Button size="sm" variant="outline" disabled={busy || preparing} onClick={() => {
+    {notes.filter(item => !elementIds || item.element_ids.some(id => elementIds.includes(id))).map(item => <article key={item.id} className="rounded border p-2"><p className="whitespace-pre-wrap">{item.note}</p><p className="mt-1 text-xs text-muted-foreground">v{item.at_revision} · {item.status === "resolved" ? t("markups.statusResolved") : t("markups.statusOpen")}</p><div className="mt-2 flex flex-wrap gap-1"><Button size="sm" variant="outline" disabled={busy || preparing} onClick={() => {
       const api = getApi(); if (!api) return; const elements = api.getSceneElements().filter(element => item.element_ids.includes(element.id));
-      if (!elements.length) { setError("批注关联的对象已不在当前画布中。"); return; }
+      if (!elements.length) { setError(t("annotations.objectsGone")); return; }
       api.updateScene({ appState: { selectedElementIds: Object.fromEntries(elements.map(element => [element.id, true])) } }); api.scrollToContent(elements);
-    }}>定位对象</Button>{item.status === "open" && onPrepare && <Button size="sm" variant="outline" disabled={busy || preparing || !canPrepare} onClick={async () => { setBusy(true); setError(""); try { if (!await onPrepare(item)) setError("Agent 草稿未准备成功，请查看错误并核对批注后重试。"); } catch (cause) { setError(String(cause)); } finally { setBusy(false); } }}>用此批注准备修改</Button>}{item.status !== "resolved" && <Button size="sm" variant="outline" disabled={busy || preparing} onClick={async () => {
+    }}>{t("annotations.locateObjects")}</Button>{item.status === "open" && onPrepare && <Button size="sm" variant="outline" disabled={busy || preparing || !canPrepare} onClick={async () => { setBusy(true); setError(""); try { if (!await onPrepare(item)) setError(t("annotations.draftFailed")); } catch (cause) { setError(String(cause)); } finally { setBusy(false); } }}>{t("annotations.prepareWithThis")}</Button>}{item.status !== "resolved" && <Button size="sm" variant="outline" disabled={busy || preparing} onClick={async () => {
       setBusy(true); setError(""); try { await gatewayRequest("POST", `${path}/${encodeURIComponent(item.id)}/resolve`); setNotes(items => items.map(current => current.id === item.id ? { ...current, status: "resolved" } : current)); } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-    }}>标为已处理</Button>}</div></article>)}
+    }}>{t("annotations.markResolved")}</Button>}</div></article>)}
   </section>;
 }

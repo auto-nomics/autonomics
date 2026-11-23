@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -84,6 +85,7 @@ export function ManuscriptsWorkspace({
   externalSidebar?: boolean;
   onOpenSidebar?: () => void;
 }) {
+  const { t } = useTranslation("bibliography");
   const [projects, setProjects] = useState<Project[]>([]),
     [detail, setDetail] = useState<Detail | null>(null),
     [path, setPath] = useState(""),
@@ -196,7 +198,9 @@ export function ManuscriptsWorkspace({
       setRecoveryError("");
     } catch (error) {
       setRecoveryError(
-        `本地草稿备份失败：${message(error)}。当前编辑仍保留，请保存到服务器后再关闭。`,
+        t("manuscripts.workspace.recovery.backupFailed", {
+          message: message(error),
+        }),
       );
     }
   }, [recoveryKey, drafts, detail?.project.id]);
@@ -268,7 +272,11 @@ export function ManuscriptsWorkspace({
       restored = readDrafts(key);
     } catch (error) {
       key = ""; // Preserve unreadable recovery data for manual recovery.
-      setRecoveryError(`无法读取本地草稿：${message(error)}`);
+      setRecoveryError(
+        t("manuscripts.workspace.recovery.readFailed", {
+          message: message(error),
+        }),
+      );
     }
     for (const draft of Object.values(restored)) {
       if (!next.files.some((file) => file.path === draft.base.path))
@@ -349,17 +357,17 @@ export function ManuscriptsWorkspace({
             revision: 0,
           },
         );
-        setError("文件已被其他协作者更新。本地编辑已保留，请对照版本后合并。");
+        setError(t("manuscripts.workspace.recovery.conflictError"));
       } else setError(message(error));
       return false;
     }
   };
   const save = () =>
-    void run("保存中", async () => {
+    void run(t("manuscripts.workspace.busy.saving"), async () => {
       await saveFile(path);
     });
   const compile = () =>
-    void run("编译中", async () => {
+    void run(t("manuscripts.workspace.busy.compiling"), async () => {
       for (const target of Object.keys(state.current.drafts)) {
         if (!(await saveFile(target))) return;
       }
@@ -392,7 +400,7 @@ export function ManuscriptsWorkspace({
           onSubmit={(event) => {
             event.preventDefault();
             if (title.trim())
-              void run("创建中", async () => {
+              void run(t("manuscripts.workspace.busy.creating"), async () => {
                 const project: Project = await gatewayRequest(
                   "POST",
                   "/bib/manuscripts",
@@ -421,14 +429,14 @@ export function ManuscriptsWorkspace({
           }}
         >
           <Input
-            aria-label="Manuscript title"
-            placeholder="新手稿标题"
+            aria-label={t("manuscripts.workspace.home.titleAria")}
+            placeholder={t("manuscripts.workspace.home.titlePlaceholder")}
             value={title}
             onChange={(event) => setTitle(event.target.value)}
           />
           <Button type="submit" disabled={!title.trim() || !!busy}>
             <Plus />
-            新建 LaTeX 手稿
+            {t("manuscripts.workspace.home.createButton")}
           </Button>
         </form>
         {error && (
@@ -437,26 +445,28 @@ export function ManuscriptsWorkspace({
           </p>
         )}
         <div className="manuscript-list-heading">
-          <span>我的手稿</span>
-          <span>{projects.length} 个项目</span>
+          <span>{t("manuscripts.workspace.home.myManuscripts")}</span>
+          <span>{t("manuscripts.workspace.home.projectCount", { n: projects.length })}</span>
         </div>
         {loading ? (
-          <p className="manuscript-muted">正在加载手稿…</p>
+          <p className="manuscript-muted">{t("manuscripts.workspace.home.loading")}</p>
         ) : projects.length ? (
           <div className="manuscript-projects">
             {projects.map((project) => (
               <button
                 key={project.id}
                 className="manuscript-project"
-                onClick={() => void run("打开中", () => open(project))}
+                onClick={() => void run(t("manuscripts.workspace.busy.opening"), () => open(project))}
                 disabled={!!busy}
               >
                 <FileText size={24} strokeWidth={1.4} />
                 <div>
                   <strong>{project.title}</strong>
                   <small>
-                    {project.main_file} · {project.article_ids.length}{" "}
-                    篇参考文献
+                    {project.main_file} ·{" "}
+                    {t("manuscripts.workspace.home.referenceCount", {
+                      n: project.article_ids.length,
+                    })}
                   </small>
                 </div>
                 <ChevronRight size={16} />
@@ -466,8 +476,8 @@ export function ManuscriptsWorkspace({
         ) : (
           <div className="manuscript-home-empty">
             <Code2 size={32} strokeWidth={1} />
-            <h2>第一篇手稿，从这里开始</h2>
-            <p>每个项目包含独立的源文件、编译记录与可审阅的修改建议。</p>
+            <h2>{t("manuscripts.workspace.home.emptyTitle")}</h2>
+            <p>{t("manuscripts.workspace.home.emptyBody")}</p>
           </div>
         )}
       </div>
@@ -494,23 +504,21 @@ export function ManuscriptsWorkspace({
       )}
       {recovered && dirty && (
         <div className="manuscript-recovered" role="status">
-          已恢复此项目的本地草稿。保存时将校验原版本，避免覆盖其他协作者的修改。
+          {t("manuscripts.workspace.recovery.restoredBanner")}
         </div>
       )}
       {error && (
         <div role="alert" className="manuscript-error">
           {error}
-          <button aria-label="Dismiss error" onClick={() => setError("")}>
+          <button aria-label={t("manuscripts.workspace.editorPane.dismissErrorAria")} onClick={() => setError("")}>
             <X size={14} />
           </button>
         </div>
       )}
       {conflict && (
         <div className="manuscript-conflict">
-          <strong>版本冲突 · {conflict.path}</strong>
-          <p>
-            左侧编辑器保留你的内容；下方对照显示服务器版本与本地草稿。合并后重新保存。
-          </p>
+          <strong>{t("manuscripts.workspace.recovery.conflictTitle", { path: conflict.path })}</strong>
+          <p>{t("manuscripts.workspace.recovery.conflictBody")}</p>
           <ProposalDiff
             original={conflict.content}
             proposed={getDraft(drafts, conflict.path)?.content ?? ""}
@@ -541,7 +549,7 @@ export function ManuscriptsWorkspace({
               setError("");
             }}
           >
-            已对照，保留草稿并更新基线
+            {t("manuscripts.workspace.recovery.conflictResolve")}
           </Button>
         </div>
       )}
@@ -549,13 +557,13 @@ export function ManuscriptsWorkspace({
         {(!externalSidebar || sidebarSlot) && (externalSidebar ? createPortal(
           <aside className="manuscript-files">
           <div className="manuscript-pane-heading">
-            <span>项目文件</span>
+            <span>{t("manuscripts.workspace.files.heading")}</span>
             <div className="manuscript-inline">
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="Upload figure"
-                title="上传图片或 PDF"
+                aria-label={t("manuscripts.workspace.files.uploadAria")}
+                title={t("manuscripts.workspace.files.uploadTitle")}
                 disabled={!!busy}
                 onClick={() => uploadInput.current?.click()}
               >
@@ -570,9 +578,9 @@ export function ManuscriptsWorkspace({
                   const upload = event.target.files?.[0];
                   event.target.value = "";
                   if (!upload) return;
-                  void run("上传附件", async () => {
+                  void run(t("manuscripts.workspace.busy.uploadingAsset"), async () => {
                     if (upload.size > 16 * 1024 * 1024)
-                      throw new Error("附件不能超过 16 MiB");
+                      throw new Error(t("manuscripts.workspace.files.assetTooLarge"));
                     const bytes = new Uint8Array(await upload.arrayBuffer());
                     let binary = "";
                     for (let offset = 0; offset < bytes.length; offset += 8192)
@@ -584,7 +592,7 @@ export function ManuscriptsWorkspace({
                       (asset) => asset.path === assetPath,
                     );
                     if (existing)
-                      throw new Error("此附件已存在，请先重命名上传文件。");
+                      throw new Error(t("manuscripts.workspace.files.assetExists"));
                     await gatewayRequest(
                       "PUT",
                       `${projectPath(detail.project.id)}/assets`,
@@ -601,8 +609,8 @@ export function ManuscriptsWorkspace({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="New source file"
-                title="新建文件"
+                aria-label={t("manuscripts.workspace.files.newFileAria")}
+                title={t("manuscripts.workspace.files.newFileTitle")}
                 onClick={() => setShowNewFile(!showNewFile)}
               >
                 <FilePlus2 />
@@ -615,7 +623,7 @@ export function ManuscriptsWorkspace({
               onSubmit={(event) => {
                 event.preventDefault();
                 if (newFile.trim())
-                  void run("创建文件", async () => {
+                  void run(t("manuscripts.workspace.busy.creatingFile"), async () => {
                     const created: SourceFile = await gatewayRequest(
                       "PUT",
                       `${projectPath(detail.project.id)}/files`,
@@ -637,17 +645,17 @@ export function ManuscriptsWorkspace({
               }}
             >
               <Input
-                aria-label="New file path"
+                aria-label={t("manuscripts.workspace.files.newFileAria")}
                 value={newFile}
                 onChange={(event) => setNewFile(event.target.value)}
                 placeholder="sections/methods.tex"
               />
               <Button type="submit" size="xs" disabled={!!busy}>
-                创建
+                {t("manuscripts.workspace.files.createButton")}
               </Button>
             </form>
           )}
-          <nav aria-label="Project files">
+          <nav aria-label={t("manuscripts.workspace.files.filesNavAria")}>
             {detail.files.map((source) => (
               <button
                 key={source.path}
@@ -668,7 +676,7 @@ export function ManuscriptsWorkspace({
           {detail.assets?.map((asset) => (
             <div className="manuscript-asset" key={asset.path}>
               <button
-                title="插入图像路径"
+                title={t("manuscripts.workspace.files.insertAssetTitle")}
                 onClick={() =>
                   setInsertion({
                     text: `\\includegraphics{${asset.path}}`,
@@ -682,10 +690,10 @@ export function ManuscriptsWorkspace({
               <Button
                 size="icon-xs"
                 variant="ghost"
-                aria-label={`Delete ${asset.path}`}
+                aria-label={t("manuscripts.workspace.files.deleteAssetAria", { path: asset.path })}
                 disabled={!!busy}
                 onClick={() =>
-                  void run("删除附件", async () => {
+                  void run(t("manuscripts.workspace.busy.deletingAsset"), async () => {
                     await gatewayRequest(
                       "DELETE",
                       `${projectPath(detail.project.id)}/assets`,
@@ -703,7 +711,7 @@ export function ManuscriptsWorkspace({
             <div className="manuscript-pane-heading">
               <span>
                 <ListTree size={14} />
-                文档大纲
+                {t("manuscripts.workspace.files.outline")}
               </span>
             </div>
             {outline.length ? (
@@ -719,7 +727,7 @@ export function ManuscriptsWorkspace({
                 </button>
               ))
             ) : (
-              <p>章节标题将显示在这里。</p>
+              <p>{t("manuscripts.workspace.files.outlineEmpty")}</p>
             )}
           </div>
           <button
@@ -727,18 +735,18 @@ export function ManuscriptsWorkspace({
             onClick={() => toggle("library")}
           >
             <BookOpen size={15} />
-            文献库与引用<span>{detail.project.article_ids.length}</span>
+            {t("manuscripts.workspace.files.libraryButton")}<span>{detail.project.article_ids.length}</span>
           </button>
         </aside>, sidebarSlot!
         ) : <aside className="manuscript-files">
           <div className="manuscript-pane-heading">
-            <span>项目文件</span>
+            <span>{t("manuscripts.workspace.files.heading")}</span>
             <div className="manuscript-inline">
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="Upload figure"
-                title="上传图片或 PDF"
+                aria-label={t("manuscripts.workspace.files.uploadAria")}
+                title={t("manuscripts.workspace.files.uploadTitle")}
                 disabled={!!busy}
                 onClick={() => uploadInput.current?.click()}
               >
@@ -753,9 +761,9 @@ export function ManuscriptsWorkspace({
                   const upload = event.target.files?.[0];
                   event.target.value = "";
                   if (!upload) return;
-                  void run("上传附件", async () => {
+                  void run(t("manuscripts.workspace.busy.uploadingAsset"), async () => {
                     if (upload.size > 16 * 1024 * 1024)
-                      throw new Error("附件不能超过 16 MiB");
+                      throw new Error(t("manuscripts.workspace.files.assetTooLarge"));
                     const bytes = new Uint8Array(await upload.arrayBuffer());
                     let binary = "";
                     for (let offset = 0; offset < bytes.length; offset += 8192)
@@ -767,7 +775,7 @@ export function ManuscriptsWorkspace({
                       (asset) => asset.path === assetPath,
                     );
                     if (existing)
-                      throw new Error("此附件已存在，请先重命名上传文件。");
+                      throw new Error(t("manuscripts.workspace.files.assetExists"));
                     await gatewayRequest(
                       "PUT",
                       `${projectPath(detail.project.id)}/assets`,
@@ -784,8 +792,8 @@ export function ManuscriptsWorkspace({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                aria-label="New source file"
-                title="新建文件"
+                aria-label={t("manuscripts.workspace.files.newFileAria")}
+                title={t("manuscripts.workspace.files.newFileTitle")}
                 onClick={() => setShowNewFile(!showNewFile)}
               >
                 <FilePlus2 />
@@ -798,7 +806,7 @@ export function ManuscriptsWorkspace({
               onSubmit={(event) => {
                 event.preventDefault();
                 if (newFile.trim())
-                  void run("创建文件", async () => {
+                  void run(t("manuscripts.workspace.busy.creatingFile"), async () => {
                     const created: SourceFile = await gatewayRequest(
                       "PUT",
                       `${projectPath(detail.project.id)}/files`,
@@ -820,17 +828,17 @@ export function ManuscriptsWorkspace({
               }}
             >
               <Input
-                aria-label="New file path"
+                aria-label={t("manuscripts.workspace.files.newFileAria")}
                 value={newFile}
                 onChange={(event) => setNewFile(event.target.value)}
                 placeholder="sections/methods.tex"
               />
               <Button type="submit" size="xs" disabled={!!busy}>
-                创建
+                {t("manuscripts.workspace.files.createButton")}
               </Button>
             </form>
           )}
-          <nav aria-label="Project files">
+          <nav aria-label={t("manuscripts.workspace.files.filesNavAria")}>
             {detail.files.map((source) => (
               <button
                 key={source.path}
@@ -851,7 +859,7 @@ export function ManuscriptsWorkspace({
           {detail.assets?.map((asset) => (
             <div className="manuscript-asset" key={asset.path}>
               <button
-                title="插入图像路径"
+                title={t("manuscripts.workspace.files.insertAssetTitle")}
                 onClick={() =>
                   setInsertion({
                     text: `\\includegraphics{${asset.path}}`,
@@ -865,10 +873,10 @@ export function ManuscriptsWorkspace({
               <Button
                 size="icon-xs"
                 variant="ghost"
-                aria-label={`Delete ${asset.path}`}
+                aria-label={t("manuscripts.workspace.files.deleteAssetAria", { path: asset.path })}
                 disabled={!!busy}
                 onClick={() =>
-                  void run("删除附件", async () => {
+                  void run(t("manuscripts.workspace.busy.deletingAsset"), async () => {
                     await gatewayRequest(
                       "DELETE",
                       `${projectPath(detail.project.id)}/assets`,
@@ -886,7 +894,7 @@ export function ManuscriptsWorkspace({
             <div className="manuscript-pane-heading">
               <span>
                 <ListTree size={14} />
-                文档大纲
+                {t("manuscripts.workspace.files.outline")}
               </span>
             </div>
             {outline.length ? (
@@ -902,7 +910,7 @@ export function ManuscriptsWorkspace({
                 </button>
               ))
             ) : (
-              <p>章节标题将显示在这里。</p>
+              <p>{t("manuscripts.workspace.files.outlineEmpty")}</p>
             )}
           </div>
           <button
@@ -910,7 +918,7 @@ export function ManuscriptsWorkspace({
             onClick={() => toggle("library")}
           >
             <BookOpen size={15} />
-            文献库与引用<span>{detail.project.article_ids.length}</span>
+            {t("manuscripts.workspace.files.libraryButton")}<span>{detail.project.article_ids.length}</span>
           </button>
         </aside>)}
         <section className="manuscript-source">
@@ -919,11 +927,11 @@ export function ManuscriptsWorkspace({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label="Back to manuscripts"
+          aria-label={t("manuscripts.workspace.editorPane.backAria")}
           disabled={!!busy}
           onClick={() => {
             if (dirty) {
-              setError("请先保存本地编辑，再返回项目列表。");
+              setError(t("manuscripts.workspace.recovery.backDirtyError"));
               return;
             }
             setDetail(null);
@@ -932,19 +940,19 @@ export function ManuscriptsWorkspace({
           <ArrowLeft />
         </Button>
               <span className="truncate" title={detail.project.title}>{detail.project.title} · {path}</span>
-              <span className={`manuscript-status-dot ${dirty ? "is-dirty" : ""}`} title={busy || (dirty ? "有未保存的修改" : "所有修改已保存")} aria-label={busy || (dirty ? "有未保存的修改" : "所有修改已保存")} />
+              <span className={`manuscript-status-dot ${dirty ? "is-dirty" : ""}`} title={busy || (dirty ? t("manuscripts.workspace.editorPane.dirtyTitle") : t("manuscripts.workspace.editorPane.savedTitle"))} aria-label={busy || (dirty ? t("manuscripts.workspace.editorPane.dirtyTitle") : t("manuscripts.workspace.editorPane.savedTitle"))} />
             </div>
             <div className="manuscript-inline">
               <span>LaTeX · r{draft?.base.revision ?? file?.revision ?? 0}</span>
         <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="论文操作" />}><Ellipsis /></DropdownMenuTrigger>
+          <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={t("manuscripts.workspace.editorPane.menuAria")} />}><Ellipsis /></DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-40">
           <DropdownMenuItem
-            aria-label="Download source ZIP"
-            title="下载源文件 ZIP"
+            aria-label={t("manuscripts.workspace.editorPane.downloadAria")}
+            title={t("manuscripts.workspace.editorPane.downloadTitle")}
             disabled={!!busy}
             onClick={() =>
-              void run("导出源文件", async () => {
+              void run(t("manuscripts.workspace.busy.exporting"), async () => {
                 for (const target of Object.keys(state.current.drafts)) {
                   if (!(await saveFile(target))) return;
                 }
@@ -963,50 +971,50 @@ export function ManuscriptsWorkspace({
               })
             }
           >
-            <Download /> 下载源文件 ZIP
+            <Download /> {t("manuscripts.workspace.editorPane.downloadItem")}
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={save}
             disabled={!dirtyPath(path) || !!busy}
           >
             <Save />
-            保存
+            {t("manuscripts.workspace.editorPane.save")}
           </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!!busy}
             onClick={compile}
           >
-            {busy === "编译中" ? (
+            {busy === t("manuscripts.workspace.busy.compiling") ? (
               <Loader2 className="animate-spin" />
             ) : (
               <Play />
             )}
-            编译
+            {t("manuscripts.workspace.editorPane.compile")}
           </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => toggle("review")}
           >
             <Sparkles />
-            审阅
+            {t("manuscripts.workspace.editorPane.review")}
             {pending.length > 0 && (
               <span className="manuscript-count">{pending.length}</span>
             )}
           </DropdownMenuItem>
           <DropdownMenuItem
-            aria-label="Comments"
-            title="批注"
+            aria-label={t("manuscripts.workspace.editorPane.commentsAria")}
+            title={t("manuscripts.workspace.editorPane.commentsTitle")}
             onClick={() => toggle("comments")}
           >
-            <MessageSquare /> 批注
+            <MessageSquare /> {t("manuscripts.workspace.editorPane.commentsItem")}
           </DropdownMenuItem>
           <DropdownMenuItem
-            aria-label="History"
-            title="版本历史"
+            aria-label={t("manuscripts.workspace.editorPane.historyAria")}
+            title={t("manuscripts.workspace.editorPane.historyTitle")}
             onClick={() => toggle("history")}
           >
-            <History /> 版本历史
+            <History /> {t("manuscripts.workspace.editorPane.historyItem")}
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={openManuscriptLog}><FileText /> 编译日志</DropdownMenuItem>
+          <DropdownMenuItem onClick={openManuscriptLog}><FileText /> {t("manuscripts.workspace.editorPane.logItem")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
             </div>
@@ -1023,7 +1031,7 @@ export function ManuscriptsWorkspace({
               insertion={insertion}
             />
           ) : (
-            <p className="manuscript-muted">请选择源文件。</p>
+            <p className="manuscript-muted">{t("manuscripts.workspace.editorPane.selectFile")}</p>
           )}
 
         </section>
@@ -1037,10 +1045,10 @@ export function ManuscriptsWorkspace({
               <span>
                 {
                   {
-                    review: "修改审阅",
-                    comments: "批注",
-                    history: "版本历史",
-                    library: "插入引用",
+                    review: t("manuscripts.workspace.panels.review"),
+                    comments: t("manuscripts.workspace.panels.comments"),
+                    history: t("manuscripts.workspace.panels.history"),
+                    library: t("manuscripts.workspace.panels.library"),
                   }[panel]
                 }
               </span>
@@ -1049,9 +1057,9 @@ export function ManuscriptsWorkspace({
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label="Refresh proposals"
+                    aria-label={t("manuscripts.workspace.panels.refreshAria")}
                     onClick={() =>
-                      void run("刷新中", () => refresh(detail.project.id))
+                      void run(t("manuscripts.workspace.busy.refreshing"), () => refresh(detail.project.id))
                     }
                   >
                     <RefreshCw />
@@ -1060,7 +1068,7 @@ export function ManuscriptsWorkspace({
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  aria-label="Close panel"
+                  aria-label={t("manuscripts.workspace.panels.closeAria")}
                   onClick={() => setPanel(null)}
                 >
                   <X />
@@ -1071,14 +1079,14 @@ export function ManuscriptsWorkspace({
               {panel === "review" && (
                 <>
                   <p className="manuscript-panel-intro">
-                    智能体的修改先作为建议保留。检查差异后，由你决定是否写入源文件。
+                    {t("manuscripts.workspace.panels.reviewIntro")}
                   </p>
                   {pending.length === 0 && (
                     <div className="manuscript-empty">
                       <Check size={24} />
-                      <p>暂无待审阅建议</p>
+                      <p>{t("manuscripts.workspace.panels.reviewEmpty")}</p>
                       <small>
-                        将源文件或选区加入会话，请智能体提交修改建议。
+                        {t("manuscripts.workspace.panels.reviewEmptyHint")}
                       </small>
                     </div>
                   )}
@@ -1088,7 +1096,7 @@ export function ManuscriptsWorkspace({
                       key={proposal.id}
                     >
                       <header>
-                        <strong>{proposal.summary || "源文件修改"}</strong>
+                        <strong>{proposal.summary || t("manuscripts.workspace.panels.proposalFallback")}</strong>
                         <small>
                           {proposal.author} · {proposal.path} · r
                           {proposal.base_revision}
@@ -1105,11 +1113,11 @@ export function ManuscriptsWorkspace({
                             disabled={!!busy || dirtyPath(proposal.path)}
                             title={
                               dirtyPath(proposal.path)
-                                ? "先保存此文件的本地修改"
+                                ? t("manuscripts.workspace.panels.saveFirstTitle")
                                 : ""
                             }
                             onClick={() =>
-                              void run("接受建议", async () => {
+                              void run(t("manuscripts.workspace.busy.accepting"), async () => {
                                 await gatewayRequest(
                                   "POST",
                                   `${projectPath(detail.project.id)}/proposals/${encodeURIComponent(proposal.id)}/resolve`,
@@ -1120,14 +1128,14 @@ export function ManuscriptsWorkspace({
                             }
                           >
                             <Check />
-                            接受修改
+                            {t("manuscripts.workspace.panels.accept")}
                           </Button>
                           <Button
                             size="xs"
                             variant="outline"
                             disabled={!!busy}
                             onClick={() =>
-                              void run("拒绝建议", async () => {
+                              void run(t("manuscripts.workspace.busy.rejecting"), async () => {
                                 await gatewayRequest(
                                   "POST",
                                   `${projectPath(detail.project.id)}/proposals/${encodeURIComponent(proposal.id)}/resolve`,
@@ -1137,17 +1145,17 @@ export function ManuscriptsWorkspace({
                               })
                             }
                           >
-                            拒绝
+                            {t("manuscripts.workspace.panels.reject")}
                           </Button>
                         </div>
                       ) : (
                         <small className="manuscript-muted">
-                          {proposal.status === "accepted" ? "已接受" : "已拒绝"}
+                          {proposal.status === "accepted" ? t("manuscripts.workspace.panels.accepted") : t("manuscripts.workspace.panels.rejected")}
                         </small>
                       )}
                       {dirtyPath(proposal.path) &&
                         proposal.status === "pending" && (
-                          <small>此文件有本地编辑，请先保存再接受建议。</small>
+                          <small>{t("manuscripts.workspace.panels.dirtyProposalNote")}</small>
                         )}
                     </article>
                   ))}
@@ -1160,7 +1168,7 @@ export function ManuscriptsWorkspace({
                     onSubmit={(event) => {
                       event.preventDefault();
                       if (comment.trim())
-                        void run("添加批注", async () => {
+                        void run(t("manuscripts.workspace.busy.addingComment"), async () => {
                           await gatewayRequest(
                             "POST",
                             `${projectPath(detail.project.id)}/comments`,
@@ -1178,11 +1186,11 @@ export function ManuscriptsWorkspace({
                     }}
                   >
                     <small>
-                      {path} · 第 {selection.startLine}–{selection.endLine} 行
+                      {path} · {t("manuscripts.workspace.panels.commentLines", { start: selection.startLine, end: selection.endLine })}
                     </small>
                     <textarea
-                      aria-label="Comment text"
-                      placeholder="对选中的段落添加批注…"
+                      aria-label={t("manuscripts.workspace.panels.commentAria")}
+                      placeholder={t("manuscripts.workspace.panels.commentPlaceholder")}
                       value={comment}
                       onChange={(event) => setComment(event.target.value)}
                     />
@@ -1191,12 +1199,12 @@ export function ManuscriptsWorkspace({
                       type="submit"
                       disabled={!comment.trim() || !!busy || dirtyPath(path)}
                     >
-                      {dirtyPath(path) ? "保存后添加批注" : "添加批注"}
+                      {dirtyPath(path) ? t("manuscripts.workspace.panels.addCommentAfterSave") : t("manuscripts.workspace.panels.addComment")}
                     </Button>
                   </form>
                   {detail.comments.length === 0 && (
                     <p className="manuscript-muted">
-                      选择源文件中的段落，开始讨论。
+                      {t("manuscripts.workspace.panels.commentsEmpty")}
                     </p>
                   )}
                   {detail.comments.map((item) => (
@@ -1217,7 +1225,7 @@ export function ManuscriptsWorkspace({
                         {item.revision &&
                         detail.files.find((file) => file.path === item.path)
                           ?.revision !== item.revision
-                          ? " · 原文已更新，需核对位置"
+                          ? t("manuscripts.workspace.panels.commentStale")
                           : ""}
                       </small>
                       <p>{item.body}</p>
@@ -1226,7 +1234,7 @@ export function ManuscriptsWorkspace({
                         size="xs"
                         disabled={!!busy}
                         onClick={() =>
-                          void run("更新批注", async () => {
+                          void run(t("manuscripts.workspace.busy.updatingComment"), async () => {
                             await gatewayRequest(
                               "PATCH",
                               `${projectPath(detail.project.id)}/comments/${encodeURIComponent(item.id)}`,
@@ -1236,7 +1244,7 @@ export function ManuscriptsWorkspace({
                           })
                         }
                       >
-                        {item.resolved ? "重新打开" : "标为已解决"}
+                        {item.resolved ? t("manuscripts.workspace.panels.reopen") : t("manuscripts.workspace.panels.resolve")}
                       </Button>
                     </article>
                   ))}
@@ -1245,19 +1253,19 @@ export function ManuscriptsWorkspace({
               {panel === "history" && (
                 <>
                   <p className="manuscript-panel-intro">
-                    {path} 的保存记录。恢复会创建一个新版本，保留完整历史。
+                    {t("manuscripts.workspace.panels.historyIntro", { path })}
                   </p>
                   {history.map((revision) => (
                     <article className="manuscript-revision" key={revision.id}>
                       <div>
-                        <strong>版本 {revision.revision}</strong>
+                        <strong>{t("manuscripts.workspace.panels.revisionLabel", { revision: revision.revision })}</strong>
                         <small>
                           {revision.actor} · {revision.created_at}
                         </small>
                       </div>
                       <p>{revision.message}</p>
                       <details>
-                        <summary>查看源文件</summary>
+                        <summary>{t("manuscripts.workspace.panels.viewSource")}</summary>
                         <pre>{revision.content}</pre>
                       </details>
                       <Button
@@ -1269,7 +1277,7 @@ export function ManuscriptsWorkspace({
                           revision.revision === file?.revision
                         }
                         onClick={() =>
-                          void run("恢复版本", async () => {
+                          void run(t("manuscripts.workspace.busy.restoring"), async () => {
                             await gatewayRequest(
                               "POST",
                               `${projectPath(detail.project.id)}/restore`,
@@ -1283,7 +1291,7 @@ export function ManuscriptsWorkspace({
                           })
                         }
                       >
-                        恢复此版本
+                        {t("manuscripts.workspace.panels.restore")}
                       </Button>
                     </article>
                   ))}
@@ -1292,14 +1300,13 @@ export function ManuscriptsWorkspace({
               {panel === "library" && (
                 <>
                   <Input
-                    aria-label="Search citation library"
-                    placeholder="搜索文献库…"
+                    aria-label={t("manuscripts.workspace.panels.librarySearchAria")}
+                    placeholder={t("manuscripts.workspace.panels.librarySearchPlaceholder")}
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                   />
                   <p className="manuscript-panel-intro">
-                    插入引用会同步项目的 references.bib。使用 \bibliography
-                    {"{references}"} 输出参考文献。
+                    {t("manuscripts.workspace.panels.libraryIntro")}
                   </p>
                   {articles.map((article) => (
                     <button
@@ -1307,7 +1314,7 @@ export function ManuscriptsWorkspace({
                       key={article.id}
                       disabled={!!busy || dirtyPath("references.bib")}
                       onClick={() =>
-                        void run("同步引用", async () => {
+                        void run(t("manuscripts.workspace.busy.syncingCitation"), async () => {
                           const ids = [
                             ...new Set([
                               ...detail.project.article_ids,
@@ -1330,7 +1337,7 @@ export function ManuscriptsWorkspace({
                           );
                           await refresh(detail.project.id);
                           const key = result.keys[article.id];
-                          if (!key) throw new Error("未返回此文献的引用键");
+                          if (!key) throw new Error(t("manuscripts.workspace.panels.citationKeyMissing"));
                           if (path === "references.bib") {
                             setPath(detail.project.main_file);
                             setTimeout(
@@ -1358,7 +1365,7 @@ export function ManuscriptsWorkspace({
                       </small>
                       <span>
                         <Plus size={12} />
-                        插入引用
+                        {t("manuscripts.workspace.panels.insertCitation")}
                       </span>
                     </button>
                   ))}

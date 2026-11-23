@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import i18n from "@/i18n";
 export type CanvasRecord = { id: string; title: string; scene: string | null; updatedAt: number };
 let database: Promise<IDBDatabase> | undefined;
 function db() {
@@ -13,7 +14,7 @@ export async function readCanvas(id: string): Promise<CanvasRecord> {
   const connection = await db();
   return new Promise((resolve, reject) => {
     const request = connection.transaction("canvases").objectStore("canvases").get(id);
-    request.onsuccess = () => request.result ? resolve(request.result) : reject(new Error("画布不存在"));
+    request.onsuccess = () => request.result ? resolve(request.result) : reject(new Error(i18n.t("canvas:legacy.notFound")));
     request.onerror = () => reject(request.error);
   });
 }
@@ -36,12 +37,12 @@ export async function saveCanvas(record: CanvasRecord) {
     transaction.objectStore("canvases").put(record);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error ?? new Error("保存已中止"));
+    transaction.onabort = () => reject(transaction.error ?? new Error(i18n.t("canvas:legacy.saveAborted")));
   });
   await refreshCanvases();
 }
 export async function createCanvas() {
-  const record: CanvasRecord = { id: crypto.randomUUID(), title: "未命名画布", scene: null, updatedAt: Date.now() };
+  const record: CanvasRecord = { id: crypto.randomUUID(), title: i18n.t("canvas:store.untitled"), scene: null, updatedAt: Date.now() };
   await saveCanvas(record);
   return record;
 }
@@ -52,7 +53,7 @@ export async function deleteCanvas(id: string) {
     transaction.objectStore("canvases").delete(id);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => reject(transaction.error);
-    transaction.onabort = () => reject(transaction.error ?? new Error("删除已中止"));
+    transaction.onabort = () => reject(transaction.error ?? new Error(i18n.t("canvas:legacy.deleteAborted")));
   });
   summaries = summaries.filter(record => record.id !== id);
   listeners.forEach(listener => listener());

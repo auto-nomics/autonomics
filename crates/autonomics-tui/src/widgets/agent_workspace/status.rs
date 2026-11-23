@@ -1,6 +1,9 @@
 //! Status glyph and name-display helpers shared by agent-listing surfaces
 //! (status bar, docked agents panel).
 
+use std::borrow::Cow;
+
+use i18n::t;
 use ratatui::style::Color;
 
 use crate::state::AgentStatus;
@@ -28,18 +31,18 @@ pub(crate) fn status_icon(status: &AgentStatus) -> &'static str {
 }
 
 /// Lowercase lifecycle label rendered next to the glyph.
-pub(crate) fn status_label(status: &AgentStatus) -> &'static str {
+pub(crate) fn status_label(status: &AgentStatus) -> Cow<'static, str> {
     match status {
-        AgentStatus::Idle => "idle",
-        AgentStatus::Aborted => "aborted",
-        AgentStatus::Requesting => "requesting",
-        AgentStatus::Streaming => "streaming",
-        AgentStatus::ToolRunning => "tool running",
-        AgentStatus::Retrying => "retrying",
-        AgentStatus::Error => "error",
-        AgentStatus::Cancelled => "cancelled",
-        AgentStatus::Waiting => "waiting",
-        AgentStatus::Compacting => "compacting",
+        AgentStatus::Idle => t!("tui.status.idle"),
+        AgentStatus::Aborted => t!("tui.status.aborted"),
+        AgentStatus::Requesting => t!("tui.status.requesting"),
+        AgentStatus::Streaming => t!("tui.status.streaming"),
+        AgentStatus::ToolRunning => t!("tui.status.toolRunning"),
+        AgentStatus::Retrying => t!("tui.status.retrying"),
+        AgentStatus::Error => t!("tui.status.error"),
+        AgentStatus::Cancelled => t!("tui.status.cancelled"),
+        AgentStatus::Waiting => t!("tui.status.waiting"),
+        AgentStatus::Compacting => t!("tui.status.compacting"),
     }
 }
 

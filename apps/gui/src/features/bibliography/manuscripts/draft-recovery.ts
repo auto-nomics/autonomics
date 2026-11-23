@@ -1,3 +1,4 @@
+import i18next from "i18next";
 import type { SourceFile } from "./types";
 export type Draft = { content: string; base: SourceFile };
 export const getDraft = (
@@ -16,7 +17,7 @@ export function readDrafts(key: string): Record<string, Draft> {
   if (!raw) return Object.create(null);
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    throw new Error("本地草稿格式无效，未覆盖服务器文件。");
+    throw new Error(i18next.t("bibliography:manuscripts.drafts.invalidFormat"));
   const result: Record<string, Draft> = Object.create(null);
   for (const [path, entry] of Object.entries(parsed)) {
     const draft = entry as Partial<Draft>;
@@ -29,7 +30,7 @@ export function readDrafts(key: string): Record<string, Draft> {
       !Number.isSafeInteger(draft.base.revision) ||
       draft.base.revision < 0
     )
-      throw new Error("本地草稿格式无效，未覆盖服务器文件。");
+      throw new Error(i18next.t("bibliography:manuscripts.drafts.invalidFormat"));
     if (draft.content !== draft.base.content) result[path] = draft as Draft;
   }
   return result;

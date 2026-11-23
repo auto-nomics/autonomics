@@ -1,6 +1,7 @@
 //! Bridge between gateway events and TUI application state.
 
 use super::history::messages_to_chatlines;
+use i18n::t;
 use super::*;
 
 fn registered_agent_id(info: &gateway::proto::HostEventView) -> Option<uuid::Uuid> {
@@ -287,8 +288,8 @@ impl App {
                 Ok(count) => {
                     self.spawn_catalog_reload();
                     self.state.toasts.success(
-                        "Catalogue refreshed",
-                        Some(format!("{provider_name}: {count} models")),
+                        t!("tui.events.catalogueRefreshed").to_string(),
+                        Some(t!("tui.events.modelCount", provider = provider_name, count = count).to_string()),
                     );
                 }
                 Err(e) => {
@@ -320,8 +321,8 @@ impl App {
                         tracing::warn!(error = %e, "chatgpt login url clipboard copy failed");
 
                         self.state.toasts.error(
-                            "Copy failed",
-                            Some(format!("{e}; the authorize URL is in the log")),
+                            t!("tui.events.copyFailed").to_string(),
+                            Some(t!("tui.events.copyFailedDetail", error = e).to_string()),
                         );
 
                         tracing::info!(url = %url, "chatgpt login authorize url");
@@ -412,7 +413,7 @@ impl App {
                                                 let id = domain["id"].as_str()?;
                                                 let prefix = domain["vfs_prefix"].as_str()?;
                                                 let root = domain["remote_root"].as_str()?;
-                                                Some(format!("{id} → {prefix} ({root})"))
+                                                Some(t!("tui.events.mountRow", id = id, prefix = prefix, root = root).to_string())
                                             })
                                             .collect()
                                     })
@@ -443,7 +444,7 @@ impl App {
                         self.dirty = true;
                     }
                     Err(error) => {
-                        panel.status = Some(format!("targets: {error}"));
+                        panel.status = Some(t!("tui.events.targetsError", error = error).to_string());
                         self.dirty = true;
                     }
                 }
@@ -479,20 +480,18 @@ impl App {
                     Err(error) => {
                         self.state
                             .hpc_panel
-                            .push_repair_event(format!("[error] {error}"));
+                            .push_repair_event(t!("tui.events.repairError", error = error).to_string());
                         self.state.hpc_panel.dashboard_pending_id = None;
                         let operation = if enrolling {
-                            "Enrollment"
+                            t!("tui.events.enrollment").to_string()
                         } else {
-                            "Connection recovery"
+                            t!("tui.events.connectionRecovery").to_string()
                         };
                         self.state.hpc_panel.status = Some(
                             if error.contains("connection closed before a result") {
-                                format!(
-                                    "{operation} status unknown. Reload the snapshot before retrying."
-                                )
+                                t!("tui.events.operationUnknown", operation = operation).to_string()
                             } else {
-                                format!("{operation} failed: {error}")
+                                t!("tui.events.operationFailed", operation = operation, error = error).to_string()
                             },
                         );
                     }
@@ -548,7 +547,7 @@ impl App {
             crate::app_event::AppEvent::ModelSwapFailed { agent, error } => {
                 self.state
                     .toasts
-                    .error("Model swap failed", Some(format!("[{agent}] {error}")));
+                    .error(t!("tui.events.modelSwapFailed").to_string(), Some(format!("[{agent}] {error}")));
             }
             crate::app_event::AppEvent::ProviderSaved {
                 provider_name,
@@ -588,7 +587,7 @@ impl App {
                     tracing::info!("deleted custom model: {provider_name}:{model_name}");
                     self.spawn_catalog_reload();
                     self.state.toasts.success(
-                        "Custom model deleted",
+                        t!("tui.events.customModelDeleted").to_string(),
                         Some(format!("{provider_name}:{model_name}")),
                     );
                 }
@@ -622,8 +621,8 @@ impl App {
                         Ok(view) => {
                             self.state.agent_config.saved(view);
                             self.state.toasts.success(
-                                "Agent config saved",
-                                Some(format!("{agent}: runtime settings updated")),
+                                t!("tui.events.agentConfigSaved").to_string(),
+                                Some(t!("tui.events.runtimeSettingsUpdated", agent = agent).to_string()),
                             );
                             // The reasoning-effort override changes what
                             // the status bar shows — refetch the agent's

@@ -1,4 +1,5 @@
 import { annotationPath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget, type ReaderWorkspaceOptions } from "./reader-target";
+import { i18next } from "./i18n";
 import { fetchBibFulltextRaw, gatewayRequest } from "@/gateway";
 import { escapeHtml } from "@/lib/markdown";
 import { defaultAnnotationColor } from "@/lib/annotation-colors";
@@ -65,12 +66,12 @@ const READER_RAIL_ICONS: Record<ReaderPane, string> = {
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`,
 };
 
-const READER_RAIL_LABELS: Record<ReaderPane, string> = {
-  outline: "Outline",
-  annotations: "Notes",
-  info: "Info",
-  tags: "Tags",
-  search: "Search",
+const READER_RAIL_LABELS: Record<ReaderPane, () => string> = {
+  outline: () => i18next.t("reader:rail.outline"),
+  annotations: () => i18next.t("reader:rail.notes"),
+  info: () => i18next.t("reader:rail.info"),
+  tags: () => i18next.t("reader:rail.tags"),
+  search: () => i18next.t("reader:rail.search"),
 };
 
 const THEME_DARK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
@@ -202,100 +203,100 @@ class ZoteroStyleTxtReader {
       <aside class="reader-sidebar-shell">
         <div class="reader-sidebar">
           <div class="reader-sidebar-header">
-            <nav class="reader-rail" aria-label="Text sidebar">
+            <nav class="reader-rail" aria-label="${i18next.t("reader:toolbar.textSidebarAria")}">
               ${(["outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
                 <button
                   type="button"
                   class="reader-rail-button${pane === this.activePane ? " active" : ""}"
                   data-pane="${pane}"
-                  title="${READER_RAIL_LABELS[pane]}"
-                  aria-label="${READER_RAIL_LABELS[pane]}"
+                  title="${READER_RAIL_LABELS[pane]()}"
+                  aria-label="${READER_RAIL_LABELS[pane]()}"
                 >
                   ${READER_RAIL_ICONS[pane]}
                 </button>
               `).join("")}
             </nav>
-            <button type="button" data-action="close-sidebar" title="Close sidebar">✕</button>
+            <button type="button" data-action="close-sidebar" title="${i18next.t("reader:toolbar.closeSidebar")}">✕</button>
           </div>
           <div class="reader-sidebar-body">
             <div class="reader-sidebar-pane" data-pane="outline"></div>
             <div class="reader-sidebar-pane" data-pane="annotations" hidden></div>
             <div class="reader-sidebar-pane" data-pane="info" hidden>
               <div class="reader-metadata">
-                ${this.metadataRow("Item Type", "Text Document")}
-                ${this.metadataRow("Title", this.bibArticle?.title || this.title)}
-                ${this.metadataRow("Authors", this.authorsText())}
-                ${this.metadataRow("Publication", this.bibArticle?.journal)}
-                ${this.metadataRow("Date", this.bibArticle?.year)}
+                ${this.metadataRow(i18next.t("reader:metadata.itemType"), i18next.t("reader:metadata.textDocument"))}
+                ${this.metadataRow(i18next.t("reader:metadata.title"), this.bibArticle?.title || this.title)}
+                ${this.metadataRow(i18next.t("reader:metadata.authors"), this.authorsText())}
+                ${this.metadataRow(i18next.t("reader:metadata.publication"), this.bibArticle?.journal)}
+                ${this.metadataRow(i18next.t("reader:metadata.date"), this.bibArticle?.year)}
                 ${this.metadataRow("DOI", this.identifier("doi"))}
                 ${this.metadataRow("PMID", this.identifier("pmid"))}
-                ${this.metadataRow("Source", this.bibArticle?.source)}
-                ${this.metadataRow("Record", this.bibArticle?.id)}
+                ${this.metadataRow(i18next.t("reader:metadata.source"), this.bibArticle?.source)}
+                ${this.metadataRow(i18next.t("reader:metadata.record"), this.bibArticle?.id)}
               </div>
             </div>
             <div class="reader-sidebar-pane" data-pane="tags" hidden>
               <div class="reader-tags" data-output="sidebar-tags"></div>
             </div>
             <div class="reader-sidebar-pane" data-pane="search" hidden>
-              <input class="reader-search-input" data-input="search" placeholder="Search text" />
+              <input class="reader-search-input" data-input="search" placeholder="${i18next.t("reader:search.textPlaceholder")}" />
               <div data-output="search-results"></div>
             </div>
           </div>
         </div>
-        <div class="reader-sidebar-resizer" data-action="resize-sidebar" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+        <div class="reader-sidebar-resizer" data-action="resize-sidebar" role="separator" aria-orientation="vertical" aria-label="${i18next.t("reader:toolbar.resizeSidebar")}"></div>
       </aside>
       <main class="reader-main">
-        <header class="reader-toolbar" aria-label="Text controls">
+        <header class="reader-toolbar" aria-label="${i18next.t("reader:toolbar.textControlsAria")}">
           <div class="reader-toolbar-start">
-            ${toolbarButton("sidebar", "Toggle sidebar", "sidebar")}
-            <div class="reader-tool-group reader-pagination" role="group" aria-label="Section navigation">
-              ${toolbarButton("section-previous", "Previous section", "previous")}
+            ${toolbarButton("sidebar", i18next.t("reader:toolbar.toggleSidebar"), "sidebar")}
+            <div class="reader-tool-group reader-pagination" role="group" aria-label="${i18next.t("reader:toolbar.sectionNavAria")}">
+              ${toolbarButton("section-previous", i18next.t("reader:toolbar.previousSection"), "previous")}
               <span class="reader-zoom-value" data-output="progress" aria-live="polite">0%</span>
-              ${toolbarButton("section-next", "Next section", "next")}
+              ${toolbarButton("section-next", i18next.t("reader:toolbar.nextSection"), "next")}
             </div>
           </div>
-          <div class="reader-tool-group reader-zoom-tools" role="group" aria-label="Text size and width">
-            ${toolbarButton("font-out", "Smaller text", "minus")}
+          <div class="reader-tool-group reader-zoom-tools" role="group" aria-label="${i18next.t("reader:toolbar.textSizeAria")}">
+            ${toolbarButton("font-out", i18next.t("reader:toolbar.smallerText"), "minus")}
             <span class="reader-zoom-value" data-output="font-size" aria-live="polite">${this.appearance.fontSize} px</span>
-            ${toolbarButton("font-in", "Larger text", "plus")}
+            ${toolbarButton("font-in", i18next.t("reader:toolbar.largerText"), "plus")}
             <span class="reader-tool-divider" aria-hidden="true"></span>
-            ${toolbarButton("width-narrow", "Narrow column", "width", "Narrow")}
-            ${toolbarButton("width-normal", "Normal column", "width", "Normal", 'aria-pressed="true"')}
-            ${toolbarButton("width-full", "Full width", "page", "Full")}
+            ${toolbarButton("width-narrow", i18next.t("reader:toolbar.narrowColumn"), "width", i18next.t("reader:toolbar.narrow"))}
+            ${toolbarButton("width-normal", i18next.t("reader:toolbar.normalColumn"), "width", i18next.t("reader:toolbar.normal"), 'aria-pressed="true"')}
+            ${toolbarButton("width-full", i18next.t("reader:toolbar.fullWidth"), "page", i18next.t("reader:toolbar.full"))}
           </div>
-          <div class="reader-tool-group reader-tool-center" role="group" aria-label="Annotation tools">
-            ${toolbarButton("tool-highlight", "Highlight selection", "highlight", "", 'class="reader-highlight-tool"')}
-            ${toolbarButton("tool-note", "Add note", "note")}
-            ${toolbarButton("copy-selection-toolbar", "Copy selection", "copy")}
-            ${this.workspace.onReference ? toolbarButton("add-context", "加入当前会话", "note") : ""}
-            ${toolbarButton("tool-clear", "Clear selection", "clear")}
+          <div class="reader-tool-group reader-tool-center" role="group" aria-label="${i18next.t("reader:toolbar.annotationToolsAria")}">
+            ${toolbarButton("tool-highlight", i18next.t("reader:toolbar.highlightSelection"), "highlight", "", 'class="reader-highlight-tool"')}
+            ${toolbarButton("tool-note", i18next.t("reader:toolbar.addNote"), "note")}
+            ${toolbarButton("copy-selection-toolbar", i18next.t("reader:toolbar.copySelection"), "copy")}
+            ${this.workspace.onReference ? toolbarButton("add-context", i18next.t("reader:context.add"), "note") : ""}
+            ${toolbarButton("tool-clear", i18next.t("reader:toolbar.clearSelection"), "clear")}
           </div>
-          <div class="reader-tool-right" role="group" aria-label="Reading options">
-            ${toolbarButton("text-options", "Text options", "appearance")}
-            ${toolbarButton("open-search", "Search text", "search")}
-            <button type="button" data-action="toggle-theme" title="Toggle dark mode" aria-label="Toggle dark mode">
+          <div class="reader-tool-right" role="group" aria-label="${i18next.t("reader:toolbar.readingOptionsAria")}">
+            ${toolbarButton("text-options", i18next.t("reader:toolbar.textOptions"), "appearance")}
+            ${toolbarButton("open-search", i18next.t("reader:toolbar.searchText"), "search")}
+            <button type="button" data-action="toggle-theme" title="${i18next.t("reader:toolbar.toggleDark")}" aria-label="${i18next.t("reader:toolbar.toggleDark")}">
               ${this.appearance.theme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON}
             </button>
             <span class="reader-tool-divider" aria-hidden="true"></span>
-            ${toolbarButton("close", "Close reader", "close")}
+            ${toolbarButton("close", i18next.t("reader:toolbar.closeReader"), "close")}
           </div>
         </header>
-        <div class="reader-reflow" data-output="document-container" tabindex="0" role="region" aria-label="Text document">
+        <div class="reader-reflow" data-output="document-container" tabindex="0" role="region" aria-label="${i18next.t("reader:reading.textDocumentAria")}">
           <article class="reader-reflow-article reader-txt-document"></article>
         </div>
         <div class="reader-status">
-          <span data-output="status">Opening text…</span>
+          <span data-output="status">${i18next.t("reader:status.openingText")}</span>
         </div>
       </main>
       <div class="reader-selection-popup" data-output="selection-popup" hidden>
-        <button type="button" data-color="yellow">Highlight</button>
-        <button type="button" data-color="green">Green</button>
-        <button type="button" data-color="red">Red</button>
-        <button type="button" data-action="add-note">Note</button>
-        <button type="button" data-action="copy-selection">Copy</button>
-          ${this.workspace.onReference ? '<button type="button" data-action="add-selection-context">加入当前会话</button>' : ""}
+        <button type="button" data-color="yellow">${i18next.t("reader:selection.highlight")}</button>
+        <button type="button" data-color="green">${i18next.t("reader:selection.green")}</button>
+        <button type="button" data-color="red">${i18next.t("reader:selection.red")}</button>
+        <button type="button" data-action="add-note">${i18next.t("reader:selection.note")}</button>
+        <button type="button" data-action="copy-selection">${i18next.t("reader:selection.copy")}</button>
+          ${this.workspace.onReference ? `<button type="button" data-action="add-selection-context">${i18next.t("reader:context.add")}</button>` : ""}
       </div>
-      <div class="reader-appearance-popup" role="dialog" aria-label="Text appearance" hidden></div>
+      <div class="reader-appearance-popup" role="dialog" aria-label="${i18next.t("reader:reading.textAppearanceAria")}" hidden></div>
     `;
     if (this.workspace.host) this.root.dataset.hosted = "true";
     (this.workspace.host ?? document.body).append(this.root);
@@ -386,7 +387,7 @@ class ZoteroStyleTxtReader {
     if (/pdf/i.test(fulltext.contentType)) {
       throw new Error("The stored full text is a PDF; open it with the PDF reader");
     }
-    this.setStatus("Decoding text…");
+    this.setStatus(i18next.t("reader:status.decoding"));
     const decoded = new TextDecoder("utf-8").decode(fulltext.bytes);
     this.raw = decoded.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
     if (!this.raw.trim()) throw new Error("This file does not contain any text");
@@ -409,7 +410,7 @@ class ZoteroStyleTxtReader {
     if (!this.initialSearch) this.restoreReadingLocation();
     this.updateProgress();
     this.setStatus(
-      `${this.raw.length.toLocaleString()} characters · ${this.outline.length.toLocaleString()} sections`,
+      i18next.t("reader:status.charactersSections", { characters: this.raw.length.toLocaleString(), sections: this.outline.length.toLocaleString() }),
     );
   }
 
@@ -476,18 +477,18 @@ class ZoteroStyleTxtReader {
   private renderAppearancePopup() {
     const value = this.appearance;
     this.appearancePopup.innerHTML = `
-      <div class="reader-appearance-heading"><strong>Text appearance</strong><button type="button" data-appearance="close" aria-label="Close appearance">✕</button></div>
-      <fieldset class="reader-reflow-settings"><legend>Typography</legend>
-        <label>Font<select data-appearance="fontFamily"><option value="serif" ${value.fontFamily === "serif" ? "selected" : ""}>Serif</option><option value="sans" ${value.fontFamily === "sans" ? "selected" : ""}>Sans serif</option></select></label>
+      <div class="reader-appearance-heading"><strong>${i18next.t("reader:appearance.textHeading")}</strong><button type="button" data-appearance="close" aria-label="${i18next.t("reader:appearance.closeAria")}">✕</button></div>
+      <fieldset class="reader-reflow-settings"><legend>${i18next.t("reader:appearance.typography")}</legend>
+        <label>${i18next.t("reader:appearance.font")}<select data-appearance="fontFamily"><option value="serif" ${value.fontFamily === "serif" ? "selected" : ""}>${i18next.t("reader:appearance.serif")}</option><option value="sans" ${value.fontFamily === "sans" ? "selected" : ""}>${i18next.t("reader:appearance.sans")}</option></select></label>
         ${([
-          ["fontSize", "Font size", 12, 36, 1, value.fontSize],
-          ["lineHeight", "Line height", .8, 2.4, .1, value.lineHeight],
+          ["fontSize", i18next.t("reader:appearance.fontSize"), 12, 36, 1, value.fontSize],
+          ["lineHeight", i18next.t("reader:appearance.lineHeight"), .8, 2.4, .1, value.lineHeight],
         ] as const).map(([name, label, min, max, step, current]) => `<label>${label}<input type="range" aria-label="${label}" data-appearance="${name}" min="${min}" max="${max}" step="${step}" value="${current}" /><output data-appearance-output="${name}">${current}</output></label>`).join("")}
-        <label>Page width<select data-appearance="pageWidth">${(["narrow", "normal", "full"] as const).map(width => `<option value="${width}" ${value.pageWidth === width ? "selected" : ""}>${width === "narrow" ? "Narrow" : width === "normal" ? "Normal" : "Full"}</option>`).join("")}</select></label>
-        <div class="reader-reading-themes" role="group" aria-label="Reading theme">${(["light", "sepia", "dark"] as const).map(theme => `<button type="button" data-appearance-theme="${theme}" aria-pressed="${value.theme === theme}">${theme === "light" ? "Light" : theme === "sepia" ? "Sepia" : "Dark"}</button>`).join("")}</div>
-        <button type="button" data-appearance="reset">Reset appearance</button>
+        <label>${i18next.t("reader:appearance.pageWidth")}<select data-appearance="pageWidth">${(["narrow", "normal", "full"] as const).map(width => `<option value="${width}" ${value.pageWidth === width ? "selected" : ""}>${width === "narrow" ? i18next.t("reader:appearance.narrow") : width === "normal" ? i18next.t("reader:appearance.normal") : i18next.t("reader:appearance.full")}</option>`).join("")}</select></label>
+        <div class="reader-reading-themes" role="group" aria-label="${i18next.t("reader:appearance.themeGroupAria")}">${(["light", "sepia", "dark"] as const).map(theme => `<button type="button" data-appearance-theme="${theme}" aria-pressed="${value.theme === theme}">${theme === "light" ? i18next.t("reader:appearance.light") : theme === "sepia" ? i18next.t("reader:appearance.sepia") : i18next.t("reader:appearance.dark")}</button>`).join("")}</div>
+        <button type="button" data-appearance="reset">${i18next.t("reader:appearance.reset")}</button>
       </fieldset>
-      <p>Line breaks and spacing of the original text file are preserved.</p>`;
+      <p>${i18next.t("reader:appearance.txtHint")}</p>`;
     this.appearancePopup.querySelector('[data-appearance="close"]')?.addEventListener("click", () => this.closeAppearancePopup());
     this.appearancePopup.querySelector('[data-appearance="reset"]')?.addEventListener("click", () => {
       this.changeAppearance({ ...DEFAULT_TXT_APPEARANCE });
@@ -557,14 +558,14 @@ class ZoteroStyleTxtReader {
     });
     action("tool-highlight", () => {
       if (this.anchor) void this.addHighlight("yellow");
-      else this.setStatus("Select text first");
+      else this.setStatus(i18next.t("reader:status.selectTextFirst"));
     });
     action("tool-note", () => void this.addNote());
     action("copy-selection-toolbar", () => void this.copySelection());
     const addReference = () => {
-      if (!this.anchor?.text) { toast.info("请先选择要引用的文本"); return; }
+      if (!this.anchor?.text) { toast.info(i18next.t("reader:toasts.selectTextToReference")); return; }
       this.workspace.onReference?.({ text: this.anchor.text, start: this.anchor.start, end: this.anchor.end });
-      toast.success("已加入当前会话引用");
+      toast.success(i18next.t("reader:toasts.referenceAdded"));
     };
     action("add-context", addReference);
     action("add-selection-context", addReference);
@@ -756,16 +757,16 @@ class ZoteroStyleTxtReader {
   private async copySelection(closePopup = false) {
     const text = this.anchor?.text;
     if (!text) {
-      toast.info("Select text to copy first");
+      toast.info(i18next.t("reader:toasts.selectFirstToCopy"));
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
       if (this.destroyed) return;
       if (closePopup) this.hideSelectionPopup();
-      toast.success("Copied to clipboard");
+      toast.success(i18next.t("reader:toasts.copied"));
     } catch {
-      if (!this.destroyed) toast.error("Unable to copy. Please try again.");
+      if (!this.destroyed) toast.error(i18next.t("reader:toasts.copyFailed"));
     }
   }
 
@@ -790,7 +791,7 @@ class ZoteroStyleTxtReader {
       this.renderAnnotations();
       this.renderAnnotationList();
     } catch (error) {
-      this.setStatus(`Annotations unavailable: ${String(error)}`);
+      this.setStatus(i18next.t("reader:status.annotationsUnavailable", { error: String(error) }));
     }
   }
 
@@ -824,7 +825,7 @@ class ZoteroStyleTxtReader {
         const mark = document.createElement("div");
         mark.className = isNote ? "reader-reflow-highlight reader-note-marker" : "reader-reflow-highlight";
         mark.dataset.annotationId = annotation.id;
-        if (isNote) { mark.textContent = "✎"; mark.title = "Note"; }
+        if (isNote) { mark.textContent = "✎"; mark.title = i18next.t("reader:inspector.note"); }
         Object.assign(mark.style, {
           left: `${rect.left - origin.left + this.container.scrollLeft}px`,
           top: `${rect.top - origin.top + this.container.scrollTop}px`,
@@ -859,7 +860,7 @@ class ZoteroStyleTxtReader {
   private renderAnnotationList() {
     this.annotationPane.replaceChildren();
     if (!this.annotations.length) {
-      this.annotationPane.innerHTML = `<div class="reader-empty">No annotations</div>`;
+      this.annotationPane.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noAnnotations")}</div>`;
       return;
     }
     for (const annotation of [...this.annotations].reverse()) {
@@ -869,7 +870,7 @@ class ZoteroStyleTxtReader {
       button.dataset.annotationId = annotation.id;
       button.setAttribute("aria-pressed", "false");
       button.innerHTML = `
-        <strong>Text</strong>
+        <strong>${escapeHtml(i18next.t("reader:list.text"))}</strong>
         <small>${escapeHtml(annotation.content.slice(0, 180))}</small>
         ${annotation.comment ? `<small class="reader-annotation-list-comment">${escapeHtml(annotation.comment)}</small>` : ""}
         ${annotation.tags?.length ? `<small>${annotation.tags.map((tag: string) => escapeHtml(tag)).join(" · ")}</small>` : ""}`;
@@ -917,7 +918,7 @@ class ZoteroStyleTxtReader {
         this.renderSidebarTags();
         return true;
       } catch (error) {
-        if (!this.destroyed) toast.error(`Failed to save note: ${String(error)}`);
+        if (!this.destroyed) toast.error(i18next.t("reader:toasts.noteSaveFailed", { error: String(error) }));
         return false;
       }
     });
@@ -935,7 +936,7 @@ class ZoteroStyleTxtReader {
   }
 
   private async deleteAnnotation(id: string) {
-    if (!await this.alertDialog.open({ title: "Delete this annotation?", description: "The annotation will be permanently removed from the document.", actionLabel: "Delete", destructive: true })) return;
+    if (!await this.alertDialog.open({ title: i18next.t("reader:dialog.deleteTitle"), description: i18next.t("reader:dialog.deleteDescription"), actionLabel: i18next.t("reader:dialog.delete"), destructive: true })) return;
     await gatewayRequest("DELETE", `/bib/annotations/${encodeURIComponent(id)}`);
     await this.loadAnnotations();
     this.renderSidebarTags();
@@ -1010,7 +1011,7 @@ class ZoteroStyleTxtReader {
       this.outlinePane.append(button);
     }
     if (!this.outline.length) {
-      this.outlinePane.innerHTML = `<div class="reader-empty">No outline detected</div>`;
+      this.outlinePane.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noOutlineDetected")}</div>`;
     }
   }
 
@@ -1030,7 +1031,7 @@ class ZoteroStyleTxtReader {
 
   private gotoSection(delta: number) {
     if (!this.outline.length) {
-      this.setStatus("No section headings were detected");
+      this.setStatus(i18next.t("reader:status.noSectionHeadings"));
       return;
     }
     const positions = this.outlinePositions();
@@ -1059,8 +1060,8 @@ class ZoteroStyleTxtReader {
     this.searchResults = results;
     this.renderSearchResults();
     this.setStatus(term
-      ? `${results.length.toLocaleString()} ${results.length === 1 ? "match" : "matches"}`
-      : "Type to search");
+      ? i18next.t("reader:status.matches", { count: results.length })
+      : i18next.t("reader:status.typeToSearch"));
   }
 
   private snippet(start: number, end: number): string {
@@ -1074,13 +1075,13 @@ class ZoteroStyleTxtReader {
     const output = this.searchPane.querySelector("[data-output=search-results]")!;
     output.replaceChildren();
     if (!this.searchResults.length) {
-      output.innerHTML = `<div class="reader-empty">No matches</div>`;
+      output.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noMatches")}</div>`;
       return;
     }
     this.searchResults.forEach((result, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.innerHTML = `<strong>Match ${(index + 1).toLocaleString()}</strong><small>${escapeHtml(this.snippet(result.start, result.end))}</small>`;
+      button.innerHTML = `<strong>${escapeHtml(i18next.t("reader:list.matchNo", { n: (index + 1).toLocaleString() }))}</strong><small>${escapeHtml(this.snippet(result.start, result.end))}</small>`;
       button.addEventListener("click", () => this.flashSpan(result.start, result.end));
       output.append(button);
     });
@@ -1110,7 +1111,7 @@ class ZoteroStyleTxtReader {
       const keywords = this.bibArticle?.keywords ?? [];
       tags.replaceChildren();
       if (!keywords.length) {
-        tags.innerHTML = `<div class="reader-empty">No tags</div>`;
+        tags.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noTags")}</div>`;
       } else {
         for (const keyword of keywords) {
           const badge = document.createElement("span");

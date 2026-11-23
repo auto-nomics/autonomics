@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
   ArrowDown,
@@ -67,6 +68,7 @@ const LOAD_CHUNK = 80;
 const MAX_WINDOW = 500;
 
 function CompactionPanel({ compaction }: { compaction: CompactionView }) {
+  const { t } = useTranslation("agent");
   const [open, setOpen] = useState(compaction.running || !!compaction.error);
 
   useLayoutEffect(() => {
@@ -78,16 +80,16 @@ function CompactionPanel({ compaction }: { compaction: CompactionView }) {
   if (!compaction.running && !compaction.error) return null;
 
   return (
-    <section aria-label="上下文压缩" className="rounded-md border bg-muted/30 p-3 text-sm" aria-live="polite">
+    <section aria-label={t("compaction.ariaLabel")} className="rounded-md border bg-muted/30 p-3 text-sm" aria-live="polite">
       <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
         <summary className="cursor-pointer font-medium">
-          {compaction.running ? (compaction.phase === "Rebuilding" ? "正在重建上下文" : "正在压缩上下文") : compaction.error ? "压缩失败" : compaction.stats ? "压缩完成" : "无需压缩"}
+          {compaction.running ? (compaction.phase === "Rebuilding" ? t("compaction.rebuilding") : t("compaction.compressing")) : compaction.error ? t("compaction.failed") : compaction.stats ? t("compaction.done") : t("compaction.noop")}
         </summary>
-        {compaction.plan && <p className="mt-1 text-xs text-muted-foreground">总结 {compaction.plan.head_messages} 条消息（约 {compaction.plan.head_tokens} tokens），保留最近 {compaction.plan.tail_messages} 条</p>}
+        {compaction.plan && <p className="mt-1 text-xs text-muted-foreground">{t("compaction.plan", { head: compaction.plan.head_messages, headTokens: compaction.plan.head_tokens, tail: compaction.plan.tail_messages })}</p>}
         {compaction.summary && <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-sans text-xs">{compaction.summary}</pre>}
         {compaction.error && <p className="mt-2 text-destructive">{compaction.error}</p>}
       </details>
-      {compaction.stats && <p className="mt-2 text-xs text-muted-foreground">{compaction.stats.messages_before} → {compaction.stats.messages_after} 条消息 · 释放约 {compaction.stats.freed_tokens} tokens · { (compaction.stats.duration_ms / 1000).toFixed(1) } 秒</p>}
+      {compaction.stats && <p className="mt-2 text-xs text-muted-foreground">{t("compaction.stats", { before: compaction.stats.messages_before, after: compaction.stats.messages_after, freed: compaction.stats.freed_tokens, seconds: (compaction.stats.duration_ms / 1000).toFixed(1) })}</p>}
     </section>
   );
 }
@@ -197,6 +199,7 @@ function ThinkingTrace({
   display: DisplaySettings;
   onToggle: (id: number, open: boolean) => void;
 }) {
+  const { t } = useTranslation("agent");
   const open = expanded[message.id] ?? !display.collapse_thinking;
   const contentRef = useRef<HTMLDivElement | null>(null);
   const followRef = useRef(true);
@@ -223,7 +226,7 @@ function ThinkingTrace({
           <TraceIcon>
             <Brain className="size-3.5" />
           </TraceIcon>
-          <TraceTitle>{streaming ? "Thinking…" : "Thought process"}</TraceTitle>
+          <TraceTitle>{streaming ? t("thinking.streaming") : t("thinking.done")}</TraceTitle>
           <TraceDescription>{formatTime(message.time)}</TraceDescription>
         </TraceLine>
       </TraceCollapsibleTrigger>
@@ -241,6 +244,7 @@ function ThinkingTrace({
  *  bails here instead of re-running markdown/tool rendering per token. All
  *  props must keep stable identities across renders for this to hold. */
 const MessageItem = memo(function MessageItem({ message, streamingId, display, expanded, onToggle, onCopy }: MessageItemProps) {
+  const { t } = useTranslation("agent");
   const isStreaming = message.id === streamingId;
 
   if (message.role === "user") {
@@ -250,7 +254,7 @@ const MessageItem = memo(function MessageItem({ message, streamingId, display, e
         <div className="max-w-[85%] rounded-2xl rounded-br-md border border-primary/25 bg-primary/10 px-3.5 py-2.5 text-sm whitespace-pre-wrap sm:max-w-[75%]">
           {attached?.text ?? message.text}
           {attached && <details className="mt-2 whitespace-normal border-t pt-2 text-xs">
-            <summary className="cursor-pointer">随消息发送的引用（{attached.resources.length}）</summary>
+            <summary className="cursor-pointer">{t("message.attachedRefs", { count: attached.resources.length })}</summary>
             <div className="mt-2 flex max-h-64 flex-col gap-2 overflow-y-auto">
               {attached.resources.map((resource, index) => <details key={index}>
                 <summary className="cursor-pointer">{contextKindLabel[resource.kind]} · {resource.title}</summary>
@@ -268,14 +272,14 @@ const MessageItem = memo(function MessageItem({ message, streamingId, display, e
     return (
       <div className="group min-w-0">
         <div className="mb-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span className="font-medium">{isStreaming ? "Generating…" : "Assistant"}</span>
+          <span className="font-medium">{isStreaming ? t("message.generating") : t("message.assistant")}</span>
           {isStreaming && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />}
           <span>{formatTime(message.time)}</span>
           {message.usage && <span className="truncate">{message.usage}</span>}
           <button
             type="button"
             className="ml-auto shrink-0 opacity-0 transition hover:text-foreground group-hover:opacity-100"
-            aria-label="复制助手回复"
+            aria-label={t("message.copyReply")}
             onClick={() => onCopy(message.text)}
           >
             <Copy className="size-3" />
@@ -328,7 +332,7 @@ const MessageItem = memo(function MessageItem({ message, streamingId, display, e
               <TraceIcon>
                 {ok ? <CheckCircle2 className="text-emerald-500" /> : <XCircle />}
               </TraceIcon>
-              <TraceTitle>{ok ? "Result" : "Failed"}</TraceTitle>
+              <TraceTitle>{ok ? t("message.result") : t("message.failed")}</TraceTitle>
               {content && (
                 <TraceDescription className="min-w-0 shrink max-w-[min(32rem,55vw)] truncate text-xs">
                   {resultJson ? <ToolPayloadPreview value={resultJson} /> : preview(content)}
@@ -371,9 +375,9 @@ const MessageItem = memo(function MessageItem({ message, streamingId, display, e
     const label =
       message.origin === "agent"
         ? message.originFrom
-          ? `Agent · ${message.originFrom}`
-          : "Agent"
-        : "System";
+          ? t("message.agentFromLabel", { from: message.originFrom })
+          : t("message.agentLabel")
+        : t("message.systemLabel");
     return (
       <div className="mx-auto max-w-[85%] rounded-lg border border-border/60 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
         <span className="mr-2 font-medium">{label}</span>
@@ -409,6 +413,7 @@ type TranscriptAreaProps = {
 };
 
 function TranscriptArea({ historyLoading, hiddenCount, blocks, streamingId, display, expanded, onToggle, onCopy, compaction, compactionKey, empty, loadEarlier, atBottom, onScrollToBottom, setViewport }: TranscriptAreaProps) {
+  const { t } = useTranslation("agent");
   return <div className="relative flex min-h-0 flex-1">
     <ScrollArea viewportRef={setViewport} className="min-h-0 flex-1" contentClassName="space-y-3 p-3 sm:p-4">
       {historyLoading ? (
@@ -419,7 +424,7 @@ function TranscriptArea({ historyLoading, hiddenCount, blocks, streamingId, disp
             <div className="flex justify-center pb-2">
               <Button size="xs" variant="outline" onClick={loadEarlier}>
                 <ArrowUp />
-                Load earlier messages ({hiddenCount})
+                {t("transcript.loadEarlier", { count: hiddenCount })}
               </Button>
             </div>
           )}
@@ -447,7 +452,7 @@ function TranscriptArea({ historyLoading, hiddenCount, blocks, streamingId, disp
           })}
           {compaction && <CompactionPanel key={compactionKey} compaction={compaction} />}
           {empty && (
-            <div className="p-8 text-center text-sm text-muted-foreground">This session has no messages yet</div>
+            <div className="p-8 text-center text-sm text-muted-foreground">{t("transcript.empty")}</div>
           )}
         </>
       )}
@@ -455,7 +460,7 @@ function TranscriptArea({ historyLoading, hiddenCount, blocks, streamingId, disp
     {!atBottom && (
       <button
         type="button"
-        aria-label="Scroll to bottom"
+        aria-label={t("transcript.scrollToBottom")}
         onClick={onScrollToBottom}
         className="absolute right-4 bottom-4 grid size-8 place-items-center rounded-full border bg-popover text-muted-foreground shadow-lg hover:bg-accent hover:text-foreground"
       >
@@ -533,6 +538,7 @@ export type AgentWorkspaceProps = {
 };
 
 export function AgentWorkspace(props: AgentWorkspaceProps) {
+  const { t } = useTranslation("agent");
   const basket = useContextBasket();
   const sendMessage = async () => {
     const resources = basket?.resources ?? [];
@@ -693,9 +699,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
       const code = button.closest(".md-code")?.querySelector("pre");
       if (!code) return;
       void navigator.clipboard.writeText(code.textContent ?? "");
-      button.textContent = "Copied!";
+      button.textContent = t("transcript.copiedCode");
       window.setTimeout(() => {
-        button.textContent = "Copy";
+        button.textContent = t("transcript.copyCode");
       }, 1400);
     };
     document.addEventListener("click", onClick);
@@ -761,9 +767,9 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     <Button
       size="icon-sm"
       variant={agentPickerOpen ? "default" : "ghost"}
-      aria-label="Search agents"
+      aria-label={t("picker.searchAgents")}
       aria-expanded={agentPickerOpen}
-      title={agentPickerOpen ? "关闭 agent 搜索" : "搜索 agent"}
+      title={agentPickerOpen ? t("picker.closeSearch") : t("picker.openSearch")}
       onClick={() => {
         if (!agentPickerOpen) props.onSearchStoredAgents("");
         setAgentPickerOpen((open) => !open);
@@ -777,11 +783,11 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
     <div className="flex min-h-0 flex-1 flex-col" data-agent-workspace={activeAgent}>
       <div className="flex h-8 shrink-0 items-center gap-2 border-b px-1.5 text-xs text-muted-foreground">
         {searchToggle}
-        <span className="truncate">{activeAgent || "No agent open"}</span>
+        <span className="truncate">{activeAgent || t("header.noAgentOpen")}</span>
         {activeAgent && (
           <>
             <span>·</span>
-            <span className="shrink-0">{activeInfo?.model ?? "no model"}</span>
+            <span className="shrink-0">{activeInfo?.model ?? t("header.noModel")}</span>
             <span>·</span>
             <AgentStatusIcon status={statuses[activeAgent]} />
             <span className="shrink-0">{running}</span>
@@ -807,14 +813,14 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
               <div className="min-w-0 flex-1 [&>div]:p-0">
                 <CommandInput
                   autoFocus
-                  placeholder="输入以切换 / 搜索 agent，Esc 返回"
+                  placeholder={t("picker.placeholder")}
                   onValueChange={(value) => searchStoredDebounced(value)}
                 />
               </div>
             </div>
             <CommandList className="max-h-64 rounded-none! border-t">
-              <CommandEmpty>没有匹配的 agent</CommandEmpty>
-              <CommandGroup heading="新建">
+              <CommandEmpty>{t("picker.empty")}</CommandEmpty>
+              <CommandGroup heading={t("picker.newGroup")}>
                 <CommandItem
                   key="new-agent"
                   value="新建 agent new spawn create"
@@ -824,10 +830,10 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   }}
                 >
                   <Plus className="size-3.5" />
-                  <span>新建 agent…</span>
+                  <span>{t("picker.newAgent")}</span>
                 </CommandItem>
               </CommandGroup>
-              <CommandGroup heading="打开的 agent">
+              <CommandGroup heading={t("picker.openGroup")}>
                 {props.openTabs.map((path) => {
                   return (
                     <CommandItem
@@ -848,7 +854,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   );
                 })}
               </CommandGroup>
-              <CommandGroup heading="运行中（未打开）">
+              <CommandGroup heading={t("picker.runningGroup")}>
                 {liveUnopened.map((agent) => (
                   <CommandItem
                     key={agent.path}
@@ -866,7 +872,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
                   </CommandItem>
                 ))}
               </CommandGroup>
-              <CommandGroup heading="已存储的 agent（选择即恢复）">
+              <CommandGroup heading={t("picker.storedGroup")}>
                 {storedOnly.map((stored) => (
                   <CommandItem
                     key={stored.id}
@@ -894,15 +900,15 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
           {transcriptElement}
 
           {!!props.queuedMessages?.length && (
-            <section aria-label="待处理消息" className="mx-3 mt-2 shrink-0 overflow-hidden rounded-lg border border-primary/20 bg-primary/5">
-              <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground" role="status"><CircleDashed className="size-3.5" aria-hidden="true" />待处理消息<span className="tabular-nums">{props.queuedMessages.length}</span></div>
+            <section aria-label={t("queued.ariaLabel")} className="mx-3 mt-2 shrink-0 overflow-hidden rounded-lg border border-primary/20 bg-primary/5">
+              <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground" role="status"><CircleDashed className="size-3.5" aria-hidden="true" />{t("queued.title")}<span className="tabular-nums">{props.queuedMessages.length}</span></div>
               <ol className="max-h-40 space-y-2 overflow-y-auto px-3 pb-3">
                 {props.queuedMessages.map((item, index) => {
                   const parsed = parseContextMessage(item.text);
                   return <li key={item.id} className="rounded-md border bg-background/60 px-2.5 py-2 text-xs">
-                    <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground"><span>消息 {index + 1}</span><span>{item.status === "sending" ? "发送中…" : "已排队 · 等待 Agent 接收"}</span></div>
+                    <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground"><span>{t("queued.messageN", { n: index + 1 })}</span><span>{item.status === "sending" ? t("queued.sending") : t("queued.queuedWaiting")}</span></div>
                     <p className="max-h-24 overflow-y-auto whitespace-pre-wrap leading-relaxed [overflow-wrap:anywhere]">{parsed?.text ?? item.text}</p>
-                    {!!parsed?.resources.length && <p className="mt-1 text-[10px] text-muted-foreground">附带 {parsed.resources.length} 条引用</p>}
+                    {!!parsed?.resources.length && <p className="mt-1 text-[10px] text-muted-foreground">{t("queued.attachedRefs", { count: parsed.resources.length })}</p>}
                   </li>;
                 })}
               </ol>
@@ -931,7 +937,7 @@ export function AgentWorkspace(props: AgentWorkspaceProps) {
         </>
       ) : (
         <div className="grid min-h-0 flex-1 place-items-center px-6 text-center text-sm text-muted-foreground">
-          从侧栏选择一个 agent，或点击 + 新建
+          {t("workspace.selectAgent")}
         </div>
       )}
 

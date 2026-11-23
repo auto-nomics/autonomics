@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use i18n::t;
 use plugin::factory::Plugin;
 
 use crate::commands::panels::load_installed_plugins;
@@ -112,20 +113,20 @@ fn render_category(name: &str, category: &Category, fatal: bool) -> String {
         Category::Failed(error) => {
             out.push_str(&format!("{name:<8} FAIL {error}\n"));
             if fatal {
-                out.push_str("         run `autonomics prepare`\n");
+                out.push_str(&format!("         {}\n", t!("cli.diag.runPrepare")));
             }
         }
         Category::Gap(gaps) => {
             let hint = if fatal {
-                " — run `autonomics prepare`"
+                t!("cli.diag.gapHintFatal")
             } else {
-                " — run `autonomics prepare` to fetch the rest (nodes needing them fail at build time until then)"
+                t!("cli.diag.gapHintAdvisory")
             };
             out.push_str(&format!("{name:<8} {} gap{}\n", gaps.len(), hint));
             for gap in gaps {
                 let kind = match gap.kind {
-                    GapKind::Missing => "missing",
-                    GapKind::Inconsistent => "inconsistent",
+                    GapKind::Missing => t!("cli.diag.kindMissing"),
+                    GapKind::Inconsistent => t!("cli.diag.kindInconsistent"),
                 };
                 out.push_str(&format!(
                     "         ! {} [{kind}] {}\n",
@@ -170,15 +171,14 @@ pub async fn check_readiness(config: &gateway::RuntimeConfig) -> ReadinessReport
 async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
     let layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     if let Err(error) = layout.ensure_v2_directories() {
-        return Category::Failed(format!("invalid plugin layout: {error}"));
+        return Category::Failed(t!("cli.diag.invalidPluginLayout", error = error).into_owned());
     }
     let root = layout.runtime_root();
     let config_path = config.state_dir.join(plugin::sync::PLUGIN_CONFIG_FILE);
     if !config_path.is_file() {
-        return Category::Skipped(format!(
-            "{} not present — built-in nodes only",
-            config_path.display()
-        ));
+        return Category::Skipped(
+            t!("cli.diag.pluginsNotPresent", path = config_path.display()).into_owned(),
+        );
     }
 
     let report = match plugin::sync::check(&config_path, &root) {
@@ -192,11 +192,15 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
         .map(|entry| {
             let (kind, label) = match entry.outcome {
                 plugin::sync::CheckOutcome::Ok => unreachable!(),
-                plugin::sync::CheckOutcome::Missing => (GapKind::Missing, "missing"),
-                plugin::sync::CheckOutcome::Inconsistent => (GapKind::Inconsistent, "inconsistent"),
+                plugin::sync::CheckOutcome::Missing => {
+                    (GapKind::Missing, t!("cli.diag.kindMissing"))
+                }
+                plugin::sync::CheckOutcome::Inconsistent => {
+                    (GapKind::Inconsistent, t!("cli.diag.kindInconsistent"))
+                }
             };
             Gap {
-                subject: format!("plugin '{}'", entry.name),
+                subject: t!("cli.diag.pluginSubject", name = entry.name).into_owned(),
                 kind,
                 detail: if entry.detail.is_empty() {
                     label.to_string()
@@ -215,11 +219,12 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
     match load_installed_plugins(&config.state_dir) {
         Ok(plugins) => {
             let kinds: usize = plugins.iter().map(|p| p.registered_kinds().len()).sum();
-            let summary = format!(
-                "{} famil{} verified, {kinds} node kinds",
-                plugins.len(),
-                if plugins.len() == 1 { "y" } else { "ies" },
-            );
+            let summary = if plugins.len() == 1 {
+                t!("cli.diag.pluginsSummaryOne", count = plugins.len(), kinds = kinds)
+            } else {
+                t!("cli.diag.pluginsSummaryMany", count = plugins.len(), kinds = kinds)
+            }
+            .into_owned();
             tracing::info!(families = plugins.len(), kinds, "plugin readiness verified");
             Category::Ok(summary)
         }
@@ -232,16 +237,20 @@ async fn check_plugins(config: &gateway::RuntimeConfig) -> Category {
 async fn check_model(config: &gateway::RuntimeConfig) -> Category {
     if !config.embedding.enabled {
         return Category::Skipped(
-            "Ollama embedding disabled — BM25 over the corpus serves the hub".into(),
+            t!("cli.diag.modelDisabledSkipped").into_owned(),
         );
     }
     if config.embedding.base_url.trim().is_empty() || config.embedding.model.trim().is_empty() {
-        return Category::Failed("Ollama base URL and model must not be empty".into());
+        return Category::Failed(t!("cli.diag.modelEmptyFailed").into_owned());
     }
-    Category::Ok(format!(
-        "configured — {} @ {}",
-        config.embedding.model, config.embedding.base_url
-    ))
+    Category::Ok(
+        t!(
+            "cli.diag.modelOk",
+            model = config.embedding.model,
+            url = config.embedding.base_url
+        )
+        .into_owned(),
+    )
 }
 
 /// Enumerate every digest-pinned image reference the daemon can need
@@ -280,9 +289,7 @@ pub(crate) async fn enumerate_images(
 /// local podman store.
 async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]>) -> Category {
     let Some(plugins) = plugins else {
-        return Category::Failed(
-            "cannot enumerate plugin images — the plugin check did not pass".into(),
-        );
+        return Category::Failed(t!("cli.diag.imagesEnumFailed").into_owned());
     };
     let declared = match enumerate_images(config, plugins).await {
         Ok(declared) => declared,
@@ -296,9 +303,9 @@ async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]
         {
             Ok(infra) => infra,
             Err(error) => {
-                return Category::Failed(format!(
-                    "invalid container execution configuration: {error}"
-                ));
+                return Category::Failed(
+                    t!("cli.diag.imagesConfigFailed", error = error).into_owned(),
+                );
             }
         };
     let local = match container_runtime::images::local_images_with_config(&infra.config).await {
@@ -308,13 +315,15 @@ async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]
     let missing: Vec<Gap> = declared
         .iter()
         .filter(|reference| !local.contains(reference))
-        .map(|reference| Gap::missing(format!("image '{reference}'"), "not in the local store"))
+        .map(|reference| {
+                Gap::missing(
+                    t!("cli.diag.imageSubject", reference = reference),
+                    t!("cli.diag.imageDetail"),
+                )
+            })
         .collect();
     if missing.is_empty() {
-        Category::Ok(format!(
-            "{} pinned images present in the local store",
-            declared.len()
-        ))
+        Category::Ok(t!("cli.diag.imagesOk", count = declared.len()).into_owned())
     } else {
         Category::Gap(missing)
     }
@@ -324,30 +333,40 @@ async fn check_images(config: &gateway::RuntimeConfig, plugins: Option<&[Plugin]
 /// panel cache, exactly the tolerance the old preflight established.
 fn check_panels(plugins: Option<&[Plugin]>) -> Category {
     let Some(plugins) = plugins else {
-        return Category::Skipped("no loadable plugin families".into());
+        return Category::Skipped(t!("cli.diag.panelsNoPlugins").into_owned());
     };
     let bundle_ids = plugin::bundles::collect_panel_bundles(plugins);
     if bundle_ids.is_empty() {
-        return Category::Ok("no data bundles declared".into());
+        return Category::Ok(t!("cli.diag.panelsNoBundles").into_owned());
     }
     let local = match data_catalog::LocalCatalog::open(data_catalog::default_panel_cache_root()) {
         Ok(local) => local,
-        Err(error) => return Category::Failed(format!("panel cache: {error}")),
+        Err(error) => {
+            return Category::Failed(t!("cli.diag.panelsCacheFailed", error = error).into_owned())
+        }
     };
     let report = plugin::bundles::check_panel_bundles(&bundle_ids, &local);
     let counts = report.counts();
     if counts.unavailable == 0 {
-        Category::Ok(format!(
-            "{}/{} data bundles cached",
-            counts.cached + counts.installed,
-            bundle_ids.len()
-        ))
+        Category::Ok(
+            t!(
+                "cli.diag.panelsOk",
+                cached = counts.cached + counts.installed,
+                total = bundle_ids.len()
+            )
+            .into_owned(),
+        )
     } else {
         Category::Gap(
             report
                 .missing_repos()
                 .into_iter()
-                .map(|repo| Gap::missing(format!("panel bundle '{repo}'"), "not cached"))
+                .map(|repo| {
+                Gap::missing(
+                    t!("cli.diag.panelSubject", repo = repo),
+                    t!("cli.diag.panelDetail"),
+                )
+            })
                 .collect(),
         )
     }

@@ -17,6 +17,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18next from "i18next";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,7 +46,7 @@ export function preview(text: string) {
 export async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
-    return "Copied message";
+    return i18next.t("agent:copy.copied");
   } catch (cause) {
     const area = document.createElement("textarea");
     area.value = text;
@@ -54,7 +56,7 @@ export async function copyText(text: string) {
     area.select();
     const copied = document.execCommand("copy");
     area.remove();
-    return copied ? "Copied message" : `Copy failed: ${String(cause)}`;
+    return copied ? i18next.t("agent:copy.copied") : i18next.t("agent:copy.failed", { reason: String(cause) });
   }
 }
 
@@ -131,6 +133,7 @@ export function SpawnAgentDialog({
   busy: string | null;
   onSpawnAgent: (input: { name: string; parentPath: string; profile: string }) => Promise<void>;
 }) {
+  const { t } = useTranslation("agent");
   const [spawnName, setSpawnName] = useState("");
   const [spawnParent, setSpawnParent] = useState("/root");
   const [spawnProfile, setSpawnProfile] = useState("researcher");
@@ -152,8 +155,8 @@ export function SpawnAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New agent</DialogTitle>
-          <DialogDescription>Spawn a resident agent under an existing path.</DialogDescription>
+          <DialogTitle>{t("spawn.title")}</DialogTitle>
+          <DialogDescription>{t("spawn.description")}</DialogDescription>
         </DialogHeader>
         <form
           className="grid gap-3"
@@ -163,12 +166,12 @@ export function SpawnAgentDialog({
             onOpenChange(false);
           }}
         >
-          <Input value={spawnName} placeholder="agent name" onChange={(event) => setSpawnName(event.target.value)} required />
+          <Input value={spawnName} placeholder={t("spawn.namePlaceholder")} onChange={(event) => setSpawnName(event.target.value)} required />
           <Input value={spawnParent} placeholder="/root" onChange={(event) => setSpawnParent(event.target.value)} required />
-          <select aria-label="Agent profile" value={spawnProfile} onChange={(event) => setSpawnProfile(event.target.value)} required className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <select aria-label={t("spawn.profileLabel")} value={spawnProfile} onChange={(event) => setSpawnProfile(event.target.value)} required className="h-9 w-full rounded-md border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
             {profiles.map(profile => <option key={profile} value={profile}>{profile}</option>)}
           </select>
-          <Button type="submit" disabled={busy === "spawn"}>Spawn</Button>
+          <Button type="submit" disabled={busy === "spawn"}>{t("spawn.submit")}</Button>
         </form>
       </DialogContent>
     </Dialog>

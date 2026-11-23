@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as d3 from "d3";
 import { Maximize, RefreshCw, Search, Settings2, ZoomIn, ZoomOut } from "lucide-react";
 import { gatewayRequest } from "@/gateway";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { openWikiEntry, useWikiRevision } from "./wiki-state";
@@ -51,6 +52,7 @@ export function WikiGraph({ entryId, title }: { entryId: string; title: string }
   const simulationRef = useRef<d3.Simulation<Node, Edge> | null>(null);
   const interactedRef = useRef(false);
   const revision = useWikiRevision();
+  const { t } = useTranslation("wiki");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -132,11 +134,11 @@ export function WikiGraph({ entryId, title }: { entryId: string; title: string }
     svg.call(zoom.transform, d3.zoomIdentity);
     const edges = layer.append("g").attr("class", "wiki-graph-links").selectAll("line").data(graph.edges).join("line").attr("stroke", "var(--muted-foreground)").attr("stroke-opacity", 0.2).attr("stroke-width", 0.8);
     const nodes = layer.append("g").selectAll<SVGGElement, Node>("g").data(graph.nodes, d => d.id).join("g")
-      .attr("class", "wiki-graph-node").attr("data-node-id", d => d.id).attr("role", "button").attr("tabindex", 0).attr("aria-label", d => `打开词条 ${d.title}`).style("cursor", "pointer");
+      .attr("class", "wiki-graph-node").attr("data-node-id", d => d.id).attr("role", "button").attr("tabindex", 0).attr("aria-label", d => t("graph.openEntry", { title: d.title })).style("cursor", "pointer");
     const radius = (node: Node) => node.id === entryId ? 6 : Math.min(6, 2.5 + Math.sqrt(node.degree) * 0.7);
     nodes.append("circle").attr("r", radius).attr("fill", node => node.id === entryId ? "var(--primary)" : "var(--muted-foreground)").attr("stroke", "var(--background)").attr("stroke-width", 0.8);
     nodes.append("text").text(d => d.title).attr("x", 0).attr("y", d => radius(d) + 2).attr("dy", "0.85em").attr("text-anchor", "middle").attr("fill", "var(--foreground)").attr("font-size", 6.5).attr("paint-order", "stroke").attr("stroke", "var(--background)").attr("stroke-width", 1.5).attr("stroke-linejoin", "round").style("pointer-events", "none");
-    nodes.append("title").text(d => `${d.title} · ${d.degree} 条连接`);
+    nodes.append("title").text(d => t("graph.connections", { title: d.title, count: d.degree }));
     const updateLabels = () => {
       const scale = d3.zoomTransform(svgElement).k;
       const opacity = Math.max(0, Math.min(1, (scale - 0.7) / 0.8));
@@ -230,38 +232,38 @@ export function WikiGraph({ entryId, title }: { entryId: string; title: string }
     else svg.transition().duration(200).call(zoomRef.current.scaleBy, factor);
   }, []);
 
-  return <section aria-label="知识关系图谱" className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+  return <section aria-label={t("graph.sectionAria")} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
     <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1 text-xs text-muted-foreground">
-      <span className="min-w-0 flex-1 truncate">{entryId ? `局部图谱 / ${title || data?.nodes[0]?.title || entryId}` : "局部图谱"}</span>
-      <Button size="icon-sm" variant="ghost" aria-label="缩小图谱" title="缩小" onClick={() => adjustZoom(0.8)}><ZoomOut /></Button>
-      <Button size="icon-sm" variant="ghost" aria-label="放大图谱" title="放大" onClick={() => adjustZoom(1.25)}><ZoomIn /></Button>
-      <Button size="icon-sm" variant="ghost" aria-label="重置图谱视图" title="适合画布" onClick={() => adjustZoom("reset")}><Maximize /></Button>
-      <Button size="icon-sm" variant="ghost" aria-label="刷新图谱" title="刷新图谱" onClick={() => setReload(value => value + 1)}><RefreshCw /></Button>
-      <Button size="icon-sm" variant="ghost" aria-label="图谱设置" title="图谱设置" onClick={() => setSettingsOpen(value => !value)}><Settings2 /></Button>
+      <span className="min-w-0 flex-1 truncate">{entryId ? t("graph.localGraphOf", { title: title || data?.nodes[0]?.title || entryId }) : t("graph.localGraph")}</span>
+      <Button size="icon-sm" variant="ghost" aria-label={t("graph.zoomOutAria")} title={t("graph.zoomOut")} onClick={() => adjustZoom(0.8)}><ZoomOut /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label={t("graph.zoomInAria")} title={t("graph.zoomIn")} onClick={() => adjustZoom(1.25)}><ZoomIn /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label={t("graph.resetViewAria")} title={t("graph.fitCanvas")} onClick={() => adjustZoom("reset")}><Maximize /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label={t("graph.refresh")} title={t("graph.refresh")} onClick={() => setReload(value => value + 1)}><RefreshCw /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label={t("graph.settings")} title={t("graph.settings")} onClick={() => setSettingsOpen(value => !value)}><Settings2 /></Button>
     </div>
-    {settingsOpen && <aside aria-label="图谱设置面板" className="absolute right-3 top-12 z-10 max-h-[calc(100%-4rem)] w-56 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-lg border bg-card/95 text-xs text-card-foreground shadow-xl backdrop-blur-sm">
-      <div className="border-b px-3 py-2.5 font-medium">筛选</div>
+    {settingsOpen && <aside aria-label={t("graph.settingsPanelAria")} className="absolute right-3 top-12 z-10 max-h-[calc(100%-4rem)] w-56 max-w-[calc(100%-1.5rem)] overflow-y-auto rounded-lg border bg-card/95 text-xs text-card-foreground shadow-xl backdrop-blur-sm">
+      <div className="border-b px-3 py-2.5 font-medium">{t("graph.filter")}</div>
       <div className="space-y-4 p-3">
-        <div className="relative"><Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="搜索图谱词条" placeholder="搜索相关词条" className="h-8 pl-7 text-xs" value={query} onChange={event => setQuery(event.target.value)} /></div>
-        <label className="block text-muted-foreground">关系层级 <span className="float-right text-foreground">{depth}</span>
-          <select aria-label="图谱关系层级" value={depth} onChange={event => setDepth(Number(event.target.value))} className="mt-2 h-8 w-full rounded-md border bg-background px-2 text-foreground">{[1, 2, 3, 4, 5].map(level => <option key={level} value={level}>{level} 级</option>)}</select>
+        <div className="relative"><Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label={t("graph.searchEntriesAria")} placeholder={t("graph.searchPlaceholder")} className="h-8 pl-7 text-xs" value={query} onChange={event => setQuery(event.target.value)} /></div>
+        <label className="block text-muted-foreground">{t("graph.depth")} <span className="float-right text-foreground">{depth}</span>
+          <select aria-label={t("graph.depthAria")} value={depth} onChange={event => setDepth(Number(event.target.value))} className="mt-2 h-8 w-full rounded-md border bg-background px-2 text-foreground">{[1, 2, 3, 4, 5].map(level => <option key={level} value={level}>{t("graph.depthLevel", { level })}</option>)}</select>
         </label>
-        <label className="flex items-center justify-between gap-2 text-muted-foreground">入链<input type="checkbox" aria-label="显示入链" checked={incomingEnabled} onChange={event => setIncomingEnabled(event.target.checked)} /></label>
-        <label className="flex items-center justify-between gap-2 text-muted-foreground">出链<input type="checkbox" aria-label="显示出链" checked={outgoingEnabled} onChange={event => setOutgoingEnabled(event.target.checked)} /></label>
-        <label className="flex items-center justify-between gap-2 text-muted-foreground">显示节点标签<input type="checkbox" aria-label="显示所有节点标签" checked={showLabels} onChange={event => setShowLabels(event.target.checked)} /></label>
+        <label className="flex items-center justify-between gap-2 text-muted-foreground">{t("graph.inLinks")}<input type="checkbox" aria-label={t("graph.showInLinks")} checked={incomingEnabled} onChange={event => setIncomingEnabled(event.target.checked)} /></label>
+        <label className="flex items-center justify-between gap-2 text-muted-foreground">{t("graph.outLinks")}<input type="checkbox" aria-label={t("graph.showOutLinks")} checked={outgoingEnabled} onChange={event => setOutgoingEnabled(event.target.checked)} /></label>
+        <label className="flex items-center justify-between gap-2 text-muted-foreground">{t("graph.nodeLabels")}<input type="checkbox" aria-label={t("graph.nodeLabelsAria")} checked={showLabels} onChange={event => setShowLabels(event.target.checked)} /></label>
       </div>
       <details className="border-t" open>
-        <summary className="cursor-pointer px-3 py-2.5 font-medium">布局力度</summary>
+        <summary className="cursor-pointer px-3 py-2.5 font-medium">{t("graph.layoutForce")}</summary>
         <div className="space-y-4 px-3 pb-3">
-          <label className="block text-muted-foreground">节点排斥力 <span className="float-right text-foreground">{repulsion}</span><input type="range" aria-label="节点排斥力" min="30" max="350" step="10" value={repulsion} onChange={event => setRepulsion(Number(event.target.value))} className="mt-2 w-full accent-primary" /></label>
-          <label className="block text-muted-foreground">链接距离 <span className="float-right text-foreground">{linkDistance}</span><input type="range" aria-label="链接距离" min="30" max="160" step="5" value={linkDistance} onChange={event => setLinkDistance(Number(event.target.value))} className="mt-2 w-full accent-primary" /></label>
+          <label className="block text-muted-foreground">{t("graph.repulsion")} <span className="float-right text-foreground">{repulsion}</span><input type="range" aria-label={t("graph.repulsion")} min="30" max="350" step="10" value={repulsion} onChange={event => setRepulsion(Number(event.target.value))} className="mt-2 w-full accent-primary" /></label>
+          <label className="block text-muted-foreground">{t("graph.linkDistance")} <span className="float-right text-foreground">{linkDistance}</span><input type="range" aria-label={t("graph.linkDistance")} min="30" max="160" step="5" value={linkDistance} onChange={event => setLinkDistance(Number(event.target.value))} className="mt-2 w-full accent-primary" /></label>
         </div>
       </details>
-      <div className="border-t px-3 py-2 text-muted-foreground">{entryId ? `中心：${title || data?.nodes[0]?.title || entryId}` : "未选择词条"}{graph ? ` · ${graph.nodes.length} 个词条 · ${graph.edges.length} 条链接` : ""}</div>
+      <div className="border-t px-3 py-2 text-muted-foreground">{entryId ? t("graph.center", { title: title || data?.nodes[0]?.title || entryId }) : t("graph.noSelection")}{graph ? t("graph.stats", { entries: graph.nodes.length, links: graph.edges.length }) : ""}</div>
     </aside>}
-    <svg ref={svgRef} role="group" aria-label="知识词条关系图，滚轮缩放，拖动空白处平移，拖动节点调整位置" className="min-h-0 w-full flex-1 touch-none" />
-    {!data && <div className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-muted-foreground" role="status">{!entryId ? "请先打开知识库词条" : error ? `加载图谱失败：${error}` : "正在加载局部图谱…"}</div>}
-    {data && graph?.edges.length === 0 && <p className="pointer-events-none absolute bottom-8 left-3 text-xs text-muted-foreground">当前词条暂无关联链接</p>}
-    <p className="pointer-events-none absolute bottom-2 left-3 text-xs text-muted-foreground">滚轮缩放 · 拖动平移 · 点击节点打开词条</p>
+    <svg ref={svgRef} role="group" aria-label={t("graph.svgAria")} className="min-h-0 w-full flex-1 touch-none" />
+    {!data && <div className="pointer-events-none absolute inset-0 grid place-items-center text-sm text-muted-foreground" role="status">{!entryId ? t("graph.openFirst") : error ? t("graph.loadError", { error }) : t("graph.loadingGraph")}</div>}
+    {data && graph?.edges.length === 0 && <p className="pointer-events-none absolute bottom-8 left-3 text-xs text-muted-foreground">{t("graph.noLinks")}</p>}
+    <p className="pointer-events-none absolute bottom-2 left-3 text-xs text-muted-foreground">{t("graph.hint")}</p>
   </section>;
 }

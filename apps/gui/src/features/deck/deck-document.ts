@@ -1,5 +1,6 @@
 import { useMemo, useSyncExternalStore } from "react";
 import { fetchDeck, fetchDeckSource, saveDeckSource, type DeckPayload } from "./deck-api";
+import { i18next } from "./i18n";
 import { setDocumentDirty } from "@/app/workbench/dirty-documents";
 
 type Snapshot = { source: string | null; savedSource: string; sourceRevision: string; sourceError: string | null; sourceLoading: boolean; saving: boolean; payload: DeckPayload | null; loading: boolean; error: string | null };
@@ -53,7 +54,7 @@ class DeckDocument {
       this.publish({ ...this.snapshot, source: this.snapshot.source === source ? result.markdown : this.snapshot.source, savedSource: result.markdown, sourceRevision: result.revision });
       await this.refresh();
     } catch (error) {
-      this.publish({ ...this.snapshot, sourceError: `保存失败：${String(error instanceof Error ? error.message : error)}。如有版本冲突，请复制草稿后重新打开文稿。` });
+      this.publish({ ...this.snapshot, sourceError: i18next.t("deck:document.saveFailed", { error: String(error instanceof Error ? error.message : error) }) });
     } finally { this.publish({ ...this.snapshot, saving: false }); }
   };
   private poll = () => {

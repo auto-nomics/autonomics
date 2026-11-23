@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { WorkbenchViewSlot } from "../view-host";
 import { startViewDrag, viewDropTarget } from "../view-drag";
 import { Button } from "@/components/ui/button";
@@ -6,11 +7,12 @@ import { setSecondarySidebarWidth, toggleSecondarySidebar, useViewLayout, workbe
 import { ViewLocationMenu } from "../view-location-menu";
 
 export function SecondarySidebar() {
+  const { t } = useTranslation("workbench");
   const layout = useViewLayout();
   const views = useWorkbenchViews().filter(view => workbenchViewLocation(view.id, layout) === "secondarySidebar");
   if (!views.length) return null;
-  return <aside {...viewDropTarget("secondarySidebar")} aria-label="辅助侧边栏" hidden={!layout.secondaryVisible} style={{ width: layout.secondaryWidth, display: layout.secondaryVisible ? undefined : "none" }} className="relative flex min-w-48 shrink-0 flex-col border-l bg-background">
-    <div role="separator" aria-label="调整辅助侧边栏宽度" aria-orientation="vertical" aria-valuemin={192} aria-valuemax={640} aria-valuenow={layout.secondaryWidth} tabIndex={0}
+  return <aside {...viewDropTarget("secondarySidebar")} data-secondary-sidebar="" aria-label={t("secondarySidebar.aria")} hidden={!layout.secondaryVisible} style={{ width: layout.secondaryWidth, display: layout.secondaryVisible ? undefined : "none" }} className="relative flex min-w-48 shrink-0 flex-col border-l bg-background">
+    <div role="separator" aria-label={t("secondarySidebar.resizeAria")} aria-orientation="vertical" aria-valuemin={192} aria-valuemax={640} aria-valuenow={layout.secondaryWidth} tabIndex={0}
       className="absolute inset-y-0 -left-1 z-30 w-2 cursor-col-resize focus-visible:bg-primary/30"
       onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
       onPointerMove={event => {
@@ -23,7 +25,7 @@ export function SecondarySidebar() {
         event.preventDefault();
         setSecondarySidebarWidth(layout.secondaryWidth + (event.key === "ArrowLeft" ? 10 : -10));
       }} />
-    <Button size="xs" variant="ghost" onClick={toggleSecondarySidebar}>隐藏辅助侧边栏</Button>
+    <Button size="xs" variant="ghost" onClick={toggleSecondarySidebar}>{t("secondarySidebar.hide")}</Button>
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
     {views.map(view => {
       return <section key={view.id} aria-label={view.title} className="flex min-h-48 flex-1 flex-col overflow-hidden">

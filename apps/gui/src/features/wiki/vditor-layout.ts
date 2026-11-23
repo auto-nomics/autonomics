@@ -1,4 +1,5 @@
 import type Vditor from "vditor";
+import i18n from "@/i18n";
 
 const svSplitKey = "autonomics.wiki.svSplit";
 
@@ -23,8 +24,8 @@ function attachSvSplit(editor: Vditor, body: HTMLElement) {
   handle.className = "wiki-sv-split-handle";
   handle.setAttribute("role", "separator");
   handle.setAttribute("aria-orientation", "vertical");
-  handle.setAttribute("aria-label", "拖动调整源码与预览列宽");
-  handle.title = "拖动调整双列宽度";
+  handle.setAttribute("aria-label", i18n.t("wiki:vditor.layoutDragAria"));
+  handle.title = i18n.t("wiki:vditor.layoutDragTitle");
   body.insertBefore(handle, preview);
 
   const apply = (percent: number) => {
@@ -72,7 +73,7 @@ export function attachWikiDocumentLayout(editor: Vditor) {
   document.className = "wiki-vditor-document";
   const metadata = window.document.createElement("div");
   metadata.className = "wiki-editor-metadata px-6 pt-4";
-  metadata.setAttribute("aria-label", "文档元数据");
+  metadata.setAttribute("aria-label", i18n.t("wiki:vditor.metadataAria"));
   const body = window.document.createElement("div");
   body.className = "wiki-vditor-body";
   const modes = [view.wysiwyg!.element.parentElement!, view.sv!.element, view.ir!.element.parentElement!, view.preview!.element];

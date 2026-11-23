@@ -1,4 +1,5 @@
 import { annotationPath, structurePath, readerLocationId, beginReaderSession, isReaderSession, registerReaderSession, releaseReaderSession, findTextRanges, trapReaderFocus, restoreReaderFocus, type ReaderSearchTarget, type ReaderWorkspaceOptions } from "./reader-target";
+import { i18next } from "./i18n";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
@@ -84,13 +85,13 @@ const READER_RAIL_ICONS: Record<ReaderPane, string> = {
   search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`,
 };
 
-const READER_RAIL_LABELS: Record<ReaderPane, string> = {
-  thumbnails: "Pages",
-  outline: "Outline",
-  annotations: "Notes",
-  info: "Info",
-  tags: "Tags",
-  search: "Search",
+const READER_RAIL_LABELS: Record<ReaderPane, () => string> = {
+  thumbnails: () => i18next.t("reader:rail.pages"),
+  outline: () => i18next.t("reader:rail.outline"),
+  annotations: () => i18next.t("reader:rail.notes"),
+  info: () => i18next.t("reader:rail.info"),
+  tags: () => i18next.t("reader:rail.tags"),
+  search: () => i18next.t("reader:rail.search"),
 };
 
 const THEME_DARK_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>`;
@@ -262,20 +263,20 @@ class ZoteroStylePdfReader {
       <aside class="reader-sidebar-shell">
         <div class="reader-sidebar">
           <div class="reader-sidebar-header">
-            <nav class="reader-rail" aria-label="PDF sidebar">
+            <nav class="reader-rail" aria-label="${i18next.t("reader:toolbar.pdfSidebarAria")}">
               ${(["thumbnails", "outline", "annotations", "info", "tags", "search"] as ReaderPane[]).map((pane) => `
                 <button
                   type="button"
                   class="reader-rail-button${pane === this.activePane ? " active" : ""}"
                   data-pane="${pane}"
-                  title="${READER_RAIL_LABELS[pane]}"
-                  aria-label="${READER_RAIL_LABELS[pane]}"
+                  title="${READER_RAIL_LABELS[pane]()}"
+                  aria-label="${READER_RAIL_LABELS[pane]()}"
                 >
                   ${READER_RAIL_ICONS[pane]}
                 </button>
               `).join("")}
             </nav>
-            <button type="button" data-action="close-sidebar" title="Close sidebar">✕</button>
+            <button type="button" data-action="close-sidebar" title="${i18next.t("reader:toolbar.closeSidebar")}">✕</button>
           </div>
           <div class="reader-sidebar-body">
             <div class="reader-sidebar-pane" data-pane="thumbnails"></div>
@@ -283,102 +284,102 @@ class ZoteroStylePdfReader {
             <div class="reader-sidebar-pane" data-pane="annotations" hidden></div>
             <div class="reader-sidebar-pane" data-pane="info" hidden>
               <div class="reader-metadata">
-                ${this.metadataRow("Item Type", this.article?.source === "crossref" ? "Journal Article" : "Article")}
-                ${this.metadataRow("Title", this.article?.title || this.title)}
-                ${this.metadataRow("Authors", this.authorsText())}
-                ${this.metadataRow("Publication", this.article?.journal)}
-                ${this.metadataRow("Date", this.article?.year)}
+                ${this.metadataRow(i18next.t("reader:metadata.itemType"), this.article?.source === "crossref" ? i18next.t("reader:metadata.journalArticle") : i18next.t("reader:metadata.article"))}
+                ${this.metadataRow(i18next.t("reader:metadata.title"), this.article?.title || this.title)}
+                ${this.metadataRow(i18next.t("reader:metadata.authors"), this.authorsText())}
+                ${this.metadataRow(i18next.t("reader:metadata.publication"), this.article?.journal)}
+                ${this.metadataRow(i18next.t("reader:metadata.date"), this.article?.year)}
                 ${this.metadataRow("DOI", this.identifier("doi"))}
                 ${this.metadataRow("PMID", this.identifier("pmid"))}
-                ${this.metadataRow("Source", this.article?.source)}
-                ${this.metadataRow("Record", this.article?.id)}
+                ${this.metadataRow(i18next.t("reader:metadata.source"), this.article?.source)}
+                ${this.metadataRow(i18next.t("reader:metadata.record"), this.article?.id)}
               </div>
             </div>
             <div class="reader-sidebar-pane" data-pane="tags" hidden>
               <div class="reader-tags" data-output="sidebar-tags"></div>
             </div>
             <div class="reader-sidebar-pane" data-pane="search" hidden>
-              <input class="reader-search-input" data-input="search" placeholder="Search PDF" />
+              <input class="reader-search-input" data-input="search" placeholder="${i18next.t("reader:search.pdfPlaceholder")}" />
               <div data-output="search-results"></div>
             </div>
           </div>
         </div>
-        <div class="reader-sidebar-resizer" data-action="resize-sidebar" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+        <div class="reader-sidebar-resizer" data-action="resize-sidebar" role="separator" aria-orientation="vertical" aria-label="${i18next.t("reader:toolbar.resizeSidebar")}"></div>
       </aside>
       <main class="reader-main">
-        <header class="reader-toolbar" aria-label="PDF controls">
+        <header class="reader-toolbar" aria-label="${i18next.t("reader:toolbar.pdfControlsAria")}">
           <div class="reader-toolbar-start">
-            ${toolbarButton("sidebar", "Toggle sidebar", "sidebar")}
-            <div class="reader-tool-group reader-pagination" role="group" aria-label="Page navigation">
-              ${toolbarButton("previous", "Previous page", "previous")}
+            ${toolbarButton("sidebar", i18next.t("reader:toolbar.toggleSidebar"), "sidebar")}
+            <div class="reader-tool-group reader-pagination" role="group" aria-label="${i18next.t("reader:toolbar.pageNavAria")}">
+              ${toolbarButton("previous", i18next.t("reader:toolbar.previousPage"), "previous")}
               <div class="reader-page-field">
-                <input data-input="page" type="number" min="1" value="1" aria-label="Page" />
+                <input data-input="page" type="number" min="1" value="1" aria-label="${i18next.t("reader:toolbar.page")}" />
                 <span data-output="page-count">/ 0</span>
               </div>
-              ${toolbarButton("next", "Next page", "next")}
+              ${toolbarButton("next", i18next.t("reader:toolbar.nextPage"), "next")}
             </div>
           </div>
-          <div class="reader-tool-group reader-zoom-tools" role="group" aria-label="Zoom and fit">
-            ${toolbarButton("zoom-out", "Zoom out", "minus")}
+          <div class="reader-tool-group reader-zoom-tools" role="group" aria-label="${i18next.t("reader:toolbar.zoomAndFitAria")}">
+            ${toolbarButton("zoom-out", i18next.t("reader:toolbar.zoomOut"), "minus")}
             <span class="reader-zoom-value" data-output="zoom" aria-live="polite">100%</span>
-            ${toolbarButton("zoom-in", "Zoom in", "plus")}
+            ${toolbarButton("zoom-in", i18next.t("reader:toolbar.zoomIn"), "plus")}
             <span class="reader-tool-divider" aria-hidden="true"></span>
-            ${toolbarButton("fit-width", "Fit width", "width", "Width", 'aria-pressed="true"')}
-            ${toolbarButton("fit-page", "Fit page", "page", "Page", 'aria-pressed="false"')}
+            ${toolbarButton("fit-width", i18next.t("reader:toolbar.fitWidth"), "width", i18next.t("reader:toolbar.width"), 'aria-pressed="true"')}
+            ${toolbarButton("fit-page", i18next.t("reader:toolbar.fitPage"), "page", i18next.t("reader:toolbar.pageLabel"), 'aria-pressed="false"')}
           </div>
-          <div class="reader-tool-group reader-tool-center" role="group" aria-label="Annotation tools">
-            ${toolbarButton("tool-highlight", "Highlight text", "highlight", "", 'class="reader-highlight-tool" aria-pressed="false"')}
-            ${toolbarButton("tool-note", "Add note", "note", "", 'aria-pressed="false"')}
-            ${toolbarButton("copy-selection-toolbar", "Copy selection", "copy")}
-            ${this.workspace.onReference ? toolbarButton("add-context", "加入当前会话", "note") : ""}
-            ${toolbarButton("tool-clear", "Clear selection", "clear")}
+          <div class="reader-tool-group reader-tool-center" role="group" aria-label="${i18next.t("reader:toolbar.annotationToolsAria")}">
+            ${toolbarButton("tool-highlight", i18next.t("reader:toolbar.highlightText"), "highlight", "", 'class="reader-highlight-tool" aria-pressed="false"')}
+            ${toolbarButton("tool-note", i18next.t("reader:toolbar.addNote"), "note", "", 'aria-pressed="false"')}
+            ${toolbarButton("copy-selection-toolbar", i18next.t("reader:toolbar.copySelection"), "copy")}
+            ${this.workspace.onReference ? toolbarButton("add-context", i18next.t("reader:context.add"), "note") : ""}
+            ${toolbarButton("tool-clear", i18next.t("reader:toolbar.clearSelection"), "clear")}
           </div>
-          <div class="reader-tool-right" role="group" aria-label="Reading options">
-            ${toolbarButton("reading-mode", "Reading Mode (Alt+R)", "book", "Read", 'aria-pressed="false"')}
-            ${toolbarButton("text-options", "Text options", "appearance")}
-            ${toolbarButton("open-search", "Search PDF", "search")}
-            <button type="button" data-action="toggle-theme" title="Toggle dark mode" aria-label="Toggle dark mode">
+          <div class="reader-tool-right" role="group" aria-label="${i18next.t("reader:toolbar.readingOptionsAria")}">
+            ${toolbarButton("reading-mode", i18next.t("reader:toolbar.readingMode"), "book", i18next.t("reader:toolbar.read"), 'aria-pressed="false"')}
+            ${toolbarButton("text-options", i18next.t("reader:toolbar.textOptions"), "appearance")}
+            ${toolbarButton("open-search", i18next.t("reader:toolbar.searchPdf"), "search")}
+            <button type="button" data-action="toggle-theme" title="${i18next.t("reader:toolbar.toggleDark")}" aria-label="${i18next.t("reader:toolbar.toggleDark")}">
               ${this.pdfTheme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON}
             </button>
             <span class="reader-tool-divider" aria-hidden="true"></span>
-            ${toolbarButton("close", "Close reader", "close")}
+            ${toolbarButton("close", i18next.t("reader:toolbar.closeReader"), "close")}
           </div>
         </header>
         <div class="reader-page-area">
           <div class="reader-pages"></div>
-        <div class="reader-selection-popup" data-output="selection-popup" hidden role="toolbar" aria-label="Selection actions">
-          <button type="button" class="reader-swatch" data-color="yellow" title="Yellow" aria-label="Yellow highlight"></button>
-          <button type="button" class="reader-swatch" data-color="red" title="Red" aria-label="Red highlight"></button>
-          <button type="button" class="reader-swatch" data-color="green" title="Green" aria-label="Green highlight"></button>
-          <button type="button" class="reader-swatch" data-color="blue" title="Blue" aria-label="Blue highlight"></button>
-          <button type="button" class="reader-swatch" data-color="purple" title="Purple" aria-label="Purple highlight"></button>
-          <button type="button" class="reader-swatch" data-color="magenta" title="Magenta" aria-label="Magenta highlight"></button>
-          <button type="button" class="reader-swatch" data-color="orange" title="Orange" aria-label="Orange highlight"></button>
-          <button type="button" class="reader-swatch" data-color="gray" title="Gray" aria-label="Gray highlight"></button>
+        <div class="reader-selection-popup" data-output="selection-popup" hidden role="toolbar" aria-label="${i18next.t("reader:selection.actionsAria")}">
+          <button type="button" class="reader-swatch" data-color="yellow" title="${i18next.t("reader:colors.yellow")}" aria-label="${i18next.t("reader:colors.yellowHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="red" title="${i18next.t("reader:colors.red")}" aria-label="${i18next.t("reader:colors.redHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="green" title="${i18next.t("reader:colors.green")}" aria-label="${i18next.t("reader:colors.greenHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="blue" title="${i18next.t("reader:colors.blue")}" aria-label="${i18next.t("reader:colors.blueHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="purple" title="${i18next.t("reader:colors.purple")}" aria-label="${i18next.t("reader:colors.purpleHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="magenta" title="${i18next.t("reader:colors.magenta")}" aria-label="${i18next.t("reader:colors.magentaHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="orange" title="${i18next.t("reader:colors.orange")}" aria-label="${i18next.t("reader:colors.orangeHighlight")}"></button>
+          <button type="button" class="reader-swatch" data-color="gray" title="${i18next.t("reader:colors.gray")}" aria-label="${i18next.t("reader:colors.grayHighlight")}"></button>
           <span class="reader-popup-divider" aria-hidden="true"></span>
-          <button type="button" class="reader-popup-action" data-action="add-note" title="Add note" aria-label="Add note">${NOTE_ICON}</button>
-          <button type="button" class="reader-popup-action" data-action="copy-selection" title="Copy" aria-label="Copy">${COPY_ICON}</button>
-          ${this.workspace.onReference ? `<button type="button" class="reader-popup-action" data-action="add-selection-context" title="加入当前会话" aria-label="加入当前会话">${CONTEXT_ICON}</button>` : ""}
+          <button type="button" class="reader-popup-action" data-action="add-note" title="${i18next.t("reader:toolbar.addNote")}" aria-label="${i18next.t("reader:toolbar.addNote")}">${NOTE_ICON}</button>
+          <button type="button" class="reader-popup-action" data-action="copy-selection" title="${i18next.t("reader:selection.copy")}" aria-label="${i18next.t("reader:selection.copy")}">${COPY_ICON}</button>
+          ${this.workspace.onReference ? `<button type="button" class="reader-popup-action" data-action="add-selection-context" title="${i18next.t("reader:context.add")}" aria-label="${i18next.t("reader:context.add")}">${CONTEXT_ICON}</button>` : ""}
         </div>
           <div class="reader-status">
-            <span data-output="status">Opening PDF…</span>
+            <span data-output="status">${i18next.t("reader:status.openingPdf")}</span>
           </div>
         </div>
       </main>
-      <div class="reader-mobile-bar" role="toolbar" aria-label="Reader controls">
+      <div class="reader-mobile-bar" role="toolbar" aria-label="${i18next.t("reader:mobile.controlsAria")}">
         <div class="reader-mobile-slider">
-          <input class="reader-page-slider" data-input="page-slider" type="range" min="1" max="1" value="1" aria-label="Page position" />
+          <input class="reader-page-slider" data-input="page-slider" type="range" min="1" max="1" value="1" aria-label="${i18next.t("reader:mobile.pagePosition")}" />
           <span class="reader-mobile-page" data-output="mobile-page">1 / 0</span>
         </div>
         <div class="reader-mobile-actions">
-          ${mobileActionButton("m-sidebar", "Sidebar", "sidebar")}
-          ${mobileActionButton("m-zoom-out", "Zoom out", "minus")}
-          ${mobileActionButton("m-zoom-in", "Zoom in", "plus")}
-          ${mobileActionButton("m-fit-width", "Fit width", "width")}
-          ${mobileActionButton("m-highlight", "Highlight", "highlight")}
-          ${mobileActionButton("m-note", "Note", "note")}
-          ${mobileActionButton("m-search", "Search", "search")}
-          ${mobileActionButton("m-theme", "Theme", "appearance")}
+          ${mobileActionButton("m-sidebar", i18next.t("reader:mobile.sidebar"), "sidebar")}
+          ${mobileActionButton("m-zoom-out", i18next.t("reader:mobile.zoomOut"), "minus")}
+          ${mobileActionButton("m-zoom-in", i18next.t("reader:mobile.zoomIn"), "plus")}
+          ${mobileActionButton("m-fit-width", i18next.t("reader:mobile.fitWidth"), "width")}
+          ${mobileActionButton("m-highlight", i18next.t("reader:mobile.highlight"), "highlight")}
+          ${mobileActionButton("m-note", i18next.t("reader:mobile.note"), "note")}
+          ${mobileActionButton("m-search", i18next.t("reader:mobile.search"), "search")}
+          ${mobileActionButton("m-theme", i18next.t("reader:mobile.theme"), "appearance")}
         </div>
       </div>
     `;
@@ -413,13 +414,13 @@ class ZoteroStylePdfReader {
     this.readingArea.hidden = true;
     this.readingArea.tabIndex = 0;
     this.readingArea.setAttribute("role", "region");
-    this.readingArea.setAttribute("aria-label", "Reading Mode document");
+    this.readingArea.setAttribute("aria-label", i18next.t("reader:reading.documentAria"));
     this.root.querySelector(".reader-main")!.append(this.readingArea, this.root.querySelector(".reader-status")!);
     this.appearancePopup = document.createElement("div");
     this.appearancePopup.className = "reader-appearance-popup";
     this.appearancePopup.hidden = true;
     this.appearancePopup.setAttribute("role", "dialog");
-    this.appearancePopup.setAttribute("aria-label", "Reading appearance");
+    this.appearancePopup.setAttribute("aria-label", i18next.t("reader:reading.appearanceAria"));
     this.root.append(this.appearancePopup);
     this.annotationInspector = new AnnotationInspector(this.root,
       (id, patch) => this.updateAnnotation(id, patch),
@@ -501,21 +502,21 @@ class ZoteroStylePdfReader {
   private renderAppearancePopup() {
     const value = this.readingAppearance;
     this.appearancePopup.innerHTML = `
-      <div class="reader-appearance-heading"><strong>Reading appearance</strong><button type="button" data-appearance="close" aria-label="Close appearance">✕</button></div>
-      <label class="reader-reading-switch"><span>Reading Mode</span><input type="checkbox" data-appearance="enabled" ${this.readingEnabled ? "checked" : ""} /></label>
-      <fieldset class="reader-reflow-settings"><legend>Reflowable text</legend>
-        <label>Font<select data-appearance="fontFamily"><option value="serif" ${value.fontFamily === "serif" ? "selected" : ""}>Serif</option><option value="sans" ${value.fontFamily === "sans" ? "selected" : ""}>Sans serif</option></select></label>
+      <div class="reader-appearance-heading"><strong>${i18next.t("reader:appearance.readingHeading")}</strong><button type="button" data-appearance="close" aria-label="${i18next.t("reader:appearance.closeAria")}">✕</button></div>
+      <label class="reader-reading-switch"><span>${i18next.t("reader:appearance.readingModeToggle")}</span><input type="checkbox" data-appearance="enabled" ${this.readingEnabled ? "checked" : ""} /></label>
+      <fieldset class="reader-reflow-settings"><legend>${i18next.t("reader:appearance.reflowLegend")}</legend>
+        <label>${i18next.t("reader:appearance.font")}<select data-appearance="fontFamily"><option value="serif" ${value.fontFamily === "serif" ? "selected" : ""}>${i18next.t("reader:appearance.serif")}</option><option value="sans" ${value.fontFamily === "sans" ? "selected" : ""}>${i18next.t("reader:appearance.sans")}</option></select></label>
         ${([
-          ["fontSize", "Font size", 12, 36, 1, value.fontSize],
-          ["lineHeight", "Line height", .8, 2, .4, value.lineHeight],
-          ["wordSpacing", "Word spacing", -50, 100, 10, value.wordSpacing],
-          ["letterSpacing", "Letter spacing", -.05, .1, .01, value.letterSpacing],
+          ["fontSize", i18next.t("reader:appearance.fontSize"), 12, 36, 1, value.fontSize],
+          ["lineHeight", i18next.t("reader:appearance.lineHeight"), .8, 2, .4, value.lineHeight],
+          ["wordSpacing", i18next.t("reader:appearance.wordSpacing"), -50, 100, 10, value.wordSpacing],
+          ["letterSpacing", i18next.t("reader:appearance.letterSpacing"), -.05, .1, .01, value.letterSpacing],
         ] as const).map(([name, label, min, max, step, current]) => `<label>${label}<input type="range" aria-label="${label}" data-appearance="${name}" min="${min}" max="${max}" step="${step}" value="${current}" /><output data-appearance-output="${name}">${current}</output></label>`).join("")}
-        <label>Page width<select data-appearance="pageWidth">${(["narrow", "normal", "full"] as const).map(width => `<option value="${width}" ${value.pageWidth === width ? "selected" : ""}>${width === "narrow" ? "Narrow" : width === "normal" ? "Normal" : "Full"}</option>`).join("")}</select></label>
-        <div class="reader-reading-themes" role="group" aria-label="Reading theme">${(["light", "sepia", "dark"] as const).map(theme => `<button type="button" data-appearance-theme="${theme}" aria-pressed="${value.theme === theme}">${theme === "light" ? "Light" : theme === "sepia" ? "Sepia" : "Dark"}</button>`).join("")}</div>
-        <button type="button" data-appearance="reset">Reset appearance</button>
+        <label>${i18next.t("reader:appearance.pageWidth")}<select data-appearance="pageWidth">${(["narrow", "normal", "full"] as const).map(width => `<option value="${width}" ${value.pageWidth === width ? "selected" : ""}>${width === "narrow" ? i18next.t("reader:appearance.narrow") : width === "normal" ? i18next.t("reader:appearance.normal") : i18next.t("reader:appearance.full")}</option>`).join("")}</select></label>
+        <div class="reader-reading-themes" role="group" aria-label="${i18next.t("reader:appearance.themeGroupAria")}">${(["light", "sepia", "dark"] as const).map(theme => `<button type="button" data-appearance-theme="${theme}" aria-pressed="${value.theme === theme}">${theme === "light" ? i18next.t("reader:appearance.light") : theme === "sepia" ? i18next.t("reader:appearance.sepia") : i18next.t("reader:appearance.dark")}</button>`).join("")}</div>
+        <button type="button" data-appearance="reset">${i18next.t("reader:appearance.reset")}</button>
       </fieldset>
-      <p>Text reflows to fit the window. Figures and formulas retain their original PDF appearance.</p>`;
+      <p>${i18next.t("reader:appearance.pdfHint")}</p>`;
     this.appearancePopup.querySelector('[data-appearance="close"]')?.addEventListener("click", () => this.closeAppearancePopup());
     this.appearancePopup.querySelector('[data-appearance="enabled"]')?.addEventListener("change", () => void this.toggleReadingMode());
     this.appearancePopup.querySelector('[data-appearance="reset"]')?.addEventListener("click", () => {
@@ -581,8 +582,8 @@ class ZoteroStylePdfReader {
       if (enabled) {
         this.readingLoading = true;
         button.disabled = true; button.setAttribute("aria-busy", "true");
-        button.textContent = "Preparing…";
-        this.setStatus("Extracting structured text with Zotero…");
+        button.textContent = i18next.t("reader:status.preparing");
+        this.setStatus(i18next.t("reader:status.extracting"));
         const pdfPage = this.currentPage;
         const view = this.pageViews.get(pdfPage);
         const bounds = view?.wrapper.getBoundingClientRect();
@@ -594,9 +595,9 @@ class ZoteroStylePdfReader {
           if (this.destroyed) return;
           const structure = response?.structure;
           if (!structure || structure.metadata?.processor?.type !== "pdf" || !Array.isArray(structure.content) || !Array.isArray(structure.catalog?.pages)) {
-            throw new Error("The extractor did not return a Zotero SDT document");
+            throw new Error(i18next.t("reader:status.extractorFailed"));
           }
-          if (!structure.content.length) throw new Error("No readable content was found in this PDF");
+          if (!structure.content.length) throw new Error(i18next.t("reader:status.noReadableContent"));
           this.readingStructure = structure;
         }
         this.readingEnabled = true;
@@ -617,7 +618,7 @@ class ZoteroStylePdfReader {
         this.zoomLabel.textContent = `${this.readingAppearance.fontSize} px`;
         this.renderReadingOutline();
         this.readingArea.focus({ preventScroll: true });
-        this.setStatus("Reading Mode · Zotero structured text");
+        this.setStatus(i18next.t("reader:status.readingModeActive"));
       } else {
         const anchor = this.readingView?.captureAnchor(this.readingArea.clientHeight / 2);
         const block = anchor && this.readingStructure?.content[Number(anchor.ref.split(".")[0])];
@@ -641,12 +642,12 @@ class ZoteroStylePdfReader {
         this.setCurrentPage(page, true);
         await this.loadOutline();
         this.pageArea.tabIndex = 0; this.pageArea.focus({ preventScroll: true });
-        this.setStatus(`${page} / ${this.pageCount}`);
+        this.setStatus(i18next.t("reader:status.pageOf", { page: page.toLocaleString(), total: this.pageCount.toLocaleString() }));
       }
       this.root.querySelectorAll<HTMLButtonElement>('[data-action="fit-width"],[data-action="fit-page"]').forEach(node => node.disabled = enabled);
       this.saveReadingLocation();
     } catch (error) {
-      if (!this.destroyed) this.setStatus(`Reading Mode unavailable: ${String(error)}`);
+      if (!this.destroyed) this.setStatus(i18next.t("reader:status.readingModeUnavailable", { error: String(error) }));
       if (!this.readingView) {
         this.readingEnabled = false; this.pageArea.hidden = false; this.readingArea.hidden = true;
         this.root.dataset.readingMode = "false";
@@ -654,8 +655,8 @@ class ZoteroStylePdfReader {
     } finally {
       this.readingLoading = false;
       button.disabled = false; button.removeAttribute("aria-busy");
-      const readingLabel = this.readingEnabled ? "Original PDF" : "Reading Mode (Alt+R)";
-      button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TOOLBAR_ICONS[this.readingEnabled ? "page" : "book"]}</svg><span class="reader-tool-label">${this.readingEnabled ? "PDF" : "Read"}</span>`;
+      const readingLabel = this.readingEnabled ? i18next.t("reader:toolbar.originalPdf") : i18next.t("reader:toolbar.readingMode");
+      button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TOOLBAR_ICONS[this.readingEnabled ? "page" : "book"]}</svg><span class="reader-tool-label">${this.readingEnabled ? i18next.t("reader:toolbar.pdf") : i18next.t("reader:toolbar.read")}</span>`;
       button.title = readingLabel;
       button.setAttribute("aria-label", readingLabel);
       button.setAttribute("aria-pressed", String(this.readingEnabled));
@@ -677,7 +678,7 @@ class ZoteroStylePdfReader {
       }
     };
     walk(this.readingStructure!.catalog.outline, 0);
-    if (!this.outlinePane.childElementCount) this.outlinePane.innerHTML = '<div class="reader-empty">No outline</div>';
+    if (!this.outlinePane.childElementCount) this.outlinePane.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noOutline")}</div>`;
   }
 
   private captureReadingSelection(range: Range) {
@@ -734,7 +735,7 @@ class ZoteroStylePdfReader {
   private applyTheme() {
     this.root.dataset.pdfTheme = this.pdfTheme;
     const icon = this.pdfTheme === "dark" ? THEME_DARK_ICON : THEME_LIGHT_ICON;
-    const title = this.pdfTheme === "dark" ? "Switch to light mode" : "Switch to dark mode";
+    const title = this.pdfTheme === "dark" ? i18next.t("reader:reading.switchLight") : i18next.t("reader:reading.switchDark");
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="toggle-theme"], [data-action="m-theme"]')) {
       // Replace only the icon so labelled mobile buttons keep their text.
       const svg = button.querySelector("svg");
@@ -794,9 +795,9 @@ class ZoteroStylePdfReader {
     });
     action("copy-selection-toolbar", () => void this.copySelection());
     const addReference = () => {
-      if (!this.anchor?.text) { toast.info("请先选择要引用的文本"); return; }
+      if (!this.anchor?.text) { toast.info(i18next.t("reader:toasts.selectTextToReference")); return; }
       this.workspace.onReference?.({ text: this.anchor.text, page: this.anchor.page });
-      toast.success("已加入当前会话引用");
+      toast.success(i18next.t("reader:toasts.referenceAdded"));
     };
     action("add-context", addReference);
     action("add-selection-context", addReference);
@@ -1108,7 +1109,7 @@ class ZoteroStylePdfReader {
       const keywords = this.article?.keywords ?? [];
       tags.replaceChildren();
       if (!keywords.length) {
-        tags.innerHTML = `<div class="reader-empty">No tags</div>`;
+        tags.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noTags")}</div>`;
       } else {
         for (const keyword of keywords) {
           const badge = document.createElement("span");
@@ -1125,7 +1126,7 @@ class ZoteroStylePdfReader {
   }
 
   private async load(bytes: Uint8Array) {
-    this.setStatus("Parsing PDF…");
+    this.setStatus(i18next.t("reader:status.parsing"));
     this.document = await pdfjs.getDocument({
       data: bytes,
       useSystemFonts: true,
@@ -1198,7 +1199,7 @@ class ZoteroStylePdfReader {
       button.className = "reader-thumbnail";
       button.dataset.page = String(page);
       button.innerHTML = `
-        <span class="reader-thumbnail-canvas"><span>Loading…</span></span>
+        <span class="reader-thumbnail-canvas"><span>${i18next.t("reader:empty.loading")}</span></span>
         <span>${page.toLocaleString()}</span>`;
       button.addEventListener("click", () => void this.gotoPage(page));
       this.thumbnailsPane.append(button);
@@ -1243,7 +1244,7 @@ class ZoteroStylePdfReader {
     if (!this.document) return;
     const raw = await this.document.getOutline();
     if (!raw?.length) {
-      this.outlinePane.innerHTML = `<div class="reader-empty">No outline</div>`;
+      this.outlinePane.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noOutline")}</div>`;
       return;
     }
 
@@ -1251,7 +1252,7 @@ class ZoteroStylePdfReader {
     const walk = async (items: any[], depth: number) => {
       for (const item of items) {
         entries.push({
-          title: item.title || "Untitled",
+          title: item.title || i18next.t("reader:empty.untitled"),
           page: await this.destinationPage(item.dest),
           depth,
         });
@@ -1290,14 +1291,14 @@ class ZoteroStylePdfReader {
             annotation.rects = geometry.rects;
           } catch (error) {
             annotation.rects = [];
-            this.setStatus(`Annotation ${annotation.id} could not be anchored: ${String(error)}`);
+            this.setStatus(i18next.t("reader:status.annotationAnchorFailed", { id: annotation.id, error: String(error) }));
           }
         }
       }
       this.renderAnnotations();
       this.renderAnnotationList();
     } catch (error) {
-      this.setStatus(`Annotations unavailable: ${String(error)}`);
+      this.setStatus(i18next.t("reader:status.annotationsUnavailable", { error: String(error) }));
     }
   }
 
@@ -1337,9 +1338,9 @@ class ZoteroStylePdfReader {
           node.style.top = `${(box.top + box.height / 2) * 100}%`;
           node.style.width = "22px"; node.style.height = "22px";
           node.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${TOOLBAR_ICONS.note}</svg>`;
-          node.setAttribute("aria-label", "Note");
+          node.setAttribute("aria-label", i18next.t("reader:inspector.note"));
         }
-        node.title = isNote ? annotation.content : "Click to select annotation";
+        node.title = isNote ? annotation.content : i18next.t("reader:inspector.clickToSelect");
         view.wrapper.append(node);
       }
       if (!isNote && boxes.length) {
@@ -1409,7 +1410,7 @@ class ZoteroStylePdfReader {
   private renderAnnotationList() {
     this.annotationPane.replaceChildren();
     if (!this.annotations.length) {
-      this.annotationPane.innerHTML = `<div class="reader-empty">No annotations</div>`;
+      this.annotationPane.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noAnnotations")}</div>`;
       return;
     }
     for (const annotation of [...this.annotations].reverse()) {
@@ -1419,7 +1420,7 @@ class ZoteroStylePdfReader {
       button.dataset.annotationId = annotation.id;
       button.setAttribute("aria-pressed", "false");
       button.innerHTML = `
-        <strong>Page ${Number(annotation.page ?? 1).toLocaleString()}</strong>
+        <strong>${escapeHtml(i18next.t("reader:list.page", { page: Number(annotation.page ?? 1).toLocaleString() }))}</strong>
         <small>${escapeHtml(annotation.content.slice(0, 180))}</small>
         ${annotation.comment ? `<small class="reader-annotation-list-comment">${escapeHtml(annotation.comment)}</small>` : ""}
         ${annotation.tags?.length ? `<small>${annotation.tags.map((tag: string) => escapeHtml(tag)).join(" · ")}</small>` : ""}`;
@@ -1507,16 +1508,16 @@ class ZoteroStylePdfReader {
   private async copySelection(closePopup = false) {
     const text = this.anchor?.text;
     if (!text) {
-      toast.info("Select text to copy first");
+      toast.info(i18next.t("reader:toasts.selectFirstToCopy"));
       return;
     }
     try {
       await navigator.clipboard.writeText(text);
       if (this.destroyed) return;
       if (closePopup) this.hideSelectionPopup();
-      toast.success("Copied to clipboard");
+      toast.success(i18next.t("reader:toasts.copied"));
     } catch {
-      if (!this.destroyed) toast.error("Unable to copy. Please try again.");
+      if (!this.destroyed) toast.error(i18next.t("reader:toasts.copyFailed"));
     }
   }
 
@@ -1620,8 +1621,8 @@ class ZoteroStylePdfReader {
       }
     }
     this.annotationInspector.close();
-    if (tool === "highlight") toast.info("Drag across text to highlight it");
-    if (tool === "note") toast.info("Click on the page to place a note");
+    if (tool === "highlight") toast.info(i18next.t("reader:toasts.dragToHighlight"));
+    if (tool === "note") toast.info(i18next.t("reader:toasts.clickToPlaceNote"));
   }
 
   private finishTextSelection() {
@@ -1644,7 +1645,7 @@ class ZoteroStylePdfReader {
       this.renderAnnotations(); this.renderAnnotationList(); this.renderSidebarTags();
       return annotation;
     } catch {
-      if (!this.destroyed) toast.error("Could not save annotation. Please try again.");
+      if (!this.destroyed) toast.error(i18next.t("reader:toasts.saveAnnotationFailed"));
       return null;
     }
   }
@@ -1668,7 +1669,7 @@ class ZoteroStylePdfReader {
       if (this.anchor === anchor) {
         this.hideSelectionPopup(); window.getSelection()?.removeAllRanges();
       }
-      if (!this.destroyed) toast.success("Highlight saved");
+      if (!this.destroyed) toast.success(i18next.t("reader:toasts.highlightSaved"));
     } finally {
       this.savingHighlights.delete(anchor);
     }
@@ -1680,7 +1681,7 @@ class ZoteroStylePdfReader {
     if (this.readingEnabled) {
       const range = document.caretRangeFromPoint?.(event.clientX, event.clientY);
       if (!range || !this.readingArea.contains(range.startContainer) || range.startContainer.nodeType !== Node.TEXT_NODE) {
-        toast.info("Click on text to place a note in Reading Mode"); return;
+        toast.info(i18next.t("reader:toasts.clickTextToPlaceNote")); return;
       }
       const node = range.startContainer as Text;
       const offset = Math.min(range.startOffset, node.length - 1);
@@ -1717,7 +1718,7 @@ class ZoteroStylePdfReader {
     this.noteComposer.open(point ?? target, async content => {
       const annotation = await this.saveAnnotation({ content, kind: "comment", page: target.page, rects: target.rects, color: defaultAnnotationColor() });
       if (!annotation) return false;
-      toast.success("Note saved");
+      toast.success(i18next.t("reader:toasts.noteSaved"));
       this.annotationInspector.select(annotation.id);
       return true;
     });
@@ -1737,9 +1738,9 @@ class ZoteroStylePdfReader {
 
   private async deleteAnnotation(id: string) {
     const confirmed = await this.alertDialog.open({
-      title: "Delete this annotation?",
-      description: "The annotation will be permanently removed from the document.",
-      actionLabel: "Delete",
+      title: i18next.t("reader:dialog.deleteTitle"),
+      description: i18next.t("reader:dialog.deleteDescription"),
+      actionLabel: i18next.t("reader:dialog.delete"),
       destructive: true,
     });
     if (!confirmed) return;
@@ -1777,7 +1778,7 @@ class ZoteroStylePdfReader {
   private async searchPdf(term: string, wordBoundary = false) {
     const sequence = ++this.searchSequence;
     if (!this.document || !term) { this.searchResults = []; this.renderSearchResults(); return; }
-    this.setStatus(`Searching “${term}”…`);
+    this.setStatus(i18next.t("reader:status.searching", { term }));
     const results: Array<{page:number;count:number}> = [];
     try {
       for (let page = 1; page <= this.pageCount; page++) {
@@ -1786,23 +1787,23 @@ class ZoteroStylePdfReader {
         const count = findTextRanges(text, term, wordBoundary).length;
         if (count) results.push({page,count});
       }
-    } catch (error) { if (!this.destroyed && sequence === this.searchSequence) this.setStatus(`Search unavailable: ${String(error)}`); return; }
+    } catch (error) { if (!this.destroyed && sequence === this.searchSequence) this.setStatus(i18next.t("reader:status.searchUnavailable", { error: String(error) })); return; }
     if (this.destroyed || sequence !== this.searchSequence) return;
     this.searchResults = results; this.renderSearchResults(); this.selectPane("search");
-    this.setStatus(results.length ? `${results.length.toLocaleString()} pages match` : "Indexed text could not be located in this file. Refresh the search or try another match.");
+    this.setStatus(results.length ? i18next.t("reader:status.pagesMatch", { pages: results.length.toLocaleString() }) : i18next.t("reader:status.searchLocated"));
   }
 
   private renderSearchResults() {
     const output = this.searchPane.querySelector("[data-output=search-results]")!;
     output.replaceChildren();
     if (!this.searchResults.length) {
-      output.innerHTML = `<div class="reader-empty">No matches</div>`;
+      output.innerHTML = `<div class="reader-empty">${i18next.t("reader:empty.noMatches")}</div>`;
       return;
     }
     for (const result of this.searchResults) {
       const button = document.createElement("button");
       button.type = "button";
-      button.innerHTML = `<strong>Page ${result.page.toLocaleString()}</strong><small>${result.count.toLocaleString()} matches</small>`;
+      button.innerHTML = `<strong>${escapeHtml(i18next.t("reader:list.page", { page: result.page.toLocaleString() }))}</strong><small>${escapeHtml(i18next.t("reader:list.matchCount", { count: result.count }))}</small>`;
       button.addEventListener("click", () => void this.gotoPage(result.page));
       output.append(button);
     }
@@ -1943,7 +1944,7 @@ class ZoteroStylePdfReader {
     this.textSelection.clear();
     this.hideSelectionPopup();
     window.getSelection()?.removeAllRanges();
-    this.setStatus("Rendering…");
+    this.setStatus(i18next.t("reader:status.rendering"));
     for (let page = 1; page <= this.pageCount; page += 1) {
       const proxy = await this.document.getPage(page);
       if (this.destroyed || layoutGeneration !== this.layoutGeneration) return;
@@ -2077,12 +2078,12 @@ class ZoteroStylePdfReader {
       this.renderPageAnnotations(page, view);
       view.wrapper.classList.remove("rendering");
       if (page === this.currentPage) {
-        this.setStatus(`${page.toLocaleString()} / ${this.pageCount.toLocaleString()}`);
+        this.setStatus(i18next.t("reader:status.pageOf", { page: page.toLocaleString(), total: this.pageCount.toLocaleString() }));
       }
     } catch (error) {
       if (view.generation === generation && !this.destroyed &&
           !["RenderingCancelledException", "AbortException"].includes((error as any)?.name)) {
-        this.setStatus(`Render failed: ${String(error)}`);
+        this.setStatus(i18next.t("reader:status.renderFailed", { error: String(error) }));
       }
     } finally {
       if (view.generation === generation) {

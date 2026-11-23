@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -37,6 +38,7 @@ import {
 type Row = WorkbenchCommand & { section: "editors" | "commands" };
 
 export function CommandPalette() {
+  const { t } = useTranslation("workbench");
   const palette = usePaletteState();
   const commands = useAllCommands();
   const state = useWorkbenchState();
@@ -89,14 +91,14 @@ export function CommandPalette() {
     <Dialog open onOpenChange={(open) => { if (!open) closePalette(); }}>
       <DialogContent className="top-[12%] translate-y-0 gap-0 overflow-hidden rounded-xl! p-0 sm:max-w-2xl">
         <DialogHeader className="sr-only">
-          <DialogTitle>命令面板</DialogTitle>
-          <DialogDescription>Ctrl+P 打开 · 输入过滤 · 上下选择 · Enter 执行。</DialogDescription>
+          <DialogTitle>{t("palette.title")}</DialogTitle>
+          <DialogDescription>{t("palette.description")}</DialogDescription>
         </DialogHeader>
         <Command loop className="gap-0 p-0">
           <CommandInput
             ref={inputRef}
             variant="plain"
-            placeholder={palette.mode === "commands" ? "选择命令…" : "搜索标签页或命令…"}
+            placeholder={palette.mode === "commands" ? t("palette.placeholderCommands") : t("palette.placeholderAll")}
             autoFocus
             className="text-[13px]"
           />
@@ -113,7 +115,7 @@ export function CommandPalette() {
                 <PaletteRow key={row.id} row={row} />
               ))}
             </CommandGroup>
-            <CommandEmpty className="py-8 text-center text-sm text-muted-foreground">没有匹配的命令</CommandEmpty>
+            <CommandEmpty className="py-8 text-center text-sm text-muted-foreground">{t("palette.empty")}</CommandEmpty>
           </CommandList>
         </Command>
       </DialogContent>
@@ -155,16 +157,17 @@ function PaletteRow({ row }: { row: Row }) {
 
 /** Shared footer hint button style for the title-bar command center. */
 export function CommandCenterButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation("workbench");
   return (
     <Button
       variant="outline"
       size="sm"
       className="h-7 w-64 justify-start gap-2 px-2.5 text-xs text-muted-foreground max-sm:w-full"
       onClick={onClick}
-      aria-label="命令面板"
-      title="命令面板(Ctrl+P)"
+      aria-label={t("commandCenter.aria")}
+      title={t("commandCenter.title")}
     >
-      <span className="truncate">搜索或输入命令…</span>
+      <span className="truncate">{t("commandCenter.placeholder")}</span>
       <kbd className="ml-auto shrink-0 rounded border bg-muted px-1 font-mono text-[10px] text-muted-foreground">Ctrl P</kbd>
     </Button>
   );

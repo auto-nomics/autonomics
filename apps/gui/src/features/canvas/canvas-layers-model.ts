@@ -1,4 +1,5 @@
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
+import i18n from "@/i18n";
 
 export type CanvasLayer = { id: string; name: string; ids: string[]; hidden: boolean; locked: boolean };
 export type LayerMetadata = { name?: string; elementName?: string; hidden?: boolean; opacityBeforeHide?: number; lockedBeforeHide?: boolean };
@@ -8,8 +9,8 @@ export const layerMetadata = (element: ExcalidrawElement): LayerMetadata => {
 };
 export const isLayerHidden = (element: ExcalidrawElement) => layerMetadata(element).hidden === true;
 
-const elementTypes: Record<string, string> = { rectangle: "矩形", ellipse: "椭圆", diamond: "菱形", arrow: "箭头", line: "线条", freedraw: "手绘", image: "图片", text: "文字", frame: "画框", embeddable: "嵌入内容" };
-export const canvasElementType = (element: ExcalidrawElement) => elementTypes[element.type] || "对象";
+const elementTypes: Record<string, string> = { rectangle: "layers.typeRectangle", ellipse: "layers.typeEllipse", diamond: "layers.typeDiamond", arrow: "layers.typeArrow", line: "layers.typeLine", freedraw: "layers.typeFreedraw", image: "layers.typeImage", text: "layers.typeText", frame: "layers.typeFrame", embeddable: "layers.typeEmbeddable" };
+export const canvasElementType = (element: ExcalidrawElement) => elementTypes[element.type] ? i18n.t(`canvas:${elementTypes[element.type]}`) : i18n.t("canvas:layers.typeObject");
 export function canvasElementName(element: ExcalidrawElement): string {
   const name = layerMetadata(element).elementName;
   if (typeof name === "string" && name.trim()) return name;

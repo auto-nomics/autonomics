@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Search } from "lucide-react";
 import { AgentStatusIcon, EFFORT_OPTIONS, effortLabel, leafName, modelShortLabel, statusLabel } from "@/features/agent";
 import { ContextMenu, ContextMenuCheckboxItem, ContextMenuContent, ContextMenuItem, ContextMenuShortcut, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -10,6 +11,7 @@ import type { AgentRuntime } from "../runtime-context";
 import { openAgentEditor } from "../workbench-store";
 
 export function AgentListPanel({ runtime, active }: { runtime: AgentRuntime; active: boolean }) {
+  const { t } = useTranslation("workbench");
   const [query, setQuery] = useState("");
   const paths = [...new Set([...runtime.openTabs, ...runtime.agents.map(agent => agent.path)])];
   const shown = paths.filter(path => path.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -36,25 +38,25 @@ export function AgentListPanel({ runtime, active }: { runtime: AgentRuntime; act
     runtime.loadModelCatalog().then(() => setCatalogError(false)).catch(() => setCatalogError(true));
   };
 
-  return <div id="agent-sidebar-list" role="tabpanel" aria-label="Agent 列表" hidden={!active} className={cn("min-h-0 flex-1 flex-col", active ? "flex" : "hidden")}>
+  return <div id="agent-sidebar-list" role="tabpanel" aria-label={t("agentSidebar.list")} hidden={!active} className={cn("min-h-0 flex-1 flex-col", active ? "flex" : "hidden")}>
     <div className="relative mx-3 mt-3">
       <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input aria-label="搜索 Agent" placeholder="搜索 Agent" className="h-8 pl-8 text-sm" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setQuery(""); }} />
+      <Input aria-label={t("agentList.search")} placeholder={t("agentList.search")} className="h-8 pl-8 text-sm" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === "Escape") setQuery(""); }} />
     </div>
-    <div className="flex h-9 shrink-0 items-center border-b px-4 text-xs text-muted-foreground">{shown.length} 个 Agent</div>
+    <div className="flex h-9 shrink-0 items-center border-b px-4 text-xs text-muted-foreground">{t("agentList.count", { count: shown.length })}</div>
     <ScrollArea className="min-h-0 flex-1" contentClassName="px-2 py-2">
-      {shown.length === 0 ? <p className="px-2 py-3 text-xs text-muted-foreground">{query ? "没有匹配的 Agent。" : "暂无 Agent，可创建或恢复。"}</p> : <div role="list" aria-label="Agent 列表">
+      {shown.length === 0 ? <p className="px-2 py-3 text-xs text-muted-foreground">{query ? t("agentList.noMatch") : t("agentList.empty")}</p> : <div role="list" aria-label={t("agentSidebar.list")}>
         {shown.map(path => {
           const status = runtime.statuses[path] ?? "idle";
           const modelSpec = runtime.agents.find(agent => agent.path === path)?.model;
           const modelShort = modelShortLabel(modelSpec);
           const effort = runtime.agentEfforts[path];
-          const effortText = effort === undefined ? "…" : effort === null ? "不支持思考" : effortLabel(effort);
-          const effortShort = effort === undefined ? "…" : effort === null ? "无" : effortLabel(effort);
+          const effortText = effort === undefined ? "…" : effort === null ? t("agentList.unsupported") : effortLabel(effort);
+          const effortShort = effort === undefined ? "…" : effort === null ? t("agentList.noneShort") : effortLabel(effort);
           return <div role="listitem" key={path}><ContextMenu onOpenChange={open => { if (open) { loadCatalog(); void runtime.refreshAgentEffort(path); } }}><HoverCard onOpenChange={open => { if (open) void runtime.refreshAgentEffort(path); }}>
             <HoverCardTrigger delay={150} closeDelay={100} render={
               <ContextMenuTrigger render={
-                <button type="button" aria-label={`打开 Agent ${path}（${statusLabel(status)}）`} aria-current={path === runtime.activeAgent ? "true" : undefined} className={cn("flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground", path === runtime.activeAgent && "bg-accent text-foreground")} onClick={() => { runtime.selectAgent(path); openAgentEditor(path); }}>
+                <button type="button" aria-label={t("agentList.openAgent", { path, status: statusLabel(status) })} aria-current={path === runtime.activeAgent ? "true" : undefined} className={cn("flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground", path === runtime.activeAgent && "bg-accent text-foreground")} onClick={() => { runtime.selectAgent(path); openAgentEditor(path); }}>
                   <AgentStatusIcon status={status} />
                   <span className="min-w-0 flex-1 truncate">{leafName(path)}</span>
                   <span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-muted-foreground/80">
@@ -69,17 +71,17 @@ export function AgentListPanel({ runtime, active }: { runtime: AgentRuntime; act
               <p className="break-all font-mono text-xs">{path}</p>
               <p className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground"><AgentStatusIcon status={status} />{statusLabel(status)}</p>
               <div className="mt-1.5 space-y-0.5 border-t pt-1.5 text-[11px] text-muted-foreground">
-                <p>模型：<span className="font-mono text-foreground">{modelSpec ?? "—"}</span></p>
-                <p>推理力度：{effortText}</p>
+                <p>{t("agentList.model")}<span className="font-mono text-foreground">{modelSpec ?? "—"}</span></p>
+                <p>{t("agentList.effort")}{effortText}</p>
               </div>
             </HoverCardContent>
           </HoverCard>
           <ContextMenuContent>
                 <ContextMenuSub>
-                  <ContextMenuSubTrigger>模型：{modelShort ?? "—"}</ContextMenuSubTrigger>
+                  <ContextMenuSubTrigger>{t("agentList.model")}{modelShort ?? "—"}</ContextMenuSubTrigger>
                   <ContextMenuSubContent className="max-h-72 overflow-y-auto">
-                    {catalogError ? <ContextMenuItem disabled>模型目录加载失败</ContextMenuItem>
-                      : !runtime.modelCatalog.length ? <ContextMenuItem disabled>模型目录为空，请在「设置 → 模型」中添加</ContextMenuItem>
+                    {catalogError ? <ContextMenuItem disabled>{t("agentList.catalogFailed")}</ContextMenuItem>
+                      : !runtime.modelCatalog.length ? <ContextMenuItem disabled>{t("agentList.catalogEmpty")}</ContextMenuItem>
                         : runtime.modelCatalog.map(model => {
                           const spec = `${model.provider_name}:${model.model_name}`;
                           return <ContextMenuCheckboxItem key={spec} checked={spec === modelSpec} closeOnClick onClick={() => { if (spec !== modelSpec) void runtime.setAgentModel(path, spec); }}>
@@ -90,9 +92,9 @@ export function AgentListPanel({ runtime, active }: { runtime: AgentRuntime; act
                   </ContextMenuSubContent>
                 </ContextMenuSub>
                 <ContextMenuSub>
-                  <ContextMenuSubTrigger disabled={effort === null}>推理力度：{effortText}</ContextMenuSubTrigger>
+                  <ContextMenuSubTrigger disabled={effort === null}>{t("agentList.effort")}{effortText}</ContextMenuSubTrigger>
                   <ContextMenuSubContent>
-                    {effort === null ? <ContextMenuItem disabled>当前模型不支持思考</ContextMenuItem>
+                    {effort === null ? <ContextMenuItem disabled>{t("agentList.effortUnsupported")}</ContextMenuItem>
                       : EFFORT_OPTIONS.map(option => <ContextMenuCheckboxItem key={option.value} checked={effort === option.value} closeOnClick onClick={() => { if (effort !== option.value) void runtime.setAgentEffort(path, option.value); }}>
                         <span className="min-w-0 flex-1">{option.label}</span>
                         <ContextMenuShortcut>{option.hint}</ContextMenuShortcut>

@@ -1,0 +1,1261 @@
+_version: 2
+tui.agentConfig.agent:
+  en: " Agent  "
+  zh: " Agent  "
+tui.agentConfig.effectiveEffort:
+  en: "effective %{effort}"
+  zh: "生效值 %{effort}"
+tui.agentConfig.footer:
+  en: " Up/Down select  Space cycle  Enter save  Esc cancel"
+  zh: " Up/Down 选择  Space 循环  Enter 保存  Esc 取消"
+tui.agentConfig.inherit:
+  en: "inherit"
+  zh: "继承"
+tui.agentConfig.loading:
+  en: " Loading runtime config..."
+  zh: " 正在加载运行时配置..."
+tui.agentConfig.memoryGeneration:
+  en: "Memory generation"
+  zh: "记忆生成"
+tui.agentConfig.memoryInjection:
+  en: "Memory injection"
+  zh: "记忆注入"
+tui.agentConfig.reasoningEffort:
+  en: "Reasoning effort"
+  zh: "推理力度"
+tui.agentConfig.saving:
+  en: " Saving..."
+  zh: " 保存中..."
+tui.agentConfig.title:
+  en: " Agent Config "
+  zh: " Agent 配置 "
+tui.agentLeaf.compactTriggerMidTurn:
+  en: "auto · mid-turn · ctx %{pct}%"
+  zh: "auto · 回合中 · ctx %{pct}%"
+tui.agentLeaf.compactTriggerPreRequest:
+  en: "auto · pre-request · ctx %{pct}%"
+  zh: "auto · 请求前 · ctx %{pct}%"
+tui.agentLeaf.compacting:
+  en: "⟳ compacting — %{phase}  (%{trigger})"
+  zh: "⟳ 压缩中 — %{phase}  (%{trigger})"
+tui.agentLeaf.pendingInput:
+  en: "Pending input (%{count})"
+  zh: "待发输入 (%{count})"
+tui.agentLeaf.pendingMore:
+  en: "  + %{count} more"
+  zh: "  + 另有 %{count} 条"
+tui.agentLeaf.runningHint:
+  en: "Agent running… (Ctrl+P → Cancel agent to cancel)"
+  zh: "Agent 运行中…(Ctrl+P → 取消 agent 以中止)"
+tui.agentLeaf.runningPendingInput:
+  en: "Agent running — pending input waits for next request…"
+  zh: "Agent 运行中 — 待发输入将等待下一次请求…"
+tui.agents.configureModelFirst:
+  en: "Configure a model before creating agents"
+  zh: "创建 agent 前请先配置模型"
+tui.agents.creationFailed:
+  en: "Agent creation failed"
+  zh: "Agent 创建失败"
+tui.agents.loadContextFailed:
+  en: "Failed to load agent context"
+  zh: "加载 agent 上下文失败"
+tui.bib.allArticles:
+  en: "All articles"
+  zh: "全部文献"
+tui.bib.articleId:
+  en: "Article ID: %{id}"
+  zh: "文献 ID: %{id}"
+tui.bib.articlesTitle:
+  en: " Articles (%{count}) "
+  zh: " 文献 ({count}) "
+tui.bib.collections:
+  en: " Collections "
+  zh: " 收藏集 "
+tui.bib.collectionsWithDesc:
+  en: " Collections (+ descendants) "
+  zh: " 收藏集 (含子项) "
+tui.bib.fAbstract:
+  en: "Abstract"
+  zh: "摘要"
+tui.bib.fAuthors:
+  en: "Authors"
+  zh: "作者"
+tui.bib.fDoi:
+  en: "DOI"
+  zh: "DOI"
+tui.bib.fExtractor:
+  en: "Extractor"
+  zh: "抽取器"
+tui.bib.fFile:
+  en: "File"
+  zh: "文件"
+tui.bib.fJournal:
+  en: "Journal"
+  zh: "期刊"
+tui.bib.fKeywords:
+  en: "Keywords"
+  zh: "关键词"
+tui.bib.fPmid:
+  en: "PMID"
+  zh: "PMID"
+tui.bib.fTitle:
+  en: "Title"
+  zh: "标题"
+tui.bib.fYear:
+  en: "Year"
+  zh: "年份"
+tui.bib.fullTextPending:
+  en: "Full text uploaded; extraction pending"
+  zh: "全文已上传;抽取进行中"
+tui.bib.helpSelected:
+  en: "Tab switch · / search · j/k move · h/l tabs/tree · R descendants · r reload · q quit · selected %{selected}"
+  zh: "Tab 切换 · / 搜索 · j/k 移动 · h/l 标签/树 · R 子项 · r 重载 · q 退出 · 已选 %{selected}"
+tui.bib.helpShort:
+  en: "Tab / j/k h/l · R descendants · r reload · q quit · %{selected}"
+  zh: "Tab / j/k h/l · R 子项 · r 重载 · q 退出 · %{selected}"
+tui.bib.noArticleSelected:
+  en: "No article selected"
+  zh: "未选择文献"
+tui.bib.noFullText:
+  en: "No full text stored"
+  zh: "未存储全文"
+tui.bib.noNotesYet:
+  en: "No notes yet"
+  zh: "暂无笔记"
+tui.bib.none:
+  en: "none"
+  zh: "无"
+tui.bib.notAvailable:
+  en: "Not available"
+  zh: "不可用"
+tui.bib.ready:
+  en: "ready"
+  zh: "就绪"
+tui.bib.resultsCount:
+  en: "%{count} results "
+  zh: "%{count} 条结果 "
+tui.bib.searchTitle:
+  en: " Search "
+  zh: " 搜索 "
+tui.chat.assistant:
+  en: "Assistant"
+  zh: "Assistant"
+tui.chat.backgroundTask:
+  en: "⏳ %{name} (background task #%{seq})"
+  zh: "⏳ %{name} (后台任务 #%{seq})"
+tui.chat.cancelled:
+  en: "⊘ Turn cancelled by user"
+  zh: "⊘ 回合已被用户取消"
+tui.chat.compactDone:
+  en: "* compacted %{before} msgs → %{after} msgs · summary %{summary} tok · freed %{freed} · %{secs}s"
+  zh: "* 已压缩 %{before} 条消息 → %{after} 条消息 · 摘要 %{summary} tok · 释放 %{freed} · %{secs}s"
+tui.chat.compactFailed:
+  en: "x compaction failed: %{error}"
+  zh: "x 压缩失败: %{error}"
+tui.chat.compactSkipped:
+  en: "* compaction skipped — conversation too short"
+  zh: "* 已跳过压缩 — 对话过短"
+tui.chat.errorPrefix:
+  en: "x Error: "
+  zh: "x 错误: "
+tui.chat.injectedAgent:
+  en: "agent · %{path}"
+  zh: "agent · %{path}"
+tui.chat.injectedSystem:
+  en: "system"
+  zh: "system"
+tui.chat.injectedUser:
+  en: "notice"
+  zh: "notice"
+tui.chat.lineCount:
+  en: " %{count} lines"
+  zh: " %{count} 行"
+tui.chat.moreLines:
+  en: "  … +%{count} more lines"
+  zh: "  … 另有 %{count} 行"
+tui.chat.resultCollapsed:
+  en: " %{icon} Result · %{summary} · collapsed"
+  zh: " %{icon} 结果 · %{summary} · 已折叠"
+tui.chat.retry:
+  en: "↻ Retry %{attempt}/%{max}"
+  zh: "↻ 重试 %{attempt}/%{max}"
+tui.chat.summaryMany:
+  en: "%{lines} lines · %{chars} chars"
+  zh: "%{lines} 行 · %{chars} 字符"
+tui.chat.summaryOne:
+  en: "1 line · %{chars} chars"
+  zh: "1 行 · %{chars} 字符"
+tui.chat.thinkingCollapsed:
+  en: " >> [thinking — %{count} lines, collapsed]"
+  zh: " >> [思考 — %{count} 行,已折叠]"
+tui.cmd.leaderDetail:
+  en: "␣%{ch} is not bound; Esc cancels, ␣␣ opens the palette"
+  zh: "␣%{ch} 未绑定;Esc 取消,␣␣ 打开命令面板"
+tui.cmd.leaderTitle:
+  en: "Leader"
+  zh: "Leader"
+tui.cmd.splitDetail:
+  en: "Open another agent first"
+  zh: "请先打开另一个 agent"
+tui.cmd.splitTitle:
+  en: "Split"
+  zh: "分屏"
+tui.cmd.switchedTheme:
+  en: "Switched to %{variant} (%{name})"
+  zh: "已切换到 %{variant} (%{name})"
+tui.cmd.themeTitle:
+  en: "Theme"
+  zh: "主题"
+tui.commandPalette.agentSettings:
+  en: "Agent settings"
+  zh: "Agent 设置"
+tui.commandPalette.agentsPopup:
+  en: "Agents popup"
+  zh: "Agent 弹窗"
+tui.commandPalette.bibliographyLibrary:
+  en: "Bibliography library"
+  zh: "文献库"
+tui.commandPalette.cancelAgent:
+  en: "Cancel agent"
+  zh: "取消 agent"
+tui.commandPalette.catAgent:
+  en: "agent"
+  zh: "agent"
+tui.commandPalette.catApp:
+  en: "app"
+  zh: "应用"
+tui.commandPalette.catClipboard:
+  en: "clipboard"
+  zh: "剪贴板"
+tui.commandPalette.catConfig:
+  en: "config"
+  zh: "配置"
+tui.commandPalette.catData:
+  en: "data"
+  zh: "数据"
+tui.commandPalette.catModel:
+  en: "model"
+  zh: "模型"
+tui.commandPalette.catResearch:
+  en: "research"
+  zh: "研究"
+tui.commandPalette.catSystem:
+  en: "system"
+  zh: "系统"
+tui.commandPalette.catView:
+  en: "view"
+  zh: "视图"
+tui.commandPalette.chatOnlyView:
+  en: "Chat-only view"
+  zh: "仅对话视图"
+tui.commandPalette.closeAgent:
+  en: "Close agent"
+  zh: "关闭 agent"
+tui.commandPalette.compactConversation:
+  en: "Compact conversation"
+  zh: "压缩对话"
+tui.commandPalette.computeDashboard:
+  en: "Compute Dashboard"
+  zh: "算力面板"
+tui.commandPalette.copyMessage:
+  en: "Copy message"
+  zh: "复制消息"
+tui.commandPalette.deleteAgent:
+  en: "Delete agent"
+  zh: "删除 agent"
+tui.commandPalette.embeddingModel:
+  en: "Embedding model"
+  zh: "嵌入模型"
+tui.commandPalette.footer:
+  en: " Enter run  ↑↓ navigate  Esc cancel"
+  zh: " Enter 运行  ↑↓ 导航  Esc 取消"
+tui.commandPalette.newAgent:
+  en: "New agent"
+  zh: "新建 agent"
+tui.commandPalette.placeholder:
+  en: "search commands…"
+  zh: "搜索命令…"
+tui.commandPalette.quit:
+  en: "Quit"
+  zh: "退出"
+tui.commandPalette.reloadConfig:
+  en: "Reload config"
+  zh: "重载配置"
+tui.commandPalette.resumeAgent:
+  en: "Resume agent"
+  zh: "恢复 agent"
+tui.commandPalette.scrollToBottom:
+  en: "Scroll to bottom"
+  zh: "滚动到底部"
+tui.commandPalette.scrollToTop:
+  en: "Scroll to top"
+  zh: "滚动到顶部"
+tui.commandPalette.searchHistory:
+  en: "Search history"
+  zh: "搜索历史"
+tui.commandPalette.selectModel:
+  en: "Select model"
+  zh: "选择模型"
+tui.commandPalette.title:
+  en: " Command Palette "
+  zh: " 命令面板 "
+tui.commandPalette.toggleAutoScroll:
+  en: "Toggle auto-scroll"
+  zh: "切换自动滚动"
+tui.commandPalette.toggleTheme:
+  en: "Toggle theme"
+  zh: "切换主题"
+tui.commandPalette.toggleThinkingBlocks:
+  en: "Toggle thinking blocks"
+  zh: "切换思考块"
+tui.commandPalette.toggleToolCalls:
+  en: "Toggle tool calls"
+  zh: "切换工具调用"
+tui.commandPalette.toggleToolResults:
+  en: "Toggle tool results"
+  zh: "切换工具结果"
+tui.commandPalette.vfsBrowser:
+  en: "VFS browser"
+  zh: "VFS 浏览器"
+tui.commandPalette.viewDag:
+  en: "View DAG"
+  zh: "查看 DAG"
+tui.confirm.or:
+  en: " or "
+  zh: " 或 "
+tui.confirm.press:
+  en: " Press "
+  zh: " 按 "
+tui.confirm.toApplyComma:
+  en: " to apply, "
+  zh: " 应用,"
+tui.confirm.toCancel:
+  en: " to cancel"
+  zh: " 取消"
+tui.confirm.toConfirmComma:
+  en: " to confirm, "
+  zh: " 确认,"
+tui.dag.cachedMark:
+  en: "cached"
+  zh: "已缓存"
+tui.dag.dirtyMark:
+  en: "dirty *"
+  zh: "脏 *"
+tui.dag.footer:
+  en: "  ←→ dataflow · ↑↓ siblings · Tab next · R refresh · Esc close"
+  zh: "  ←→ 数据流 · ↑↓ 同级 · Tab 下一个 · R 刷新 · Esc 关闭"
+tui.dag.footerCached:
+  en: " · cached"
+  zh: " · 已缓存"
+tui.dag.footerDirty:
+  en: " · dirty"
+  zh: " · 脏"
+tui.dag.footerFixture:
+  en: " · Space fixture"
+  zh: " · Space fixture"
+tui.dag.layoutFailed:
+  en: "DAG layout failed"
+  zh: "DAG 布局失败"
+tui.dag.noNodes:
+  en: "No DAG nodes. Ask the agent to add one."
+  zh: "无 DAG 节点。让 agent 添加一个。"
+tui.dag.stats:
+  en: " %{nodes} nodes · %{edges} edges · %{running} running · %{failed} failed "
+  zh: " %{nodes} 节点 · %{edges} 边 · %{running} 运行中 · %{failed} 失败 "
+tui.dag.title:
+  en: " DAG "
+  zh: " DAG "
+tui.dagView.loading:
+  en: "Loading DAG snapshot…"
+  zh: "正在加载 DAG 快照…"
+tui.dagView.noActiveAgent:
+  en: "No active agent. The DAG view is scoped to an agent session."
+  zh: "无活动 agent。DAG 视图限定在 agent 会话内。"
+tui.dagView.title:
+  en: " Data DAG "
+  zh: " 数据 DAG "
+tui.deleteConfirm.historyErased:
+  en: " All conversation history will be erased."
+  zh: " 所有对话历史将被清除。"
+tui.deleteConfirm.prompt:
+  en: " Permanently delete "
+  zh: " 永久删除 "
+tui.deleteConfirm.q:
+  en: "?"
+  zh: "?"
+tui.deleteConfirm.title:
+  en: "Delete Agent"
+  zh: "删除 Agent"
+tui.effortPicker.inheritDefault:
+  en: "inherit (model default)"
+  zh: "继承(模型默认)"
+tui.effortPicker.title:
+  en: " Set Effort (bulk) "
+  zh: " 设置推理力度 (批量) "
+tui.embeddingConfig.baseUrl:
+  en: "Base URL"
+  zh: "Base URL"
+tui.embeddingConfig.batchSize:
+  en: "Batch size"
+  zh: "批大小"
+tui.embeddingConfig.enabled:
+  en: "Enabled"
+  zh: "启用"
+tui.embeddingConfig.model:
+  en: "Model"
+  zh: "模型"
+tui.embeddingConfig.saveApply:
+  en: "Save and apply (Enter)"
+  zh: "保存并应用 (Enter)"
+tui.embeddingConfig.timeoutSeconds:
+  en: "Timeout (seconds)"
+  zh: "超时 (秒)"
+tui.embeddingConfig.title:
+  en: " Embedding Model "
+  zh: " 嵌入模型 "
+tui.empty.noAgentTitle:
+  en: " No Agent "
+  zh: " 无 Agent "
+tui.empty.noAgentsPressCtrlP:
+  en: "No agents — press Ctrl+P to start"
+  zh: "无 agent — 按 Ctrl+P 开始"
+tui.empty.noAgentsRunning:
+  en: "No agents running."
+  zh: "没有运行中的 agent。"
+tui.empty.startHint:
+  en: "Ctrl+P → \"New agent\" or \"Resume agent\" to start."
+  zh: "Ctrl+P → \"新建 agent\" 或 \"恢复 agent\" 开始。"
+tui.events.agentConfigSaved:
+  en: "Agent config saved"
+  zh: "Agent 配置已保存"
+tui.events.catalogueRefreshed:
+  en: "Catalogue refreshed"
+  zh: "目录已刷新"
+tui.events.connectionRecovery:
+  en: "Connection recovery"
+  zh: "连接恢复"
+tui.events.copyFailed:
+  en: "Copy failed"
+  zh: "复制失败"
+tui.events.copyFailedDetail:
+  en: "%{error}; the authorize URL is in the log"
+  zh: "%{error};授权 URL 已写入日志"
+tui.events.customModelDeleted:
+  en: "Custom model deleted"
+  zh: "自定义模型已删除"
+tui.events.enrollment:
+  en: "Enrollment"
+  zh: "注册"
+tui.events.modelCount:
+  en: "%{provider}: %{count} models"
+  zh: "%{provider}: %{count} 个模型"
+tui.events.modelSwapFailed:
+  en: "Model swap failed"
+  zh: "模型切换失败"
+tui.events.mountRow:
+  en: "%{id} → %{prefix} (%{root})"
+  zh: "%{id} → %{prefix} (%{root})"
+tui.events.operationFailed:
+  en: "%{operation} failed: %{error}"
+  zh: "%{operation}失败: %{error}"
+tui.events.operationUnknown:
+  en: "%{operation} status unknown. Reload the snapshot before retrying."
+  zh: "%{operation}状态未知。重试前请先重载快照。"
+tui.events.repairError:
+  en: "[error] %{error}"
+  zh: "[错误] %{error}"
+tui.events.runtimeSettingsUpdated:
+  en: "%{agent}: runtime settings updated"
+  zh: "%{agent}: 运行时设置已更新"
+tui.events.targetsError:
+  en: "targets: %{error}"
+  zh: "targets: %{error}"
+tui.flow.ignoredSuffix:
+  en: " · %{count} ignored"
+  zh: " · 忽略 %{count}"
+tui.flow.lastRun:
+  en: "last run: "
+  zh: "上次运行: "
+tui.flow.loadFailed:
+  en: "flow load failed: %{error}"
+  zh: "flow 加载失败: %{error}"
+tui.flow.loading:
+  en: "loading flow…"
+  zh: "正在加载 flow…"
+tui.flow.summary:
+  en: "    %{total} total · %{ok} ok · %{failed} failed · %{skipped} skipped · %{reused} reused%{ignored}"
+  zh: "    共 %{total} · 成功 %{ok} · 失败 %{failed} · 跳过 %{skipped} · 复用 %{reused}%{ignored}"
+tui.hpc.checkError:
+  en: "%{id}: %{error}"
+  zh: "%{id}: %{error}"
+tui.hpc.checkFailed:
+  en: "check failed"
+  zh: "检查失败"
+tui.hpc.checkPassed:
+  en: "%{id}: configuration check passed"
+  zh: "%{id}: 配置检查通过"
+tui.hpc.checking:
+  en: "Checking %{id}…"
+  zh: "正在检查 %{id}…"
+tui.hpc.dataSource:
+  en: "Data source: /data/%{source}"
+  zh: "数据源: /data/%{source}"
+tui.hpc.defaultTag:
+  en: "(default)"
+  zh: "(默认)"
+tui.hpc.deleteCancelled:
+  en: "Delete cancelled"
+  zh: "已取消删除"
+tui.hpc.deleteConfirm:
+  en: "Delete %{name}? y or Ctrl+X confirms; any other key cancels"
+  zh: "删除 %{name}?y 或 Ctrl+X 确认;其他键取消"
+tui.hpc.detailsTitle:
+  en: " Target details "
+  zh: " 目标详情 "
+tui.hpc.disabledTag:
+  en: " · disabled"
+  zh: " · 已禁用"
+tui.hpc.editBuffer:
+  en: "    edit: %{buffer}_  (Enter commit · Esc cancel)"
+  zh: "    编辑: %{buffer}_  (Enter 提交 · Esc 取消)"
+tui.hpc.editTitle:
+  en: " Edit target "
+  zh: " 编辑目标 "
+tui.hpc.endpointsLocal:
+  en: "    endpoints: (local, none frozen)"
+  zh: "    端点: (本地,未冻结)"
+tui.hpc.enrollTitle:
+  en: " Enroll compute target "
+  zh: " 注册算力目标 "
+tui.hpc.enrollmentProgress:
+  en: " Enrollment progress "
+  zh: " 注册进度 "
+tui.hpc.errChooseBackend:
+  en: "Choose SSH or Slurm"
+  zh: "请选择 SSH 或 Slurm"
+tui.hpc.errDataAliasNeedsRoot:
+  en: "A data SSH alias requires a shared directory absolute path"
+  zh: "数据 SSH 别名需要共享目录的绝对路径"
+tui.hpc.errIdChars:
+  en: "ID must contain 1–64 letters, digits, underscores or dashes"
+  zh: "ID 须为 1–64 个字母、数字、下划线或连字符"
+tui.hpc.errIdExists:
+  en: "Target ID already exists"
+  zh: "目标 ID 已存在"
+tui.hpc.errNameRequired:
+  en: "Target name is required"
+  zh: "目标名称必填"
+tui.hpc.errRuntimeJson:
+  en: "Container runtime JSON is required"
+  zh: "容器运行时 JSON 必填"
+tui.hpc.errRuntimeType:
+  en: "%{kind} requires a %{runtime} container runtime"
+  zh: "%{kind} 需要 %{runtime} 容器运行时"
+tui.hpc.errSshHostRequired:
+  en: "SSH host is required"
+  zh: "SSH 主机必填"
+tui.hpc.fBackend:
+  en: "Backend"
+  zh: "后端"
+tui.hpc.fEnabled:
+  en: "Enabled"
+  zh: "启用"
+tui.hpc.fSharedDir:
+  en: "Shared directory (absolute)"
+  zh: "共享目录 (绝对路径)"
+tui.hpc.fWorkerPath:
+  en: "Remote worker path"
+  zh: "远程 worker 路径"
+tui.hpc.fDeployPackage:
+  en: "Gateway worker package"
+  zh: "网关 worker 包"
+tui.hpc.fSelectAfterEnroll:
+  en: "Select after enrollment"
+  zh: "注册后选择"
+tui.hpc.fContainerRuntime:
+  en: "Container runtime JSON"
+  zh: "容器运行时 JSON"
+tui.hpc.fId:
+  en: "ID"
+  zh: "ID"
+tui.hpc.fName:
+  en: "Name"
+  zh: "名称"
+tui.hpc.footerDefault:
+  en: "Tab switch · r reload gateway snapshot · Esc close"
+  zh: "Tab 切换 · r 重载网关快照 · Esc 关闭"
+tui.hpc.footerTargets:
+  en: "Enter select target · Tab switch · r reload gateway snapshot · Esc close"
+  zh: "Enter 选择目标 · Tab 切换 · r 重载网关快照 · Esc 关闭"
+tui.hpc.hintEditing:
+  en: "Tab/↑↓ field · Enter edit/toggle · Ctrl+S save · Esc cancel"
+  zh: "Tab/↑↓ 字段 · Enter 编辑/切换 · Ctrl+S 保存 · Esc 取消"
+tui.hpc.hintEvents:
+  en: "Esc return to form or details"
+  zh: "Esc 返回表单或详情"
+tui.hpc.hintJobs:
+  en: "Tab switch · ↑↓ jobs · r reload gateway snapshot · Esc close"
+  zh: "Tab 切换 · ↑↓ 作业 · r 重载网关快照 · Esc 关闭"
+tui.hpc.hintOperation:
+  en: "Esc close panel · operation continues"
+  zh: "Esc 关闭面板 · 操作继续进行"
+tui.hpc.hintTargets:
+  en: "Tab switch · ↑↓ move · n enroll · e edit · c check · R readiness · x select · w repair · Ctrl+X delete · r reload · Esc close"
+  zh: "Tab 切换 · ↑↓ 移动 · n 注册 · e 编辑 · c 检查 · R 就绪 · x 选择 · w 修复 · Ctrl+X 删除 · r 重载 · Esc 关闭"
+tui.hpc.idBackendFixed:
+  en: "ID and backend are fixed for existing targets"
+  zh: "已有目标的 ID 与后端不可修改"
+tui.hpc.jobsTitle:
+  en: " Jobs "
+  zh: " 作业 "
+tui.hpc.loading:
+  en: "Loading…"
+  zh: "加载中…"
+tui.hpc.noJobs:
+  en: "No monitored HPC jobs. Submissions from agents appear here."
+  zh: "暂无受监控的 HPC 作业。agent 提交的作业会显示在这里。"
+tui.hpc.noTargets:
+  en: "No enrolled compute targets."
+  zh: "尚未注册算力目标。"
+tui.hpc.pressNToAdd:
+  en: "Press n to add a target"
+  zh: "按 n 添加目标"
+tui.hpc.recoveryEvents:
+  en: " Connection recovery events "
+  zh: " 连接恢复事件 "
+tui.hpc.repairEvent:
+  en: "[%{stage}] %{message}"
+  zh: "[%{stage}] %{message}"
+tui.hpc.saveFailed:
+  en: "save failed: %{error}"
+  zh: "保存失败: %{error}"
+tui.hpc.saveTargetHint:
+  en: "s save target"
+  zh: "s 保存目标"
+tui.hpc.selectRemoteToRepair:
+  en: "Select a remote target to repair its worker"
+  zh: "选择一个远程目标以修复其 worker"
+tui.hpc.selectToEdit:
+  en: "Select a Slurm compute target to edit its settings."
+  zh: "选择一个 Slurm 算力目标以编辑其设置。"
+tui.hpc.selectedTag:
+  en: " · SELECTED"
+  zh: " · 已选择"
+tui.hpc.stateWithBlockers:
+  en: "%{state}: %{blockers}"
+  zh: "%{state}: %{blockers}"
+tui.hpc.tabConfig:
+  en: "Compute settings"
+  zh: "算力设置"
+tui.hpc.tabJobs:
+  en: "Jobs"
+  zh: "作业"
+tui.hpc.tabTargets:
+  en: "Targets"
+  zh: "目标"
+tui.hpc.targetLabel:
+  en: "Target: %{id}"
+  zh: "目标: %{id}"
+tui.hpc.targetsTitle:
+  en: " Compute targets "
+  zh: " 算力目标 "
+tui.hpc.title:
+  en: " Compute Dashboard "
+  zh: " 算力面板 "
+tui.hpc.vfsPartitions:
+  en: "VFS mount partitions:"
+  zh: "VFS 挂载分区:"
+tui.leader.agent:
+  en: "agent"
+  zh: "agent"
+tui.leader.agentConfig:
+  en: "Agent config"
+  zh: "Agent 配置"
+tui.leader.backspaceBack:
+  en: "⌫ back"
+  zh: "⌫ 返回"
+tui.leader.bibliography:
+  en: "Bibliography"
+  zh: "文献库"
+tui.leader.cancel:
+  en: "Cancel"
+  zh: "取消"
+tui.leader.chatOnlyView:
+  en: "Chat-only view"
+  zh: "仅对话视图"
+tui.leader.close:
+  en: "Close"
+  zh: "关闭"
+tui.leader.closeSplit:
+  en: "Close split"
+  zh: "关闭分屏"
+tui.leader.collapseThinking:
+  en: "Collapse thinking"
+  zh: "折叠思考"
+tui.leader.collapseToolCalls:
+  en: "Collapse tool calls"
+  zh: "折叠工具调用"
+tui.leader.collapseToolResults:
+  en: "Collapse tool results"
+  zh: "折叠工具结果"
+tui.leader.commandPalette:
+  en: "Command palette"
+  zh: "命令面板"
+tui.leader.compactContext:
+  en: "Compact context"
+  zh: "压缩上下文"
+tui.leader.computeDashboard:
+  en: "Compute Dashboard"
+  zh: "算力面板"
+tui.leader.copyMessage:
+  en: "Copy message"
+  zh: "复制消息"
+tui.leader.dag:
+  en: "DAG"
+  zh: "DAG"
+tui.leader.delete:
+  en: "Delete"
+  zh: "删除"
+tui.leader.embeddingConfig:
+  en: "Embedding config"
+  zh: "嵌入配置"
+tui.leader.escClose:
+  en: "Esc close"
+  zh: "Esc 关闭"
+tui.leader.focusOther:
+  en: "Focus other"
+  zh: "切换焦点"
+tui.leader.followOutput:
+  en: "Follow output"
+  zh: "跟随输出"
+tui.leader.historySearch:
+  en: "History search"
+  zh: "历史搜索"
+tui.leader.modelConfig:
+  en: "Model config"
+  zh: "模型配置"
+tui.leader.newAgent:
+  en: "New agent"
+  zh: "新建 agent"
+tui.leader.planPopup:
+  en: "Plan popup"
+  zh: "计划弹窗"
+tui.leader.quit:
+  en: "Quit"
+  zh: "退出"
+tui.leader.resume:
+  en: "Resume"
+  zh: "恢复"
+tui.leader.splitBelow:
+  en: "Split below"
+  zh: "向下分屏"
+tui.leader.splitRight:
+  en: "Split right"
+  zh: "向右分屏"
+tui.leader.switcher:
+  en: "Switcher"
+  zh: "切换器"
+tui.leader.tasksPopup:
+  en: "Tasks popup"
+  zh: "任务弹窗"
+tui.leader.title:
+  en: " leader "
+  zh: " leader "
+tui.leader.toggleTheme:
+  en: "Toggle theme"
+  zh: "切换主题"
+tui.leader.view:
+  en: "view"
+  zh: "视图"
+tui.leader.window:
+  en: "window"
+  zh: "窗口"
+tui.messagePicker.badgeAssistant:
+  en: "AI"
+  zh: "AI"
+tui.messagePicker.badgeUser:
+  en: "YOU"
+  zh: "YOU"
+tui.messagePicker.cancel:
+  en: " cancel"
+  zh: " 取消"
+tui.messagePicker.content:
+  en: "  Content:"
+  zh: "  内容:"
+tui.messagePicker.copy:
+  en: " copy  "
+  zh: " 复制  "
+tui.messagePicker.emptyMessage:
+  en: "(empty message)"
+  zh: "(空消息)"
+tui.messagePicker.index:
+  en: "  Index    "
+  zh: "  序号    "
+tui.messagePicker.length:
+  en: "  Length   "
+  zh: "  长度   "
+tui.messagePicker.lengthValue:
+  en: "%{chars} chars, %{lines} lines"
+  zh: "%{chars} 字符, %{lines} 行"
+tui.messagePicker.messagesTitle:
+  en: " Messages (%{count}) "
+  zh: " 消息 (%{count}) "
+tui.messagePicker.navigate:
+  en: " navigate  "
+  zh: " 导航  "
+tui.messagePicker.noMessages:
+  en: "  No messages found."
+  zh: "  未找到消息。"
+tui.messagePicker.placeholder:
+  en: "filter messages…"
+  zh: "过滤消息…"
+tui.messagePicker.preview:
+  en: " Preview "
+  zh: " 预览 "
+tui.messagePicker.role:
+  en: "  Role     "
+  zh: "  角色     "
+tui.messagePicker.selectToPreview:
+  en: "  Select a message to preview."
+  zh: "  选择一条消息进行预览。"
+tui.messagePicker.title:
+  en: " Copy Message "
+  zh: " 复制消息 "
+tui.modelConfig.yes:
+  en: "Yes"
+  zh: "是"
+tui.modelConfig.no:
+  en: "No"
+  zh: "否"
+tui.modelConfig.aboutLine1:
+  en: "No API key needed: press L and finish OpenAI authorization"
+  zh: "无需 API key:按 L 完成 OpenAI 授权"
+tui.modelConfig.aboutLine2:
+  en: "in the browser; the authorize URL is copied to the clipboard."
+  zh: "(在浏览器中进行;授权 URL 会复制到剪贴板)。"
+tui.modelConfig.activeMark:
+  en: "  ● active"
+  zh: "  ● 使用中"
+tui.modelConfig.chatgptLogin:
+  en: " ChatGPT login "
+  zh: " ChatGPT 登录 "
+tui.modelConfig.configure:
+  en: " Configure "
+  zh: " 配置 "
+tui.modelConfig.configureFooter:
+  en: "[Tab] switch field  [↑/↓] cycle URL preset  [Enter] save  [Esc] cancel"
+  zh: "[Tab] 切换字段  [↑/↓] 切换 URL 预设  [Enter] 保存  [Esc] 取消"
+tui.modelConfig.configuredCount:
+  en: "(%{count} configured) "
+  zh: "(%{count} 已配置) "
+tui.modelConfig.customPreset:
+  en: "[custom]"
+  zh: "[自定义]"
+tui.modelConfig.deleteBuiltinDetail:
+  en: "  Built-in SDK presets are read-only and cannot be deleted."
+  zh: "  内置 SDK 预设为只读,无法删除。"
+tui.modelConfig.deleteConfirmHint:
+  en: "  Press Ctrl+X again to confirm, or any other key to cancel."
+  zh: "  再按一次 Ctrl+X 确认,或按其他任意键取消。"
+tui.modelConfig.deleteCustomDetail:
+  en: "  This permanently removes the custom model row from storage."
+  zh: "  这将从存储中永久移除该自定义模型条目。"
+tui.modelConfig.deleteFooter:
+  en: "[Ctrl+X] confirm  [any other key] cancel"
+  zh: "[Ctrl+X] 确认  [其他任意键] 取消"
+tui.modelConfig.deleteTitle:
+  en: " Delete Custom Model "
+  zh: " 删除自定义模型 "
+tui.modelConfig.details:
+  en: " Details "
+  zh: " 详情 "
+tui.modelConfig.emailUnknown:
+  en: "email unknown"
+  zh: "邮箱未知"
+tui.modelConfig.emptyPreset:
+  en: "(empty)"
+  zh: "(空)"
+tui.modelConfig.fAbout:
+  en: "About"
+  zh: "关于"
+tui.modelConfig.fAccount:
+  en: "Account"
+  zh: "账户"
+tui.modelConfig.fAccountId:
+  en: "Account ID"
+  zh: "账户 ID"
+tui.modelConfig.fBaseUrl:
+  en: "Base URL"
+  zh: "Base URL"
+tui.modelConfig.fContextLen:
+  en: "Context Len"
+  zh: "上下文长度"
+tui.modelConfig.fCustomModels:
+  en: "Custom Models"
+  zh: "自定义模型"
+tui.modelConfig.fEndpoints:
+  en: "Endpoints"
+  zh: "端点"
+tui.modelConfig.fFnCall:
+  en: "FnCall"
+  zh: "函数调用"
+tui.modelConfig.fInPrice:
+  en: "In Price"
+  zh: "输入价格"
+tui.modelConfig.fLastRefresh:
+  en: "Last refresh"
+  zh: "上次刷新"
+tui.modelConfig.fLogin:
+  en: "Login"
+  zh: "登录"
+tui.modelConfig.fMaxOutput:
+  en: "Max Output"
+  zh: "最大输出"
+tui.modelConfig.fMode:
+  en: "Mode"
+  zh: "模式"
+tui.modelConfig.fModel:
+  en: "Model"
+  zh: "模型"
+tui.modelConfig.fModels:
+  en: "Models"
+  zh: "模型"
+tui.modelConfig.fOrigin:
+  en: "Origin"
+  zh: "来源"
+tui.modelConfig.fOutPrice:
+  en: "Out Price"
+  zh: "输出价格"
+tui.modelConfig.fPlan:
+  en: "Plan"
+  zh: "套餐"
+tui.modelConfig.fProvider:
+  en: "Provider"
+  zh: "提供商"
+tui.modelConfig.fShortcut:
+  en: "Shortcut"
+  zh: "快捷键"
+tui.modelConfig.fStatus:
+  en: "Status"
+  zh: "状态"
+tui.modelConfig.fStreaming:
+  en: "Streaming"
+  zh: "流式"
+tui.modelConfig.fThinking:
+  en: "Thinking"
+  zh: "思考"
+tui.modelConfig.fType:
+  en: "Type"
+  zh: "类型"
+tui.modelConfig.fVision:
+  en: "Vision"
+  zh: "视觉"
+tui.modelConfig.labelApiKey:
+  en: " API Key        :"
+  zh: " API Key        :"
+tui.modelConfig.labelBaseUrl:
+  en: " Base URL       :"
+  zh: " Base URL       :"
+tui.modelConfig.labelProvider:
+  en: " Provider       : "
+  zh: " 提供商       : "
+tui.modelConfig.labelType:
+  en: " Type           : "
+  zh: " 类型           : "
+tui.modelConfig.loginFooter:
+  en: "[L] log in / log in again  [Esc] close"
+  zh: "[L] 登录 / 重新登录  [Esc] 关闭"
+tui.modelConfig.modeValue:
+  en: "ChatGPT subscription (Plus/Pro) OAuth login"
+  zh: "ChatGPT 订阅 (Plus/Pro) OAuth 登录"
+tui.modelConfig.modelsBuiltIn:
+  en: "%{count} (built-in)"
+  zh: "%{count} (内置)"
+tui.modelConfig.notSignedIn:
+  en: "Not signed in"
+  zh: "未登录"
+tui.modelConfig.nothingSelected:
+  en: "  (nothing selected)"
+  zh: "  (未选择)"
+tui.modelConfig.originBuiltIn:
+  en: "built-in (read-only)"
+  zh: "内置 (只读)"
+tui.modelConfig.originCustom:
+  en: "custom (editable)"
+  zh: "自定义 (可编辑)"
+tui.modelConfig.planUnknown:
+  en: "plan unknown"
+  zh: "套餐未知"
+tui.modelConfig.providers:
+  en: " Providers "
+  zh: " 提供商 "
+tui.modelConfig.reloginHint:
+  en: "Press R/L to log in again (switch accounts or refresh stale credentials)"
+  zh: "按 R/L 重新登录 (切换账户或刷新过期凭据)"
+tui.modelConfig.required:
+  en: "(required)"
+  zh: "(必填)"
+tui.modelConfig.searchPlaceholder:
+  en: "search…  Ctrl+A add  Ctrl+O edit  Ctrl+X delete"
+  zh: "搜索…  Ctrl+A 添加  Ctrl+O 编辑  Ctrl+X 删除"
+tui.modelConfig.shortcutValue:
+  en: "Ctrl+A add  Ctrl+O edit  Ctrl+X delete"
+  zh: "Ctrl+A 添加  Ctrl+O 编辑  Ctrl+X 删除"
+tui.modelConfig.signedIn:
+  en: "Signed in"
+  zh: "已登录"
+tui.modelConfig.startLoginHint:
+  en: "Press L to start the ChatGPT login"
+  zh: "按 L 开始 ChatGPT 登录"
+tui.modelConfig.statusConfigured:
+  en: "configured"
+  zh: "已配置"
+tui.modelConfig.statusNotConfigured:
+  en: "not configured"
+  zh: "未配置"
+tui.modelConfig.title:
+  en: " Model Config "
+  zh: " 模型配置 "
+tui.modelConfig.unknown:
+  en: "unknown"
+  zh: "未知"
+tui.modelEditor.addTitle:
+  en: " Add Custom Model "
+  zh: " 添加自定义模型 "
+tui.modelEditor.ctxLengthLabel:
+  en: "Context Length"
+  zh: "上下文长度"
+tui.modelEditor.maxOutputLabel:
+  en: "Max Output"
+  zh: "最大输出"
+tui.modelEditor.ctxLength:
+  en: "Context length"
+  zh: "上下文长度"
+tui.modelEditor.editTitle:
+  en: " Edit Custom Model "
+  zh: " 编辑自定义模型 "
+tui.modelEditor.errNameRequired:
+  en: "Model name is required"
+  zh: "模型名称必填"
+tui.modelEditor.errNonNegative:
+  en: "%{label} must be a non-negative integer"
+  zh: "%{label} 必须是非负整数"
+tui.modelEditor.errNotNegative:
+  en: "%{label} cannot be negative"
+  zh: "%{label} 不能为负数"
+tui.modelEditor.errNumber:
+  en: "%{label} must be a number"
+  zh: "%{label} 必须是数字"
+tui.modelEditor.errPositive:
+  en: "%{label} must be greater than zero"
+  zh: "%{label} 必须大于零"
+tui.modelEditor.footer:
+  en: "[Tab/↑↓] field  [Space] toggle  [Enter] save  [Esc] cancel"
+  zh: "[Tab/↑↓] 字段  [Space] 切换  [Enter] 保存  [Esc] 取消"
+tui.modelEditor.functionCalling:
+  en: "Function Calling"
+  zh: "函数调用"
+tui.modelEditor.inputPrice:
+  en: "Input price"
+  zh: "输入价格"
+tui.modelEditor.inputPriceTok:
+  en: "Input $/M Tok"
+  zh: "输入 $/M Tok"
+tui.modelEditor.maxOutput:
+  en: "Max output"
+  zh: "最大输出"
+tui.modelEditor.model:
+  en: "Model"
+  zh: "模型"
+tui.modelEditor.outputPrice:
+  en: "Output price"
+  zh: "输出价格"
+tui.modelEditor.outputPriceTok:
+  en: "Output $/M Tok"
+  zh: "输出 $/M Tok"
+tui.modelEditor.overrideNote:
+  en: " Custom models override built-in metadata."
+  zh: " 自定义模型会覆盖内置元数据。"
+tui.modelEditor.provider:
+  en: "Provider"
+  zh: "提供商"
+tui.modelEditor.streaming:
+  en: "Streaming"
+  zh: "流式"
+tui.modelEditor.thinking:
+  en: "Thinking"
+  zh: "思考"
+tui.modelEditor.thinkingEnabled:
+  en: "Thinking Enabled"
+  zh: "启用思考"
+tui.modelEditor.tooShort:
+  en: "  Increase terminal height to edit models."
+  zh: "  请增大终端高度以编辑模型。"
+tui.modelEditor.vision:
+  en: "Vision"
+  zh: "视觉"
+tui.modelPicker.applyTo:
+  en: " Apply to "
+  zh: " 应用到 "
+tui.modelPicker.cancel:
+  en: " cancel"
+  zh: " 取消"
+tui.modelPicker.filterHint:
+  en: " filter models"
+  zh: " 过滤模型"
+tui.modelPicker.filteredAgents:
+  en: "%{count} filtered agents"
+  zh: "%{count} 个被过滤的 agent"
+tui.modelPicker.navigate:
+  en: " navigate  "
+  zh: " 导航  "
+tui.modelPicker.noMatches:
+  en: " No matching models"
+  zh: " 无匹配模型"
+tui.modelPicker.noProviders:
+  en: " No configured providers with models — add one in Model Config (Ctrl+M)"
+  zh: " 没有已配置模型的提供商 — 请在模型配置 (Ctrl+M) 中添加"
+tui.modelPicker.select:
+  en: " select  "
+  zh: " 选择  "
+tui.modelPicker.title:
+  en: " Switch Model "
+  zh: " 切换模型 "
+tui.nameInput.footer:
+  en: " Enter create  Esc cancel"
+  zh: " Enter 创建  Esc 取消"
+tui.nameInput.placeholder:
+  en: "Enter a name…"
+  zh: "输入名称…"
+tui.nameInput.title:
+  en: "Name"
+  zh: "名称"
+tui.picker.noMatches:
+  en: "  No matches."
+  zh: "  无匹配项。"
+tui.plan.noActivePlan:
+  en: "(no active plan)"
+  zh: "(无活动计划)"
+tui.plan.title:
+  en: " Plan "
+  zh: " 计划 "
+tui.plan.titleWithRevision:
+  en: " Plan · r%{revision} "
+  zh: " 计划 · r%{revision} "
+tui.status.aborted:
+  en: "aborted"
+  zh: "已中止"
+tui.status.cancelled:
+  en: "cancelled"
+  zh: "已取消"
+tui.status.compacting:
+  en: "compacting"
+  zh: "压缩中"
+tui.status.error:
+  en: "error"
+  zh: "错误"
+tui.status.idle:
+  en: "idle"
+  zh: "空闲"
+tui.status.requesting:
+  en: "requesting"
+  zh: "请求中"
+tui.status.retrying:
+  en: "retrying"
+  zh: "重试中"
+tui.status.streaming:
+  en: "streaming"
+  zh: "流式输出中"
+tui.status.toolRunning:
+  en: "tool running"
+  zh: "工具运行中"
+tui.status.waiting:
+  en: "waiting"
+  zh: "等待中"
+tui.statusBar.compactGenerated:
+  en: " · %{tokens} generated"
+  zh: " · 已生成 %{tokens}"
+tui.statusBar.compactHead:
+  en: " %{tokens} tok (%{messages} msgs)"
+  zh: " %{tokens} tok(%{messages} 条消息)"
+tui.statusBar.compactPhasePreparing:
+  en: "preparing"
+  zh: "准备中"
+tui.statusBar.compactPhaseRebuilding:
+  en: "rebuilding"
+  zh: "重建中"
+tui.statusBar.compactPhaseSummarizing:
+  en: "summarizing"
+  zh: "摘要中"
+tui.statusBar.compacting:
+  en: "compacting ▸ %{phase}"
+  zh: "压缩中 ▸ %{phase}"
+tui.tasks.noTasks:
+  en: "(no background tasks)"
+  zh: "(无后台任务)"
+tui.tasks.title:
+  en: " Tasks "
+  zh: " 任务 "
+tui.treePicker.capabilities:
+  en: "Capabilities"
+  zh: "能力"
+tui.treePicker.desc:
+  en: "Desc"
+  zh: "描述"
+tui.treePicker.identity:
+  en: "Identity"
+  zh: "身份"
+tui.treePicker.preview:
+  en: " Preview "
+  zh: " 预览 "
+tui.treePicker.profile:
+  en: "Profile"
+  zh: "档案"
+tui.treePicker.searchPlaceholder:
+  en: " search %{noun}…"
+  zh: " 搜索%{noun}…"
+tui.vfs.created:
+  en: "已创建 %{path}"
+  zh: "已创建 %{path}"
+tui.vfs.deleted:
+  en: "已删除 %{path}"
+  zh: "已删除 %{path}"
+tui.vfs.renamed:
+  en: "已重命名为 %{dst}"
+  zh: "已重命名为 %{dst}"
+tui.workspace.agentUnavailableTitle:
+  en: "Agent unavailable"
+  zh: "Agent 不可用"
+tui.workspace.appliedAgents:
+  en: "%{spec} → %{count} agent(s)"
+  zh: "%{spec} → %{count} 个 agent"
+tui.workspace.appliedAgentsSkipped:
+  en: "%{label} → %{count} agent(s), %{skipped} non-thinking skipped"
+  zh: "%{label} → %{count} 个 agent,跳过 %{skipped} 个非思考模型"
+tui.workspace.appliedEffortAgents:
+  en: "%{label} → %{count} agent(s)"
+  zh: "%{label} → %{count} 个 agent"
+tui.workspace.delegatedNotOpen:
+  en: "Delegated agent %{target} is no longer open"
+  zh: "被委托的 agent %{target} 已不再打开"
+tui.workspace.effortToastTitle:
+  en: "Effort"
+  zh: "力度"
+tui.workspace.filteredAgents:
+  en: "%{spec} → %{count} filtered agents"
+  zh: "%{spec} → %{count} 个被过滤的 agent"
+tui.workspace.filteredAgentsLabel:
+  en: "%{label} → %{count} filtered agents"
+  zh: "%{label} → %{count} 个被过滤的 agent"
+tui.workspace.modelToastTitle:
+  en: "Model"
+  zh: "模型"
+tui.workspace.newAgentTitle:
+  en: " New Agent (%{kind}) "
+  zh: " 新建 Agent (%{kind}) "
+tui.workspace.setEffortTitle:
+  en: "Set effort (bulk)"
+  zh: "设置力度 (批量)"
+tui.workspace.switchModelTitle:
+  en: "Switch model"
+  zh: "切换模型"

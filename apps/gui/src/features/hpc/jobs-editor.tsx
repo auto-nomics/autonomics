@@ -4,6 +4,7 @@
  * 本面板呈现状态、调度器视图与轮询节奏。
  */
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { fetchHpcJobs } from "./api";
 import type { MonitorView } from "./types";
 import { Button } from "@/components/ui/button";
@@ -32,6 +33,7 @@ function formatTime(epochSeconds: number): string {
 }
 
 export function HpcJobsEditorView() {
+  const { t } = useTranslation("hpc");
   const [monitors, setMonitors] = useState<MonitorView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -59,11 +61,8 @@ export function HpcJobsEditorView() {
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between gap-2 border-b px-3 py-2">
         <div>
-          <h2 className="text-base font-semibold">HPC 任务</h2>
-          <p className="text-xs text-muted-foreground">
-            监控中的集群任务(10 秒自动刷新)。任务由 agent/DAG 运行提交;
-            watch/停止监控绑定原始会话,在 agent 侧操作。
-          </p>
+          <h2 className="text-base font-semibold">{t("jobs.title")}</h2>
+          <p className="text-xs text-muted-foreground">{t("jobs.description")}</p>
         </div>
         <Button
           size="sm"
@@ -71,7 +70,7 @@ export function HpcJobsEditorView() {
           disabled={refreshing}
           onClick={() => void reload()}
         >
-          刷新
+          {t("jobs.refresh")}
         </Button>
       </header>
       {error ? (
@@ -81,11 +80,9 @@ export function HpcJobsEditorView() {
       ) : null}
       <ScrollArea className="min-h-0 flex-1">
         {monitors === null ? (
-          <p className="p-4 text-sm text-muted-foreground">加载中…</p>
+          <p className="p-4 text-sm text-muted-foreground">{t("jobs.loading")}</p>
         ) : monitors.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">
-            当前没有监控中的 HPC 任务。
-          </p>
+          <p className="p-4 text-sm text-muted-foreground">{t("jobs.empty")}</p>
         ) : (
           <ul className="divide-y">
             {monitors.map((monitor) => (
@@ -115,8 +112,8 @@ export function HpcJobsEditorView() {
                   <span title={monitor.submission_key}>
                     {monitor.agent_path}
                   </span>
-                  <span>更新 {formatTime(monitor.updated_at)}</span>
-                  <span>下次轮询 {formatTime(monitor.next_poll)}</span>
+                  <span>{t("jobs.updated", { time: formatTime(monitor.updated_at) })}</span>
+                  <span>{t("jobs.nextPoll", { time: formatTime(monitor.next_poll) })}</span>
                 </div>
                 {monitor.last_error ? (
                   <p

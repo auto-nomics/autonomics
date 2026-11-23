@@ -4,7 +4,9 @@
  * the slide thumbnail rail.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, Maximize, Minimize, Presentation } from "lucide-react";
+import "../i18n";
 import type { DeckPayload, SlideSpec } from "../deck-api";
 import { clickTotal } from "./deck-model";
 import { SlideView } from "./slide-view";
@@ -20,6 +22,7 @@ export interface DeckRendererProps {
 }
 
 export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckRendererProps): React.ReactNode {
+  const { t } = useTranslation("deck");
   const { deck, slides } = payload;
   const canvasWidth = payload.canvasSize?.width ?? deck.canvasWidth ?? 980;
   const aspect = deck.aspectRatio ?? { width: 16, height: 9 };
@@ -89,12 +92,12 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
 
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement === rendererRef.current) {
-      void document.exitFullscreen().catch(() => setPresenterError("无法退出全屏"));
+      void document.exitFullscreen().catch(() => setPresenterError(t("renderer.exitFailed")));
     } else if (rendererRef.current?.requestFullscreen) {
       setZoom(1); setPan({ x: 0, y: 0 });
-      void rendererRef.current.requestFullscreen().catch(() => setPresenterError("无法进入全屏，请检查浏览器权限"));
-    } else setPresenterError("当前环境不支持全屏展示");
-  }, []);
+      void rendererRef.current.requestFullscreen().catch(() => setPresenterError(t("renderer.enterFailed")));
+    } else setPresenterError(t("renderer.unsupported"));
+  }, [t]);
 
   useEffect(() => {
     const update = () => setFullscreen(document.fullscreenElement === rendererRef.current);
@@ -115,7 +118,7 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
   const openPresenter = () => {
     if (popupRef.current && !popupRef.current.closed) { popupRef.current.focus(); return; }
     if (nativePresenterRef.current) { void nativePresenterRef.current.setFocus().catch(() => { nativePresenterRef.current = null; }); return; }
-    if (typeof BroadcastChannel === "undefined") { setPresenterError("当前环境不支持讲演者窗口同步"); return; }
+    if (typeof BroadcastChannel === "undefined") { setPresenterError(t("renderer.syncUnsupported")); return; }
     const session = crypto.randomUUID();
     const channel = new BroadcastChannel(`deck-presenter-${session}`);
     channelRef.current?.close();
@@ -130,24 +133,24 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
       void import("@tauri-apps/api/webviewWindow").then(async ({ WebviewWindow }) => {
         const presenter = new WebviewWindow(`deck-presenter-${session}`, {
           url: `index.html?deckPresenter=${encodeURIComponent(session)}`,
-          title: "讲演者模式", width: 1200, height: 800,
+          title: t("renderer.windowTitle"), width: 1200, height: 800,
         });
         nativePresenterRef.current = presenter;
         await presenter.once("tauri://error", event => {
           nativePresenterRef.current = null;
           channel.close();
           if (channelRef.current === channel) channelRef.current = null;
-          setPresenterError(`无法打开讲演者窗口：${String(event.payload)}`);
+          setPresenterError(t("renderer.openFailed", { error: String(event.payload) }));
         });
         await presenter.onCloseRequested(() => { nativePresenterRef.current = null; });
-      }).catch(error => { channel.close(); channelRef.current = null; setPresenterError(`无法打开讲演者窗口：${String(error)}`); });
+      }).catch(error => { channel.close(); channelRef.current = null; setPresenterError(t("renderer.openFailed", { error: String(error) })); });
       setPresenterError("");
       return;
     }
     const url = new URL("/deck/presenter", location.href);
     url.searchParams.set("session", session);
     const popup = window.open(url.href, "_blank", "popup,width=1200,height=800");
-    if (!popup) { channel.close(); channelRef.current = null; setPresenterError("讲演者窗口被拦截，请允许弹出窗口后重试"); return; }
+    if (!popup) { channel.close(); channelRef.current = null; setPresenterError(t("renderer.blocked")); return; }
     popupRef.current = popup;
     setPresenterError("");
   };
@@ -216,32 +219,32 @@ export function DeckRenderer({ payload, dark, startSlide, onSlideChange }: DeckR
                 dark={slideDark}
               />
             ) : (
-              <div className="deck-empty">空 deck</div>
+              <div className="deck-empty">{t("renderer.emptyDeck")}</div>
             )}
           </div>
         </div>
 
         {presenterError && <div className="deck-presentation-error" role="alert">{presenterError} <button type="button" onClick={() => setPresenterError("")}>×</button></div>}
         <div className="deck-controls">
-          <button type="button" className="deck-btn" onClick={openPresenter} aria-label="打开讲演者模式" title="打开讲演者模式"><Presentation size={16} /></button>
-          <button type="button" className="deck-btn" onClick={toggleFullscreen} aria-label={fullscreen ? "退出全屏" : "全屏展示"} title="全屏展示 (F)">{fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}</button>
-          <button type="button" className="deck-btn" onClick={() => go(-1)} aria-label="上一页">
+          <button type="button" className="deck-btn" onClick={openPresenter} aria-label={t("renderer.openPresenter")} title={t("renderer.openPresenter")}><Presentation size={16} /></button>
+          <button type="button" className="deck-btn" onClick={toggleFullscreen} aria-label={fullscreen ? t("renderer.exitFullscreen") : t("renderer.fullscreen")} title={`${t("renderer.fullscreen")} (F)`}>{fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}</button>
+          <button type="button" className="deck-btn" onClick={() => go(-1)} aria-label={t("renderer.prevPage")}>
             <ChevronLeft size={16} />
           </button>
           <span className="deck-counter">
             {nav.slide} / {slides.length}
-            {total > 0 ? <span className="deck-click-counter"> · click {clampedClick}/{total}</span> : null}
+            {total > 0 ? <span className="deck-click-counter"> · {t("renderer.clickCount", { current: clampedClick, total })}</span> : null}
           </span>
-          <button type="button" className="deck-btn" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} title="重置画布缩放与位置" aria-label="重置画布缩放">{Math.round(zoom * 100)}%</button>
-          <button type="button" className="deck-btn" onClick={() => go(1)} aria-label="下一页">
+          <button type="button" className="deck-btn" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} title={t("renderer.resetZoomTitle")} aria-label={t("renderer.resetZoomAria")}>{Math.round(zoom * 100)}%</button>
+          <button type="button" className="deck-btn" onClick={() => go(1)} aria-label={t("renderer.nextPage")}>
             <ChevronRight size={16} />
           </button>
         </div>
 
         {slides.some(s => s.note) ? (
           <div className="deck-notes">
-            <div className="deck-notes-head">备注</div>
-            <div className="deck-notes-body">{notes || "此页没有备注"}</div>
+            <div className="deck-notes-head">{t("renderer.notes")}</div>
+            <div className="deck-notes-body">{notes || t("renderer.noNotes")}</div>
           </div>
         ) : null}
       </main>

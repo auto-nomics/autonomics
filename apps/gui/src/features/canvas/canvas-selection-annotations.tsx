@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
+import { useTranslation } from "react-i18next";
 import { Popover } from "@base-ui/react/popover";
 import { getCommonBounds, sceneCoordsToViewportCoords } from "@excalidraw/excalidraw";
 import { MessageSquarePlus, X } from "lucide-react";
@@ -8,6 +9,7 @@ import "./canvas-selection-annotations.css";
 
 type SelectionAnchor = { ids: string[]; key: string; x: number; y: number; visible: boolean; theme: CSSProperties };
 export function CanvasSelectionAnnotations({ surface, agentPath, ...props }: CanvasAgentHandoffProps & { surface: RefObject<HTMLDivElement | null>; agentPath: string }) {
+  const { t } = useTranslation("canvas");
   const [selection, setSelection] = useState<SelectionAnchor | null>(null);
   const [open, setOpen] = useState(false);
   const [targets, setTargets] = useState<string[]>([]);
@@ -48,11 +50,11 @@ export function CanvasSelectionAnnotations({ surface, agentPath, ...props }: Can
     if (next && selection) setTargets(selection.ids);
     setOpen(next);
   }} modal={false}>
-    {selection?.visible && <Popover.Trigger ref={trigger} className="canvas-annotation-trigger" aria-label="批注" title={selection.ids.length > 100 ? "最多批注 100 个对象，请缩小选区。" : `为选中的 ${selection.ids.length} 个对象添加批注`} disabled={selection.ids.length > 100} data-prevent-outside-click="true" style={{ ...selection.theme, left: selection.x, top: selection.y }} onPointerDown={event => event.stopPropagation()}><MessageSquarePlus size={16} /><span>批注</span><span className="canvas-annotation-count" aria-hidden="true">{selection.ids.length}</span></Popover.Trigger>}
+    {selection?.visible && <Popover.Trigger ref={trigger} className="canvas-annotation-trigger" aria-label={t("selectionAnnotations.triggerLabel")} title={selection.ids.length > 100 ? t("selectionAnnotations.tooManyObjects") : t("selectionAnnotations.addTarget", { count: selection.ids.length })} disabled={selection.ids.length > 100} data-prevent-outside-click="true" style={{ ...selection.theme, left: selection.x, top: selection.y }} onPointerDown={event => event.stopPropagation()}><MessageSquarePlus size={16} /><span>{t("selectionAnnotations.annotate")}</span><span className="canvas-annotation-count" aria-hidden="true">{selection.ids.length}</span></Popover.Trigger>}
     <Popover.Portal container={surface} keepMounted>
       <Popover.Positioner side="right" align="start" sideOffset={8} collisionPadding={8} collisionBoundary={surface.current ?? undefined} className="canvas-annotation-positioner">
         <Popover.Popup ref={popup} role="dialog" className="canvas-annotation-popover" style={selection?.theme} data-prevent-outside-click="true" initialFocus={() => popup.current?.querySelector<HTMLTextAreaElement>("textarea") ?? true} finalFocus={false} onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === "Escape") { setOpen(false); trigger.current?.focus(); } event.stopPropagation(); }}>
-          <div className="canvas-annotation-header"><Popover.Title>对象批注</Popover.Title><span className="canvas-annotation-target-count">{targets.length} 个对象</span><Popover.Close aria-label="关闭批注" disabled={handoff.busy}><X size={16} /></Popover.Close></div>
+          <div className="canvas-annotation-header"><Popover.Title>{t("annotations.title")}</Popover.Title><span className="canvas-annotation-target-count">{t("selectionAnnotations.objectCount", { count: targets.length })}</span><Popover.Close aria-label={t("selectionAnnotations.closeLabel")} disabled={handoff.busy}><X size={16} /></Popover.Close></div>
           <CanvasAnnotations key={JSON.stringify(targets)} {...props} elementIds={targets} active={open} preparing={handoff.busy} canPrepare={handoff.targetAvailable} onPrepare={async annotation => {
             const prepared = await handoff.prepare(annotation.note, annotation);
             if (prepared) setOpen(false);

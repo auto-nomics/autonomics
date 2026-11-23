@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, Folder, Library, Inbox, Plus, Search, Trash2, X } from "lucide-react";
 import type { BibCollection } from "@/types";
 import { collectionDescendants, collectionFilter, collectionPath, collectionRows, type CollectionRow } from "./collection-tree-model";
@@ -23,6 +24,7 @@ function readExpanded(): Set<string> {
 }
 
 export function CollectionTree({ collections, selected, total, onSelect, onAction }: Props) {
+  const { t } = useTranslation("bibliography");
   const [expanded, setExpanded] = useState(readExpanded);
   const [focused, setFocused] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
@@ -36,7 +38,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
   const composingFilter = useRef(false);
   const tree = useRef<HTMLDivElement>(null);
   const modal = useRef<HTMLDialogElement>(null);
-  const trashNode: BibCollection = { id: "@trash", name: "Trash", article_ids: [], direct_article_count: collections.filter(c => c.deleted).length, deleted: true };
+  const trashNode: BibCollection = { id: "@trash", name: t("collectionTree.trash"), article_ids: [], direct_article_count: collections.filter(c => c.deleted).length, deleted: true };
   // Filtering is view-only: dialogs and drop targets still see every collection.
   const visibility = collectionFilter(collections, filter);
   const visibleIds = visibility?.visible;
@@ -109,7 +111,7 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
     try {
       for (const root of roots) await onAction({ method: "DELETE", path: `/bib/collections/${encodeURIComponent(root.id)}?permanent=true` });
       setEmptyTrashOpen(false);
-    } catch (e) { setError(`Could not empty trash: ${String(e)}`); }
+    } catch (e) { setError(t("collectionTree.emptyTrashError", { error: String(e) })); }
     finally { setBusy(false); }
   }
   async function drop(event: React.DragEvent, parentId: string | null) {
@@ -128,8 +130,8 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
       <div className="relative min-w-0 flex-1">
         <Search className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
-          aria-label="Filter collections"
-          placeholder="Filter collections"
+          aria-label={t("collectionTree.filterAria")}
+          placeholder={t("collectionTree.filterPlaceholder")}
           value={filterDraft}
           className="h-7 pl-7 pr-6 text-xs"
           onChange={event => {
@@ -149,14 +151,14 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
             if (event.key === "ArrowDown" && rows[0]) { event.preventDefault(); focus(rows[0].collection.id); }
           }}
         />
-        {filterDraft && <button type="button" tabIndex={-1} aria-label="Clear collection filter" className="absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground" onClick={clearFilter}><X className="size-3" /></button>}
+        {filterDraft && <button type="button" tabIndex={-1} aria-label={t("collectionTree.clearFilterAria")} className="absolute top-1/2 right-1 flex size-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground" onClick={clearFilter}><X className="size-3" /></button>}
       </div>
-      <Button size="icon-xs" variant="ghost" aria-label="New collection" onClick={() => open("create", null)}><Plus /></Button>
+      <Button size="icon-xs" variant="ghost" aria-label={t("collectionTree.newCollection")} onClick={() => open("create", null)}><Plus /></Button>
     </div>
-    <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", !selected && "bg-accent")} onClick={() => onSelect(null)} onDragOver={e => e.preventDefault()} onDrop={e => void drop(e, null)}><Library className="size-4" />All Articles<span className="ml-auto">{total}</span></button>
-    <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", selected === "@unfiled" && "bg-accent")} onClick={() => onSelect("@unfiled")}><Inbox className="size-4" />Unfiled</button>
-    <div ref={tree} role="tree" aria-label="Collections" className="py-1">
-      {rows.map(({ collection: c, depth, hasChildren }, index) => c.id === "@trash" ? <ContextMenu key={c.id}><ContextMenuTrigger render={<div />}><div role="treeitem" data-collection-id={c.id} aria-label="Trash" aria-level={1} aria-expanded={expanded.has(c.id)} tabIndex={focusId === c.id ? 0 : -1} onFocus={() => setFocused(c.id)} onKeyDown={event => { if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) { event.preventDefault(); toggle(c.id); } }}><button type="button" className="mt-2 flex w-full items-center gap-2 border-t px-2 py-2 text-left text-xs" aria-label="Toggle collection trash" onClick={() => toggle(c.id)}>{expanded.has(c.id) ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}<Trash2 className="size-3.5" />Trash<span className="ml-auto">{c.direct_article_count}</span></button></div></ContextMenuTrigger><ContextMenuContent><ContextMenuItem variant="destructive" disabled={busy || !c.direct_article_count} onClick={() => { setError(""); setEmptyTrashOpen(true); }}>Empty trash…</ContextMenuItem></ContextMenuContent></ContextMenu> : <ContextMenu key={c.id}>
+    <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", !selected && "bg-accent")} onClick={() => onSelect(null)} onDragOver={e => e.preventDefault()} onDrop={e => void drop(e, null)}><Library className="size-4" />{t("collectionTree.allArticles")}<span className="ml-auto">{total}</span></button>
+    <button type="button" className={cn("flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs", selected === "@unfiled" && "bg-accent")} onClick={() => onSelect("@unfiled")}><Inbox className="size-4" />{t("collectionTree.unfiled")}</button>
+    <div ref={tree} role="tree" aria-label={t("collectionTree.treeAria")} className="py-1">
+      {rows.map(({ collection: c, depth, hasChildren }, index) => c.id === "@trash" ? <ContextMenu key={c.id}><ContextMenuTrigger render={<div />}><div role="treeitem" data-collection-id={c.id} aria-label={t("collectionTree.trash")} aria-level={1} aria-expanded={expanded.has(c.id)} tabIndex={focusId === c.id ? 0 : -1} onFocus={() => setFocused(c.id)} onKeyDown={event => { if (["Enter", " ", "ArrowRight", "ArrowLeft"].includes(event.key)) { event.preventDefault(); toggle(c.id); } }}><button type="button" className="mt-2 flex w-full items-center gap-2 border-t px-2 py-2 text-left text-xs" aria-label={t("collectionTree.toggleTrashAria")} onClick={() => toggle(c.id)}>{expanded.has(c.id) ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}<Trash2 className="size-3.5" />{t("collectionTree.trash")}<span className="ml-auto">{c.direct_article_count}</span></button></div></ContextMenuTrigger><ContextMenuContent><ContextMenuItem variant="destructive" disabled={busy || !c.direct_article_count} onClick={() => { setError(""); setEmptyTrashOpen(true); }}>{t("collectionTree.emptyTrash")}</ContextMenuItem></ContextMenuContent></ContextMenu> : <ContextMenu key={c.id}>
         <ContextMenuTrigger render={<div />}>
           <div role="treeitem" data-collection-id={c.id} aria-label={c.name} aria-level={depth} aria-selected={selected === c.id} aria-expanded={hasChildren ? expanded.has(c.id) : undefined}
             tabIndex={focusId === c.id ? 0 : -1}
@@ -179,44 +181,49 @@ export function CollectionTree({ collections, selected, total, onSelect, onActio
             }}
             draggable={!c.deleted} onDragStart={e => { e.dataTransfer.setData("application/x-autonomics-collection", c.id); e.dataTransfer.effectAllowed = "move"; }}
             onDragOver={e => { if (!c.deleted) e.preventDefault(); }} onDrop={e => { if (!c.deleted) void drop(e, c.id); }}>
-            <button type="button" tabIndex={-1} aria-label={`${expanded.has(c.id) ? "Collapse" : "Expand"} ${c.name}`} className="flex size-5 shrink-0 items-center justify-center" onClick={e => { e.stopPropagation(); if (hasChildren) toggle(c.id); }}>{hasChildren ? expanded.has(c.id) ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" /> : null}</button>
+            <button type="button" tabIndex={-1} aria-label={t("collectionTree.toggleAria", { action: expanded.has(c.id) ? t("collectionTree.collapse") : t("collectionTree.expand"), name: c.name })} className="flex size-5 shrink-0 items-center justify-center" onClick={e => { e.stopPropagation(); if (hasChildren) toggle(c.id); }}>{hasChildren ? expanded.has(c.id) ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" /> : null}</button>
             {c.deleted ? <Trash2 className="size-3.5 shrink-0" /> : <Folder className="size-3.5 shrink-0" />}<span className="truncate" title={collectionPath(collections, c.id)}>{c.name}</span><span className="ml-auto text-muted-foreground">{c.direct_article_count ?? c.article_ids?.length ?? 0}</span>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          {c.deleted ? <><ContextMenuItem disabled={busy} onClick={() => void action({ method: "POST", path: `/bib/collections/${encodeURIComponent(c.id)}/restore` }).catch(() => {})}>Restore collection</ContextMenuItem><ContextMenuItem onClick={() => open("erase", c.id)}>Delete permanently…</ContextMenuItem></> : <>
-            <ContextMenuItem onClick={() => open("create", c.id)}>New subcollection…</ContextMenuItem>
-            <ContextMenuItem onClick={() => open("rename", c.id)}>Rename collection…</ContextMenuItem>
-            <ContextMenuItem onClick={() => open("move", c.id)}>Move collection…</ContextMenuItem>
-            <ContextMenuSeparator /><ContextMenuItem onClick={() => open("trash", c.id)}>Move collection to trash…</ContextMenuItem>
+          {c.deleted ? <><ContextMenuItem disabled={busy} onClick={() => void action({ method: "POST", path: `/bib/collections/${encodeURIComponent(c.id)}/restore` }).catch(() => {})}>{t("collectionTree.restoreCollection")}</ContextMenuItem><ContextMenuItem onClick={() => open("erase", c.id)}>{t("collectionTree.deletePermanently")}</ContextMenuItem></> : <>
+            <ContextMenuItem onClick={() => open("create", c.id)}>{t("collectionTree.newSubcollection")}</ContextMenuItem>
+            <ContextMenuItem onClick={() => open("rename", c.id)}>{t("collectionTree.renameCollection")}</ContextMenuItem>
+            <ContextMenuItem onClick={() => open("move", c.id)}>{t("collectionTree.moveCollection")}</ContextMenuItem>
+            <ContextMenuSeparator /><ContextMenuItem onClick={() => open("trash", c.id)}>{t("collectionTree.moveToTrash")}</ContextMenuItem>
           </>}
         </ContextMenuContent>
       </ContextMenu>)}
-      {visibility && !pool.length && <p className="px-2 py-1 text-xs text-muted-foreground">No matching collections</p>}
+      {visibility && !pool.length && <p className="px-2 py-1 text-xs text-muted-foreground">{t("collectionTree.noMatching")}</p>}
     </div>
 
     <ConfirmDialog open={emptyTrashOpen} onOpenChange={(open) => { if (!busy) setEmptyTrashOpen(open); }}>
       <DialogContent role="alertdialog" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Empty trash?</DialogTitle>
-          <DialogDescription>Permanently delete all {collections.filter(c => c.deleted).length} trashed collections? Articles, attachments and notes remain in your library.</DialogDescription>
+          <DialogTitle>{t("collectionTree.emptyTrashTitle")}</DialogTitle>
+          <DialogDescription>{t("collectionTree.emptyTrashDescription", { count: collections.filter(c => c.deleted).length })}</DialogDescription>
         </DialogHeader>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={() => setEmptyTrashOpen(false)}>Cancel</Button>
-          <Button variant="destructive" disabled={busy} onClick={() => void emptyTrash()}>{busy ? "Deleting…" : "Empty trash"}</Button>
+          <Button variant="outline" disabled={busy} onClick={() => setEmptyTrashOpen(false)}>{t("collectionTree.cancel")}</Button>
+          <Button variant="destructive" disabled={busy} onClick={() => void emptyTrash()}>{busy ? t("collectionTree.deleting") : t("collectionTree.emptyTrash")}</Button>
         </DialogFooter>
       </DialogContent>
     </ConfirmDialog>
     {error && !dialog && !emptyTrashOpen && <p role="alert" className="p-2 text-xs text-destructive">{error}</p>}
     {dialog && <dialog ref={modal} aria-labelledby="collection-dialog-title" onCancel={e => { if (busy) e.preventDefault(); else setDialog(null); }} className="fixed inset-0 m-auto w-[min(90vw,420px)] rounded-lg border bg-card p-5 text-foreground shadow-xl backdrop:bg-[var(--scrim)]">
       <form onSubmit={submit} className="space-y-4">
-        <h2 id="collection-dialog-title" className="font-semibold">{({ create: "New collection", rename: "Rename collection", move: "Move collection", trash: "Move collection to trash?", erase: "Delete collection permanently?" })[dialog.kind]}</h2>
-        {(dialog.kind === "create" || dialog.kind === "rename") && <label className="block text-sm">Name<Input autoFocus value={name} onChange={e => setName(e.target.value)} required /></label>}
-        {(dialog.kind === "create" || dialog.kind === "move") && <label className="block text-sm">Parent collection<select autoFocus={dialog.kind === "move"} className="mt-1 block w-full rounded border bg-background p-2" aria-label="Parent collection" value={parent} onChange={e => setParent(e.target.value)}><option value="">Library root</option>{collections.filter(c => !c.deleted && (dialog.kind === "create" || !excluded.has(c.id))).map(c => <option key={c.id} value={c.id}>{collectionPath(collections, c.id)}</option>)}</select></label>}
-        {(dialog.kind === "trash" || dialog.kind === "erase") && <p className="text-sm">{pending?.name} and {Math.max(0, excluded.size - 1)} subcollections will be {dialog.kind === "erase" ? "permanently deleted" : "moved to trash"}. Articles, attachments and notes remain in your library.</p>}
+        <h2 id="collection-dialog-title" className="font-semibold">{
+          dialog.kind === "create" ? t("collectionTree.dialogCreate")
+          : dialog.kind === "rename" ? t("collectionTree.dialogRename")
+          : dialog.kind === "move" ? t("collectionTree.dialogMove")
+          : dialog.kind === "trash" ? t("collectionTree.dialogTrash")
+          : t("collectionTree.dialogErase")}</h2>
+        {(dialog.kind === "create" || dialog.kind === "rename") && <label className="block text-sm">{t("collectionTree.nameLabel")}<Input autoFocus value={name} onChange={e => setName(e.target.value)} required /></label>}
+        {(dialog.kind === "create" || dialog.kind === "move") && <label className="block text-sm">{t("collectionTree.parentLabel")}<select autoFocus={dialog.kind === "move"} className="mt-1 block w-full rounded border bg-background p-2" aria-label={t("collectionTree.parentLabel")} value={parent} onChange={e => setParent(e.target.value)}><option value="">{t("collectionTree.libraryRoot")}</option>{collections.filter(c => !c.deleted && (dialog.kind === "create" || !excluded.has(c.id))).map(c => <option key={c.id} value={c.id}>{collectionPath(collections, c.id)}</option>)}</select></label>}
+        {(dialog.kind === "trash" || dialog.kind === "erase") && <p className="text-sm">{t("collectionTree.consequence", { name: pending?.name, count: Math.max(0, excluded.size - 1), action: dialog.kind === "erase" ? t("collectionTree.permanentlyDeleted") : t("collectionTree.movedToTrash") })}</p>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-        <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => { modal.current?.close(); setDialog(null); }}>Cancel</Button><Button type="submit" disabled={busy || ((dialog.kind === "create" || dialog.kind === "rename") && !name.trim())}>{busy ? "Saving…" : dialog.kind === "trash" ? "Move to trash" : dialog.kind === "erase" ? "Delete permanently" : "Save"}</Button></div>
+        <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={() => { modal.current?.close(); setDialog(null); }}>{t("collectionTree.cancel")}</Button><Button type="submit" disabled={busy || ((dialog.kind === "create" || dialog.kind === "rename") && !name.trim())}>{busy ? t("collectionTree.saving") : dialog.kind === "trash" ? t("collectionTree.moveToTrash") : dialog.kind === "erase" ? t("collectionTree.deletePermanently") : t("collectionTree.save")}</Button></div>
       </form>
     </dialog>}
   </>;

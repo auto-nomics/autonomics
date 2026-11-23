@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import type { BibArticle } from "@/types";
 
 export type ContextResource = {
@@ -10,12 +11,22 @@ export type ContextResource = {
   revision?: string;
 };
 export const resourceKey = (resource: ContextResource) => JSON.stringify([resource.kind, resource.id]);
-export const contextKindLabel = { article: "文献", evidence: "证据", knowledge: "知识", editor: "编辑器", image: "图片", manuscript: "手稿" };
+const contextKinds: Record<string, true> = { article: true, evidence: true, knowledge: true, editor: true, image: true, manuscript: true };
+// Translated lazily via getters so language switches apply at render time,
+// while the record's bracket-access shape stays stable for consumers.
+export const contextKindLabel: Record<ContextResource["kind"], string> = {
+  get article() { return i18n.t("context:kind.article"); },
+  get evidence() { return i18n.t("context:kind.evidence"); },
+  get knowledge() { return i18n.t("context:kind.knowledge"); },
+  get editor() { return i18n.t("context:kind.editor"); },
+  get image() { return i18n.t("context:kind.image"); },
+  get manuscript() { return i18n.t("context:kind.manuscript"); },
+};
 
 export function articleContext(article: BibArticle): ContextResource {
   return {
     kind: "article", id: article.id, title: article.title,
-    scope: "元数据与摘要（不含全文）", source: `bib:${article.id}`,
+    scope: i18n.t("context:article.scope"), source: `bib:${article.id}`,
     content: JSON.stringify(article, null, 2),
   };
 }
@@ -30,7 +41,7 @@ export function parseContextMessage(text: string): { text: string; resources: Co
   try {
     const resources: unknown = JSON.parse(text.slice(at + CONTEXT_MARKER.length));
     if (!Array.isArray(resources) || !resources.length || !resources.every(item =>
-      item && typeof item === "object" && Object.hasOwn(contextKindLabel, item.kind)
+      item && typeof item === "object" && Object.hasOwn(contextKinds, item.kind)
       && ["id", "title", "scope", "source", "content"].every(key => typeof item[key] === "string"))) return null;
     return { text: text.slice(0, at), resources };
   } catch { return null; }

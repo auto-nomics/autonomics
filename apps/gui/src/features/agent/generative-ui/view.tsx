@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18next from "i18next";
 import DOMPurify from "dompurify";
 import { parseDrawingContent, type DrawingContent } from "./content";
 import { loadWebsandbox, type SandboxInstance } from "./websandbox-loader";
@@ -14,6 +16,7 @@ const heightFor = (height: unknown) => typeof height === "number" && Number.isFi
 // Adapted from CopilotKit/OpenIntelligentUI's preview/final sandbox lifecycle.
 // All mutations share one queue; completed JS expressions execute once in order.
 function DrawingFrame({ content }: { content: DrawingContent }) {
+  const { t } = useTranslation("agent");
   const container = useRef<HTMLDivElement>(null);
   const latest = useRef(content);
   const sync = useRef<(() => void) | null>(null);
@@ -79,7 +82,7 @@ function DrawingFrame({ content }: { content: DrawingContent }) {
     window.addEventListener("message", onMessage);
     const themeObserver = new MutationObserver(() => sync.current?.());
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme"] });
-    const timeout = window.setTimeout(() => fail("绘图加载超时，请重试。"), 15000);
+    const timeout = window.setTimeout(() => fail(i18next.t("agent:drawing.loadTimeout")), 15000);
     void (async () => {
       const Websandbox = await loadWebsandbox();
       if (cancelled) return;
@@ -88,7 +91,7 @@ function DrawingFrame({ content }: { content: DrawingContent }) {
         frameContent: buildFinalFrameContent(fullHtml ?? "<body></body>", css),
         allowAdditionalAttributes: "",
       });
-      sandbox.iframe.title = "交互式绘图";
+      sandbox.iframe.title = i18next.t("agent:drawing.iframeTitle");
       sandbox.iframe.style.cssText = "width:100%;height:100%;border:0;background:transparent";
       await sandbox.promise;
       if (cancelled) return;
@@ -112,15 +115,16 @@ function DrawingFrame({ content }: { content: DrawingContent }) {
     };
   }, [fullHtml, css, hasBody]);
 
-  return <section className="min-w-0 space-y-2" aria-label="交互式解释" aria-busy={content.generating}>
-    {!ready && !error && <p role="status" className="text-xs text-muted-foreground">{content.placeholderMessages?.[0] || "正在绘制交互图…"}</p>}
-    {error && <div role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">绘图未能完整运行：{error}</div>}
+  return <section className="min-w-0 space-y-2" aria-label={t("drawing.sectionAria")} aria-busy={content.generating}>
+    {!ready && !error && <p role="status" className="text-xs text-muted-foreground">{content.placeholderMessages?.[0] || t("drawing.drawing")}</p>}
+    {error && <div role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">{t("drawing.runFailed", { error })}</div>}
     <div ref={container} className="w-full overflow-hidden rounded-lg" style={{ height, display: css === undefined || !hasBody ? "none" : undefined }} />
-    {content.generating && ready && <p role="status" className="text-xs text-muted-foreground">正在补充图形与交互…</p>}
+    {content.generating && ready && <p role="status" className="text-xs text-muted-foreground">{t("drawing.supplementing")}</p>}
   </section>;
 }
 
 export default function GenerativeUI({ code, streaming }: { code: string; streaming: boolean }) {
+  const { t } = useTranslation("agent");
   const parsed = useMemo(() => {
     try { return { content: parseDrawingContent(code, streaming), error: null }; }
     catch (cause) { return { content: null, error: String(cause) }; }
@@ -128,6 +132,6 @@ export default function GenerativeUI({ code, streaming }: { code: string; stream
   const lastGood = useRef<DrawingContent | null>(null);
   useEffect(() => { if (parsed.content) lastGood.current = parsed.content; }, [parsed]);
   const content = parsed.content ?? (streaming ? lastGood.current : null);
-  if (!content) return <div role={streaming ? "status" : "alert"} className="text-sm text-muted-foreground">{streaming ? "正在准备交互图…" : `无法解析绘图回复：${parsed.error}`}</div>;
+  if (!content) return <div role={streaming ? "status" : "alert"} className="text-sm text-muted-foreground">{streaming ? t("drawing.preparing") : t("drawing.parseFailed", { error: parsed.error })}</div>;
   return <DrawingFrame content={content} />;
 }

@@ -15,6 +15,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{List, ListItem, ListState, Widget},
 };
+use i18n::t;
 
 use crate::widgets::popup::{Popup, PopupControls};
 
@@ -202,7 +203,7 @@ impl<'a> SearchablePicker<'a> {
         // ── List ──
         if state.filtered.is_empty() {
             let line = Line::from(Span::styled(
-                "  No matches.",
+                t!("tui.picker.noMatches").to_string(),
                 Style::default().fg(theme.text_faint),
             ));
             let area = Rect {

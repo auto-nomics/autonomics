@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import "../i18n";
 import type { DeckPayload } from "../deck-api";
 import { clickTotal } from "../render/deck-model";
 import { SlideView } from "../render/slide-view";
@@ -7,6 +10,7 @@ import { stepNav, type NavState, type PresentationMessage } from "../render/pres
 import "../deck.css";
 
 function Preview({ payload, nav, dark }: { payload: DeckPayload; nav: NavState; dark: boolean }) {
+  const { t } = useTranslation("deck");
   const ref = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
   const width = payload.canvasSize?.width ?? payload.deck.canvasWidth ?? 980;
@@ -21,7 +25,7 @@ function Preview({ payload, nav, dark }: { payload: DeckPayload; nav: NavState; 
     observer.observe(node); update();
     return () => observer.disconnect();
   }, [width, height]);
-  if (!slide) return <div className="presenter-preview" ref={ref}>没有幻灯片</div>;
+  if (!slide) return <div className="presenter-preview" ref={ref}>{t("presenter.noSlides")}</div>;
   const slideDark = payload.deck.colorSchema === "dark" ? true : payload.deck.colorSchema === "light" ? false : dark;
   return <div className="presenter-preview" ref={ref}><div className="deck-canvas" style={{ width, height, transform: `scale(${scale})` }}>
     <SlideView slide={slide} deckId={payload.deck.id} assets={payload.assets} themeCss={payload.themeCss} outline={payload.outline} currentClick={Math.min(Math.max(nav.click, slide.clickPlan?.clicksStart ?? 0), clickTotal(slide))} dark={slideDark} />
@@ -29,6 +33,7 @@ function Preview({ payload, nav, dark }: { payload: DeckPayload; nav: NavState; 
 }
 
 function Presenter({ session }: { session: string }) {
+  const { t } = useTranslation("deck");
   const [state, setState] = useState<{ payload: DeckPayload; nav: NavState; dark: boolean } | null>(null);
   const [connected, setConnected] = useState(false);
   const [running, setRunning] = useState(false);
@@ -72,13 +77,13 @@ function Presenter({ session }: { session: string }) {
   const next = state && stepNav(state.nav, state.payload.slides, 1);
   const atEnd = state && next && next.slide === state.nav.slide && next.click === state.nav.click;
   return <div className="presenter">
-    <header className="presenter-header"><div><strong>讲演者模式</strong><span className="presenter-title">{state?.payload.deck.title}</span></div><span className={connected ? "presenter-connected" : "presenter-disconnected"}>{connected ? "已连接观众画面" : "等待观众画面连接"}</span></header>
+    <header className="presenter-header"><div><strong>{t("presenter.title")}</strong><span className="presenter-title">{state?.payload.deck.title}</span></div><span className={connected ? "presenter-connected" : "presenter-disconnected"}>{connected ? t("presenter.connected") : t("presenter.waiting")}</span></header>
     {state ? <div className="presenter-grid">
-      <section className="presenter-current"><div className="presenter-label">当前画面 <span>{state.nav.slide} / {state.payload.slides.length}</span></div><Preview payload={state.payload} nav={state.nav} dark={state.dark} /></section>
-      <section className="presenter-next"><div className="presenter-label">接下来 <span>{atEnd ? "已到末尾" : next?.slide === state.nav.slide ? "下一动画" : "下一页"}</span></div>{next && <Preview payload={state.payload} nav={next} dark={state.dark} />}</section>
-      <section className="presenter-notes"><div className="presenter-label">演讲备注</div><div className="presenter-notes-body">{state.payload.slides[state.nav.slide - 1]?.note || "此页没有备注"}</div></section>
-    </div> : <div className="presenter-wait">请从幻灯片的“讲演者模式”按钮打开此窗口。</div>}
-    <footer className="presenter-footer"><div className="presenter-navigation"><button type="button" onClick={() => step(-1)} disabled={!connected}>上一动画 / 页</button><button type="button" onClick={() => step(1)} disabled={!connected}>下一动画 / 页</button></div><div className="presenter-timer"><span aria-label="计时">{time}</span><button type="button" onClick={() => setRunning(value => !value)}>{running ? "暂停" : "开始"}</button><button type="button" onClick={() => { setRunning(false); setElapsed(0); }}>重置</button></div></footer>
+      <section className="presenter-current"><div className="presenter-label">{t("presenter.current")} <span>{state.nav.slide} / {state.payload.slides.length}</span></div><Preview payload={state.payload} nav={state.nav} dark={state.dark} /></section>
+      <section className="presenter-next"><div className="presenter-label">{t("presenter.next")} <span>{atEnd ? t("presenter.atEnd") : next?.slide === state.nav.slide ? t("presenter.nextAnimation") : t("presenter.nextPage")}</span></div>{next && <Preview payload={state.payload} nav={next} dark={state.dark} />}</section>
+      <section className="presenter-notes"><div className="presenter-label">{t("presenter.notes")}</div><div className="presenter-notes-body">{state.payload.slides[state.nav.slide - 1]?.note || t("presenter.noNotes")}</div></section>
+    </div> : <div className="presenter-wait">{t("presenter.wait")}</div>}
+    <footer className="presenter-footer"><div className="presenter-navigation"><button type="button" onClick={() => step(-1)} disabled={!connected}>{t("presenter.prevStep")}</button><button type="button" onClick={() => step(1)} disabled={!connected}>{t("presenter.nextStep")}</button></div><div className="presenter-timer"><span aria-label={t("presenter.timerAria")}>{time}</span><button type="button" onClick={() => setRunning(value => !value)}>{running ? t("presenter.pause") : t("presenter.start")}</button><button type="button" onClick={() => { setRunning(false); setElapsed(0); }}>{t("presenter.reset")}</button></div></footer>
   </div>;
 }
 

@@ -1,0 +1,28 @@
+{
+  "app": {
+    "boot": {
+      "connecting": "正在连接 Gateway…",
+      "tokenTitle": "需要 Gateway 令牌",
+      "tokenBody": "令牌在运行 Gateway 的机器上:~/.autonomics/gateway.token (或环境变量 AUTONOMICS_HTTP_API_TOKEN)。令牌只提交一次,之后由 HttpOnly 会话 Cookie 维持登录。",
+      "tokenPlaceholder": "Gateway 令牌",
+      "connectingBusy": "连接中…",
+      "connect": "连接",
+      "gatewayDown": "Gateway 未运行",
+      "noAgent": "未选择 Agent"
+    },
+    "language": {
+      "label": "语言",
+      "switch": "切换语言"
+    }
+  },
+  "workbench": {
+    "statusbar": {
+      "label": "状态栏",
+      "connected": "Gateway 已连接",
+      "disconnected": "Gateway 已断开",
+      "model": "活动模型",
+      "noModel": "no model",
+      "editor": "活动编辑器"
+    }
+  }
+}

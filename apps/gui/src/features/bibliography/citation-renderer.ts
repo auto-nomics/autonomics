@@ -1,3 +1,5 @@
+import i18next from "i18next";
+
 export type CitationStyle = "apa" | "vancouver" | "gb7714";
 export type CslItem = { id: string; type: string; title?: string; [key: string]: unknown };
 /** Bundled CSL assets run locally; no citation contents are sent to third parties. */
@@ -11,6 +13,6 @@ export async function renderCitations(items: CslItem[], style: CitationStyle, ci
   processor.updateItems([...indexed.keys()]);
   const citation = processor.makeCitationCluster((citationIds ?? [...indexed.keys()]).map(id => ({ id })));
   const rendered = processor.makeBibliography();
-  if (!rendered) throw new Error("The citation style did not produce a bibliography");
+  if (!rendered) throw new Error(i18next.t("bibliography:citationRenderer.noBibliography"));
   return { citation, bibliography: rendered[1].join("\n").trim() };
 }

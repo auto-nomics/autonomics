@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import type { IndexStatus } from "./bib-search-model";
 
 export function SearchIndexStatus({ onSourceChange, onEngine }: { onSourceChange: () => void; onEngine: (engine: string) => void }) {
+  const { t } = useTranslation("bibliography");
   const [status, setStatus] = useState<IndexStatus | null>(null);
   const [error, setError] = useState("");
   const [queued, setQueued] = useState(false);
@@ -36,14 +38,14 @@ export function SearchIndexStatus({ onSourceChange, onEngine }: { onSourceChange
   };
   if (!status && !error) return null;
   return <details className="mt-3 border-t px-1 pt-2 text-xs">
-    <summary className="cursor-pointer text-muted-foreground">{status?.building ? `Indexing… ${status.processed_documents.toLocaleString()} objects` : status?.last_error ? "Search index needs attention" : status?.pending_articles ? `${status.pending_articles} articles awaiting indexing` : status?.engine === "legacy" ? "Basic search enabled" : "Search index ready"}</summary>
+    <summary className="cursor-pointer text-muted-foreground">{status?.building ? t("searchIndex.indexing", { count: status.processed_documents.toLocaleString() }) : status?.last_error ? t("searchIndex.needsAttention") : status?.pending_articles ? t("searchIndex.awaiting", { count: status.pending_articles }) : status?.engine === "legacy" ? t("searchIndex.basicEnabled") : t("searchIndex.ready")}</summary>
     <div className="space-y-1 py-2 text-muted-foreground">
-      {status && <p>{status.indexed_documents.toLocaleString()} indexed objects · {status.pending_articles.toLocaleString()} articles pending</p>}
-      {status?.building && <p>Index maintenance may delay new searches. You can keep browsing the current results.</p>}
-      {status && !status.durable && status.engine !== "legacy" && <p>This session uses a temporary index. The library data is saved.</p>}
+      {status && <p>{t("searchIndex.indexedStats", { indexed: status.indexed_documents.toLocaleString(), pending: status.pending_articles.toLocaleString() })}</p>}
+      {status?.building && <p>{t("searchIndex.buildingNote")}</p>}
+      {status && !status.durable && status.engine !== "legacy" && <p>{t("searchIndex.temporaryNote")}</p>}
       {status?.last_error && <p role="alert" className="text-destructive">{status.last_error}</p>}
       {error && <p role="alert" className="text-destructive">{error}</p>}
-      {status?.engine !== "legacy" && <Button size="xs" variant="secondary" disabled={queued || status?.building} onClick={() => void rebuild()}>{queued ? "Queuing…" : "Rebuild search index"}</Button>}
+      {status?.engine !== "legacy" && <Button size="xs" variant="secondary" disabled={queued || status?.building} onClick={() => void rebuild()}>{queued ? t("searchIndex.queuing") : t("searchIndex.rebuild")}</Button>}
     </div>
   </details>;
 }

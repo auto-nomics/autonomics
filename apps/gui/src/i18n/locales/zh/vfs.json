@@ -1,0 +1,57 @@
+{
+  "editor": {
+    "ariaFile": "VFS 文件 {{path}}",
+    "readOnlyMountTitle": "该文件位于只读挂载",
+    "readOnlyMount": "只读挂载",
+    "charCount": "{{count}} 字符",
+    "save": "保存",
+    "download": "下载",
+    "conflict": "文件在服务器上已变更(或保存窗口外被修改)，本次保存被拒绝。重新加载会丢弃本地修改。",
+    "reload": "重新加载",
+    "loading": "加载中…",
+    "truncatedNotice": "文件较大，仅显示开头部分；完整内容请下载。",
+    "viewFile": "查看 {{path}}",
+    "editFile": "编辑 {{path}}",
+    "binaryHint": "该文件不是 UTF-8 文本（或超出文本预览上限）。",
+    "downloadFile": "下载文件"
+  },
+  "sidebar": {
+    "renamePrompt": "重命名为:",
+    "confirmDeleteDir": "删除目录 {{path}} 及其全部内容?",
+    "confirmDeleteFile": "删除文件 {{path}}?",
+    "downloadAria": "下载 {{name}}",
+    "downloadTitle": "下载",
+    "renameAria": "重命名 {{name}}",
+    "renameTitle": "重命名",
+    "deleteAria": "删除 {{name}}",
+    "deleteTitle": "删除",
+    "readOnlyBadge": "只读挂载",
+    "loading": "加载中…",
+    "empty": "(空)",
+    "backendLocal": "本地",
+    "groupTitle": "{{name}} · {{backend}}",
+    "groupTitleReadOnly": "{{name}} · {{backend}} · 只读",
+    "newFolderPrompt": "在 {{dir}} 下新建文件夹:",
+    "newFilePrompt": "在 {{dir}} 下新建文件:",
+    "newFolder": "新建文件夹",
+    "newFolderTitle": "在 {{dir}} 新建文件夹",
+    "newFile": "新建文件",
+    "newFileTitle": "在 {{dir}} 新建文件",
+    "upload": "上传文件",
+    "uploadTitle": "上传到 {{dir}}",
+    "refresh": "重新加载",
+    "browserLabel": "VFS 文件浏览",
+    "readOnlyNotice": "{{dir}} 位于只读挂载,仅可浏览与下载。",
+    "treeLabel": "VFS 目录树"
+  },
+  "tree": {
+    "localTarget": "本地"
+  },
+  "api": {
+    "uploadFailed": "上传失败 ({{status}})",
+    "uploadDialogTitle": "上传到 VFS",
+    "desktopUploadNeedsPath": "桌面端上传需要一个本地文件路径",
+    "browserUploadNeedsFile": "浏览器上传需要一个文件",
+    "downloadFailed": "下载失败 ({{status}})"
+  }
+}

@@ -1,0 +1,23 @@
+_version: 2
+locale.name:
+  en: English
+common.yes:
+  en: "Yes"
+common.no:
+  en: "No"
+common.cancel:
+  en: Cancel
+common.confirm:
+  en: Confirm
+common.close:
+  en: Close
+common.retry:
+  en: Retry
+common.loading:
+  en: Loading…
+common.error:
+  en: Error
+common.none:
+  en: none
+common.search:
+  en: Search

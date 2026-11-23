@@ -21,6 +21,7 @@ pub mod xai_textarea;
 
 /// Launch the interactive TUI (the `autonomics tui` subcommand body).
 pub fn run_tui() -> color_eyre::Result<()> {
+    i18n::init_locale();
     let mut app = app::App::new()?;
     app.start()
 }

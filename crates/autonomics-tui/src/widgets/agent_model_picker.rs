@@ -11,6 +11,7 @@
 //! navigation live in [`PickerState`].
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -92,7 +93,7 @@ impl PickerTarget {
     pub fn describe(&self) -> String {
         match self {
             Self::Single { agent } => agent.clone(),
-            Self::AllFiltered { agents } => format!("{} filtered agents", agents.len()),
+            Self::AllFiltered { agents } => t!("tui.modelPicker.filteredAgents", count = agents.len()).to_string(),
         }
     }
 }
@@ -272,7 +273,8 @@ pub fn render_agent_model_picker(
 
     let theme = crate::theme::current();
     let popup_w = (frame_area.width * 6 / 10).max(44);
-    let popup = Popup::new(" Switch Model ", PopupControls::default())
+    let title = t!("tui.modelPicker.title").to_string();
+    let popup = Popup::new(&title, PopupControls::default())
         .accent(theme.accent)
         .width(popup_w);
     let inner = popup.render(frame_area, buf);
@@ -296,7 +298,7 @@ pub fn render_agent_model_picker(
         .unwrap_or_default();
     Widget::render(
         Paragraph::new(Line::from(vec![
-            Span::styled(" Apply to ", Style::default().fg(theme.text_faint)),
+            Span::styled(t!("tui.modelPicker.applyTo").to_string(), Style::default().fg(theme.text_faint)),
             Span::styled(
                 target_label,
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
@@ -329,21 +331,21 @@ pub fn render_agent_model_picker(
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" select  ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.modelPicker.select").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(
             "↑↓",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" navigate  ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.modelPicker.navigate").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" cancel", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.modelPicker.cancel").to_string(), Style::default().fg(theme.text_faint)),
     ]);
     Widget::render(Paragraph::new(footer), v_regions[4], buf);
 }
@@ -370,7 +372,7 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut AgentModelPicke
     };
 
     if state.textarea.is_empty() {
-        let hint = " filter models";
+        let hint = t!("tui.modelPicker.filterHint").to_string();
         buf.set_string(
             ta_area.x,
             ta_area.y,
@@ -391,9 +393,9 @@ fn render_list(area: Rect, buf: &mut Buffer, state: &mut AgentModelPickerState) 
     let theme = crate::theme::current();
     if state.picker.items.is_empty() {
         let hint = if state.picker.query.is_empty() {
-            " No configured providers with models — add one in Model Config (Ctrl+M)"
+            t!("tui.modelPicker.noProviders").to_string()
         } else {
-            " No matching models"
+            t!("tui.modelPicker.noMatches").to_string()
         };
         Paragraph::new(hint)
             .style(Style::default().fg(theme.text_faint))

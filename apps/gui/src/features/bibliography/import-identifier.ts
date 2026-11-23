@@ -1,9 +1,11 @@
+import i18next from "i18next";
+
 export type ImportIdentifier = { id_type: "doi" | "pmid" | "pmc" | "arxiv" | "openalex"; id: string };
 
 /** Resolve the identifier before choosing a provider; a numeric PMID is never a DOI. */
 export function parseImportIdentifier(input: string): ImportIdentifier {
   let value = input.trim();
-  if (!value) throw new Error("Enter a DOI, PMID, PMCID, arXiv ID, or OpenAlex ID.");
+  if (!value) throw new Error(i18next.t("bibliography:importIdentifier.empty"));
   if (/^https?:\/\//i.test(value)) {
     const url = new URL(value);
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
@@ -13,7 +15,7 @@ export function parseImportIdentifier(input: string): ImportIdentifier {
     else if (host === "pmc.ncbi.nlm.nih.gov") value = path.replace(/^articles\//, "");
     else if (host === "arxiv.org" || host === "export.arxiv.org") value = `arxiv:${path.replace(/^(abs|pdf)\//, "").replace(/\.pdf$/i, "")}`;
     else if (host === "openalex.org") value = path;
-    else throw new Error("Unsupported URL. Paste the article's DOI or supported identifier.");
+    else throw new Error(i18next.t("bibliography:importIdentifier.unsupportedUrl"));
   }
   if (/^(?:doi:\s*)?10\.\d{4,9}\/\S+$/i.test(value)) return { id_type: "doi", id: value.replace(/^doi:\s*/i, "") };
   if (/^(?:pmid:\s*)?\d+$/i.test(value)) return { id_type: "pmid", id: value.replace(/^pmid:\s*/i, "") };
@@ -21,5 +23,5 @@ export function parseImportIdentifier(input: string): ImportIdentifier {
   if (/^(?:openalex:\s*)?W\d+$/i.test(value)) return { id_type: "openalex", id: value.replace(/^openalex:\s*/i, "").toUpperCase() };
   const arxiv = value.replace(/^arxiv:\s*/i, "");
   if (/^(?:\d{4}\.\d{4,5}|[a-z][a-z.\-]+\/\d{7})(?:v\d+)?$/i.test(arxiv)) return { id_type: "arxiv", id: arxiv };
-  throw new Error("Identifier not recognized. Use a DOI, PMID, PMCID, arXiv ID, or OpenAlex ID.");
+  throw new Error(i18next.t("bibliography:importIdentifier.unrecognized"));
 }

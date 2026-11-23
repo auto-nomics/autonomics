@@ -7,6 +7,8 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use i18n::t;
+
 use crate::state::{AgentStatus, CompactState};
 use crate::widgets::agent_workspace::{status_color, status_icon, status_label};
 
@@ -195,24 +197,30 @@ fn compact_status_text(c: &CompactState) -> String {
     use agentik_types::CompactPhase;
 
     let phase = match c.phase {
-        Some(CompactPhase::Summarizing) => "summarizing",
-        Some(CompactPhase::Rebuilding) => "rebuilding",
-        None => "preparing",
+        Some(CompactPhase::Summarizing) => t!("tui.statusBar.compactPhaseSummarizing"),
+        Some(CompactPhase::Rebuilding) => t!("tui.statusBar.compactPhaseRebuilding"),
+        None => t!("tui.statusBar.compactPhasePreparing"),
     };
-    let mut text = format!("compacting ▸ {phase}");
+    let mut text = t!("tui.statusBar.compacting", phase = phase).to_string();
     if let Some(plan) = &c.plan {
-        text.push_str(&format!(
-            " {} tok ({} msgs)",
-            format_tokens(plan.head_tokens),
-            plan.head_messages
-        ));
+        text.push_str(
+            &t!(
+                "tui.statusBar.compactHead",
+                tokens = format_tokens(plan.head_tokens),
+                messages = plan.head_messages
+            )
+            .to_string(),
+        );
     }
     if !c.summary.is_empty() {
         // chars/4 matches the backend's estimate heuristic.
-        text.push_str(&format!(
-            " · {} generated",
-            format_tokens((c.summary.len() / 4) as u64)
-        ));
+        text.push_str(
+            &t!(
+                "tui.statusBar.compactGenerated",
+                tokens = format_tokens((c.summary.len() / 4) as u64)
+            )
+            .to_string(),
+        );
     }
     if let Some(started) = c.started_at {
         text.push_str(&format!(" · {}s", started.elapsed().as_secs()));

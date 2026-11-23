@@ -1,3 +1,4 @@
+import i18next from "i18next";
 import { searchFieldLabels, type SearchExpr, type SearchRequest } from "./bib-search-model";
 const object = (value: unknown): value is Record<string, any> => Boolean(value && typeof value === "object" && !Array.isArray(value));
 function expression(value: unknown, depth = 0): value is SearchExpr {
@@ -40,7 +41,7 @@ export function readSearchLocation(): { request: SearchRequest; savedId: string 
     const text = url.searchParams.get("bib_search");
     const value = text ? JSON.parse(text) : window.history.state?.bibSearch;
     if (!value) return { request: {}, savedId: null, error: "" };
-    if (value.version !== 1 || !validate(value.request)) throw new Error("The search URL is invalid or uses unsupported conditions. Clear it or enter a new query.");
+    if (value.version !== 1 || !validate(value.request)) throw new Error(i18next.t("bibliography:searchLocation.invalidUrl"));
     return { request: value.request, savedId: typeof value.savedId === "string" ? value.savedId : null, error: "" };
   } catch (failure) { return { request: {}, savedId: null, error: String(failure) }; }
 }

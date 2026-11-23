@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import i18n from "@/i18n";
 import { useWorkbenchRuntime } from "@/app/workbench/runtime-context";
 import { findEditor, openAgentEditor, patchEditorState } from "@/app/workbench/workbench-store";
 
@@ -23,7 +24,7 @@ export function useCanvasIllustrator(editorId: string, projectId: string | undef
       const editor = findEditor(editorId);
       if (editor) patchEditorState(editorId, { ...(editor.state && typeof editor.state === "object" ? editor.state : {}), illustratorPath: path });
       openAgentEditor(path, false);
-    }).catch(cause => { if (!cancelled) setError(`无法连接插画专家：${String(cause)}`); });
+    }).catch(cause => { if (!cancelled) setError(i18n.t("canvas:illustrator.connectFailed", { cause: String(cause) })); });
     return () => { cancelled = true; };
   }, [editorId, projectId, canvasId, loaded, attempt, runtime.ensureIllustratorAgent]);
   const openConversation = useCallback(() => {

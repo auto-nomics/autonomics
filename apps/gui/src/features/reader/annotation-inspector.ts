@@ -1,4 +1,5 @@
 import type { ReadingTextRange } from './reading-text-range';
+import { i18next } from './i18n';
 import { escapeHtml } from '@/lib/markdown';
 import { defaultAnnotationColor, annotationPalette } from '@/lib/annotation-colors';
 import { AnnotationHoverCard } from './annotation-hover-card';
@@ -115,21 +116,21 @@ export class AnnotationInspector {
     const tags = draft.tags ?? annotation.tags ?? [];
     this.popup.dataset.annotationId = annotation.id;
     this.popup.innerHTML = `
-      <header><span class="reader-annotation-icon" aria-hidden="true">A</span><span>Page ${Number(annotation.page ?? 1)}</span><button type="button" class="reader-annotation-more" aria-label="Annotation options" aria-expanded="false">•••</button></header>
+      <header><span class="reader-annotation-icon" aria-hidden="true">A</span><span>${escapeHtml(i18next.t('reader:inspector.page', { page: Number(annotation.page ?? 1) }))}</span><button type="button" class="reader-annotation-more" aria-label="${i18next.t('reader:inspector.options')}" aria-expanded="false">•••</button></header>
       ${annotation.kind === 'comment' ? `<p class="reader-note-content">${escapeHtml(annotation.content)}</p>` : ''}
-      <textarea aria-label="Annotation comment" placeholder="Add comment" rows="3">${escapeHtml(comment)}</textarea>
+      <textarea aria-label="${i18next.t('reader:inspector.commentAria')}" placeholder="${i18next.t('reader:inspector.commentPlaceholder')}" rows="3">${escapeHtml(comment)}</textarea>
       <div class="reader-annotation-tags"></div>
-      <input class="reader-annotation-tag-input" aria-label="Add annotation tags" placeholder="Add tags…" />
-      ${this.onReference && annotation.kind !== 'comment' ? '<button type="button" class="reader-annotation-reference" data-annotation-action="reference">发送到 Agent</button>' : ''}
+      <input class="reader-annotation-tag-input" aria-label="${i18next.t('reader:inspector.tagsAria')}" placeholder="${i18next.t('reader:inspector.tagsPlaceholder')}" />
+      ${this.onReference && annotation.kind !== 'comment' ? `<button type="button" class="reader-annotation-reference" data-annotation-action="reference">${escapeHtml(i18next.t('reader:inspector.sendToAgent'))}</button>` : ''}
       <div class="reader-annotation-options" hidden>
-        <div class="reader-annotation-colors" role="group" aria-label="Highlight color">${annotationPalette().map(color => `<button type="button" data-annotation-color="${color}" aria-label="Color ${color}" style="--annotation-color:${color}"></button>`).join('')}</div>
-        <button type="button" data-annotation-action="copy">Copy highlighted text</button>
-        <button type="button" data-annotation-action="delete">Delete annotation</button>
+        <div class="reader-annotation-colors" role="group" aria-label="${i18next.t('reader:inspector.highlightColor')}">${annotationPalette().map(color => `<button type="button" data-annotation-color="${color}" aria-label="${escapeHtml(i18next.t('reader:inspector.colorName', { color }))}" style="--annotation-color:${color}"></button>`).join('')}</div>
+        <button type="button" data-annotation-action="copy">${escapeHtml(i18next.t('reader:inspector.copyHighlighted'))}</button>
+        <button type="button" data-annotation-action="delete">${escapeHtml(i18next.t('reader:inspector.deleteAnnotation'))}</button>
       </div>
       <div class="reader-annotation-save-status" role="status"></div>`;
     this.popup.querySelector<HTMLElement>('.reader-annotation-icon')!.style.color = annotation.color ?? defaultAnnotationColor();
     this.renderTags(tags);
-    if (this.failed.has(annotation.id)) this.status('Could not save. ', true);
+    if (this.failed.has(annotation.id)) this.status(i18next.t('reader:inspector.couldNotSave'), true);
     const textarea = this.popup.querySelector('textarea')!;
     textarea.addEventListener('input', () => this.stage({ comment: textarea.value }));
     textarea.addEventListener('blur', () => this.flush());
@@ -161,14 +162,14 @@ export class AnnotationInspector {
       });
     });
     this.popup.querySelector('[data-annotation-action=copy]')!.addEventListener('click', () => {
-      void navigator.clipboard.writeText(annotation.content).catch(() => this.status('Could not copy text'));
+      void navigator.clipboard.writeText(annotation.content).catch(() => this.status(i18next.t('reader:inspector.couldNotCopy')));
     });
     this.popup.querySelector('[data-annotation-action=reference]')?.addEventListener('click', () => {
       this.onReference?.(annotation);
     });
     this.popup.querySelector('[data-annotation-action=delete]')!.addEventListener('click', () => {
       this.flush();
-      void this.queue.then(() => this.remove(annotation.id)).catch(() => this.status('Could not delete annotation'));
+      void this.queue.then(() => this.remove(annotation.id)).catch(() => this.status(i18next.t('reader:inspector.couldNotDelete')));
     });
   }
 
@@ -177,7 +178,7 @@ export class AnnotationInspector {
     container.replaceChildren();
     for (const tag of tags) {
       const button = document.createElement('button'); button.type = 'button';
-      button.textContent = `${tag} ×`; button.setAttribute('aria-label', `Remove tag ${tag}`);
+      button.textContent = `${tag} ×`; button.setAttribute('aria-label', i18next.t('reader:inspector.removeTag', { tag }));
       button.addEventListener('click', () => {
         const id = this.selected!;
         const current = this.drafts.get(id)?.tags ?? this.annotations.get(id)?.tags ?? tags;
@@ -195,7 +196,7 @@ export class AnnotationInspector {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = window.setTimeout(() => { this.timer = null; this.flush(); }, 450);
     this.failed.delete(this.selected);
-    this.status('Unsaved changes');
+    this.status(i18next.t('reader:inspector.unsavedChanges'));
   }
 
   private flush() {
@@ -204,7 +205,7 @@ export class AnnotationInspector {
     for (const [id, patch] of this.pending) {
       this.pending.delete(id);
       this.queue = this.queue.then(async () => {
-        if (this.selected === id) this.status('Saving…');
+        if (this.selected === id) this.status(i18next.t('reader:inspector.saving'));
         try {
           const annotation = await this.update(id, patch);
           this.annotations.set(id, annotation);
@@ -216,11 +217,11 @@ export class AnnotationInspector {
             }
             if (!Object.keys(draft).length) this.drafts.delete(id);
           }
-          if (this.selected === id) this.status(this.pending.has(id) ? 'Unsaved changes' : this.drafts.has(id) ? 'Saving…' : 'Saved');
+          if (this.selected === id) this.status(this.pending.has(id) ? i18next.t('reader:inspector.unsavedChanges') : this.drafts.has(id) ? i18next.t('reader:inspector.saving') : i18next.t('reader:inspector.saved'));
         } catch {
           this.failed.add(id);
           this.pending.set(id, { ...patch, ...this.pending.get(id) });
-          if (this.selected === id) this.status('Could not save. ', true);
+          if (this.selected === id) this.status(i18next.t('reader:inspector.couldNotSave'), true);
         }
       });
     }
@@ -231,7 +232,7 @@ export class AnnotationInspector {
     if (!status) return;
     status.replaceChildren(document.createTextNode(message));
     if (retry) {
-      const button = document.createElement('button'); button.type = 'button'; button.textContent = 'Retry';
+      const button = document.createElement('button'); button.type = 'button'; button.textContent = i18next.t('reader:inspector.retry');
       button.addEventListener('click', () => this.flush()); status.append(button);
     }
   }

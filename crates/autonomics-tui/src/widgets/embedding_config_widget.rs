@@ -1,6 +1,7 @@
 //! Embedding model configuration surface.
 
 use crate::xai_textarea::{TextArea, TextAreaState};
+use i18n::t;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use gateway::proto::{EmbeddingConfigView, SaveEmbeddingConfigRequest};
 use ratatui::{
@@ -216,22 +217,22 @@ impl StatefulWidgetRef for EmbeddingConfigWidget {
             buf,
             state,
             EmbeddingConfigField::BaseUrl,
-            "Base URL",
+            &t!("tui.embeddingConfig.baseUrl"),
         );
-        render_input(rows[2], buf, state, EmbeddingConfigField::Model, "Model");
+        render_input(rows[2], buf, state, EmbeddingConfigField::Model, &t!("tui.embeddingConfig.model"));
         render_input(
             rows[3],
             buf,
             state,
             EmbeddingConfigField::BatchSize,
-            "Batch size",
+            &t!("tui.embeddingConfig.batchSize"),
         );
         render_input(
             rows[4],
             buf,
             state,
             EmbeddingConfigField::TimeoutSecs,
-            "Timeout (seconds)",
+            &t!("tui.embeddingConfig.timeoutSeconds"),
         );
         render_save(rows[5], buf, state);
         state.cursor_pos = match state.focused {
@@ -265,7 +266,7 @@ fn focused_style(active: bool) -> Style {
 fn render_toggle(area: Rect, buf: &mut Buffer, state: &EmbeddingConfigState) {
     let style = focused_style(state.focused == EmbeddingConfigField::Enabled);
     let marker = if state.config.enabled { "[x]" } else { "[ ]" };
-    Paragraph::new(Line::from(format!("{marker} Enabled")))
+    Paragraph::new(Line::from(format!("{marker} {}", t!("tui.embeddingConfig.enabled"))))
         .style(style)
         .render(area, buf);
 }
@@ -295,7 +296,7 @@ fn render_input(
 
 fn render_save(area: Rect, buf: &mut Buffer, state: &EmbeddingConfigState) {
     let style = focused_style(state.focused == EmbeddingConfigField::Save);
-    Paragraph::new(Line::from("Save and apply (Enter)"))
+    Paragraph::new(Line::from(t!("tui.embeddingConfig.saveApply").to_string()))
         .style(style)
         .render(area, buf);
 }

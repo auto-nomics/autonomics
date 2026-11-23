@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+use i18n::t;
 
 use super::logo::Logo;
 
@@ -18,7 +19,7 @@ impl Widget for EmptyState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.text_faint))
             .title(Span::styled(
-                " No Agent ",
+                t!("tui.empty.noAgentTitle").to_string(),
                 Style::default().fg(theme.text_faint),
             ));
         let inner = block.inner(area);
@@ -61,14 +62,14 @@ impl EmptyState {
         let theme = crate::theme::current();
         let hints = vec![
             Line::from(Span::styled(
-                "No agents running.",
+                t!("tui.empty.noAgentsRunning").to_string(),
                 Style::default()
                     .fg(theme.text_dim)
                     .add_modifier(Modifier::DIM),
             )),
             Line::raw(""),
             Line::from(Span::styled(
-                "Ctrl+P → \"New agent\" or \"Resume agent\" to start.",
+                t!("tui.empty.startHint").to_string(),
                 Style::default()
                     .fg(theme.text_faint)
                     .add_modifier(Modifier::DIM),
@@ -98,7 +99,7 @@ impl EmptyState {
                 )),
                 Line::raw(""),
                 Line::from(Span::styled(
-                    "Ctrl+P → \"New agent\" or \"Resume agent\" to start.",
+                    t!("tui.empty.startHint").to_string(),
                     Style::default()
                         .fg(theme.text_faint)
                         .add_modifier(Modifier::DIM),
@@ -106,7 +107,7 @@ impl EmptyState {
             ]
         } else {
             vec![Line::from(Span::styled(
-                "No agents — press Ctrl+P to start",
+                t!("tui.empty.noAgentsPressCtrlP").to_string(),
                 Style::default().fg(theme.text_faint),
             ))]
         };

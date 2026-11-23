@@ -12,6 +12,7 @@ import { WikiAttachmentImage } from "./wiki-images";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Loader2, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -65,6 +66,7 @@ export function WikiEntrySurface({
 }) {
   // undefined = fetching; null = missing.
   const [entry, setEntry] = useState<WikiEntry | undefined | null>(undefined);
+  const { t } = useTranslation("wiki");
   const [missingLink, setMissingLink] = useState<string | null>(null);
   const [creatingLink, setCreatingLink] = useState(false);
   const revision = useWikiRevision();
@@ -91,7 +93,7 @@ export function WikiEntrySurface({
     return (
       <div className="flex h-full flex-col text-sm text-muted-foreground">
         <div className="flex items-center p-2">{navigation}</div>
-        <div className="grid flex-1 place-items-center">词条不存在或已被删除。</div>
+        <div className="grid flex-1 place-items-center">{t("surface.missing")}</div>
       </div>
     );
   }
@@ -135,7 +137,7 @@ export function WikiEntrySurface({
                 void (async () => {
                   try {
                     await deleteEntry(entry.id);
-                    toast.success("已移入回收站(标题在净删前仍被占用)");
+                    toast.success(t("surface.recycleToast"));
                     bumpWikiRevision();
                     onDeleted?.();
                   } catch (error) {
@@ -155,14 +157,14 @@ export function WikiEntrySurface({
       }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>词条不存在</DialogTitle>
+            <DialogTitle>{t("surface.missingTitle")}</DialogTitle>
             <DialogDescription>
-              「{missingLink}」尚未创建。创建并打开它,或返回继续阅读?
+              {t("surface.missingDescription", { title: missingLink ?? "" })}
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setMissingLink(null)}>
-              取消
+              {t("common.cancel")}
             </Button>
             <Button
               onClick={() =>
@@ -175,7 +177,7 @@ export function WikiEntrySurface({
                       content: `# ${missingLink}\n\n`,
                       tags: [],
                     });
-                    toast.success(`已创建「${missingLink}」`);
+                    toast.success(t("surface.createdToast", { title: missingLink }));
                     setMissingLink(null);
                     bumpWikiRevision();
                     onNavigate(created.id, missingLink);
@@ -189,7 +191,7 @@ export function WikiEntrySurface({
               disabled={creatingLink}
             >
               {creatingLink ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              创建
+              {t("surface.create")}
             </Button>
           </div>
         </DialogContent>
@@ -207,11 +209,12 @@ function SidePanel({
   onNavigate: (entryId: string, title?: string) => void;
   onInsert: (meta: AttachmentMeta) => void;
 }) {
+  const { t } = useTranslation("wiki");
   return (
-    <div className="mx-auto mt-12 max-w-3xl border-t pb-8 pt-4 text-sm" aria-label="链接与历史">
+    <div className="mx-auto mt-12 max-w-3xl border-t pb-8 pt-4 text-sm" aria-label={t("surface.panelAria")}>
       <LinksTab entry={entry} onNavigate={onNavigate} />
-      <DetailSection title="附件"><FilesTab entry={entry} onInsert={onInsert} /></DetailSection>
-      <DetailSection title="历史"><HistoryTab entry={entry} /></DetailSection>
+      <DetailSection title={t("surface.attachments")}><FilesTab entry={entry} onInsert={onInsert} /></DetailSection>
+      <DetailSection title={t("surface.history")}><HistoryTab entry={entry} /></DetailSection>
     </div>
   );
 }
@@ -239,6 +242,7 @@ function LinksTab({
   const [descending, setDescending] = useState(false);
   const [contexts, setContexts] = useState<Record<string, MentionContext | null>>({});
   const [, setResolvedTick] = useState(0);
+  const { t } = useTranslation("wiki");
 
   useEffect(() => {
     let cancelled = false;
@@ -282,18 +286,18 @@ function LinksTab({
   const visible = incoming.filter(ref => ref.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase())).sort((a, b) => (descending ? -1 : 1) * a.title.localeCompare(b.title, undefined, { numeric: true }));
   return <div>
     <div className="flex items-center gap-2">
-      <h2 className="font-semibold">关联提及</h2>
+      <h2 className="font-semibold">{t("links.related")}</h2>
       <span className="text-xs text-muted-foreground">{graph ? incoming.length : ""}</span>
       <div className="ml-auto flex items-center gap-1 text-muted-foreground">
-        <button type="button" aria-label="切换关联提及排序" title="切换排序" className="rounded px-1.5 py-1 hover:bg-accent hover:text-foreground" onClick={() => setDescending(value => !value)}>{descending ? "Z → A" : "A → Z"}</button>
-        <button type="button" aria-label="筛选关联提及" title="筛选关联提及" className="rounded p-1 hover:bg-accent hover:text-foreground" onClick={() => setSearchOpen(value => !value)}><Search className="size-4" /></button>
+        <button type="button" aria-label={t("links.toggleSortAria")} title={t("links.toggleSort")} className="rounded px-1.5 py-1 hover:bg-accent hover:text-foreground" onClick={() => setDescending(value => !value)}>{descending ? "Z → A" : "A → Z"}</button>
+        <button type="button" aria-label={t("links.filterAria")} title={t("links.filterAria")} className="rounded p-1 hover:bg-accent hover:text-foreground" onClick={() => setSearchOpen(value => !value)}><Search className="size-4" /></button>
       </div>
     </div>
-    {searchOpen && <Input autoFocus aria-label="筛选来源词条" value={filter} onChange={event => setFilter(event.target.value)} placeholder="筛选来源词条" className="my-2 h-8 text-xs" />}
-    {error ? <p className="py-3 text-xs text-destructive">无法加载关联提及。</p> : !graph ? <Loader2 className="my-3 size-4 animate-spin" /> : visible.length === 0 ? <p className="py-3 text-xs text-muted-foreground">{filter ? "没有匹配的来源词条。" : "暂无关联提及。"}</p> : <div className="mt-2 space-y-1">{visible.map(ref => <MentionRow key={ref.id} entry={entry} source={ref} context={contexts[ref.id]} onNavigate={onNavigate} />)}</div>}
+    {searchOpen && <Input autoFocus aria-label={t("links.filterPlaceholder")} value={filter} onChange={event => setFilter(event.target.value)} placeholder={t("links.filterPlaceholder")} className="my-2 h-8 text-xs" />}
+    {error ? <p className="py-3 text-xs text-destructive">{t("links.loadError")}</p> : !graph ? <Loader2 className="my-3 size-4 animate-spin" /> : visible.length === 0 ? <p className="py-3 text-xs text-muted-foreground">{filter ? t("links.noMatchSources") : t("links.none")}</p> : <div className="mt-2 space-y-1">{visible.map(ref => <MentionRow key={ref.id} entry={entry} source={ref} context={contexts[ref.id]} onNavigate={onNavigate} />)}</div>}
     <div className="mt-4 space-y-3 border-t pt-3 text-xs text-muted-foreground">
-      <LinkSection title={`出链(${graph ? withTitles(graph.out_links).length : "…"})`} refs={withTitles(graph?.out_links ?? [])} onOpen={(id, title) => onNavigate(id, title)} loading={!graph && !error} />
-      <LinkSection title={`未链接提及(${mentions?.length ?? 0})`} refs={withTitles(mentions ?? [])} onOpen={(id, title) => onNavigate(id, title)} empty="暂无未链接提及。" loading={mentions === null} />
+      <LinkSection title={t("links.outgoing", { count: graph ? withTitles(graph.out_links).length : "…" })} refs={withTitles(graph?.out_links ?? [])} onOpen={(id, title) => onNavigate(id, title)} loading={!graph && !error} />
+      <LinkSection title={t("links.unlinked", { count: mentions?.length ?? 0 })} refs={withTitles(mentions ?? [])} onOpen={(id, title) => onNavigate(id, title)} empty={t("links.noUnlinked")} loading={mentions === null} />
     </div>
   </div>;
 }
@@ -317,14 +321,15 @@ function findMentionContext(content: string, entry: WikiEntry): MentionContext {
 
 function MentionRow({ entry, source, context, onNavigate }: { entry: WikiEntry; source: WikiLinkRef; context: MentionContext | null | undefined; onNavigate: (id: string, title?: string) => void }) {
   const [open, setOpen] = useState(false);
+  const { t } = useTranslation("wiki");
   return <div>
     <div className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-      <button type="button" aria-label={`${open ? "折叠" : "展开"} ${source.title} 的关联提及`} aria-expanded={open} className="rounded p-1 hover:bg-accent" onClick={() => setOpen(value => !value)}>{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button>
+      <button type="button" aria-label={open ? t("links.collapseOf", { title: source.title }) : t("links.expandOf", { title: source.title })} aria-expanded={open} className="rounded p-1 hover:bg-accent" onClick={() => setOpen(value => !value)}>{open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}</button>
       <button type="button" className="min-w-0 flex-1 truncate py-1 text-left hover:underline" title={source.title} onClick={() => onNavigate(source.id, source.title)}>{source.title}</button>
-      {context && context.count > 0 && <span className="px-1 text-xs" aria-label={`${source.title} 有 ${context.count} 处关联提及`}>{context.count}</span>}
-      {context === null && <span className="px-1 text-xs" title="无法加载来源内容" aria-label={`${source.title} 的计数不可用`}>—</span>}
+      {context && context.count > 0 && <span className="px-1 text-xs" aria-label={t("links.mentionCountAria", { title: source.title, count: context.count })}>{context.count}</span>}
+      {context === null && <span className="px-1 text-xs" title={t("links.countUnavailableTitle")} aria-label={t("links.countUnavailableAria", { title: source.title })}>—</span>}
     </div>
-    {open && <div className="space-y-1 pb-1 pl-1">{context === null ? <p className="px-2 text-xs text-muted-foreground">无法加载来源内容。</p> : context === undefined ? <Loader2 className="m-2 size-3.5 animate-spin" /> : context.lines.length === 0 ? <p className="px-2 text-xs text-muted-foreground">未能定位链接上下文。</p> : context.lines.map((line, index) => <button key={index} type="button" className="block w-full rounded border px-3 py-2 text-left text-xs leading-relaxed text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => onNavigate(source.id, source.title)}>{line.split(/(\[\[[^\]]+\]\])/g).map((part, partIndex) => part.startsWith("[[") && part.endsWith("]]") && isLinkToEntry(part.slice(2, -2), entry) ? <mark key={partIndex} className="rounded-sm bg-yellow-500/30 text-foreground">{part}</mark> : part)}</button>)}</div>}
+    {open && <div className="space-y-1 pb-1 pl-1">{context === null ? <p className="px-2 text-xs text-muted-foreground">{t("links.loadSourceError")}</p> : context === undefined ? <Loader2 className="m-2 size-3.5 animate-spin" /> : context.lines.length === 0 ? <p className="px-2 text-xs text-muted-foreground">{t("links.noContext")}</p> : context.lines.map((line, index) => <button key={index} type="button" className="block w-full rounded border px-3 py-2 text-left text-xs leading-relaxed text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => onNavigate(source.id, source.title)}>{line.split(/(\[\[[^\]]+\]\])/g).map((part, partIndex) => part.startsWith("[[") && part.endsWith("]]") && isLinkToEntry(part.slice(2, -2), entry) ? <mark key={partIndex} className="rounded-sm bg-yellow-500/30 text-foreground">{part}</mark> : part)}</button>)}</div>}
   </div>;
 }
 
@@ -359,6 +364,7 @@ function LinkSection({
   loading?: boolean;
 }) {
   const [open, setOpen] = useState(true);
+  const { t } = useTranslation("wiki");
   return (
     <div>
       <button
@@ -374,7 +380,7 @@ function LinkSection({
           {loading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : refs.length === 0 ? (
-            <p className="text-muted-foreground">{empty ?? "无"}</p>
+            <p className="text-muted-foreground">{empty ?? t("links.noneDefault")}</p>
           ) : (
             refs.map((ref) => (
               <button
@@ -396,6 +402,7 @@ function LinkSection({
 
 function FilesTab({ entry, onInsert }: { entry: WikiEntry; onInsert: (meta: AttachmentMeta) => void }) {
   const [items, setItems] = useState<AttachmentMeta[] | null>(null);
+  const { t } = useTranslation("wiki");
   const fileInput = useRef<HTMLInputElement>(null);
 
   async function reload() {
@@ -422,7 +429,7 @@ function FilesTab({ entry, onInsert }: { entry: WikiEntry; onInsert: (meta: Atta
           void (async () => {
             try {
               await uploadAttachment(entry.id, file);
-              toast.success(`已附加 ${file.name}`);
+              toast.success(t("attachments.attached", { name: file.name }));
               await reload();
             } catch (error) {
               toast.error((error as Error).message);
@@ -431,12 +438,12 @@ function FilesTab({ entry, onInsert }: { entry: WikiEntry; onInsert: (meta: Atta
         }}
       />
       <Button size="sm" variant="outline" className="w-full" onClick={() => fileInput.current?.click()}>
-        上传图像
+        {t("attachments.upload")}
       </Button>
       {items === null ? (
         <Loader2 className="h-4 w-4 animate-spin" />
       ) : items.length === 0 ? (
-        <p className="text-muted-foreground">暂无附件。</p>
+        <p className="text-muted-foreground">{t("attachments.none")}</p>
       ) : (
         <ul className="grid grid-cols-2 gap-2">
           {items.map((item) => {
@@ -444,13 +451,13 @@ function FilesTab({ entry, onInsert }: { entry: WikiEntry; onInsert: (meta: Atta
             return (
               <li key={id} className="rounded-md border p-1.5">
                 <WikiAttachmentImage entryId={entry.id} attachmentId={id} filename={item.filename} />
-                <button type="button" className="mt-1 underline" onClick={() => onInsert(item)}>插入正文</button>
+                <button type="button" className="mt-1 underline" onClick={() => onInsert(item)}>{t("attachments.insert")}</button>
                 <div className="mt-1 flex items-center justify-between gap-1">
                   <span className="truncate text-[11px]">{item.filename}</span>
                   <button
                     type="button"
                     className="rounded p-0.5 hover:bg-accent"
-                    title="摘除"
+                    title={t("attachments.detach")}
                     onClick={() =>
                       void (async () => {
                         try {
@@ -476,6 +483,7 @@ function FilesTab({ entry, onInsert }: { entry: WikiEntry; onInsert: (meta: Atta
 
 function HistoryTab({ entry }: { entry: WikiEntry }) {
   const [versions, setVersions] = useState<VersionSummary[] | null>(null);
+  const { t } = useTranslation("wiki");
 
   useEffect(() => {
     setVersions(null);
@@ -484,7 +492,7 @@ function HistoryTab({ entry }: { entry: WikiEntry }) {
 
   if (versions === null) return <Loader2 className="m-4 h-4 w-4 animate-spin" />;
   if (!versions.length) {
-    return <p className="text-xs text-muted-foreground">暂无版本记录。</p>;
+    return <p className="text-xs text-muted-foreground">{t("history.none")}</p>;
   }
   return (
     <ul className="space-y-1 text-xs">
@@ -500,14 +508,14 @@ function HistoryTab({ entry }: { entry: WikiEntry }) {
               void (async () => {
                 try {
                   await restoreVersion(entry.id, version.version);
-                  toast.success(`已回滚到 v${version.version}(新版本已追加)`);
+                  toast.success(t("history.rolledBack", { version: version.version }));
                 } catch (error) {
                   toast.error((error as Error).message);
                 }
               })()
             }
           >
-            回滚
+            {t("history.rollback")}
           </Button>
         </li>
       ))}

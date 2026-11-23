@@ -12,6 +12,7 @@
 //! renderer for the list area (colored role badges, multi-line preview).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -40,10 +41,10 @@ pub enum MessageRole {
 
 impl MessageRole {
     /// Short uppercase badge label (3 chars).
-    pub fn badge(self) -> &'static str {
+    pub fn badge(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::User => "YOU",
-            Self::Assistant => "AI",
+            Self::User => t!("tui.messagePicker.badgeUser"),
+            Self::Assistant => t!("tui.messagePicker.badgeAssistant"),
         }
     }
 
@@ -325,7 +326,8 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
 
     // Wide popup: 80% of frame width, auto height.
     let popup_w = (frame_area.width * 8 / 10).max(60);
-    let popup = Popup::new(" Copy Message ", PopupControls::default())
+    let popup_title = t!("tui.messagePicker.title");
+    let popup = Popup::new(&popup_title, PopupControls::default())
         .accent(theme.accent_alt)
         .width(popup_w);
     let inner = popup.render(frame_area, buf);
@@ -372,21 +374,21 @@ pub fn render_message_picker(frame_area: Rect, buf: &mut Buffer, state: &mut Mes
                 .fg(theme.accent_alt)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" copy  ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.messagePicker.copy").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(
             "↑↓",
             Style::default()
                 .fg(theme.accent_alt)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" navigate  ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.messagePicker.navigate").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(
             "Esc",
             Style::default()
                 .fg(theme.accent_alt)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" cancel", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.messagePicker.cancel").to_string(), Style::default().fg(theme.text_faint)),
     ]);
     Widget::render(Paragraph::new(footer), v_regions[3], buf);
 }
@@ -419,7 +421,8 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut MessagePickerSt
         let placeholder_style = Style::default()
             .fg(theme.text_faint)
             .add_modifier(Modifier::DIM);
-        let placeholder = "filter messages…";
+        let placeholder = t!("tui.messagePicker.placeholder").to_string();
+        let placeholder = placeholder.as_str();
         let truncated = if placeholder.len() > ta_area.width as usize {
             &placeholder[..ta_area.width as usize]
         } else {
@@ -446,7 +449,7 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
         .borders(Borders::RIGHT)
         .border_style(Style::default().fg(theme.text_faint))
         .title(Span::styled(
-            format!(" Messages ({}) ", state.picker.filtered.len()),
+            t!("tui.messagePicker.messagesTitle", count = state.picker.filtered.len()).to_string(),
             Style::default()
                 .fg(theme.accent_alt)
                 .add_modifier(Modifier::BOLD),
@@ -456,7 +459,7 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 
     if state.picker.filtered.is_empty() {
         let line = Line::from(Span::styled(
-            "  No messages found.",
+            t!("tui.messagePicker.noMessages").to_string(),
             Style::default().fg(theme.text_faint),
         ));
         let area = Rect {
@@ -535,7 +538,7 @@ fn render_list_block(area: Rect, buf: &mut Buffer, state: &mut MessagePickerStat
 fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState) {
     let theme = crate::theme::current();
     let block = Block::default().borders(Borders::NONE).title(Span::styled(
-        " Preview ",
+        t!("tui.messagePicker.preview").to_string(),
         Style::default()
             .fg(theme.accent_alt)
             .add_modifier(Modifier::BOLD),
@@ -545,7 +548,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
 
     let Some(item) = state.picker.selected_item() else {
         let line = Line::from(Span::styled(
-            "  Select a message to preview.",
+            t!("tui.messagePicker.selectToPreview").to_string(),
             Style::default()
                 .fg(theme.text_faint)
                 .add_modifier(Modifier::DIM),
@@ -568,7 +571,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     // ── Metadata header ──
     let badge_bg = item.role.color();
     lines.push(Line::from(vec![
-        Span::styled("  Role     ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.messagePicker.role").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(format!(" {} ", item.role.badge()), {
             Style::default()
                 .fg(theme.on_accent)
@@ -582,14 +585,14 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Index    ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.messagePicker.index").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(format!("#{}", item.index), Style::default().fg(theme.text)),
     ]));
 
     lines.push(Line::from(vec![
-        Span::styled("  Length   ", Style::default().fg(theme.text_faint)),
+        Span::styled(t!("tui.messagePicker.length").to_string(), Style::default().fg(theme.text_faint)),
         Span::styled(
-            format!("{char_count} chars, {line_count} lines"),
+            t!("tui.messagePicker.lengthValue", chars = char_count, lines = line_count).to_string(),
             Style::default().fg(theme.text_dim),
         ),
     ]));
@@ -597,7 +600,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     // Separator between metadata and content.
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "  Content:",
+        t!("tui.messagePicker.content").to_string(),
         Style::default()
             .fg(theme.text_faint)
             .add_modifier(Modifier::BOLD),
@@ -636,7 +639,7 @@ fn render_preview_block(area: Rect, buf: &mut Buffer, state: &MessagePickerState
     // (just whitespace), show a placeholder.
     if item.full_text.trim().is_empty() {
         lines.push(Line::from(Span::styled(
-            format!("{content_indent}(empty message)"),
+            format!("{content_indent}{}", t!("tui.messagePicker.emptyMessage")),
             Style::default().fg(theme.text_faint),
         )));
     }

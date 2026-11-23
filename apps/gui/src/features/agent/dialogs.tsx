@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { registerCommands } from "@/app/workbench/command-registry";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { copyText, leafName, preview } from "./agent";
 
@@ -42,6 +43,7 @@ export type AgentDialogsProps = {
 };
 
 export function AgentDialogs(props: AgentDialogsProps) {
+  const { t } = useTranslation("agent");
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeQuery, setResumeQuery] = useState("");
   const [storedAgents, setStoredAgents] = useState<StoredAgent[]>([]);
@@ -68,7 +70,7 @@ export function AgentDialogs(props: AgentDialogsProps) {
         : "?limit=100";
       setStoredAgents(await gatewayRequest("GET", `/storage/agents${suffix}`));
     } catch (cause) {
-      showToast(`Failed to load persisted agents: ${String(cause)}`);
+      showToast(t("dialogs.loadFailed", { reason: String(cause) }));
     }
   }, [showToast]);
 
@@ -85,7 +87,7 @@ export function AgentDialogs(props: AgentDialogsProps) {
 
   const openCopy = useCallback(() => {
     if (!props.messages.some((message) => (message.role === "user" || message.role === "assistant") && message.text.trim())) {
-      showToast("No text messages available");
+      showToast(t("dialogs.noTextMessages"));
       return;
     }
     setPicker({ open: true, query: "" });
@@ -114,9 +116,9 @@ export function AgentDialogs(props: AgentDialogsProps) {
 
   // Commands behind the palette; revoked on unmount or when handlers change.
   useEffect(() => registerCommands("agent-dialogs", [
-    { id: "resume-agent", title: "Resume agent", category: "agent", keywords: "restore reconnect continue previous", run: openResume },
-    { id: "history", title: "Search prompt history", category: "agent", keywords: "ctrl r recall previous prompt", run: openHistory },
-    { id: "copy", title: "Copy message", category: "clipboard", keywords: "clipboard transcript text", run: openCopy },
+    { id: "resume-agent", title: t("dialogs.cmdResume"), category: "agent", keywords: "restore reconnect continue previous", run: openResume },
+    { id: "history", title: t("dialogs.cmdHistory"), category: "agent", keywords: "ctrl r recall previous prompt", run: openHistory },
+    { id: "copy", title: t("dialogs.cmdCopy"), category: "clipboard", keywords: "clipboard transcript text", run: openCopy },
   ]), [openResume, openHistory, openCopy]);
 
   useEffect(() => {
@@ -159,12 +161,12 @@ export function AgentDialogs(props: AgentDialogsProps) {
       <Dialog open={resumeOpen} onOpenChange={setResumeOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Resume persisted agent</DialogTitle>
-            <DialogDescription>Restore a stored agent. Existing runtime instances are focused.</DialogDescription>
+            <DialogTitle>{t("dialogs.resumeTitle")}</DialogTitle>
+            <DialogDescription>{t("dialogs.resumeDescription")}</DialogDescription>
           </DialogHeader>
           <Input
             value={resumeQuery}
-            placeholder="Search by path or profile"
+            placeholder={t("dialogs.resumePlaceholder")}
             onChange={(event) => {
               setResumeQuery(event.target.value);
               searchStoredAgentsDebounced(event.target.value);
@@ -179,7 +181,7 @@ export function AgentDialogs(props: AgentDialogsProps) {
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium">{agent.name}</div>
                       <div className="truncate text-xs text-muted-foreground">
-                        {agent.config_json.kind ?? "researcher"} · {agent.config_json.preferred_model ?? "default model"} · {new Date(agent.last_active).toLocaleString()}
+                        {agent.config_json.kind ?? "researcher"} · {agent.config_json.preferred_model ?? t("dialogs.defaultModel")} · {new Date(agent.last_active).toLocaleString()}
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1">
@@ -193,16 +195,16 @@ export function AgentDialogs(props: AgentDialogsProps) {
                           setResumeOpen(false);
                         }}
                       >
-                        {running ? "Focus" : resumeBusy === agent.id ? "Resuming…" : "Resume"}
+                        {running ? t("dialogs.focus") : resumeBusy === agent.id ? t("dialogs.resuming") : t("dialogs.resume")}
                       </Button>
                       <Button
                         size="xs"
                         variant="secondary"
                         onClick={() => setRenameAgent(renameAgent?.id === agent.id ? null : { id: agent.id, name: leafName(agent.name) })}
                       >
-                        Rename
+                        {t("dialogs.rename")}
                       </Button>
-                      <Button size="xs" variant="destructive" onClick={() => setDeleteAgent({ id: agent.id, confirm: "" })}>Delete</Button>
+                      <Button size="xs" variant="destructive" onClick={() => setDeleteAgent({ id: agent.id, confirm: "" })}>{t("dialogs.delete")}</Button>
                     </div>
                   </div>
                   {renameAgent?.id === agent.id && (
@@ -218,7 +220,7 @@ export function AgentDialogs(props: AgentDialogsProps) {
                       }}
                     >
                       <Input value={renameAgent.name} onChange={(event) => setRenameAgent({ id: agent.id, name: event.target.value })} />
-                      <Button type="submit" size="sm">Save</Button>
+                      <Button type="submit" size="sm">{t("dialogs.save")}</Button>
                     </form>
                   )}
                   {deleteAgent?.id === agent.id && (
@@ -237,8 +239,8 @@ export function AgentDialogs(props: AgentDialogsProps) {
                         await loadStoredAgents();
                       }}
                     >
-                      <Input value={deleteAgent.confirm} placeholder='type "yes"' onChange={(event) => setDeleteAgent({ id: agent.id, confirm: event.target.value })} />
-                      <Button type="submit" size="sm" variant="destructive">Delete forever</Button>
+                      <Input value={deleteAgent.confirm} placeholder={t("dialogs.confirmPlaceholder")} onChange={(event) => setDeleteAgent({ id: agent.id, confirm: event.target.value })} />
+                      <Button type="submit" size="sm" variant="destructive">{t("dialogs.deleteForever")}</Button>
                     </form>
                   )}
                 </Card>
@@ -251,10 +253,10 @@ export function AgentDialogs(props: AgentDialogsProps) {
       <Dialog open={picker.open} onOpenChange={(open) => setPicker((current) => ({ ...current, open }))}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Copy message</DialogTitle>
-            <DialogDescription>Click a transcript message to copy it.</DialogDescription>
+            <DialogTitle>{t("dialogs.copyTitle")}</DialogTitle>
+            <DialogDescription>{t("dialogs.copyDescription")}</DialogDescription>
           </DialogHeader>
-          <Input value={picker.query} placeholder="Filter messages" onChange={(event) => setPicker((current) => ({ ...current, query: event.target.value }))} />
+          <Input value={picker.query} placeholder={t("dialogs.filterMessages")} onChange={(event) => setPicker((current) => ({ ...current, query: event.target.value }))} />
           <ScrollArea className="max-h-[60vh] min-h-0" contentClassName="space-y-1">
             {filteredPickerItems.map((item, index) => (
               <button
@@ -263,11 +265,11 @@ export function AgentDialogs(props: AgentDialogsProps) {
                 onClick={() => void selectPickerItem(item)}
                 className={cn("grid w-full grid-cols-[44px_minmax(0,1fr)] gap-2 rounded-md border p-2 text-left hover:bg-accent", index === 0 && "border-primary bg-accent")}
               >
-                <span className="text-xs text-muted-foreground">{item.role === "user" ? "YOU" : "AI"}</span>
+                <span className="text-xs text-muted-foreground">{item.role === "user" ? t("dialogs.roleUser") : t("dialogs.roleAssistant")}</span>
                 <span className="truncate text-sm">{preview(item.text)}</span>
               </button>
             ))}
-            {!filteredPickerItems.length && <div className="p-4 text-sm text-muted-foreground">No matching messages</div>}
+            {!filteredPickerItems.length && <div className="p-4 text-sm text-muted-foreground">{t("dialogs.noMatchingMessages")}</div>}
           </ScrollArea>
         </DialogContent>
       </Dialog>
@@ -275,10 +277,10 @@ export function AgentDialogs(props: AgentDialogsProps) {
       <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Prompt history</DialogTitle>
-            <DialogDescription>Select a previous prompt to restore it in the composer.</DialogDescription>
+            <DialogTitle>{t("dialogs.historyTitle")}</DialogTitle>
+            <DialogDescription>{t("dialogs.historyDescription")}</DialogDescription>
           </DialogHeader>
-          <Input value={historyQuery} placeholder="Filter prompts" onChange={(event) => setHistoryQuery(event.target.value)} />
+          <Input value={historyQuery} placeholder={t("dialogs.filterPrompts")} onChange={(event) => setHistoryQuery(event.target.value)} />
           <ScrollArea className="max-h-[60vh] min-h-0" contentClassName="space-y-1">
             {filteredHistory.map((item, index) => (
               <button
@@ -293,7 +295,7 @@ export function AgentDialogs(props: AgentDialogsProps) {
                 {preview(item)}
               </button>
             ))}
-            {!filteredHistory.length && <div className="p-4 text-sm text-muted-foreground">No matching prompts</div>}
+            {!filteredHistory.length && <div className="p-4 text-sm text-muted-foreground">{t("dialogs.noMatchingPrompts")}</div>}
           </ScrollArea>
         </DialogContent>
       </Dialog>

@@ -98,6 +98,7 @@ fn init_frontend_logging(nocapture: bool) -> color_eyre::Result<()> {
 }
 
 fn main() -> color_eyre::Result<()> {
+    i18n::init_locale();
     if manuscript_engine::run_worker_if_requested() {
         return Ok(());
     }
