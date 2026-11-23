@@ -42,7 +42,7 @@ pub mod typed_worker;
 mod workspace;
 
 pub use apptainer::{
-    ApptainerContainer, ApptainerMode, ApptainerNetwork, ApptainerSettings, SifImage,
+    ApptainerContainer, ApptainerMode, ApptainerNetwork, ApptainerSettings, SifImage, SifRuntime,
 };
 pub use channel_value::ChannelTransportValue;
 pub use contract::{

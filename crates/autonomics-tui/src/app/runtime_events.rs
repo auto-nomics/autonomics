@@ -461,24 +461,49 @@ impl App {
             }
             crate::app_event::AppEvent::HpcRepairFinished(result) => {
                 self.state.hpc_panel.loading = false;
+                let enrolling = self.state.hpc_panel.enrollment_progress;
                 match result {
                     Ok(reply) => {
-                        self.state
-                            .hpc_panel
-                            .push_repair_event("[ready] 连接恢复完成".into());
+                        self.state.hpc_panel.push_repair_event(if enrolling {
+                            "[ready] Compute target enrolled".into()
+                        } else {
+                            "[ready] Connection recovery complete".into()
+                        });
                         self.apply_hpc_save_reply(reply);
-                        self.state.hpc_panel.status =
-                            Some("Connection recovery complete · Esc returns to details".into());
+                        self.state.hpc_panel.status = Some(if enrolling {
+                            "Compute target enrolled · Esc returns to details".into()
+                        } else {
+                            "Connection recovery complete · Esc returns to details".into()
+                        });
                     }
                     Err(error) => {
                         self.state
                             .hpc_panel
                             .push_repair_event(format!("[error] {error}"));
                         self.state.hpc_panel.dashboard_pending_id = None;
-                        self.state.hpc_panel.status =
-                            Some(format!("Connection recovery failed: {error}"));
+                        let operation = if enrolling {
+                            "Enrollment"
+                        } else {
+                            "Connection recovery"
+                        };
+                        self.state.hpc_panel.status = Some(
+                            if error.contains("connection closed before a result") {
+                                format!(
+                                    "{operation} status unknown. Reload the snapshot before retrying."
+                                )
+                            } else {
+                                format!("{operation} failed: {error}")
+                            },
+                        );
                     }
                 }
+                self.dirty = true;
+            }
+            crate::app_event::AppEvent::HpcCheckFinished(result) => {
+                let panel = &mut self.state.hpc_panel;
+                panel.loading = false;
+                panel.status =
+                    Some(result.unwrap_or_else(|error| format!("Check failed: {error}")));
                 self.dirty = true;
             }
             crate::app_event::AppEvent::HpcProfileSaved(result) => match result {

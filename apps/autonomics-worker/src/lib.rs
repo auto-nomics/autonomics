@@ -414,6 +414,9 @@ fn podman_worker_policy(
         TypedPodmanResourceControl::DelegatedCgroups => {
             container_runtime::PodmanWorkerResourceControl::DelegatedCgroups
         }
+        TypedPodmanResourceControl::SshDelegatedCgroups => {
+            container_runtime::PodmanWorkerResourceControl::SshDelegatedCgroups
+        }
         TypedPodmanResourceControl::SlurmAllocation { swap_policy } => {
             container_runtime::PodmanWorkerResourceControl::SlurmAllocation {
                 swap_policy: match swap_policy {
@@ -537,8 +540,11 @@ pub async fn run(dispatch_path: &Path) -> Result<(), Box<dyn std::error::Error>>
             &envelope.worker.apptainer_executable,
         ) {
             (Some(catalog), Some(executable)) => {
-                container_runtime::ContainerExecutionInfra::for_apptainer_worker(
-                    &state, catalog, executable,
+                container_runtime::ContainerExecutionInfra::for_sif_worker(
+                    &state,
+                    catalog,
+                    executable,
+                    !envelope.worker.sif_runtime.is_default(),
                 )
                 .map_err(std::io::Error::other)?
             }

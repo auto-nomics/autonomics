@@ -20,26 +20,9 @@ use super::{
 /// caller under `/api/v1` (see [`router_with_bib`]).
 pub fn api_router(state: GatewayState) -> Router {
     Router::new()
-        // ── compute targets and HPC jobs ──
-        .route("/compute", get(compute::status))
-        .route("/compute/readiness", post(compute::readiness))
-        .route("/compute/enroll", post(compute::enroll))
-        .route("/compute/enroll/stream", post(compute::enroll_stream))
-        .route("/compute/repair-worker", post(compute::repair_worker))
-        .route(
-            "/compute/repair-worker/stream",
-            post(compute::repair_worker_stream),
-        )
-        .route("/compute/targets", put(compute::target))
-        .route("/compute/targets/{id}", delete(compute::delete_target))
-        .route("/compute/targets/{id}/check", post(compute::check))
-        .route("/compute/policy", put(compute::select))
-        .route("/compute/data-sources", post(compute::source))
-        .route("/compute/image-evidence", get(compute::image_evidence))
-        .route("/hpc/config", get(hpc_config::show).put(hpc_config::update))
-        .route("/hpc/jobs", get(hpc_jobs::list))
-        .route("/hpc/jobs/watch", post(hpc_jobs::watch))
-        .route("/hpc/jobs/{id}/stop-monitor", post(hpc_jobs::stop_monitor))
+        .merge(compute::routes())
+        .merge(hpc_config::routes())
+        .merge(hpc_jobs::routes())
         // ── daemon lifecycle ──
         // No shutdown route: stopping the daemon goes through SIGTERM
         // (`autonomics serve stop`), never the API.
@@ -128,54 +111,7 @@ pub fn api_router(state: GatewayState) -> Router {
             "/plugin-projects/{name}/snapshot",
             get(plugins::project_snapshot),
         )
-        .route(
-            "/plugin-projects/{name}/container",
-            get(super::devcontainer::status)
-                .post(super::devcontainer::open)
-                .delete(super::devcontainer::close),
-        )
-        .route(
-            "/plugin-projects/{name}/vscode-session",
-            post(super::devcontainer::vscode_url),
-        )
-        .route(
-            "/plugin-projects/{name}/vscode-control",
-            post(super::devcontainer::vscode_control),
-        )
-        .route(
-            "/plugin-projects/{name}/terminal",
-            get(super::devcontainer::terminal_output)
-                .post(super::devcontainer::terminal_open)
-                .delete(super::devcontainer::terminal_close),
-        )
-        .route(
-            "/plugin-projects/{name}/terminal/input",
-            post(super::devcontainer::terminal_input),
-        )
-        .route(
-            "/plugin-projects/{name}/terminal/size",
-            put(super::devcontainer::terminal_resize),
-        )
-        .route(
-            "/plugin-projects/{name}/language/{language}",
-            post(super::devcontainer::language_open),
-        )
-        .route(
-            "/plugin-projects/{name}/language/{language}/{client}",
-            get(super::devcontainer::language_output)
-                .post(super::devcontainer::language_input)
-                .delete(super::devcontainer::language_close),
-        )
-        .route(
-            "/plugin-projects/{name}/debug/{language}",
-            post(super::devcontainer::debug_open),
-        )
-        .route(
-            "/plugin-projects/{name}/debug/{language}/{client}",
-            get(super::devcontainer::debug_output)
-                .post(super::devcontainer::debug_input)
-                .delete(super::devcontainer::debug_close),
-        )
+        .merge(super::devcontainer::routes())
         .route(
             "/plugin-projects/{name}/file",
             get(plugins::read_project_file)

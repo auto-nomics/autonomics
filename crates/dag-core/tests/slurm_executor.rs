@@ -33,10 +33,6 @@ control_master=unset
 control_path=unset
 control_persist=unset
 strict_host_keys=unset
-if [ "$1" = "-F" ]; then
-  printf '%s\n' "$2" >> "$DIR/pinned_profile_calls.log"
-  shift 2
-fi
 while [ "$1" = "-o" ]; do
   printf '%s\n' "$2" >> "$DIR/ssh_options.log"
   case "$2" in
@@ -234,12 +230,6 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        // The pinned SSH profile requires an owner-only parent directory;
-        // tempfile uses the process umask for directory permissions.
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
         // Child-only HOME: never mutate the Rust process environment, and
         // never let a fake `cd && pwd` resolve to a real account home.
         let home = dir.path().join("home");
@@ -662,6 +652,7 @@ async fn apptainer_changed_operator_sif_binding_cannot_reuse_an_existing_submiss
         &root.path().join("local"),
     );
     settings.apptainer = Some(dag_core::ApptainerSettings {
+        runtime: dag_core::SifRuntime::Apptainer,
         program: "/usr/bin/apptainer".into(),
         images: std::collections::BTreeMap::from([(
             image,
@@ -2092,64 +2083,6 @@ async fn competing_successful_downloads_publish_exactly_one_held_inode() {
     );
 }
 
-#[tokio::test]
-async fn ssh_timeout_includes_nonreading_script_stdin_and_reaps_local_shim() {
-    let fixture = Fixture::new();
-    let pid_path = fixture.path().join("blocked-ssh.pid");
-    std::fs::write(
-        fixture.path().join("ssh"),
-        format!(
-            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec python3 -c 'import time;time.sleep(10)'\n",
-            pid_path.display()
-        ),
-    )
-    .unwrap();
-    let target = fixture
-        .ssh_target()
-        .with_command_timeout(Duration::from_millis(100));
-    let script = "x".repeat(2 * 1024 * 1024);
-    let result = tokio::time::timeout(Duration::from_secs(2), target.run_script(&script)).await;
-    let error = result
-        .expect("stdin write escaped command deadline")
-        .unwrap_err();
-    assert!(error.to_string().contains("remote outcome UNKNOWN"));
-    let pid = std::fs::read_to_string(&pid_path).unwrap();
-    for _ in 0..100 {
-        if !Path::new("/proc").join(pid.trim()).exists() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("local synthetic SSH process was not reaped after timeout");
-}
-
-#[tokio::test]
-async fn accepted_submission_timeout_recovers_without_replaying_sbatch() {
-    let fixture = Fixture::new();
-    let shim = FIXTURE_SSH.replace("exec /bin/sh -c \"$*\"", "if [ \"$*\" = \"bash -s\" ]; then /bin/sh -c \"$*\"; exec python3 -c 'import time;time.sleep(10)'; fi\nexec /bin/sh -c \"$*\"");
-    std::fs::write(fixture.path().join("ssh"), shim).unwrap();
-    let cluster = tempfile::tempdir().unwrap();
-    let mut settings = slurm_settings(&fixture, cluster.path(), cluster.path());
-    // This case needs the synthetic sbatch to ACCEPT before its SSH shim
-    // withholds stdout for ten seconds. Allow fixture creation on a shared
-    // filesystem to finish; the separate 100 ms stdin/reaping regression
-    // above still exercises the short command deadline itself.
-    settings.ssh = fixture
-        .ssh_target()
-        .with_command_timeout(Duration::from_secs(2));
-    let transport = SlurmTaskTransport::new(settings);
-    let lease = submit_simple(&transport, cluster.path(), "accepted-timeout").await;
-    assert_eq!(lease.lease_id, "4242");
-    assert_eq!(
-        fixture
-            .calls_log()
-            .lines()
-            .filter(|s| s.starts_with("--parsable "))
-            .count(),
-        1
-    );
-}
-
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn cancelled_download_has_no_named_staging_to_remove_or_substitute() {
@@ -2654,35 +2587,6 @@ async fn submission_handshake_rejects_stdout_pollution_without_admission() {
 }
 
 #[tokio::test]
-async fn submission_handshake_deadline_reaps_child_without_admitting_payload() {
-    let fixture = Fixture::new();
-    let pid_path = fixture.path().join("blocked-ssh.pid");
-    std::fs::write(
-        fixture.path().join("ssh"),
-        format!(
-            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec python3 -c 'import time;time.sleep(10)'\n",
-            pid_path.display(),
-        ),
-    )
-    .unwrap();
-    let target = fixture
-        .ssh_target()
-        .with_command_timeout(Duration::from_millis(100));
-    let mut admitted = false;
-    let error = target
-        .run_submission_once("echo forbidden\n", || {
-            admitted = true;
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("payload NOT_SENT"));
-    assert!(!admitted);
-    let pid = std::fs::read_to_string(pid_path).unwrap();
-    assert!(!Path::new("/proc").join(pid.trim()).exists());
-}
-
-#[tokio::test]
 async fn submit_reports_unknown_when_accounting_cannot_confirm() {
     let fixture = Fixture::new();
     let cluster = tempfile::tempdir().unwrap();
@@ -2867,13 +2771,6 @@ async fn ssh_commands_and_streams_disable_persistent_multiplexing() {
     assert!(command.status.success());
     assert_eq!(command.stdout, b"command-ok");
 
-    let staging = fixture.path().join("single-call-stream.bin");
-    let stream = ssh
-        .stream_remote_to_file("printf '3\\nabc'", &staging)
-        .await
-        .unwrap();
-    assert_eq!(stream.content_bytes, 3);
-    assert_eq!(std::fs::read(&staging).unwrap(), b"abc");
     let options = std::fs::read_to_string(fixture.path().join("ssh_options.log")).unwrap();
     for required in [
         "BatchMode=yes",
@@ -2884,14 +2781,11 @@ async fn ssh_commands_and_streams_disable_persistent_multiplexing() {
     ] {
         assert_eq!(
             options.lines().filter(|option| *option == required).count(),
-            2,
-            "both execute and stream paths must pass {required}"
+            1,
+            "command path must pass {required}"
         );
     }
 
-    // The artifact store has a separate anonymous-inode download path. Its
-    // metadata query and payload transfer must both override inherited SSH
-    // multiplexing too; the generic stream test above does not exercise it.
     let cluster = tempfile::tempdir().unwrap();
     let local_root = tempfile::tempdir().unwrap();
     let source = cluster.path().join("source.txt");
@@ -2938,51 +2832,6 @@ async fn ssh_commands_and_streams_disable_persistent_multiplexing() {
             .join("ssh_background_master_would_survive")
             .exists()
     );
-}
-
-#[tokio::test]
-async fn ssh_stream_enforces_declared_size() {
-    let fixture = Fixture::new();
-    let ssh = fixture.ssh_target();
-
-    let staging = fixture.path().join("stream-ok.bin");
-    let stream = ssh
-        .stream_remote_to_file("echo 3; printf abc", &staging)
-        .await
-        .unwrap();
-    assert_eq!(stream.declared_size, 3);
-    assert_eq!(stream.content_bytes, 3);
-    assert_eq!(
-        stream.content_sha256,
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
-    assert_eq!(std::fs::read(&staging).unwrap(), &b"abc"[..]);
-
-    // A short stream, a missing header, and a remote failure after the
-    // bytes must all error — and never leave staging behind.
-    for (name, command) in [
-        ("size-mismatch", "echo 5; printf abc"),
-        ("no-header", "printf abc"),
-        ("remote-exit", "echo 5; printf abcde; exit 3"),
-    ] {
-        let staging = fixture.path().join(format!("stream-{name}.bin"));
-        let result = ssh.stream_remote_to_file(command, &staging).await;
-        assert!(result.is_err(), "{name}: expected an error");
-        assert!(
-            !staging.exists(),
-            "{name}: failed stream left staging behind"
-        );
-    }
-
-    // Exit 255 with nothing received is the one retried failure: the flag
-    // self-destructs, so the second attempt goes through cleanly.
-    std::fs::write(fixture.path().join("ssh_fail_255_before_once"), "").unwrap();
-    let staging = fixture.path().join("stream-retry.bin");
-    let stream = ssh
-        .stream_remote_to_file("echo 3; printf abc", &staging)
-        .await
-        .unwrap();
-    assert_eq!(stream.content_bytes, 3);
 }
 
 #[tokio::test]
@@ -3640,75 +3489,4 @@ async fn formal_recorder_ambiguous_submission_does_not_cancel_by_name_alone() {
             .count(),
         1
     );
-}
-
-fn private_profile_file(path: &Path, raw: &[u8]) -> FileRef {
-    use sha2::Digest;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, raw).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    FileRef {
-        domain: Default::default(),
-        path: path.to_string_lossy().into_owned(),
-        format: None,
-        fingerprint: Some(FileFingerprint {
-            size: raw.len() as u64,
-            mtime_ns: 0,
-            content_hash: Some(format!("{:x}", sha2::Sha256::digest(raw))),
-            immutable_remote: false,
-        }),
-    }
-}
-#[tokio::test]
-async fn pinned_ssh_profile_is_explicit_and_dependency_drift_prevents_any_command() {
-    let fixture = Fixture::new();
-    let config = private_profile_file(&fixture.path().join("config"), b"Host fakehost\n");
-    let hosts = private_profile_file(&fixture.path().join("known_hosts"), b"SYNTHETIC HOST KEY\n");
-    let ssh = fixture
-        .ssh_target()
-        .with_pinned_configuration(config.clone(), vec![hosts.clone()])
-        .unwrap();
-    assert!(ssh.run("true").await.unwrap().status.success());
-    assert_eq!(
-        std::fs::read_to_string(fixture.path().join("pinned_profile_calls.log"))
-            .unwrap()
-            .trim(),
-        config.path
-    );
-    let calls = fixture.ssh_calls_log();
-    std::fs::write(&hosts.path, b"CHANGED HOST KEY\n").unwrap();
-    assert!(ssh.run("true").await.is_err());
-    assert_eq!(fixture.ssh_calls_log(), calls);
-    assert!(
-        ssh.stream_remote_to_file("true", &fixture.path().join("download.part"))
-            .await
-            .is_err()
-    );
-    assert!(!fixture.path().join("download.part").exists());
-    assert_eq!(fixture.ssh_calls_log(), calls);
-}
-#[test]
-fn pinned_ssh_profile_rejects_world_readable_and_symlink_sources() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-    let fixture = Fixture::new();
-    let config = private_profile_file(&fixture.path().join("config"), b"Host fakehost\n");
-    std::fs::set_permissions(&config.path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(
-        fixture
-            .ssh_target()
-            .with_pinned_configuration(config.clone(), vec![])
-            .is_err()
-    );
-    std::fs::set_permissions(&config.path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let alias = fixture.path().join("alias");
-    symlink(&config.path, &alias).unwrap();
-    let mut changed = config;
-    changed.path = alias.to_string_lossy().into_owned();
-    assert!(
-        fixture
-            .ssh_target()
-            .with_pinned_configuration(changed, vec![])
-            .is_err()
-    );
-    assert!(fixture.ssh_calls_log().is_empty());
 }

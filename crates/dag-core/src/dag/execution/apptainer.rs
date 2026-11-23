@@ -43,11 +43,35 @@ pub struct SifImage {
     pub sha256: String,
 }
 
+/// SIF command dialect selected by the operator.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SifRuntime {
+    #[default]
+    Apptainer,
+    SingularityCe,
+}
+
+impl SifRuntime {
+    pub fn is_default(&self) -> bool {
+        *self == Self::Apptainer
+    }
+
+    pub fn env_prefix(self) -> &'static str {
+        match self {
+            Self::Apptainer => "APPTAINER",
+            Self::SingularityCe => "SINGULARITY",
+        }
+    }
+}
+
 /// Coordinator-side operator manifest. Task specs cannot select programs,
 /// arbitrary bind mounts, privilege flags, or unregistered image paths.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApptainerSettings {
+    #[serde(default, skip_serializing_if = "SifRuntime::is_default")]
+    pub runtime: SifRuntime,
     pub program: PathBuf,
     pub images: BTreeMap<String, SifImage>,
 }
@@ -203,6 +227,7 @@ pub(super) fn render(
         ));
     }
     let runtime = format!("{task_dir}/.apptainer-runtime");
+    let prefix = settings.runtime.env_prefix();
     let mut script = format!(
         "set -eu\numask 077\ncd {}\n\
          test -f {} && test ! -L {} || {{ echo 'SIF is missing or is a symlink' >&2; exit 78; }}\n\
@@ -228,14 +253,14 @@ pub(super) fn render(
         "LANG=C".into(),
         format!("HOME={runtime}/home"),
         format!("TMPDIR={runtime}/tmp"),
-        format!("APPTAINER_TMPDIR={runtime}/session"),
-        format!("APPTAINER_CACHEDIR={runtime}/cache"),
-        format!("APPTAINERENV_TMPDIR={runtime}/tmp"),
+        format!("{prefix}_TMPDIR={runtime}/session"),
+        format!("{prefix}_CACHEDIR={runtime}/cache"),
+        format!("{prefix}ENV_TMPDIR={runtime}/tmp"),
     ];
     args.extend(
         environment
             .iter()
-            .map(|(name, value)| format!("APPTAINERENV_{name}={value}")),
+            .map(|(name, value)| format!("{prefix}ENV_{name}={value}")),
     );
     args.push(settings.program.to_string_lossy().into_owned());
     args.push(
@@ -301,7 +326,9 @@ mod tests {
         std::fs::write(&image, b"synthetic SIF fixture").unwrap();
         let program = root.path().join("apptainer");
         // Model only argv / environment forwarding, not mount or UID isolation.
-        std::fs::write(&program, r#"#!/usr/bin/python3
+        std::fs::write(
+            &program,
+            r#"#!/usr/bin/python3
 import json, os, sys
 assert 'LEAKED_HOST_MARKER' not in os.environ
 assert 'APPTAINER_BIND' not in os.environ
@@ -312,18 +339,22 @@ os.chdir(args[args.index('--pwd') + 1])
 with open('invocation.json', 'w') as stream:
     json.dump({'args': args, 'env': dict(os.environ)}, stream)
 environment = {'PATH': '/usr/bin:/bin'}
-environment.update((k[len('APPTAINERENV_'):], v) for k, v in os.environ.items() if k.startswith('APPTAINERENV_'))
-assert 'APPTAINERENV_HOME' not in os.environ
+prefix = 'SINGULARITYENV_' if 'SINGULARITY_TMPDIR' in os.environ else 'APPTAINERENV_'
+environment.update((k[len(prefix):], v) for k, v in os.environ.items() if k.startswith(prefix))
+assert prefix + 'HOME' not in os.environ
 environment['HOME'] = args[args.index('--home') + 1].split(':')[-1]
 payload = args[image + 1:]
 if not payload:
     assert args[0] == 'run'
     payload = ['/bin/true']  # synthetic image CMD
 os.execvpe(payload[0], payload, environment)
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         let reference = format!("ghcr.io/autonomics/toy@sha256:{}", "a".repeat(64));
         let settings = ApptainerSettings {
+            runtime: SifRuntime::Apptainer,
             program,
             images: BTreeMap::from([(
                 reference.clone(),
@@ -406,6 +437,29 @@ os.execvpe(payload[0], payload, environment)
             !args
                 .iter()
                 .any(|v| v == "--fakeroot" || v == "--writable" || v == "--net")
+        );
+    }
+
+    #[test]
+    fn singularity_ce_forwards_the_literal_environment_with_its_own_prefix() {
+        let (root, mut settings, process) = fixture();
+        settings.runtime = SifRuntime::SingularityCe;
+        let result = execute(root.path(), &settings, &process);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let work = root.path().join("task");
+        let invocation: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(work.join("invocation.json")).unwrap()).unwrap();
+        let env = invocation["env"].as_object().unwrap();
+        assert!(env.contains_key("SINGULARITY_TMPDIR"));
+        assert!(env.contains_key("SINGULARITY_CACHEDIR"));
+        assert!(!env.keys().any(|key| key.starts_with("APPTAINER")));
+        assert_eq!(
+            std::fs::read_to_string(work.join("result.txt")).unwrap(),
+            "synthetic input\nliteral ' $HOME $(touch INJECTED)"
         );
     }
 

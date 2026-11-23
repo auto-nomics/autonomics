@@ -2,25 +2,17 @@
 //! (pinned endpoints, per-invocation options), streamed upload sources,
 //! and small shell/quoting helpers.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::{Output, Stdio};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::super::contract::{TaskAttemptReceipt, TaskDispatch, TaskExecution};
-use super::super::process::{
-    ProcessTaskSpec, parse_process_task, process_task_environment, render_process_script,
-    sanitize_path_component,
-};
-use super::super::traits::{TaskArtifactStore, TaskExecutor, TaskLease, TaskTransport};
+use super::super::process::sanitize_path_component;
 use crate::dag::DagError;
-use crate::dag::node_event::JobResult;
-use crate::value::{DomainId, FileFingerprint, FileRef};
 
 // ── ssh plumbing ─────────────────────────────────────────────────────────
 /// Where and how to reach the cluster login node over ssh.
@@ -31,12 +23,11 @@ pub struct SshTarget {
     pub(crate) program: String,
     pub(crate) host: String,
     pub(crate) connect_timeout: Duration,
-    pub(crate) command_timeout: Duration,
+    command_timeout: Duration,
     pub(crate) transfer_timeout: Duration,
     /// Keepalive cadence for connections that outlive a short command. Absent
     /// means every connection is short-lived and needs no liveness probing.
     pub(crate) keepalive: Option<(Duration, u32)>,
-    pub(crate) pinned_configuration: Option<(FileRef, Vec<FileRef>)>,
 }
 impl SshTarget {
     pub fn new(program: impl Into<String>, host: impl Into<String>) -> Self {
@@ -49,7 +40,6 @@ impl SshTarget {
             command_timeout: Duration::from_secs(120),
             transfer_timeout: Duration::from_secs(3600),
             keepalive: None,
-            pinned_configuration: None,
         }
     }
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
@@ -73,10 +63,6 @@ impl SshTarget {
         }
         Ok(())
     }
-    pub fn with_command_timeout(mut self, timeout: Duration) -> Self {
-        self.command_timeout = timeout;
-        self
-    }
     pub fn with_transfer_timeout(mut self, timeout: Duration) -> Self {
         self.transfer_timeout = timeout;
         self
@@ -91,106 +77,13 @@ impl SshTarget {
         self.keepalive = Some((interval, count.max(1)));
         self
     }
-    /// An operator-owned private configuration and its public dependencies.
-    /// Credential bytes are never copied here. Recheck the same closed files
-    /// before every command, retry and artifact transfer; never fall back to
-    /// the process user's ambient SSH configuration.
-    pub fn with_pinned_configuration(
-        mut self,
-        configuration: FileRef,
-        dependencies: Vec<FileRef>,
-    ) -> Result<Self, DagError> {
-        if dependencies.len() > 8 {
-            return Err(DagError::Schedule(
-                "too many SSH profile dependencies".into(),
-            ));
-        }
-        self.pinned_configuration = Some((configuration, dependencies));
-        self.verify_pinned_configuration()?;
-        Ok(self)
-    }
-    #[cfg(unix)]
-    fn verify_pinned_configuration(&self) -> Result<(), DagError> {
-        let Some((configuration, dependencies)) = &self.pinned_configuration else {
-            return Ok(());
-        };
-        use std::io::Read;
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-        for file in std::iter::once(configuration).chain(dependencies) {
-            let bad = || {
-                DagError::Schedule("pinned private SSH profile changed or is unavailable".into())
-            };
-            let p = Path::new(&file.path);
-            let fp = file.fingerprint.as_ref().ok_or_else(bad)?;
-            let sha = fp.content_hash.as_ref().ok_or_else(bad)?;
-            if !p.is_absolute()
-                || p.canonicalize().map_err(|_| bad())? != p
-                || fp.size == 0
-                || fp.size > 65536
-                || sha.len() != 64
-                || !sha
-                    .bytes()
-                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
-            {
-                return Err(bad());
-            }
-            let parent = p.parent().ok_or_else(bad)?.metadata().map_err(|_| bad())?;
-            let mut fd = std::fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(p)
-                .map_err(|_| bad())?;
-            let before = fd.metadata().map_err(|_| bad())?;
-            let uid = unsafe { libc::geteuid() };
-            if !before.is_file()
-                || before.uid() != uid
-                || before.mode() & 0o077 != 0
-                || parent.uid() != uid
-                || parent.mode() & 0o077 != 0
-                || before.len() != fp.size
-            {
-                return Err(bad());
-            }
-            let mut raw = Vec::new();
-            fd.by_ref()
-                .take(65537)
-                .read_to_end(&mut raw)
-                .map_err(|_| bad())?;
-            let after = fd.metadata().map_err(|_| bad())?;
-            if raw.len() as u64 != fp.size
-                || hex_encode(&Sha256::digest(&raw)) != *sha
-                || before.mtime_nsec() != after.mtime_nsec()
-                || before.mtime() != after.mtime()
-                || before.ctime_nsec() != after.ctime_nsec()
-                || before.ctime() != after.ctime()
-                || before.len() != after.len()
-            {
-                return Err(bad());
-            }
-        }
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    fn verify_pinned_configuration(&self) -> Result<(), DagError> {
-        if self.pinned_configuration.is_some() {
-            Err(DagError::Schedule(
-                "private pinned SSH profiles require Unix".into(),
-            ))
-        } else {
-            Ok(())
-        }
-    }
     // Every command and artifact transfer must share the same SSH policy.
     // Keeping this construction in one place prevents a transfer path from
     // inheriting an independently managed persistent master from ~/.ssh/config.
     pub(crate) fn command(&self) -> Result<tokio::process::Command, DagError> {
-        self.verify_pinned_configuration()?;
         self.verify_endpoints()?;
         let connect = format!("ConnectTimeout={}", self.connect_timeout.as_secs().max(1));
         let mut command = tokio::process::Command::new(&self.program);
-        if let Some((configuration, _)) = &self.pinned_configuration {
-            command.args(["-F", &configuration.path]);
-        }
         if let Some(endpoint) = &self.endpoint {
             command.args(endpoint.options());
         }
@@ -226,31 +119,6 @@ impl SshTarget {
             None,
         )
         .await
-    }
-    /// Run `bash -s` with `script` piped to the remote shell's stdin.
-    /// Read-only scripts only — see [`Self::run_script_once`].
-    pub async fn run_script(&self, script: &str) -> Result<Output, DagError> {
-        self.execute(
-            &["bash", "-s"],
-            StdinSource::Bytes(script.as_bytes()),
-            self.command_timeout,
-            true,
-            None,
-        )
-        .await
-    }
-    /// Run one remote command under an explicit deadline.
-    ///
-    /// The default command timeout bounds short probes. A transport that
-    /// blocks on a remote task needs the task's own horizon instead, so the
-    /// caller states it rather than inheriting a fixed default.
-    pub async fn run_with_timeout(
-        &self,
-        remote_command: &str,
-        timeout: Duration,
-    ) -> Result<Output, DagError> {
-        self.execute(&[remote_command], StdinSource::Null, timeout, true, None)
-            .await
     }
     /// Run `bash -s` under an explicit deadline. Read-only scripts only.
     pub async fn run_script_with_timeout(
@@ -554,218 +422,6 @@ impl SshTarget {
             }
         }
     }
-    /// Stream one remote command's stdout into `staging` under a size
-    /// declaration protocol: the remote side prints ONE header line with the
-    /// decimal byte count, then raw content. The declared count catches both
-    /// a truncated transfer and stdout pollution — anything other than
-    /// exactly `declared` content bytes fails. The payload is never buffered
-    /// whole; only a connection failure with zero content bytes is retried.
-    pub async fn stream_remote_to_file(
-        &self,
-        remote_command: &str,
-        staging: &Path,
-    ) -> Result<RemoteStream, DagError> {
-        let mut attempt = 0usize;
-        loop {
-            match self.stream_remote_once(remote_command, staging).await {
-                Ok(stream) => return Ok(stream),
-                Err(failure) => {
-                    let _ = std::fs::remove_file(staging);
-                    if attempt == 0 && failure.ssh_exit_255 && failure.received_bytes == 0 {
-                        attempt += 1;
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                        continue;
-                    }
-                    return Err(failure.error);
-                }
-            }
-        }
-    }
-    async fn stream_remote_once(
-        &self,
-        remote_command: &str,
-        staging: &Path,
-    ) -> Result<RemoteStream, StreamFailure> {
-        let mut command = self.command().map_err(|error| StreamFailure {
-            error,
-            ssh_exit_255: false,
-            received_bytes: 0,
-        })?;
-        command
-            .arg(remote_command)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command.spawn().map_err(|error| StreamFailure {
-            error: DagError::Schedule(format!(
-                "cannot start ssh program `{}`: {error}",
-                self.program
-            )),
-            ssh_exit_255: false,
-            received_bytes: 0,
-        })?;
-        let mut stdout = child.stdout.take().expect("ssh stdout is piped");
-        // Keep draining stderr on its own task: a chatty remote side must
-        // not deadlock a full pipe against our read loop.
-        let stderr_handle = child.stderr.take().expect("ssh stderr is piped");
-        let mut stderr_task = Some(tokio::spawn(async move {
-            let mut text = String::new();
-            let mut handle = stderr_handle;
-            // Read errors here surface through the exit status instead.
-            let _ = handle.read_to_string(&mut text).await;
-            text
-        }));
-        let failure = |message: String, ssh_exit_255: bool, received_bytes: u64| StreamFailure {
-            error: DagError::Schedule(message),
-            ssh_exit_255,
-            received_bytes,
-        };
-        // Keep the child owned across the deadline so handled failures do
-        // not return before the local SSH process is actually reaped.
-        let result = tokio::time::timeout(self.transfer_timeout, async {
-        let mut file = tokio::fs::File::create(staging).await.map_err(|error| {
-            failure(
-                format!(
-                    "cannot create staging file `{}`: {error}",
-                    staging.display()
-                ),
-                false,
-                0,
-            )
-        })?;
-        let mut hasher = Sha256::new();
-        let mut declared: Option<u64> = None;
-        let mut header = Vec::new();
-        let mut content_bytes = 0u64;
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let read = stdout.read(&mut buffer).await.map_err(|error| {
-                failure(
-                    format!("ssh download `{remote_command}` stream error: {error}"),
-                    false,
-                    content_bytes,
-                )
-            })?;
-            if read == 0 {
-                break;
-            }
-            let mut chunk = &buffer[..read];
-            if declared.is_none() {
-                match chunk.iter().position(|&byte| byte == b'\n') {
-                    Some(newline) => {
-                        header.extend_from_slice(&chunk[..newline]);
-                        let text = String::from_utf8_lossy(&header);
-                        let value = text.trim().parse::<u64>().map_err(|_| {
-                            failure(
-                                format!(
-                                    "ssh download `{remote_command}` sent unusable size header {text:?}"
-                                ),
-                                false,
-                                0,
-                            )
-                        })?;
-                        declared = Some(value);
-                        chunk = &chunk[newline + 1..];
-                    }
-                    None => {
-                        if header.len() + chunk.len() > 128 {
-                            return Err(failure(
-                                format!(
-                                    "ssh download `{remote_command}` sent no size header within the first 128 bytes"
-                                ),
-                                false,
-                                0,
-                            ));
-                        }
-                        header.extend_from_slice(chunk);
-                        continue;
-                    }
-                }
-            }
-            if !chunk.is_empty() {
-                hasher.update(chunk);
-                file.write_all(chunk).await.map_err(|error| {
-                    failure(
-                        format!("cannot write staging file `{}`: {error}", staging.display()),
-                        false,
-                        content_bytes,
-                    )
-                })?;
-                content_bytes += chunk.len() as u64;
-            }
-        }
-        file.flush().await.map_err(|error| {
-            failure(
-                format!("cannot flush staging file `{}`: {error}", staging.display()),
-                false,
-                content_bytes,
-            )
-        })?;
-        file.sync_all().await.map_err(|error| {
-            failure(
-                format!("cannot sync staging file `{}`: {error}", staging.display()),
-                false,
-                content_bytes,
-            )
-        })?;
-        let status = child.wait().await.map_err(|error| {
-            failure(
-                format!("ssh download `{remote_command}`: {error}"),
-                false,
-                content_bytes,
-            )
-        })?;
-        let stderr_text = stderr_task.take().expect("stderr task").await.unwrap_or_default();
-        if !status.success() {
-            return Err(failure(
-                format!(
-                    "ssh download `{remote_command}` failed with exit status {:?}: {}",
-                    status.code(),
-                    stderr_text.trim()
-                ),
-                status.code() == Some(255),
-                content_bytes,
-            ));
-        }
-        let Some(declared) = declared else {
-            return Err(failure(
-                format!("ssh download `{remote_command}` sent no size header"),
-                false,
-                0,
-            ));
-        };
-        if declared != content_bytes {
-            return Err(failure(
-                format!(
-                    "ssh download `{remote_command}` declared {declared} bytes but {content_bytes} arrived — refusing the payload"
-                ),
-                false,
-                content_bytes,
-            ));
-        }
-        Ok(RemoteStream {
-            declared_size: declared,
-            content_bytes,
-            content_sha256: hex_encode(&hasher.finalize()),
-        })
-        }).await.unwrap_or_else(|_| Err(failure(format!("ssh transfer `{remote_command}` timed out"), false, 0)));
-        if let Err(mut error) = result {
-            drop(stdout);
-            let _ = child.start_kill();
-            let stopped = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
-            if let Some(task) = stderr_task.take() {
-                task.abort();
-                let _ = task.await;
-            }
-            if !matches!(stopped, Ok(Ok(_))) {
-                error.error =
-                    DagError::Schedule(format!("{}; local SSH child stop UNKNOWN", error.error));
-            }
-            return Err(error);
-        }
-        result
-    }
     async fn execute(
         &self,
         args: &[&str],
@@ -928,22 +584,6 @@ enum StdinSource<'a> {
     Bytes(&'a [u8]),
     File(std::fs::File),
 }
-/// What [`SshTarget::stream_remote_to_file`] received from the remote side.
-pub struct RemoteStream {
-    /// Byte count the remote side declared in its header line.
-    pub declared_size: u64,
-    /// Content bytes actually streamed into the staging file.
-    pub content_bytes: u64,
-    /// Lowercase SHA-256 of the streamed content.
-    pub content_sha256: String,
-}
-/// A failed stream attempt, carrying what the retry policy needs: only a
-/// connection-level failure with zero content bytes is safe to retry.
-struct StreamFailure {
-    error: DagError,
-    ssh_exit_255: bool,
-    received_bytes: u64,
-}
 /// Fail loud on a nonzero ssh exit; otherwise hand back stdout as text.
 pub(crate) fn ensure_ssh_success(output: Output, context: &str) -> Result<Output, DagError> {
     if output.status.success() {
@@ -1017,4 +657,68 @@ pub(crate) fn slurm_job_name(task_id: &str, nonce: &str) -> String {
         name.truncate(boundary);
     }
     format!("{name}-{nonce}")
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+
+    fn blocked_ssh() -> (tempfile::TempDir, SshTarget, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let program = directory.path().join("ssh");
+        let pid_path = directory.path().join("ssh.pid");
+        fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > {}\nexec sleep 10\n",
+                sh_single_quote(pid_path.to_str().unwrap()),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut target = SshTarget::new(program.to_str().unwrap(), "test-host");
+        target.command_timeout = Duration::from_millis(100);
+        (directory, target, pid_path)
+    }
+
+    #[tokio::test]
+    async fn ssh_timeout_includes_nonreading_script_stdin_and_reaps_local_shim() {
+        let (_directory, target, pid_path) = blocked_ssh();
+        let script = "x".repeat(2 * 1024 * 1024);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            target.run_script_with_timeout(&script, Duration::from_millis(100)),
+        )
+        .await;
+        let error = result
+            .expect("stdin write escaped command deadline")
+            .unwrap_err();
+        assert!(error.to_string().contains("remote outcome UNKNOWN"));
+        let pid = std::fs::read_to_string(&pid_path).unwrap();
+        for _ in 0..100 {
+            if !Path::new("/proc").join(pid.trim()).exists() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("local synthetic SSH process was not reaped after timeout");
+    }
+
+    #[tokio::test]
+    async fn submission_handshake_deadline_reaps_child_without_admitting_payload() {
+        let (_directory, target, pid_path) = blocked_ssh();
+        let mut admitted = false;
+        let error = target
+            .run_submission_once("echo forbidden\n", || {
+                admitted = true;
+                Ok(())
+            })
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("payload NOT_SENT"));
+        assert!(!admitted);
+        let pid = std::fs::read_to_string(pid_path).unwrap();
+        assert!(!Path::new("/proc").join(pid.trim()).exists());
+    }
 }

@@ -30,13 +30,23 @@ impl ContainerExecutionInfra {
         catalog_path: &std::path::Path,
         executable: impl Into<std::path::PathBuf>,
     ) -> Result<Self, String> {
+        Self::for_sif_worker(state_dir, catalog_path, executable, false)
+    }
+
+    pub fn for_sif_worker(
+        state_dir: &std::path::Path,
+        catalog_path: &std::path::Path,
+        executable: impl Into<std::path::PathBuf>,
+        singularity_ce: bool,
+    ) -> Result<Self, String> {
         let mut config = PodmanConfig::for_state_dir(state_dir);
         let runtime = crate::ApptainerRuntime::from_catalog_file(
             config.workspace_root.clone(),
             executable,
             catalog_path,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .with_singularity_ce(singularity_ce);
         if let Some(root) = runtime.panel_cache_root() {
             config.panel_cache_root = root.to_path_buf();
         }
@@ -90,7 +100,41 @@ impl ContainerExecutionInfra {
                 .filter(|text| !text.is_empty()),
         };
         let driver = PrivateStorageDriver::parse_operator_setting(setting.as_deref())?;
-        Self::for_state_dir_with_storage_driver(state_dir, driver)
+        if !state_dir.join("storage-layout-v1").is_file() {
+            return Self::for_state_dir_with_storage_driver(state_dir, driver);
+        }
+        ensure_backend_env_removed()?;
+        let mut config = PodmanConfig::for_state_dir_with_storage_driver(state_dir, driver);
+        let storage = state_dir.join("images/podman");
+        std::fs::create_dir_all(&storage).map_err(|error| error.to_string())?;
+        let driver = config
+            .storage_driver
+            .as_deref()
+            .ok_or("missing Podman storage driver")?;
+        let marker = storage.join(".autonomics-driver");
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(driver.as_bytes())
+                    .and_then(|_| file.sync_all())
+                    .map_err(|error| error.to_string())?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::read_to_string(&marker).map_err(|error| error.to_string())? != driver {
+                    return Err("unified Podman store belongs to a different storage driver".into());
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+        config.workspace_root = crate::config::canonicalize_workspace_root(state_dir.join("work"));
+        config.panel_cache_root = state_dir.join("panels");
+        config.storage_root = Some(storage);
+        config.run_root = Some(state_dir.join("runtime/podman"));
+        Ok(Self::from_config(config))
     }
 
     pub fn for_state_dir(state_dir: &std::path::Path) -> Result<Self, String> {

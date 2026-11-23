@@ -1,4 +1,6 @@
 use super::*;
+use crate::config::SlurmConfig;
+use container_runtime::{ContainerExecutionInfra, PodmanConnection};
 use dag_core::{
     DagNode, NodeInput, NodePorts, TaskExecution, TaskExecutor,
     dag::{
@@ -12,9 +14,23 @@ use data_engine::workflow::{FlowGraph, FlowRunConfig, FlowScheduler, Process, So
 use futures::StreamExt;
 use std::{
     any::Any,
+    fs,
+    os::unix::fs::PermissionsExt,
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
+
+fn bindings(registry: &ComputeRegistry) -> Vec<ExecutionBinding> {
+    fs::read_dir(registry.root.join("runs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| serde_json::from_slice(&read_private(&path).unwrap()).unwrap())
+        .collect()
+}
 
 struct Fixture {
     _dir: tempfile::TempDir,
@@ -124,6 +140,33 @@ async fn deleting_target_preserves_bound_executor_and_reserves_identity() {
     assert!(reopened.state().deleted_target_ids.contains("other"));
 }
 
+fn test_sif_manifest(root: &Path) -> PathBuf {
+    let path = root.join("test-sif-images.json");
+    if !path.exists() {
+        let image = format!("example/runtime-test@sha256:{}", "a".repeat(64));
+        write_new(&path, &serde_json::json!({
+            "program": "/usr/bin/apptainer",
+            "images": { image: { "path": "/admitted/runtime-test.sif", "sha256": "b".repeat(64) } }
+        })).unwrap();
+    }
+    path
+}
+
+fn test_podman() -> EnrollContainerRuntime {
+    serde_json::from_value(serde_json::json!({
+        "type": "podman",
+        "plugins_root": "/remote/plugins",
+        "plugins_sha256": "a".repeat(64),
+        "podman": {
+            "executable": "/usr/bin/podman",
+            "executable_sha256": "b".repeat(64),
+            "image_catalog": "/remote/images.json",
+            "image_catalog_sha256": "c".repeat(64),
+        }
+    }))
+    .unwrap()
+}
+
 fn remote_settings(root: &Path, host: &str) -> SlurmConfig {
     let profile = root.join(format!("{host}-worker.json"));
     write_new(&profile,&serde_json::json!({"worker":{"executable":"/cluster/autonomics","executable_sha256":"a".repeat(64),"expected_source_revision":dag_core::source_revision()},"local_kinds":["channel","dynamic_fanout"]})).unwrap();
@@ -137,7 +180,7 @@ fn remote_settings(root: &Path, host: &str) -> SlurmConfig {
     settings.data_ssh_host = Some(format!("{host}-data"));
     settings.pi_ssh_host = None;
     settings.typed_worker_config = Some(profile);
-    settings.apptainer_manifest = None;
+    settings.apptainer_manifest = Some(test_sif_manifest(root));
     settings
 }
 
@@ -265,7 +308,7 @@ async fn image_evidence_tracks_resident_configuration_not_mutable_catalog_files(
             .image_evidence("mapping", &format!("other@sha256:{}", "d".repeat(64)))
             .is_err()
     );
-    assert_eq!(f.registry.status().unwrap().runs.len(), 0);
+    assert_eq!(bindings(&f.registry).len(), 0);
 }
 
 #[agentik_proc::tool(
@@ -298,7 +341,7 @@ async fn agent_context_and_environment_tools_follow_live_operator_policy() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let tools = super::tools::guard_environment_tools(
         vec![EnvironmentProbe(calls.clone()).into()],
-        Some(&f.registry),
+        &f.registry,
     );
     let settings = remote_settings(&f.config.state_dir, "environment-host");
     f.registry
@@ -515,7 +558,7 @@ async fn binding_publication_is_atomic_and_preserves_failed_evidence() {
     // A crash before publication must not break status or count a partial run.
     let incomplete = runs.join(".pending-interrupted");
     write_bytes_new(&incomplete, b"{\"id\":").unwrap();
-    assert!(f.registry.status().unwrap().runs.is_empty());
+    assert!(bindings(&f.registry).is_empty());
     let writer = f.registry.clone();
     let task = tokio::task::spawn_blocking(move || {
         for _ in 0..32 {
@@ -527,22 +570,21 @@ async fn binding_publication_is_atomic_and_preserves_failed_evidence() {
         tokio::task::yield_now().await;
     }
     task.await.unwrap();
-    let status = f.registry.status().unwrap();
-    assert_eq!(status.runs.len(), 32);
+    let published_bindings = bindings(&f.registry);
+    assert_eq!(published_bindings.len(), 32);
     assert_eq!(fs::read(&incomplete).unwrap(), b"{\"id\":");
-    let binding = &status.runs[0];
+    let binding = &published_bindings[0];
     let published = runs.join(format!("{}.json", binding.id));
     let original = read_private(&published).unwrap();
     let mut replacement = binding.clone();
     replacement.target_id = "must-not-replace".into();
     assert!(write_binding(&published, &replacement).is_err());
     assert_eq!(read_private(&published).unwrap(), original);
-    assert_eq!(f.registry.status().unwrap().runs.len(), 32);
+    assert_eq!(bindings(&f.registry).len(), 32);
     assert_eq!(fs::read_dir(&runs).unwrap().count(), 34);
-    // Only unpublished files are excluded. Corrupt historical records must
-    // remain visible as an error, rather than silently disappearing.
+    // Configuration remains readable independently of historical records.
     write_bytes_new(&runs.join("corrupt.json"), b"{").unwrap();
-    assert!(f.registry.status().is_err());
+    assert!(f.registry.status().is_ok());
     assert_eq!(fs::read(runs.join("corrupt.json")).unwrap(), b"{");
 }
 
@@ -565,8 +607,11 @@ async fn target_profiles_are_frozen_and_tampering_is_rejected_on_restart() {
     let ComputeBackend::Slurm { settings } = &target.target.backend else {
         panic!()
     };
-    let frozen = settings.typed_worker_config.clone().unwrap();
-    assert_ne!(source, frozen);
+    assert!(settings.typed_worker_config.is_none());
+    assert!(settings.typed_worker.is_some());
+    let frozen_manifest = settings.apptainer_manifest.as_ref().unwrap();
+    assert!(frozen_manifest.is_file());
+    assert!(!frozen_manifest.with_file_name("worker.json").exists());
     fs::write(&source, b"changed source profile").unwrap();
     select(&f.registry, "remote");
     assert!(f.registry.bind().is_ok());
@@ -581,7 +626,18 @@ async fn target_profiles_are_frozen_and_tampering_is_rejected_on_restart() {
         )
         .is_ok()
     );
-    fs::write(&frozen, b"{}").unwrap();
+    let mut tampered = f.registry.state();
+    let target = tampered
+        .targets
+        .iter_mut()
+        .find(|target| target.id == "remote")
+        .unwrap();
+    let ComputeBackend::Slurm { settings } = &mut target.backend else {
+        panic!()
+    };
+    settings.typed_worker.as_mut().unwrap()["worker"]["executable"] =
+        "/other/autonomics-worker".into();
+    f.registry.persist(&tampered).unwrap();
     let (vfs, storage) = mounts(&f.config);
     assert!(
         ComputeRegistry::open(
@@ -717,7 +773,7 @@ async fn scheduler_binds_once_and_existing_agent_graphs_follow_next_run_policy()
         *calls.lock().unwrap(),
         vec!["local", "local", "server-b", "server-b"]
     );
-    assert_eq!(f.registry.status().unwrap().runs.len(), 2);
+    assert_eq!(bindings(&f.registry).len(), 2);
 }
 
 #[tokio::test]
@@ -1225,7 +1281,8 @@ async fn restart_uses_enrolled_profiles_instead_of_mutable_legacy_paths() {
     obsolete.slurm.typed_worker_config =
         Some(f.config.state_dir.join("deleted-legacy-profile.json"));
     let resolved = startup_config(&obsolete).unwrap();
-    assert!(resolved.slurm.typed_worker_config.unwrap().is_file());
+    assert!(resolved.slurm.typed_worker_config.is_none());
+    assert!(resolved.slurm.typed_worker.is_some());
     assert!(!resolved.plugin_rsi.environment_dev.enabled);
     assert!(obsolete.local_container_execution_required().is_ok());
     select(&f.registry, "local");
@@ -1298,7 +1355,7 @@ async fn background_image_builds_cannot_bypass_remote_compute_policy() {
 }
 
 #[tokio::test]
-async fn first_enrollment_preserves_explicit_legacy_container_placement() {
+async fn legacy_target_without_sif_cannot_initialize() {
     let f = fixture();
     let mut config = f.config.clone();
     config.state_dir = config.state_dir.join("legacy-state");
@@ -1311,68 +1368,35 @@ async fn first_enrollment_preserves_explicit_legacy_container_placement() {
         container_runtime::PodmanConfig::for_state_dir(&config.state_dir),
     );
     let (vfs, storage) = mounts(&config);
-    let registry = ComputeRegistry::open(
+    let result = ComputeRegistry::open(
         &config,
         storage,
         vfs,
         &containers,
         crate::hpc_monitor::MonitorHub::empty(),
-    )
-    .unwrap();
-    assert_eq!(registry.state().policy.target_id, "legacy-slurm");
-    assert_eq!(
-        registry.target("legacy-slurm").unwrap().containers.name(),
-        containers.runtime.name()
     );
-    assert_eq!(f.registry.state().policy.target_id, "local");
+    assert!(matches!(result, Err(error) if error.contains("requires a SIF image manifest")));
 }
 
 #[tokio::test]
-async fn legacy_registry_migrates_once_and_preserves_selected_configuration() {
+async fn old_compute_catalog_does_not_initialize_a_new_registry() {
     let f = fixture();
-    let mut value = serde_json::to_value(f.registry.state()).unwrap();
-    value["version"] = 1.into();
-    value["revision"] = 42.into();
-    value["policy"] = serde_json::json!({"revision":7,"target_id":"local","target_revision":2});
-    let mut first = value["targets"][0].clone();
-    first["revision"] = 1.into();
-    first["name"] = "first".into();
-    let mut selected = first.clone();
-    selected["revision"] = 2.into();
-    selected["name"] = "selected".into();
-    let mut latest = first.clone();
-    latest["revision"] = 3.into();
-    latest["name"] = "unselected edit".into();
-    latest["enabled"] = false.into();
-    value["targets"] = serde_json::json!([latest, first, selected]);
-    let path = f.registry.root.join("registry.json");
-    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
-    let open = || {
-        let (vfs, storage) = mounts(&f.config);
-        ComputeRegistry::open(
-            &f.config,
-            storage,
-            vfs,
-            &f.containers,
-            crate::hpc_monitor::MonitorHub::empty(),
-        )
-        .unwrap()
-    };
-    let migrated = open();
-    assert_eq!(migrated.state().targets.len(), 1);
-    assert!(
-        migrated.bind().is_err(),
-        "migration must preserve a later disable"
+    let registry = f.registry.root.join("registry.json");
+    let catalog = f.registry.root.join("catalog.json");
+    fs::rename(&registry, &catalog).unwrap();
+    let bytes = read_private(&catalog).unwrap();
+
+    let (vfs, storage) = mounts(&f.config);
+    let result = ComputeRegistry::open(
+        &f.config,
+        storage,
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
     );
-    assert_eq!(migrated.target("local").unwrap().target.name, "selected");
-    let bytes = read_private(&path).unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["version"], 2);
-    assert!(json.get("revision").is_none());
-    drop(migrated);
-    let reopened = open();
-    assert_eq!(reopened.target("local").unwrap().target.name, "selected");
-    assert_eq!(bytes, read_private(&path).unwrap());
+    assert!(matches!(result, Err(error) if error.contains("unsupported compute catalog")));
+    assert!(!registry.exists());
+    assert_eq!(read_private(&catalog).unwrap(), bytes);
 }
 
 #[tokio::test]
@@ -1428,16 +1452,20 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
         reopened.status().unwrap().deployment["source_compatible"],
         false
     );
+    use agentik_core::context::ContextProvider;
+    let context = super::tools::ComputeContext::new(reopened.clone());
+    let message = context.poll().await.unwrap();
+    assert!(message.contains("previous-release"));
+    assert!(message.contains("\"source_compatible\":false"));
     assert!(reopened.bind().is_err());
-    assert!(reopened.status().unwrap().runs.is_empty());
+    assert!(bindings(&reopened).is_empty());
     let old_runtime = reopened.target("old-worker").unwrap();
     // Register a measured matching replacement, preserving the old capsule.
     let old = reopened.target("old-worker").unwrap().target.clone();
-    let old_bytes = fs::read(match &old.backend {
-        ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
-        ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
-    })
-    .unwrap();
+    let ComputeBackend::Slurm { settings } = &old.backend else {
+        panic!()
+    };
+    let old_profile = settings.typed_worker.clone();
     let replacement_root = f.config.state_dir.join("replacement");
     fs::create_dir(&replacement_root).unwrap();
     let replacement = remote_settings(&replacement_root, "old-worker");
@@ -1458,17 +1486,13 @@ async fn incompatible_worker_cannot_be_selected_checked_or_bound_after_upgrade()
     assert_eq!(status.deployment["source_compatible"], true);
     assert_eq!(status.deployment["target_id"], "old-worker");
     assert!(reopened.bind().is_ok());
-    assert_eq!(reopened.status().unwrap().runs.len(), 1);
+    assert_eq!(bindings(&reopened).len(), 1);
     let historical = old_runtime;
     assert_eq!(historical.target.capsule_sha256, old.capsule_sha256);
-    assert_eq!(
-        fs::read(match &historical.target.backend {
-            ComputeBackend::Slurm { settings } => settings.typed_worker_config.as_ref().unwrap(),
-            ComputeBackend::Local | ComputeBackend::Ssh { .. } => unreachable!(),
-        })
-        .unwrap(),
-        old_bytes
-    );
+    let ComputeBackend::Slurm { settings } = &historical.target.backend else {
+        panic!()
+    };
+    assert_eq!(settings.typed_worker, old_profile);
     select(&reopened, "local");
     assert_eq!(
         reopened.status().unwrap().deployment["source_compatible"],
@@ -1541,7 +1565,7 @@ async fn readiness_blocks_missing_images_per_instance_and_keeps_bound_target() {
     assert_eq!(report["state"], "BLOCKED");
     assert_eq!(report["deployment"]["source_compatible"], true);
     assert_eq!(report["blockers"][0]["code"], "IMAGE_MAPPING_UNAVAILABLE");
-    assert_eq!(f.registry.status().unwrap().runs.len(), 0);
+    assert_eq!(bindings(&f.registry).len(), 0);
     let valid = f
         .registry
         .readiness(
@@ -1653,7 +1677,7 @@ async fn readiness_reports_unregistered_candidate_and_local_unknown_without_muta
     assert_eq!(empty["requested_identities"], 0);
     assert!(!empty["verification_gaps"].as_array().unwrap().is_empty());
     assert_eq!(serde_json::to_value(f.registry.state()).unwrap(), before);
-    assert!(f.registry.status().unwrap().runs.is_empty());
+    assert!(bindings(&f.registry).is_empty());
 }
 
 #[tokio::test]
@@ -1716,7 +1740,7 @@ async fn readiness_requires_a_resident_network_policy_pin() {
     let ready = f.registry.readiness(&request, &nodes).unwrap();
     assert_eq!(ready["state"], "CONFIGURATION_READY");
     assert_eq!(ready["end_to_end_acceptance"], "NOT_VERIFIED");
-    assert!(f.registry.status().unwrap().runs.is_empty());
+    assert!(bindings(&f.registry).is_empty());
 }
 
 // ── direct SSH backend: real-host integration ────────────────────────────
@@ -1741,7 +1765,10 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     settings.ssh_command = "ssh".into();
     settings.scratch_remote_dir = scratch.clone();
     settings.tools_enabled = false;
-    settings.typed_worker_config = None;
+    settings.typed_worker_config = Some(PathBuf::from(
+        std::env::var("AUTONOMICS_SSH_SMOKE_PROFILE")
+            .expect("absolute gateway path of the SSH Podman worker profile required"),
+    ));
     settings.apptainer_manifest = None;
     f.registry
         .save_target(SaveTarget {
@@ -1822,8 +1849,7 @@ async fn real_ssh_target_runs_process_task_end_to_end() {
     let _ = details;
     // The remote payload's identity is in the run details; the run itself
     // succeeding through the whole stack is the assertion.
-    let status = f.registry.status().unwrap();
-    assert_eq!(status.runs.len(), 1);
+    assert_eq!(bindings(&f.registry).len(), 1);
     let _ = target;
 }
 
@@ -2007,6 +2033,14 @@ async fn data_domain_aliases_are_pinned_and_survive_catalog_roundtrip() {
     .unwrap();
 
     let mut settings = remote_settings(&config.state_dir, "domain-a");
+    settings.apptainer_manifest = None;
+    let mut profile = worker::worker_profile("/remote/autonomics-worker", &"d".repeat(64));
+    let runtime = serde_json::to_value(test_podman()).unwrap();
+    for key in ["plugins_root", "plugins_sha256", "podman"] {
+        profile["worker"][key] = runtime[key].clone();
+    }
+    settings.typed_worker_config = None;
+    settings.typed_worker = Some(profile);
     // The transport requires task work to live inside the retained
     // output root; the domain root must therefore contain the scratch.
     settings.scratch_remote_dir = "/lustre/share/scratch".into();
@@ -2064,10 +2098,16 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
         .registry
         .enroll(super::EnrollRequest {
             backend: super::EnrollBackend::Slurm,
+            container_runtime: Some(EnrollContainerRuntime::Sif {
+                image_manifest: test_sif_manifest(&f.config.state_dir),
+                runtime: Default::default(),
+                singularity_executable: None,
+            }),
             id: "hpc-b".into(),
             name: None,
             login_alias: "hpc-b-login".into(),
             data_alias: Some("hpc-b-data".into()),
+            storage_root: None,
             data_root: Some(cluster.display().to_string()),
             worker_executable: worker.display().to_string(),
             deploy_worker: None,
@@ -2075,7 +2115,7 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
             partition: Some("test-part".into()),
             account: None,
             ssh_command: Some(ssh.display().to_string()),
-            scratch_dir: None,
+            data_dir: None,
             select: true,
         })
         .await
@@ -2098,10 +2138,8 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
         backend.scratch_remote_dir,
         format!("{}/scratch", cluster.display())
     );
-    assert!(backend.typed_worker_config.is_some());
-    let profile: serde_json::Value =
-        serde_json::from_slice(&fs::read(backend.typed_worker_config.as_ref().unwrap()).unwrap())
-            .unwrap();
+    assert!(backend.typed_worker_config.is_none());
+    let profile = backend.typed_worker.unwrap();
     for kind in [
         "source_literature",
         "bib_save",
@@ -2119,11 +2157,8 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
     }
 
     // The domain mount: read-only, domain-tagged, at the derived prefix.
-    let source = catalog
-        .data_sources
-        .iter()
-        .find(|s| s.id == "hpc-b")
-        .unwrap();
+    assert!(catalog.data_sources.is_empty());
+    let source = target.data_source.as_ref().unwrap();
     assert!(source.read_only);
     assert_eq!(source.domain.as_deref(), Some("hpc-b"));
     assert_eq!(source.mount_path(), "/data/hpc-b");
@@ -2141,6 +2176,116 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
         serde_json::to_value(&repaired).unwrap(),
         serde_json::to_value(&catalog).unwrap()
     );
+
+    // Reopen the current registry and verify the target-owned mount.
+    let (vfs, storage) = mounts(&f.config);
+    let reopened = ComputeRegistry::open(
+        &f.config,
+        storage,
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+    let state = reopened.state();
+    assert!(state.data_sources.is_empty());
+    assert_eq!(state.all_data_sources().count(), 1);
+    assert_eq!(
+        reopened.storage.canonical_uri("/data/hpc-b/file").unwrap(),
+        "hpc-b://file"
+    );
+    let state = reopened
+        .save_target(SaveTarget {
+            id: target.id.clone(),
+            name: "Renamed cluster".into(),
+            enabled: target.enabled,
+            backend: target.backend.clone(),
+            data_domains: target.data_domains.clone(),
+        })
+        .unwrap();
+    let target = state
+        .targets
+        .iter()
+        .find(|target| target.id == "hpc-b")
+        .unwrap();
+    assert_eq!(
+        target.data_source.as_ref().unwrap().mount_path(),
+        "/data/hpc-b"
+    );
+    let replacement = cluster.join("replacement");
+    fs::create_dir(&replacement).unwrap();
+    let edit = |backend| SaveTargetDataSource {
+        target: SaveTarget {
+            id: target.id.clone(),
+            name: target.name.clone(),
+            enabled: target.enabled,
+            backend,
+            data_domains: target.data_domains.clone(),
+        },
+        alias: "hpc-b-data".into(),
+        root: replacement.display().to_string(),
+        python: "python3".into(),
+    };
+    let mut invalid = target.backend.clone();
+    let ComputeBackend::Slurm { settings } = &mut invalid else {
+        unreachable!();
+    };
+    settings.apptainer_manifest = None;
+    let mounts_before = reopened.vfs.mount_paths();
+    let registry_before = fs::read(reopened.root.join("registry.json")).unwrap();
+    assert!(
+        reopened
+            .save_target_data_source(edit(invalid))
+            .await
+            .unwrap_err()
+            .contains("requires a SIF image manifest")
+    );
+    assert_eq!(reopened.vfs.mount_paths(), mounts_before);
+    assert_eq!(
+        fs::read(reopened.root.join("registry.json")).unwrap(),
+        registry_before
+    );
+
+    let edited = reopened
+        .save_target_data_source(edit(target.backend.clone()))
+        .await
+        .unwrap();
+    let target = edited
+        .targets
+        .iter()
+        .find(|target| target.id == "hpc-b")
+        .unwrap();
+    let new_path = target.data_source.as_ref().unwrap().mount_path();
+    assert_eq!(target.retained_data_sources[0].mount_path(), "/data/hpc-b");
+    assert!(edited.data_sources.is_empty());
+    assert!(reopened.vfs.mount_paths().contains(&new_path));
+    select(&reopened, "local");
+    let state = reopened.delete_target("hpc-b").unwrap();
+    assert_eq!(state.all_data_sources().count(), 0);
+    assert!(!reopened.vfs.mount_paths().contains(&"/data/hpc-b".into()));
+    assert!(!reopened.vfs.mount_paths().contains(&new_path));
+    assert!(
+        reopened
+            .storage
+            .try_resolve_virtual("hpc-b://file")
+            .is_err()
+    );
+    let (vfs, storage) = mounts(&f.config);
+    let after_delete = ComputeRegistry::open(
+        &f.config,
+        storage,
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+    assert!(
+        !after_delete
+            .vfs
+            .mount_paths()
+            .contains(&"/data/hpc-b".into())
+    );
+    assert!(after_delete.monitors.target_hub("hpc-b").is_ok());
 }
 
 #[tokio::test]
@@ -2174,18 +2319,20 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
         .registry
         .enroll(super::EnrollRequest {
             backend: super::EnrollBackend::Ssh,
+            container_runtime: Some(test_podman()),
             id: "hpc-b".into(),
             name: None,
             login_alias: "hpc-b-login".into(),
             data_alias: None,
-            data_root: Some(cluster.display().to_string()),
+            storage_root: None,
+            data_root: None,
             worker_executable: String::new(),
             deploy_worker: Some(worker.display().to_string()),
             python: None,
             partition: None,
             account: None,
             ssh_command: Some(ssh.display().to_string()),
-            scratch_dir: None,
+            data_dir: None,
             select: true,
         })
         .await
@@ -2198,7 +2345,9 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
     assert_eq!(target.data_domains[0].ssh_aliases, vec!["hpc-b-login"]);
     let domain = &target.data_domains[0];
     assert_eq!(domain.vfs_prefix, "/data/hpc-b");
-    assert_eq!(domain.remote_root, cluster.display().to_string());
+    let default_root = cluster.join(".autonomics/compute/hpc-b/data");
+    assert!(default_root.is_dir());
+    assert_eq!(domain.remote_root, default_root.display().to_string());
     let backend = match &target.backend {
         ComputeBackend::Ssh { settings } => settings.clone(),
         _ => panic!("SSH enrollment must preserve its backend"),
@@ -2206,12 +2355,13 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
 
     assert_eq!(
         backend.scratch_remote_dir,
-        format!("{}/scratch", cluster.display())
+        default_root
+            .with_file_name("dag-tasks")
+            .display()
+            .to_string()
     );
-    assert!(backend.typed_worker_config.is_some());
-    let profile: serde_json::Value =
-        serde_json::from_slice(&fs::read(backend.typed_worker_config.as_ref().unwrap()).unwrap())
-            .unwrap();
+    assert!(backend.typed_worker_config.is_none());
+    let profile = backend.typed_worker.unwrap();
     let installed = profile["worker"]["executable"].as_str().unwrap();
     assert!(Path::new(installed).starts_with(cluster.join(".local/share/autonomics/workers")));
     assert!(Path::new(installed).is_file());
@@ -2233,12 +2383,31 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
     }
 
     // The domain mount: read-only, domain-tagged, at the derived prefix.
-    let source = catalog
-        .data_sources
+    assert_eq!(
+        domain.retained_vfs_prefix.as_deref(),
+        Some("/data/dag-tasks-hpc-b")
+    );
+    let retained = target
+        .retained_data_sources
         .iter()
-        .find(|s| s.id == "hpc-b")
+        .find(|source| Some(source.mount_path()) == domain.retained_vfs_prefix)
         .unwrap();
-    assert!(source.read_only);
+    assert!(retained.read_only);
+    assert!(
+        f.registry
+            .storage
+            .try_resolve_virtual("local://data/hpc-b/file")
+            .is_err()
+    );
+    assert_eq!(
+        f.registry
+            .storage
+            .try_resolve_virtual("hpc-b://file")
+            .unwrap(),
+        "/data/hpc-b/file"
+    );
+    let source = target.data_source.as_ref().unwrap();
+    assert!(!source.read_only);
     assert_eq!(source.domain.as_deref(), Some("hpc-b"));
     assert_eq!(source.mount_path(), "/data/hpc-b");
 
@@ -2255,6 +2424,54 @@ printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","ex
         serde_json::to_value(&repaired).unwrap(),
         serde_json::to_value(&catalog).unwrap()
     );
+
+    let replacement_root = cluster.join("replacement");
+    fs::create_dir(&replacement_root).unwrap();
+    let error = f
+        .registry
+        .save_target_data_source(SaveTargetDataSource {
+            target: SaveTarget {
+                id: target.id.clone(),
+                name: "Updated SSH target".into(),
+                enabled: target.enabled,
+                backend: target.backend.clone(),
+                data_domains: target.data_domains.clone(),
+            },
+            alias: "hpc-b-login".into(),
+            root: replacement_root.display().to_string(),
+            python: "python3".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.contains("offline migration"));
+    assert_eq!(
+        f.registry.storage.mount_read_only("/data/hpc-b"),
+        Some(false)
+    );
+    assert_eq!(
+        f.registry
+            .storage
+            .mount_read_only(domain.retained_vfs_prefix.as_deref().unwrap()),
+        Some(true)
+    );
+
+    let retained_path = domain.retained_vfs_prefix.as_ref().unwrap();
+    select(&f.registry, "local");
+    f.registry.delete_target("hpc-b").unwrap();
+    assert!(!f.registry.vfs.mount_paths().contains(&"/data/hpc-b".into()));
+    assert!(!f.registry.vfs.mount_paths().contains(retained_path));
+    assert!(default_root.is_dir());
+    let (vfs, storage) = mounts(&f.config);
+    let reopened = ComputeRegistry::open(
+        &f.config,
+        storage,
+        vfs,
+        &f.containers,
+        crate::hpc_monitor::MonitorHub::empty(),
+    )
+    .unwrap();
+    assert!(!reopened.vfs.mount_paths().contains(retained_path));
+    assert_eq!(reopened.state().all_data_sources().count(), 0);
 }
 
 #[tokio::test]
@@ -2263,11 +2480,13 @@ async fn enroll_rejects_partial_data_home_inputs() {
     let error = f
         .registry
         .enroll(super::EnrollRequest {
+            container_runtime: None,
             backend: super::EnrollBackend::Slurm,
             id: "broken".into(),
             name: None,
             login_alias: "alias".into(),
             data_alias: Some("data-alias".into()),
+            storage_root: None,
             data_root: None,
             worker_executable: "/worker".into(),
             deploy_worker: None,
@@ -2275,7 +2494,7 @@ async fn enroll_rejects_partial_data_home_inputs() {
             partition: None,
             account: None,
             ssh_command: None,
-            scratch_dir: None,
+            data_dir: None,
             select: false,
         })
         .await
@@ -2284,11 +2503,11 @@ async fn enroll_rejects_partial_data_home_inputs() {
 }
 
 #[tokio::test]
-async fn filesystem_domain_context_refreshes_without_a_compute_change() {
+async fn filesystem_domains_are_available_on_demand() {
     use agentik_core::context::ContextProvider;
     let f = fixture();
     let context = super::tools::ComputeContext::new(f.registry.clone());
-    assert!(context.poll().await.unwrap().contains("local://"));
+    assert!(context.poll().await.unwrap().contains("mount_list"));
     assert!(context.poll().await.is_none());
     let before = serde_json::to_value(f.registry.state()).unwrap();
     let remote = tempfile::tempdir().unwrap();
@@ -2297,12 +2516,6 @@ async fn filesystem_domain_context_refreshes_without_a_compute_change() {
         serde_json::to_string(&remote.path().to_string_lossy()).unwrap(),
     )).unwrap();
     f.registry.vfs.add_data_mount(&manifest).unwrap();
-    let update = context.poll().await.unwrap();
-    let payload: serde_json::Value = serde_json::from_str(update.lines().nth(1).unwrap()).unwrap();
-    let domains = payload["filesystem_domains"].as_array().unwrap();
-    assert!(domains.iter().any(|d| d["uri"] == "csu://"
-        && d["virtual_path"] == "/data/Csu"
-        && d["read_only"] == true));
     assert_eq!(serde_json::to_value(f.registry.state()).unwrap(), before);
     assert!(context.poll().await.is_none());
     let status_tool = super::tools::registrations(f.registry.clone())
@@ -2324,110 +2537,6 @@ async fn filesystem_domain_context_refreshes_without_a_compute_change() {
             .iter()
             .any(|m| m["path"] == "csu://" && m["virtual_path"] == "/data/Csu")
     );
-}
-
-#[tokio::test]
-async fn legacy_jobs_and_evidence_survive_migration_and_restart() {
-    for (target_id, legacy_revision) in [("account", 1), ("legacy-slurm", 2)] {
-        let f = fixture();
-        let settings = remote_settings(&f.config.state_dir, "migration-host");
-        f.registry
-            .save_target(SaveTarget {
-                id: target_id.into(),
-                name: "Account".into(),
-                enabled: true,
-                backend: ComputeBackend::Slurm { settings },
-                data_domains: vec![],
-            })
-            .unwrap();
-        let legacy_root = f
-            .registry
-            .root
-            .join("targets")
-            .join(format!("{target_id}-r{legacy_revision}"));
-        private_dir(&legacy_root).unwrap();
-        fs::rename(
-            if target_id == "legacy-slurm" {
-                f.config.state_dir.join("hpc-account")
-            } else {
-                f.registry
-                    .root
-                    .join("targets")
-                    .join(target_id)
-                    .join("hpc-account")
-            },
-            legacy_root.join("hpc-account"),
-        )
-        .unwrap();
-        let nonce = "a".repeat(32);
-        let monitor_id = format!(
-            "{:x}",
-            Sha256::digest(format!("migration-host\0{nonce}").as_bytes())
-        );
-        let record = serde_json::json!({
-            "version":1,"id":monitor_id,"owner":{"agent_id":uuid::Uuid::nil(),"agent_path":"/root/test","session_id":uuid::Uuid::nil()},
-            "ssh_host":"migration-host","cluster":"default","submission_key":"retained", "nonce":nonce,
-            "request_sha256":"b".repeat(64),"job_id":"123","state":"watching","observation":null,"notification":"none",
-            "verification_plan":{},"next_poll":u64::MAX,"failures":0,"last_error":null,"revision":1,"created_at":1,"updated_at":1,
-        });
-        write_new(
-            &legacy_root
-                .join("hpc-account/job-monitors")
-                .join(format!("{monitor_id}.json")),
-            &record,
-        )
-        .unwrap();
-        let evidence = legacy_root.join("tasks/attempt/task.json");
-        fs::create_dir_all(evidence.parent().unwrap()).unwrap();
-        fs::write(&evidence, b"legacy receipt").unwrap();
-        let mut legacy = serde_json::to_value(f.registry.state()).unwrap();
-        legacy["version"] = 1.into();
-        legacy["revision"] = 9.into();
-        legacy["policy"] =
-            serde_json::json!({"revision":3,"target_id":"local","target_revision":1});
-        for target in legacy["targets"].as_array_mut().unwrap() {
-            target["revision"] = if target["id"] == target_id {
-                legacy_revision
-            } else {
-                1
-            }
-            .into();
-        }
-        fs::write(
-            f.registry.root.join("registry.json"),
-            serde_json::to_vec(&legacy).unwrap(),
-        )
-        .unwrap();
-        for _ in 0..2 {
-            let (vfs, storage) = mounts(&f.config);
-            let registry = ComputeRegistry::open(
-                &f.config,
-                storage.clone(),
-                vfs,
-                &f.containers,
-                crate::hpc_monitor::MonitorHub::empty(),
-            )
-            .unwrap();
-            let views = registry.monitors.views(None).unwrap();
-            assert_eq!(views.len(), 1);
-            assert_eq!(views[0].target_id.as_deref(), Some(target_id));
-            assert_eq!(views[0].id, monitor_id);
-            assert!(
-                serde_json::to_value(&views[0])
-                    .unwrap()
-                    .get("target_revision")
-                    .is_none()
-            );
-            assert_eq!(
-                storage
-                    .read_range(&evidence.to_string_lossy(), 0..14)
-                    .await
-                    .unwrap()
-                    .to_vec(),
-                b"legacy receipt"
-            );
-        }
-    }
 }
 
 #[tokio::test]
@@ -2489,6 +2598,17 @@ async fn enrollment_rejects_invalid_options_before_connecting() {
         );
         assert!(!f.registry.state().targets.iter().any(|t| t.id == "invalid"));
     }
+    let missing = serde_json::from_value(serde_json::json!({
+        "id":"missing-runtime", "login_alias":"unused", "backend":"ssh"
+    }))
+    .unwrap();
+    assert!(
+        f.registry
+            .enroll(missing)
+            .await
+            .unwrap_err()
+            .contains("requires a container_runtime")
+    );
     let old: super::EnrollRequest = serde_json::from_value(serde_json::json!({
         "id":"legacy", "login_alias":"legacy", "worker_executable":"/bin/worker"
     }))

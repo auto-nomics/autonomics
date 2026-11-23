@@ -223,10 +223,10 @@ script = "cat \"$reads\" > /work/out.txt"
     }
 
     #[tokio::test]
-    async fn shell_tuple_script_requires_a_registered_factory() {
+    async fn shell_tuple_r_script_requires_a_registered_factory() {
         let (client, _handle) =
             data_engine::runtime::spawn_with_engine(DataEngine::builder().build());
-        let script = "from_list('reads', [[1, 'reads.fastq']])\nnode('qc', 'python_script', {'code':'pass', 'inputs':[{'name':'pair','kind':'tuple','tuple':[{'val':'sample'},{'path':'reads'}]}], 'outputs':[{'name':'out','kind':'file','format':'txt'}]})\nedge('reads', 0, 'qc', 0)\ncommit()\n";
+        let script = "from_list('reads', [[1, 'reads.fastq']])\nnode('qc', 'r_script', {'code':'pass', 'inputs':[{'name':'pair','kind':'tuple','tuple':[{'val':'sample'},{'path':'reads'}]}], 'outputs':[{'name':'out','kind':'file','format':'txt'}]})\nedge('reads', 0, 'qc', 0)\ncommit()\n";
         let edit = client
             .run_dag_shell(script.into(), false, None)
             .await
@@ -235,8 +235,8 @@ script = "cat \"$reads\" > /work/out.txt"
         let error = client
             .run_flow(None, data_engine::flow::FlowOptions::default())
             .await
-            .expect_err("the default registry intentionally excludes script nodes");
-        assert!(error.to_string().contains("python_script"), "{error}");
+            .expect_err("the default registry intentionally excludes the R script node");
+        assert!(error.to_string().contains("r_script"), "{error}");
     }
 
     #[tokio::test]

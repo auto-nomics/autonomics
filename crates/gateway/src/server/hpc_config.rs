@@ -1,21 +1,25 @@
 //! Compatibility endpoint for editing the selected Slurm compute target.
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::get};
 use runtime::compute::{ComputeBackend, SaveTarget};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+pub(super) fn routes() -> Router<GatewayState> {
+    Router::new().route("/hpc/config", get(show).put(update))
+}
 
 fn conflict(message: impl Into<String>) -> GatewayError {
     GatewayError::Status(StatusCode::CONFLICT, message.into())
 }
 
+#[utoipa::path(
+    get, path = "/api/v1/hpc/config", tag = "hpc",
+    responses((status = 200, body = Object), (status = 409, description = "HPC operation unavailable or conflicts with current state"))
+)]
 pub(crate) async fn show(State(state): State<GatewayState>) -> GatewayResult<Json<Value>> {
-    let registry = state
-        .infra
-        .compute
-        .as_ref()
-        .ok_or_else(|| conflict("compute registry unavailable"))?;
+    let registry = &state.infra.compute;
     let snapshot = registry.state();
     let target = snapshot
         .targets
@@ -40,15 +44,15 @@ pub(crate) struct Update {
     config: Value,
 }
 
+#[utoipa::path(
+    put, path = "/api/v1/hpc/config", tag = "hpc", request_body = Object,
+    responses((status = 200, body = Object), (status = 409, description = "HPC operation unavailable or conflicts with current state"))
+)]
 pub(crate) async fn update(
     State(state): State<GatewayState>,
     Json(request): Json<Update>,
 ) -> GatewayResult<Json<Value>> {
-    let registry = state
-        .infra
-        .compute
-        .as_ref()
-        .ok_or_else(|| conflict("compute registry unavailable"))?;
+    let registry = &state.infra.compute;
     let snapshot = registry.state();
     if snapshot.policy.target_id != request.target_id {
         return Err(conflict("compute selection changed; refresh before saving"));

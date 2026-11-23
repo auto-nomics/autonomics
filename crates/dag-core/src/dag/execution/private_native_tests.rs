@@ -19,6 +19,7 @@ fn settings() -> TypedWorkerSettings {
         plugins_sha256: None,
         apptainer_catalog: None,
         apptainer_executable: None,
+        sif_runtime: Default::default(),
         podman: None,
         worker_vfs_manifest: None,
         worker_vfs_sha256: None,

@@ -66,6 +66,23 @@ impl SshDataHome {
             _ => (&self.vfs_prefix, &self.remote_root),
         }
     }
+    fn has_separate_task_mount(&self) -> bool {
+        let data = Path::new(&self.remote_root);
+        self.retained_remote_root.as_deref().is_some_and(|root| {
+            let tasks = Path::new(root);
+            data.ends_with("data")
+                && tasks.ends_with("dag-tasks")
+                && data.parent() == tasks.parent()
+                && self.retained_vfs_prefix.as_deref().is_some_and(|prefix| {
+                    prefix.starts_with("/data/tasks-")
+                        || self
+                            .vfs_prefix
+                            .strip_prefix("/data/")
+                            .is_some_and(|id| prefix.strip_prefix("/data/dag-tasks-") == Some(id))
+                })
+        })
+    }
+
     pub(super) fn validate(&self) -> Result<(), DagError> {
         if self
             .domain_id
@@ -95,7 +112,8 @@ impl SshDataHome {
                 && clean_absolute(root)
                 && prefix != &self.vfs_prefix
                 && root != &self.remote_root
-                && Path::new(root).starts_with(&self.remote_root) => {}
+                && (Path::new(root).starts_with(&self.remote_root)
+                    || self.has_separate_task_mount()) => {}
             _ => return Err(DagError::Schedule(
                 "retained output prefix/root must be a paired, distinct namespace below the data home".into()
             )),
@@ -107,25 +125,38 @@ impl SshDataHome {
     /// never silently reinterpret a generated retained artifact reference.
     pub fn validate_vfs(&self, storage: &vfs::OpendalFileStorage) -> Result<(), DagError> {
         self.validate()?;
-        self.validate_vfs_mapping(storage, &self.vfs_prefix, &self.remote_root)?;
+        self.validate_vfs_mapping(
+            storage,
+            &self.vfs_prefix,
+            &self.remote_root,
+            !self.has_separate_task_mount(),
+        )?;
         if let (Some(_), Some(prefix), Some(root)) = (
             &self.domain_id,
             &self.retained_vfs_prefix,
             &self.retained_remote_root,
         ) {
-            let relative = Path::new(root)
-                .strip_prefix(&self.remote_root)
-                .map_err(|_| DagError::Schedule("retained root outside domain".into()))?;
-            let expected = format!("{}/{}", self.vfs_prefix, relative.to_string_lossy());
-            if *prefix != expected {
-                return Err(DagError::Schedule(format!(
-                    "named domain retained mount must preserve its primary projection: expected '{expected}'"
-                )));
+            if self.has_separate_task_mount() {
+                if storage.mount_domain(prefix).as_deref() != prefix.strip_prefix("/data/") {
+                    return Err(DagError::Schedule(
+                        "retained task domain does not match its mount".into(),
+                    ));
+                }
+            } else {
+                let relative = Path::new(root)
+                    .strip_prefix(&self.remote_root)
+                    .map_err(|_| DagError::Schedule("retained root outside domain".into()))?;
+                let expected = format!("{}/{}", self.vfs_prefix, relative.to_string_lossy());
+                if *prefix != expected {
+                    return Err(DagError::Schedule(format!(
+                        "named domain retained mount must preserve its primary projection: expected '{expected}'"
+                    )));
+                }
             }
         }
         if let (Some(prefix), Some(root)) = (&self.retained_vfs_prefix, &self.retained_remote_root)
         {
-            self.validate_vfs_mapping(storage, prefix, root)?;
+            self.validate_vfs_mapping(storage, prefix, root, true)?;
         }
         // A named domain must agree with its *primary* mount partition: the
         // `<domain>://` address layer resolves against the mount's declared
@@ -147,13 +178,14 @@ impl SshDataHome {
         storage: &vfs::OpendalFileStorage,
         vfs_prefix: &str,
         remote_root: &str,
+        require_read_only: bool,
     ) -> Result<(), DagError> {
         // The published namespace must be mounted read-only: placements in
         // this domain are measured once and trusted thereafter, and a
         // writable mount would let silent overwrites defeat that trust.
         // Writable work areas belong to a *different* mount partition of
         // the same filesystem, not to the published domain namespace.
-        if storage.mount_read_only(vfs_prefix) == Some(false) {
+        if require_read_only && storage.mount_read_only(vfs_prefix) == Some(false) {
             return Err(DagError::Schedule(
                 "retained VFS namespace must be mounted read_only".into(),
             ));
@@ -261,7 +293,8 @@ impl SshArtifactStore {
     pub fn with_data_home(mut self, data_home: SshDataHome) -> Result<Self, DagError> {
         data_home.validate()?;
         if !clean_absolute(&self.scratch_dir)
-            || !Path::new(&self.scratch_dir).starts_with(&data_home.remote_root)
+            || (!data_home.has_separate_task_mount()
+                && !Path::new(&self.scratch_dir).starts_with(&data_home.remote_root))
             || self.scratch_dir == data_home.remote_root
         {
             return Err(DagError::Schedule(
@@ -282,15 +315,22 @@ impl SshArtifactStore {
             .data_home
             .as_ref()
             .ok_or_else(|| DagError::Schedule("SSH data home is disabled".into()))?;
+        let retained = home.retained_mapping().1;
+        let measurement_root =
+            if home.has_separate_task_mount() && Path::new(path).starts_with(retained) {
+                retained
+            } else {
+                &home.remote_root
+            };
         if !clean_absolute(path)
-            || !Path::new(path).starts_with(&home.remote_root)
-            || path == home.remote_root
+            || !Path::new(path).starts_with(measurement_root)
+            || path == measurement_root
         {
             return Err(DagError::Schedule(
                 "remote file is outside its retained data home".into(),
             ));
         }
-        let request = serde_json::json!({"root":home.remote_root,"path":path}).to_string();
+        let request = serde_json::json!({"root":measurement_root,"path":path}).to_string();
         let command = format!(
             "python3 -c {} {}",
             sh_single_quote(MEASURE_DATA_HOME_FILE),
@@ -365,11 +405,21 @@ impl TaskArtifactStore for SshArtifactStore {
         // same-domain placement (and every legacy untagged record) proceeds
         // to the alias/endpoint admission below, which remains the trust
         // step for in-place references.
+        let retained = home.retained_mapping();
+        let retained_input = home.has_separate_task_mount()
+            && retained.0.strip_prefix("/data/") == Some(artifact.domain.as_str());
+        if home.has_separate_task_mount()
+            && !retained_input
+            && storage.mount_read_only(&home.vfs_prefix) != Some(true)
+        {
+            return Ok(None);
+        }
         match super::super::placement::placement_decision(
             &artifact.domain,
             &self.placement_domain(),
         ) {
-            super::super::placement::Movement::Stage => return Ok(None),
+            super::super::placement::Movement::Stage if !retained_input => return Ok(None),
+            super::super::placement::Movement::Stage => {}
             super::super::placement::Movement::Reject(reason) => {
                 return Err(DagError::Schedule(reason.to_string()));
             }
@@ -401,7 +451,11 @@ impl TaskArtifactStore for SshArtifactStore {
         };
         if !home.ssh_aliases.contains(&location.alias)
             || actual_endpoint != expected_endpoint
-            || !Path::new(&location.path).starts_with(&home.remote_root)
+            || !Path::new(&location.path).starts_with(if retained_input {
+                retained.1
+            } else {
+                &home.remote_root
+            })
         {
             // Another authorized data source needs ordinary VFS staging. Its
             // physical path is never interpreted on this compute target.
@@ -425,6 +479,17 @@ impl TaskArtifactStore for SshArtifactStore {
             ));
         }
         let mut reference = self.measure_data_file(&artifact.path, &artifact).await?;
+        if home.has_separate_task_mount() {
+            let domain = prefix
+                .strip_prefix("/data/")
+                .ok_or_else(|| DagError::Schedule("invalid retained task domain".into()))?;
+            reference.path = format!(
+                "{domain}://{}",
+                vfs::uri::encode_path(&relative.to_string_lossy())
+            );
+            reference.domain = DomainId::new(domain);
+            return Ok(Some(reference));
+        }
         reference.path = if let Some(domain) = &home.domain_id {
             // Domain addresses are relative to the primary filesystem root,
             // including the retained subdirectory when one is configured.

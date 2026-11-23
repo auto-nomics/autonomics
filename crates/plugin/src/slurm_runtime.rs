@@ -248,15 +248,14 @@ fn report_stopped_worker(
     reporter: &dag_core::dag::node_event::NodeReporter,
     root: &Path,
     proof: &Value,
+    backend: &str,
 ) -> Result<()> {
     let projection = stopped_worker_projection(proof)?;
     record(&root.join("STOP_PROOF.json"), proof)?;
     reporter.execution(dag_core::dag::live::ExecutionObservation {
         phase: "checking_worker_stop".into(),
-        worker: Some(
-            json!({"evidence":"verified_stop","backend":"slurm-apptainer",
-            "id":proof["job_id"],"proof":projection}),
-        ),
+        worker: Some(json!({"evidence":"verified_stop","backend":backend,
+            "id":proof["job_id"],"proof":projection})),
         ..Default::default()
     });
     Ok(())
@@ -336,6 +335,7 @@ pub struct SlurmContainerRuntime {
     workspace: PathBuf,
     journal: PathBuf,
     remote_panels: String,
+    remote_runtime_root: Option<String>,
     python: String,
     gpu_partition: Option<String>,
     gpu_cpus_per_gpu: u32,
@@ -390,6 +390,7 @@ impl SlurmContainerRuntime {
             workspace,
             journal,
             remote_panels,
+            remote_runtime_root: None,
             python,
             gpu_partition: None,
             gpu_cpus_per_gpu: 16,
@@ -516,6 +517,12 @@ impl SlurmContainerRuntime {
     }
 
     /// Admit GPU requests only through an explicit operator partition.
+    pub fn with_remote_runtime_root(mut self, root: String) -> Result<Self> {
+        absolute(Path::new(&root))?;
+        self.remote_runtime_root = Some(root);
+        Ok(self)
+    }
+
     pub fn with_gpu_partition(mut self, partition: String) -> Result<Self> {
         if partition.is_empty()
             || !partition
@@ -835,8 +842,9 @@ impl SlurmContainerRuntime {
             )
             .await
             .map_err(mapped)?;
-        let mut payload_request = json!({"schema": "APPTAINER_CONTAINER_REQUEST_V1", "program": self.images.program,
+        let mut payload_request = json!({"schema": "APPTAINER_CONTAINER_REQUEST_V1", "program": self.images.program, "sif_runtime": self.images.runtime,
             "sif": image, "command": request.command, "env": request.env,
+            "runtime_root": self.remote_runtime_root,
             "workdir": request.workspace.container_workdir, "files": files.iter().map(|(v,_)| v).collect::<Vec<_>>(),
             "directories": directories, "panels": panels,
             "network": match request.network { ContainerNetwork::Isolated => "isolated", ContainerNetwork::Egress => "egress" },
@@ -1011,7 +1019,7 @@ impl SlurmContainerRuntime {
                 record(&journal, &state)?;
                 if cancellation.is_ok() && proof["full_subtree_terminal"] == true {
                     guard.lease = None;
-                    report_stopped_worker(&reporter, &root, &proof)?;
+                    report_stopped_worker(&reporter, &root, &proof, self.name())?;
                 }
                 return Err(ContainerRuntimeError::Timeout {
                     timeout_secs: request.timeout_secs,
@@ -1031,7 +1039,7 @@ impl SlurmContainerRuntime {
         guard.lease = None;
         state["state"] = json!("STOPPED");
         record(&journal, &state)?;
-        report_stopped_worker(&reporter, &root, &proof)?;
+        report_stopped_worker(&reporter, &root, &proof, self.name())?;
         if receipt.exit_code != 0 {
             return Err(invalid(
                 "Slurm worker failed; attempt and remote diagnostics retained",
@@ -1085,7 +1093,7 @@ impl SlurmContainerRuntime {
             reporter.execution(dag_core::dag::live::ExecutionObservation {
                 phase: "collecting_outputs".into(),
                 worker: Some(
-                    json!({"evidence":"verified_software", "backend":"slurm-apptainer",
+                    json!({"evidence":"verified_software", "backend":self.name(),
                     "id":lease.lease_id,"software":software}),
                 ),
                 ..Default::default()
@@ -1231,7 +1239,10 @@ impl PodmanConnection for SlurmContainerRuntime {
         })
     }
     fn name(&self) -> &'static str {
-        "slurm-apptainer"
+        match self.images.runtime {
+            dag_core::SifRuntime::Apptainer => "slurm-apptainer",
+            dag_core::SifRuntime::SingularityCe => "slurm-singularity-ce",
+        }
     }
     fn workspace_root(&self) -> &Path {
         &self.workspace
@@ -1572,6 +1583,7 @@ mod tests {
             default_time: "00:01:00".into(),
             poll_interval: Duration::from_millis(1),
             apptainer: Some(ApptainerSettings {
+                runtime: dag_core::SifRuntime::Apptainer,
                 program: "/usr/bin/apptainer".into(),
                 images: BTreeMap::from([(
                     format!("example/toy@sha256:{}", "a".repeat(64)),
@@ -1616,6 +1628,7 @@ mod tests {
         let image = format!("example/toy@sha256:{}", "a".repeat(64));
         let settings = SlurmSettings {
             apptainer: Some(ApptainerSettings {
+                runtime: dag_core::SifRuntime::Apptainer,
                 program: "/usr/bin/apptainer".into(),
                 images: BTreeMap::from([(
                     image.clone(),

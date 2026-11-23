@@ -23,6 +23,7 @@ use crate::{
 pub enum PodmanWorkerResourceControl {
     #[default]
     DelegatedCgroups,
+    SshDelegatedCgroups,
     SlurmAllocation {
         swap_policy: crate::SlurmSwapPolicy,
     },
@@ -758,19 +759,54 @@ fn select_worker_parent(required: &[&str]) -> Result<String, ContainerRuntimeErr
     })
 }
 
+fn ssh_worker_parent(current: &str) -> Result<&Path, ContainerRuntimeError> {
+    let current = Path::new(current);
+    if !current.is_absolute()
+        || current
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(invalid("SSH Podman worker cgroup path is invalid"));
+    }
+    current
+        .parent()
+        .filter(|parent| *parent != Path::new("/"))
+        .ok_or_else(|| {
+            invalid(
+                "SSH Podman requires a dedicated worker leaf under a delegated cgroup v2 parent",
+            )
+        })
+}
+
+fn validate_worker_parent(
+    control: Option<PodmanWorkerResourceControl>,
+    current: &str,
+    parent: &str,
+) -> Result<(), ContainerRuntimeError> {
+    if control == Some(PodmanWorkerResourceControl::SshDelegatedCgroups) {
+        if ssh_worker_parent(current)? != Path::new(parent) {
+            return Err(invalid(
+                "SSH Podman parent must be the immediate parent of the worker leaf",
+            ));
+        }
+        return Ok(());
+    }
+    let job = std::env::var("SLURM_JOB_ID")
+        .map_err(|_| invalid("ordinary Podman requires an explicit Slurm job anchor"))?;
+    worker_parent_in_job(current, &job, parent)
+}
+
 fn validate_worker_controller_requirements(
     config: &PodmanConfig,
     required: &[&str],
 ) -> Result<(), ContainerRuntimeError> {
     let cgroup = std::fs::read_to_string("/proc/self/cgroup")?;
     let current = unified_worker_path(&cgroup)?;
-    let job = std::env::var("SLURM_JOB_ID")
-        .map_err(|_| invalid("ordinary Podman requires an explicit Slurm job anchor"))?;
     let parent = config
         .cgroup_parent
         .as_deref()
         .ok_or_else(|| invalid("ordinary Podman has no admitted delegated parent"))?;
-    worker_parent_in_job(current, &job, parent)?;
+    validate_worker_parent(config.worker_resource_control, current, parent)?;
     delegated_parent_at(Path::new("/sys/fs/cgroup"), Path::new(parent), required)
 }
 
@@ -782,9 +818,7 @@ fn helper_cgroup_root(
         return Ok(worker.to_owned());
     };
     let current = unified_worker_path(worker)?;
-    let job = std::env::var("SLURM_JOB_ID")
-        .map_err(|_| invalid("missing Slurm helper-confinement anchor"))?;
-    worker_parent_in_job(current, &job, parent)?;
+    validate_worker_parent(config.worker_resource_control, current, parent)?;
     Ok(format!("0::{parent}\n"))
 }
 
@@ -984,6 +1018,12 @@ impl ContainerExecutionInfra {
                     config.cgroup_parent = Some(select_worker_parent(&["cpu", "memory", "pids"])?);
                     validate_worker_controller_requirements(&config, &["cpu", "memory", "pids"])?;
                 }
+                PodmanWorkerResourceControl::SshDelegatedCgroups => {
+                    let cgroup = std::fs::read_to_string("/proc/self/cgroup")?;
+                    let parent = ssh_worker_parent(unified_worker_path(&cgroup)?)?;
+                    config.cgroup_parent = Some(parent.to_string_lossy().into_owned());
+                    validate_worker_controller_requirements(&config, &["cpu", "memory", "pids"])?;
+                }
                 PodmanWorkerResourceControl::SlurmAllocation { swap_policy } => {
                     let observation = crate::slurm_allocation::observe()?;
                     write_worker_evidence(
@@ -1105,6 +1145,24 @@ impl ContainerExecutionInfra {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ssh_podman_uses_the_worker_leaf_parent_only() {
+        let control = Some(PodmanWorkerResourceControl::SshDelegatedCgroups);
+        let worker = "/user.slice/target.scope/worker";
+        assert!(validate_worker_parent(control, worker, "/user.slice/target.scope").is_ok());
+        for invalid in ["/", "/user.slice", "/user.slice/other.scope", worker] {
+            assert!(validate_worker_parent(control, worker, invalid).is_err());
+        }
+        for invalid in [
+            "/",
+            "/session.scope",
+            "relative/worker",
+            "/session.scope/../worker",
+        ] {
+            assert!(ssh_worker_parent(invalid).is_err());
+        }
+    }
 
     #[test]
     fn single_uid_mapping_requires_exact_operator_identity_without_extra_ranges() {

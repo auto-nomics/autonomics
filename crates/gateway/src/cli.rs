@@ -5,8 +5,8 @@
 //! them with its own dispatcher:
 //!
 //! ```text
-//! autonomics compute enroll <id> --login <alias> [--data-alias <a> --data-root <dir>]
-//!                           [--backend ssh|slurm] [--worker <remote-path>] [--partition P] [--account A]
+//! autonomics compute enroll <id> --login <alias> --container-runtime-config <json> [--data-alias <a> --storage-root <dir>]
+//!                           [--backend ssh|slurm] [--storage-root <dir>] [--worker <remote-path>] [--partition P] [--account A]
 //!                           [--ssh-command <path>] [--scratch <dir>] [--name NAME]
 //!                           [--no-select] [--gateway ADDR] [--token TOKEN]
 //! ```
@@ -78,8 +78,10 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
     let mut login = None;
     let mut data_alias = None;
     let mut data_root = None;
+    let mut storage_root = None;
     let mut worker = None;
     let mut backend = runtime::compute::EnrollBackend::Slurm;
+    let mut container_runtime = None;
     let mut deploy = None;
     let mut partition = None;
     let mut account = None;
@@ -116,6 +118,7 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
             "--name" => name = Some(next_value(&mut values, flag)),
             "--login" => login = Some(next_value(&mut values, flag)),
             "--data-alias" => data_alias = Some(next_value(&mut values, flag)),
+            "--storage-root" => storage_root = Some(next_value(&mut values, flag)),
             "--data-root" => data_root = Some(next_value(&mut values, flag)),
             "--backend" => {
                 backend = match next_value(&mut values, flag).as_str() {
@@ -126,6 +129,20 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
                         return 2;
                     }
                 };
+            }
+            "--container-runtime-config" => {
+                let path = next_value(&mut values, flag);
+                match std::fs::read(path)
+                    .map_err(|error| error.to_string())
+                    .and_then(|bytes| {
+                        serde_json::from_slice(&bytes).map_err(|error| error.to_string())
+                    }) {
+                    Ok(value) => container_runtime = Some(value),
+                    Err(error) => {
+                        eprintln!("invalid container runtime configuration: {error}");
+                        return 2;
+                    }
+                }
             }
             "--worker" => worker = Some(next_value(&mut values, flag)),
             "--deploy" => deploy = Some(next_value(&mut values, flag)),
@@ -149,6 +166,10 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
         usage();
         return 2;
     };
+    if container_runtime.is_none() {
+        eprintln!("--container-runtime-config is required");
+        return 2;
+    }
     let client = match GatewayClient::new(&gateway, token.as_deref()) {
         Ok(client) => client,
         Err(error) => {
@@ -159,18 +180,20 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
     eprintln!("[gateway] 正在读取计算目标配置…");
     let request = runtime::compute::EnrollRequest {
         backend,
+        container_runtime,
         id,
         name,
         login_alias: login,
         data_alias,
         data_root,
+        storage_root,
         worker_executable: worker.unwrap_or_default(),
         deploy_worker: deploy,
         partition,
         account,
         ssh_command,
         python,
-        scratch_dir: scratch,
+        data_dir: scratch,
         select,
     };
     eprintln!(
@@ -211,9 +234,9 @@ pub async fn compute_enroll_main(args: &[String]) -> i32 {
 
 fn usage() {
     eprintln!(
-        "usage: autonomics compute enroll <id> --login <ssh-alias> [--backend ssh|slurm] [--worker <remote-path>]"
+        "usage: autonomics compute enroll <id> --login <ssh-alias> --container-runtime-config <json> [--backend ssh|slurm] [--storage-root <dir>] [--worker <remote-path>]"
     );
-    eprintln!("       [--data-alias <a> --data-root <dir>] [--partition P] [--account A]");
+    eprintln!("       [--data-alias <a> --storage-root <dir>] [--partition P] [--account A]");
     eprintln!(
         "       [--deploy <local-binary>]   # upload target/release/autonomics-worker to --worker"
     );

@@ -69,7 +69,12 @@ pub(super) fn build_vfs(config: &RuntimeConfig) -> Result<MountedObjectStore> {
 /// FileRefs never fall through to an unrelated catch-all VFS mount.
 pub(super) fn ensure_executor_workspace_mounts(manifest: &mut VfsManifest, config: &RuntimeConfig) {
     let executor = PodmanConfig::for_state_dir(&config.state_dir);
-    ensure_workspace_mount(manifest, &executor.workspace_root);
+    let workspace = if config.state_dir.join("storage-layout-v1").is_file() {
+        container_runtime::canonicalize_workspace_root(config.state_dir.join("work"))
+    } else {
+        executor.workspace_root
+    };
+    ensure_workspace_mount(manifest, &workspace);
     // Historical FileRefs contain absolute paths. Keep their identity mounts
     // readable without moving data or changing the active daemon's storage.
     for relative in [
@@ -137,7 +142,12 @@ pub(super) async fn build_vfs_with_catalog(
                 data_catalog::hf::resolve_hf_token(None),
             )
             .map_err(|error| Error::Other(error.to_string()))?;
-            let local = LocalCatalog::open(default_panel_cache_root())
+            let local =
+                LocalCatalog::open(if config.state_dir.join("storage-layout-v1").is_file() {
+                    config.state_dir.join("panels")
+                } else {
+                    default_panel_cache_root()
+                })
                 .map_err(|error| Error::Other(error.to_string()))?;
             let mounts = local
                 .mount_definitions(CACHE_BACKEND_ID, catalog_config.agent_visible)
@@ -556,7 +566,11 @@ fn default_vfs_manifest(config: &RuntimeConfig) -> VfsManifest {
         domain: Some("local".into()),
         path: "/".into(),
         backend: "default".into(),
-        source: config.data_dir.to_string_lossy().to_string(),
+        source: if config.state_dir.join("storage-layout-v1").is_file() {
+            config.state_dir.join("data").display().to_string()
+        } else {
+            config.data_dir.display().to_string()
+        },
         read_only: false,
         permissions: Default::default(),
     }];

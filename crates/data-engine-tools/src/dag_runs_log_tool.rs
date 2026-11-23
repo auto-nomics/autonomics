@@ -625,13 +625,19 @@ fn run_ports_view(report: Option<&Value>) -> serde_json::Value {
             continue;
         };
         for (port, value) in assignments {
-            out.push(serde_json::json!({
-                "node_id": id,
-                "port": port.parse::<u8>().ok(),
-                "path": value.get("path"),
-                "format": value.get("format"),
-                "fingerprint": value.get("fingerprint"),
-            }));
+            let files = match value {
+                Value::Array(files) => files.as_slice(),
+                file => std::slice::from_ref(file),
+            };
+            for file in files {
+                out.push(serde_json::json!({
+                    "node_id": id,
+                    "port": port.parse::<u8>().ok(),
+                    "path": file.get("path"),
+                    "format": file.get("format"),
+                    "fingerprint": file.get("fingerprint"),
+                }));
+            }
         }
     }
     serde_json::json!({"ports": out, "total": out.len()})
@@ -1111,7 +1117,11 @@ mod tests {
 
     #[test]
     fn ports_view_flattens_port_assignments() {
-        let run = sample_run(&full_report().to_string());
+        let mut report = full_report();
+        report["nodes"][0]["port_assignments"]["1"] =
+            serde_json::json!([{"path": "a.csv"}, {"path": "b.csv"}]);
+        report["nodes"][0]["port_assignments"]["2"] = serde_json::json!([]);
+        let run = sample_run(&report.to_string());
         let input = DagRunsLogInput {
             ref_name: None,
             limit: None,
@@ -1131,9 +1141,13 @@ mod tests {
             &filter,
         )
         .unwrap();
-        assert_eq!(detail["total"], 1);
+        assert_eq!(detail["total"], 3);
         assert_eq!(detail["ports"][0]["port"], 0);
         assert_eq!(detail["ports"][0]["path"], "out.csv");
+        assert_eq!(detail["ports"][1]["port"], 1);
+        assert_eq!(detail["ports"][1]["path"], "a.csv");
+        assert_eq!(detail["ports"][2]["port"], 1);
+        assert_eq!(detail["ports"][2]["path"], "b.csv");
     }
 
     #[test]

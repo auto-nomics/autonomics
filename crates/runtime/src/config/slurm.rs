@@ -55,12 +55,19 @@ pub const ENV_SLURM_SSH_CONNECT_TIMEOUT_SECS: &str = "AUTONOMICS_SLURM_SSH_CONNE
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SlurmConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_root_v1: Option<String>,
     /// Persistent compute-side content-addressed cache, outside per-job scratch.
     #[serde(default = "default_slurm_panel_cache")]
     pub panel_cache_remote_dir: String,
     /// Operator-owned local SIF manifest; containers require this explicit profile.
     #[serde(default = "default_slurm_apptainer_manifest")]
     pub apptainer_manifest: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "dag_core::SifRuntime::is_default")]
+    pub sif_runtime: dag_core::SifRuntime,
+    /// Optional compute-node executable override for SingularityCE.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub singularity_executable: Option<PathBuf>,
     /// Register user-authorized account tools independently of DAG routing.
     #[serde(default = "default_hpc_enabled")]
     pub tools_enabled: bool,
@@ -95,6 +102,9 @@ pub struct SlurmConfig {
     /// Optional pinned typed-worker placement profile; absent preserves process-only routing.
     #[serde(default = "default_slurm_typed_worker_config")]
     pub typed_worker_config: Option<PathBuf>,
+    /// Worker placement profile stored directly in the compute registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_worker: Option<serde_json::Value>,
     /// Default sbatch partition.
     #[serde(default = "default_slurm_partition")]
     pub partition: String,
@@ -121,11 +131,20 @@ pub struct SlurmConfig {
     pub ssh_connect_timeout_secs: u64,
 }
 
+impl SlurmConfig {
+    pub(crate) fn has_typed_worker(&self) -> bool {
+        self.typed_worker.is_some() || self.typed_worker_config.is_some()
+    }
+}
+
 impl Default for SlurmConfig {
     fn default() -> Self {
         Self {
+            storage_root_v1: None,
             panel_cache_remote_dir: default_slurm_panel_cache(),
             apptainer_manifest: default_slurm_apptainer_manifest(),
+            sif_runtime: Default::default(),
+            singularity_executable: None,
             tools_enabled: default_hpc_enabled(),
             data_ssh_host: default_hpc_data_ssh_host(),
             pi_ssh_host: default_hpc_pi_ssh_host(),
@@ -137,6 +156,7 @@ impl Default for SlurmConfig {
             scratch_remote_dir: default_slurm_scratch_remote_dir(),
             artifact_root: PathBuf::new(),
             typed_worker_config: default_slurm_typed_worker_config(),
+            typed_worker: None,
             partition: default_slurm_partition(),
             gpu_partition: default_slurm_gpu_partition(),
             gpu_cpus_per_gpu: default_slurm_gpu_cpus_per_gpu(),
@@ -277,6 +297,8 @@ pub struct SlurmSiteProfile {
     pub scratch_remote_dir: Option<String>,
     pub artifact_root: Option<PathBuf>,
     pub apptainer_manifest: Option<PathBuf>,
+    pub sif_runtime: Option<dag_core::SifRuntime>,
+    pub singularity_executable: Option<PathBuf>,
     pub typed_worker_config: Option<PathBuf>,
     pub panel_cache_remote_dir: Option<String>,
     pub account: Option<String>,
@@ -332,6 +354,12 @@ impl SlurmSiteProfile {
         }
         if let Some(v) = &self.artifact_root {
             config.artifact_root = v.clone();
+        }
+        if let Some(runtime) = self.sif_runtime {
+            config.sif_runtime = runtime;
+        }
+        if let Some(executable) = &self.singularity_executable {
+            config.singularity_executable = Some(executable.clone());
         }
         if let Some(v) = &self.apptainer_manifest {
             config.apptainer_manifest = Some(v.clone());
@@ -472,6 +500,51 @@ pub fn parse_walltime(value: &str) -> Option<std::time::Duration> {
 #[cfg(test)]
 mod site_profile_tests {
     use super::*;
+
+    #[test]
+    fn sif_runtime_uses_the_target_selection_and_keeps_legacy_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let manifest = dir.path().join("images.json");
+        let reference = format!("ghcr.io/autonomics/toy@sha256:{}", "a".repeat(64));
+        let mut images = std::collections::BTreeMap::new();
+        images.insert(
+            reference,
+            serde_json::json!({"path":"/images/toy.sif","sha256":"b".repeat(64)}),
+        );
+        std::fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "program": "/site/apptainer", "images": images,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut config = crate::RuntimeConfig::default();
+        config.slurm.apptainer_manifest = Some(manifest);
+        let resolve = |config: &crate::RuntimeConfig| {
+            crate::host::shared_infra::slurm_settings(config)
+                .unwrap()
+                .apptainer
+                .unwrap()
+        };
+        assert_eq!(resolve(&config).program, PathBuf::from("/site/apptainer"));
+        config.slurm.sif_runtime = dag_core::SifRuntime::SingularityCe;
+        assert_eq!(
+            resolve(&config).runtime,
+            dag_core::SifRuntime::SingularityCe
+        );
+        assert_eq!(
+            resolve(&config).program,
+            PathBuf::from("/usr/bin/singularity")
+        );
+        config.slurm.singularity_executable = Some("/site/bin/singularity".into());
+        assert_eq!(
+            resolve(&config).program,
+            PathBuf::from("/site/bin/singularity")
+        );
+        config.slurm.apptainer_manifest = None;
+        assert!(crate::host::shared_infra::slurm_settings(&config).is_err());
+    }
 
     #[test]
     fn round_trips_through_disk_and_applies_over_defaults() {

@@ -57,6 +57,7 @@ let state: VfsTreeState = {
 };
 
 const listeners = new Set<() => void>();
+let treeGeneration = 0;
 
 function commit(next: Partial<VfsTreeState>): void {
   state = { ...state, ...next, revision: state.revision + 1 };
@@ -103,16 +104,19 @@ function sortEntries(entries: VfsEntry[]): TreeNode[] {
 /** Fetch a directory's children (all pages) into the store. */
 export async function loadDir(path: string): Promise<void> {
   if (state.loading.has(path) || state.children.has(path)) return;
+  const generation = treeGeneration;
   const errors = new Map(state.errors);
   errors.delete(path);
   commit({ loading: new Set(state.loading).add(path), errors });
   try {
     const entries = await listDirAll(path);
+    if (generation !== treeGeneration) return;
     commit({
       children: new Map(state.children).set(path, sortEntries(entries)),
       loading: new Set([...state.loading].filter((item) => item !== path)),
     });
   } catch (error) {
+    if (generation !== treeGeneration) return;
     commit({
       loading: new Set([...state.loading].filter((item) => item !== path)),
       errors: new Map(state.errors).set(path, String(error)),
@@ -180,8 +184,9 @@ function buildGroups(status: ComputeStatus | null): ComputeGroup[] {
   if (!status) return [LOCAL_FALLBACK];
   const groups: ComputeGroup[] = [];
   const hidden: string[] = [];
+  const deletedIds = new Set(status.state.deleted_target_ids);
   for (const target of status.state.targets) {
-    if (target.enabled === false) continue;
+    if (target.enabled === false || deletedIds.has(target.id)) continue;
     const backend = target.backend?.type ?? "local";
     if (backend === "local") {
       groups.push({ id: target.id, name: target.name || "本地", backend: "local", roots: ["/"] });
@@ -209,36 +214,22 @@ function buildGroups(status: ComputeStatus | null): ComputeGroup[] {
 
 /** Prefetch mounts (read-only badges), compute-target groups, and the
  *  group root listings. */
-export async function bootstrapTree(): Promise<void> {
-  if (state.children.size > 0 || state.loading.size > 0) return;
-  let status: ComputeStatus | null = null;
-  try {
-    status = await fetchComputeStatus();
-  } catch {
-    /* compute registry unavailable — fall back to a plain local root */
-  }
-  const groups = buildGroups(status);
-  try {
-    const { mounts } = await listMounts();
-    commit({ mounts, groups });
-  } catch {
-    /* mounts are cosmetic; the tree still loads */
-    commit({ groups });
-  }
-  const roots = new Set(groups.flatMap((group) => group.roots));
-  await Promise.all([...roots].map((root) => loadDir(root)));
-  for (const root of roots) expandDir(root);
-}
+export async function bootstrapTree(): Promise<boolean> {
+  const generation = ++treeGeneration;
+  const [status, mountList] = await Promise.allSettled([fetchComputeStatus(), listMounts()]);
+  if (generation !== treeGeneration) return false;
 
-export function resetTree(): void {
-  state = {
+  const groups = buildGroups(status.status === "fulfilled" ? status.value : null);
+  const mounts = mountList.status === "fulfilled" ? mountList.value.mounts : [];
+  commit({
     children: new Map(),
     expanded: new Set(),
     errors: new Map(),
     loading: new Set(),
-    mounts: [],
-    groups: [LOCAL_FALLBACK],
-    revision: state.revision + 1,
-  };
-  for (const listener of listeners) listener();
+    mounts,
+    groups,
+  });
+  const roots = new Set(groups.flatMap((group) => group.roots));
+  for (const root of roots) expandDir(root);
+  return true;
 }

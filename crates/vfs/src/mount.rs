@@ -731,6 +731,23 @@ impl MountedObjectStore {
         Ok(())
     }
 
+    /// Remove exact mount paths from all principal-scoped views.
+    pub fn remove_data_mounts(&self, paths: &[String]) -> Result<(), MountError> {
+        let mut mounts = self
+            .mounts
+            .write()
+            .map_err(|_| MountError::Config("VFS mount lock poisoned".into()))?;
+        for path in paths {
+            if path == "/" || !mounts.iter().any(|mount| mount.definition.path == *path) {
+                return Err(MountError::Config(format!(
+                    "cannot remove data mount '{path}'"
+                )));
+            }
+        }
+        mounts.retain(|mount| !paths.contains(&mount.definition.path));
+        Ok(())
+    }
+
     fn resolve(&self, path: &Path) -> Result<(Mount, Path), ObjectStoreError> {
         let mount = self.find(path).ok_or_else(|| not_mounted(path))?;
         let suffix = path

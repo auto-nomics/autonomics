@@ -207,9 +207,12 @@ impl InstanceRecord {
             match value {
                 NodeValue::File(file) => {
                     files.push(file.clone());
-                    ports.insert(*port, file.clone());
+                    ports.insert(*port, serde_json::json!(file));
                 }
-                NodeValue::FileSet(values) => files.extend(values.iter().cloned()),
+                NodeValue::FileSet(values) => {
+                    files.extend(values.iter().cloned());
+                    ports.insert(*port, serde_json::json!(values));
+                }
                 _ => {}
             }
         }

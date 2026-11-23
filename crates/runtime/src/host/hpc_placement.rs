@@ -9,6 +9,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use dag_core::dag::execution::typed_worker::TypedPodmanResourceControl;
 use data_engine::dag::execution::{
     LimitedTaskExecutor, MAX_REMOTE_TASKS, PlacementTaskExecutor, RemoteTaskExecutor,
     SlurmSettings, SlurmTaskTransport, SshArtifactStore, SshDataHome, TaskExecutor,
@@ -22,8 +23,8 @@ const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PlacementProfile {
-    worker: TypedWorkerSettings,
+pub(crate) struct PlacementProfile {
+    pub(crate) worker: TypedWorkerSettings,
     #[serde(default)]
     local_kinds: Vec<String>,
     #[serde(default)]
@@ -88,7 +89,14 @@ fn read_profile(path: &Path) -> Result<PlacementProfile> {
             "typed-worker profile changed while reading".into(),
         ));
     }
-    let profile: PlacementProfile = serde_json::from_slice(&bytes)
+    decode_profile(&bytes)
+}
+
+pub(crate) fn decode_profile(bytes: &[u8]) -> Result<PlacementProfile> {
+    if bytes.len() as u64 > MAX_PROFILE_BYTES {
+        return Err(Error::Other("typed-worker profile exceeds 1 MiB".into()));
+    }
+    let profile: PlacementProfile = serde_json::from_slice(bytes)
         .map_err(|error| Error::Other(format!("invalid typed-worker profile: {error}")))?;
     if profile
         .max_remote_tasks
@@ -101,20 +109,18 @@ fn read_profile(path: &Path) -> Result<PlacementProfile> {
     Ok(profile)
 }
 
-/// Read the same protected profile schema used to construct the executor.
-/// Callers retain this identity with the resident target, never a mutable seed.
-pub(crate) fn pinned_source_revision(path: &Path) -> Result<String> {
-    Ok(read_profile(path)?.worker.expected_source_revision)
-}
-
-pub(crate) fn pinned_network_policy(path: &Path) -> Result<Option<String>> {
-    let worker = read_profile(path)?.worker;
-    worker
-        .validate()
-        .map_err(|error| Error::Other(error.to_string()))?;
-    Ok(worker
-        .native_environment
-        .and_then(|environment| environment.network_policy_sha256))
+pub(crate) fn configured_profile(
+    settings: &crate::config::SlurmConfig,
+) -> Result<Option<PlacementProfile>> {
+    if let Some(value) = &settings.typed_worker {
+        let bytes = serde_json::to_vec(value).map_err(|error| Error::Other(error.to_string()))?;
+        return decode_profile(&bytes).map(Some);
+    }
+    settings
+        .typed_worker_config
+        .as_deref()
+        .map(read_profile)
+        .transpose()
 }
 
 /// Offline deployment policy only. This validates the local operator profile;
@@ -134,9 +140,9 @@ pub(crate) fn requires_local_containers(
         && matches!(execution_mode.trim(), "" | "exploratory")
         && !research_binding
         && !config.plugin_rsi.environment_dev.enabled;
-    let Some(path) = &config.slurm.typed_worker_config else {
+    if !config.slurm.has_typed_worker() {
         return Ok(!slurm_containers);
-    };
+    }
     if !config.slurm.enabled {
         return Err(Error::Other(
             "typed-worker placement requires Slurm enabled".into(),
@@ -155,7 +161,8 @@ pub(crate) fn requires_local_containers(
     if research_binding {
         return Ok(true);
     }
-    let profile = read_profile(path)?;
+    let profile = configured_profile(&config.slurm)?
+        .ok_or_else(|| Error::Other("missing typed-worker profile".into()))?;
     profile
         .worker
         .validate()
@@ -197,47 +204,14 @@ pub(crate) fn requires_local_containers(
     Ok(!coordinator_only && !slurm_containers)
 }
 
-struct CoordinatorContainerRuntime {
-    workspace_root: PathBuf,
-}
-
-#[async_trait::async_trait]
-impl container_runtime::PodmanConnection for CoordinatorContainerRuntime {
-    async fn run(
-        &self,
-        _request: container_runtime::ContainerRunRequest,
-    ) -> std::result::Result<
-        container_runtime::ContainerRunResult,
-        container_runtime::ContainerRuntimeError,
-    > {
-        Err(container_runtime::ContainerRuntimeError::Invalid("local container execution is disabled by remote-only typed placement; submit computation to the cluster worker".into()))
-    }
-    fn workspace_root(&self) -> &Path {
-        &self.workspace_root
-    }
-    fn name(&self) -> &'static str {
-        "remote-only-coordinator"
-    }
-}
-
-pub(super) fn disable_local_container_execution(
-    infra: &mut container_runtime::ContainerExecutionInfra,
-) {
-    infra.runtime = Arc::new(CoordinatorContainerRuntime {
-        workspace_root: infra.config.workspace_root.clone(),
-    });
-}
-
 pub(crate) fn executor(
-    path: &Path,
+    profile: PlacementProfile,
     data_home: Option<SshDataHome>,
     settings: SlurmSettings,
     workspace: &Path,
     storage: &vfs::OpendalFileStorage,
-    remote_container_dispatch: bool,
     local: Arc<dyn TaskExecutor>,
-) -> Result<(Arc<dyn TaskExecutor>, Option<usize>, String)> {
-    let profile = read_profile(path)?;
+) -> Result<(Arc<dyn TaskExecutor>, String)> {
     let mut store = SshArtifactStore::new(
         settings.ssh.clone(),
         settings.scratch_dir.clone(),
@@ -246,7 +220,7 @@ pub(crate) fn executor(
     // The catalog's data-domain declaration is authoritative when
     // present; the worker-profile field remains the legacy fallback for
     // pre-existing frozen enrollments.
-    let data_home = data_home.or(profile.data_home);
+    let data_home = data_home.or_else(|| profile.data_home.clone());
     if let Some(data_home) = data_home {
         data_home
             .validate_vfs(storage)
@@ -255,25 +229,88 @@ pub(crate) fn executor(
             .with_data_home(data_home)
             .map_err(|error| Error::Other(error.to_string()))?;
     }
+    let mut profile = profile;
+    if profile.worker.podman.as_ref().is_some_and(|podman| {
+        podman.resource_control == TypedPodmanResourceControl::SshDelegatedCgroups
+    }) {
+        return Err(Error::Other(
+            "SSH Podman cgroup mode cannot be used for Slurm".into(),
+        ));
+    }
+    if let Some(sif) = &settings.apptainer {
+        if !sif.runtime.is_default() && profile.worker.podman.is_some() {
+            return Err(Error::Other(
+                "SingularityCE cannot override a typed worker pinned to Podman".into(),
+            ));
+        }
+        if profile.worker.apptainer_catalog.is_some() {
+            profile.worker.sif_runtime = sif.runtime;
+            if !sif.runtime.is_default() {
+                profile.worker.apptainer_executable = Some(sif.program.clone());
+            }
+        }
+    }
     let remote: Arc<dyn TaskExecutor> = Arc::new(RemoteTaskExecutor::new(
         Arc::new(SlurmTaskTransport::new(settings)),
         Arc::new(store),
         workspace,
     ));
-    assemble_typed(path, remote, remote_container_dispatch, local)
+    assemble_profile(profile, remote, false, local)
 }
 
-/// Wrap one already-built remote executor with the pinned typed-worker
-/// placement profile: typed lowering, the concurrency limit and the local
-/// kind whitelist. The transport choice is the caller's — Slurm and the
-/// direct SSH backend differ only below this seam.
-pub(crate) fn assemble_typed(
-    path: &Path,
+pub(crate) fn validate_ssh_podman(
+    plugins_root: &Path,
+    plugins_sha256: &str,
+    podman: &dag_core::dag::execution::typed_worker::TypedPodmanSettings,
+) -> Result<()> {
+    podman
+        .validate()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    if !plugins_root.is_absolute()
+        || plugins_sha256.len() != 64
+        || !plugins_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || podman.image_catalog.is_none()
+    {
+        return Err(Error::Other("SSH Podman requires pinned plugins and an offline image catalog in the typed-worker profile".into()));
+    }
+    if matches!(
+        podman.resource_control,
+        TypedPodmanResourceControl::SlurmAllocation { .. }
+    ) {
+        return Err(Error::Other(
+            "SSH Podman cannot use Slurm allocation limits".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn assemble_ssh_typed(
+    mut profile: PlacementProfile,
     remote: Arc<dyn TaskExecutor>,
-    remote_container_dispatch: bool,
     local: Arc<dyn TaskExecutor>,
-) -> Result<(Arc<dyn TaskExecutor>, Option<usize>, String)> {
-    let profile = read_profile(path)?;
+) -> Result<(Arc<dyn TaskExecutor>, String)> {
+    let worker = &mut profile.worker;
+    let podman = worker.podman.as_mut().ok_or_else(|| {
+        Error::Other(
+            "SSH Podman requires a pinned podman section in the typed-worker profile".into(),
+        )
+    })?;
+    let (plugins_root, plugins_sha256) = worker
+        .plugins_root
+        .as_deref()
+        .zip(worker.plugins_sha256.as_deref())
+        .ok_or_else(|| Error::Other("SSH Podman requires a pinned plugin directory".into()))?;
+    validate_ssh_podman(plugins_root, plugins_sha256, podman)?;
+    podman.resource_control = TypedPodmanResourceControl::SshDelegatedCgroups;
+    assemble_profile(profile, remote, true, local)
+}
+
+fn assemble_profile(
+    profile: PlacementProfile,
+    remote: Arc<dyn TaskExecutor>,
+    worker_container_dispatch: bool,
+    local: Arc<dyn TaskExecutor>,
+) -> Result<(Arc<dyn TaskExecutor>, String)> {
     let source_revision = profile.worker.expected_source_revision.clone();
     let typed: Arc<dyn TaskExecutor> = Arc::new(
         TypedRemoteTaskExecutor::new(remote, profile.worker)
@@ -286,16 +323,14 @@ pub(crate) fn assemble_typed(
         ) as Arc<dyn TaskExecutor>,
         None => typed,
     };
-    let mut placement = PlacementTaskExecutor::new(local, Some(remote), profile.local_kinds)
+    let placement = PlacementTaskExecutor::new(local, Some(remote), profile.local_kinds)
         .map_err(|error| Error::Other(error.to_string()))?;
-    if remote_container_dispatch {
-        placement = placement.with_remote_container_dispatch();
-    }
-    Ok((
-        Arc::new(placement),
-        profile.max_remote_tasks,
-        source_revision,
-    ))
+    let placement = if worker_container_dispatch {
+        placement.with_worker_container_dispatch()
+    } else {
+        placement.with_remote_container_dispatch()
+    };
+    Ok((Arc::new(placement), source_revision))
 }
 
 #[cfg(test)]
@@ -309,6 +344,51 @@ mod tests {
             "local_kinds":local_kinds,
         })).unwrap()).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn ssh_podman_requires_pinned_plugins_and_images() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("profile.json");
+        profile(&path, serde_json::json!([]));
+        let build = || {
+            assemble_ssh_typed(
+                read_profile(&path).unwrap(),
+                Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                    fixture.path().join("remote"),
+                )),
+                Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
+                    fixture.path().join("local"),
+                )),
+            )
+        };
+        assert!(build().is_err());
+
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let worker = config["worker"].as_object_mut().unwrap();
+        worker.insert("plugins_root".into(), "/site/plugins".into());
+        worker.insert("plugins_sha256".into(), "b".repeat(64).into());
+        worker.insert(
+            "podman".into(),
+            serde_json::json!({
+                "executable": "/usr/bin/podman",
+                "executable_sha256": "c".repeat(64),
+            }),
+        );
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        assert!(build().is_err());
+        config["worker"]["podman"]["image_catalog"] = "/site/images.json".into();
+        config["worker"]["podman"]["image_catalog_sha256"] = "d".repeat(64).into();
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        assert!(build().is_ok());
+
+        config["worker"]["podman"]["resource_control"] =
+            serde_json::json!({"mode":"slurm_allocation","swap_policy":"inherit"});
+        config["worker"]["podman"]["oci_runtime"] = "/usr/bin/crun".into();
+        config["worker"]["podman"]["oci_runtime_sha256"] = "e".repeat(64).into();
+        std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+        assert!(build().is_err());
     }
 
     #[test]
@@ -371,41 +451,6 @@ mod tests {
         assert!(requires_local_containers(&config, "", false).is_err());
         config.slurm.typed_worker_config = None;
         assert!(requires_local_containers(&config, "", false).unwrap());
-    }
-
-    #[tokio::test]
-    async fn coordinator_runtime_rejects_a_local_container_without_creating_its_workspace() {
-        let fixture = tempfile::tempdir().unwrap();
-        let mut infra = container_runtime::ContainerExecutionInfra::from_config(
-            container_runtime::PodmanConfig::for_state_dir(fixture.path()),
-        );
-        disable_local_container_execution(&mut infra);
-        assert_eq!(infra.runtime.name(), "remote-only-coordinator");
-        let request = container_runtime::ContainerRunRequest {
-            image: "must-not-run".into(),
-            command: vec!["touch".into(), "MUST_NOT_BE_CREATED".into()],
-            workspace: container_runtime::WorkspaceRef {
-                host_path: infra.config.workspace_root.join("must-not-create"),
-                container_workdir: "/work".into(),
-            },
-            env: vec![],
-            panels: vec![],
-            input_mounts: vec![],
-            network: container_runtime::ContainerNetwork::Isolated,
-            read_only_rootfs: true,
-            pull_policy: container_runtime::PullPolicy::Never,
-            cpus: None,
-            memory: None,
-            pids_limit: None,
-            shm_size: None,
-            gpus: container_runtime::GpuRequest::None,
-            user: None,
-            timeout_secs: 1,
-            name: "coordinator-must-not-run".into(),
-        };
-        let error = infra.runtime.run(request).await.unwrap_err();
-        assert!(error.to_string().contains("disabled by remote-only"));
-        assert!(!infra.config.workspace_root.exists());
     }
 
     #[test]

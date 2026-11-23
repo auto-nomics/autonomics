@@ -32,6 +32,7 @@ try {
   const writes = { mkdirs: [], saves: [], deletes: [], moves: [], uploads: [] };
 
   await page.route(`${origin}/api/session`, r => r.fulfill({ json: {} }));
+  const deletedTargetIds = ['old-ht'];
   await page.route('**/api/v1/**', async route => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace('/api/v1', '');
@@ -43,10 +44,12 @@ try {
     ], count: 2 } });
     if (path === '/compute') return route.fulfill({ json: {
       deployment: {},
-      state: { version: 1, policy: { target_id: 'local' }, targets: [
+      state: { version: 2, deleted_target_ids: deletedTargetIds, policy: { target_id: 'local' }, targets: [
         { id: 'local', name: '本地工作区', enabled: true, backend: { type: 'local' } },
         { id: 'ht', name: 'ht 集群', enabled: true, backend: { type: 'ssh', settings: {} },
           data_domains: [{ id: 'ht', ssh_aliases: ['ht'], remote_root: '/srv/share', vfs_prefix: '/data/ldsc' }] },
+        { id: 'old-ht', name: 'ht 集群', enabled: true, backend: { type: 'ssh', settings: {} },
+          data_domains: [{ id: 'old-ht', ssh_aliases: ['ht'], remote_root: '/srv/old', vfs_prefix: '/data/retired' }] },
       ], data_sources: [] },
       mounts: [], runs: [],
     } });
@@ -130,10 +133,18 @@ try {
   await htHeader.click();
   await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').waitFor();
 
+  const groupIndent = await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]')
+    .evaluate(row => getComputedStyle(row).paddingLeft);
+  assert.equal(groupIndent, '16px', 'entries directly inside a mount group indent one level');
+
   // ── Lazy expand + read-only badge ─────────────────────────────────
   await page.locator('[data-vfs-path="/data"]').click();
   await page.locator('[data-vfs-path="/data/ldsc"]').waitFor();
   assert.ok(listed.includes('/data'), `/data should be fetched, got ${JSON.stringify(listed)}`);
+  const nameX = async (path) =>
+    (await page.locator(`[data-vfs-path="${path}"] [data-vfs-entry-name]`).boundingBox()).x;
+  assert.equal(await nameX('/notes.md'), await nameX('/data'), 'sibling file and directory labels align');
+  assert.equal(await nameX('/data/ldsc') - await nameX('/data'), 12, 'nested entries indent one level');
   const dataRow = page.locator('[data-vfs-path="/data"]');
   assert.ok(await dataRow.locator('svg.lucide-lock').count() >= 0, 'lock icon resolves');
   // The read-only mount covers /data and its descendants.
@@ -184,11 +195,20 @@ try {
 
   // ── Read-only mount file shows the badge ──────────────────────────
   await page.locator('[data-vfs-path="/data/ldsc"]').click();
-  await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').waitFor();
-  await page.locator('[data-vfs-path="/data/ldsc/readme.txt"]').click();
+  await htHeader.locator("..").locator('[data-vfs-path="/data/ldsc/readme.txt"]').click();
   await page.locator('[data-vfs-file-path="ht://readme.txt"]').waitFor();
   await page.locator('header', { has: page.locator('[data-vfs-file-path="ht://readme.txt"]') })
     .getByText('只读挂载', { exact: true }).waitFor();
+
+  assert.equal(await page.locator('[data-vfs-group="old-ht"]').count(), 0);
+  assert.ok(!listed.includes('/data/retired'));
+  deletedTargetIds.push('ht');
+  const remoteListings = listed.filter((path) => path === '/data/ldsc').length;
+  await page.evaluate(() => window.dispatchEvent(new Event('autonomics:compute-changed')));
+  await htHeader.waitFor({ state: 'hidden' });
+  await page.locator('[data-vfs-path="/notes.md"]').waitFor();
+  assert.equal(listed.filter((path) => path === '/data/ldsc').length, remoteListings);
+  assert.equal(await sidebar.getAttribute('data-vfs-active-dir'), '/');
 
   assert.equal(errors.length, 0, `page errors: ${errors.join('; ')}`);
   console.log('vfs-browser: all assertions passed');

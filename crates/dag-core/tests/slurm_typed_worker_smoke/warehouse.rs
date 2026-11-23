@@ -174,8 +174,7 @@ print(json.dumps({{'fixture_root':root,'uid':s.st_uid,'device':s.st_dev,'inode':
 "#,
         literal = serde_json::to_string(&payload)?
     );
-    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host)
-        .with_command_timeout(Duration::from_secs(60));
+    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host);
     let result = python(
         &ssh,
         &settings.remote_python,
@@ -284,8 +283,7 @@ async fn execute(
     for name in ["coordinator", "artifacts"] {
         private_dir(&root.join(name))?;
     }
-    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host)
-        .with_command_timeout(Duration::from_secs(60));
+    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host);
     let transport = Arc::new(RecordingTransport {
         inner: SlurmTaskTransport::new(SlurmSettings {
             apptainer: None,
@@ -545,8 +543,7 @@ pub(super) async fn run() -> SmokeResult<()> {
     let ctx = context(&profile, &fixture, principal)
         .map_err(|e| format!("warehouse coordinator context: {e}"))?;
     // Readiness identity before any sbatch, independently of worker launch pins.
-    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host)
-        .with_command_timeout(Duration::from_secs(60));
+    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host);
     let identity = capture(
         &ssh,
         &format!(

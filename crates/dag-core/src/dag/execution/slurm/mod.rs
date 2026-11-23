@@ -16,7 +16,7 @@ mod transport;
 pub use artifact::{SshArtifactStore, SshDataHome};
 pub use routing::{ProcessRoutingTaskExecutor, slurm_backed_executor};
 pub use settings::SlurmSettings;
-pub use ssh::{RemoteStream, SshTarget, slurm_queue_absent};
+pub use ssh::{SshTarget, slurm_queue_absent};
 pub(crate) use ssh::{ensure_ssh_success, hex_encode, sh_single_quote, ssh_stdout_text};
 pub use transport::SlurmTaskTransport;
 

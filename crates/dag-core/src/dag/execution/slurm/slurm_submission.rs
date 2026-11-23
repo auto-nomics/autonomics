@@ -114,12 +114,6 @@ pub(super) fn transport_binding(settings: &SlurmSettings) -> Result<String, DagE
         "mem_per_cpu":settings.mem_per_cpu,"default_time":settings.default_time,
         "apptainer":settings.apptainer
     });
-    // Preserve ordinary legacy identities byte-for-byte when no profile was
-    // installed. A pinned profile binds its non-secret source files too.
-    if let Some(profile) = &settings.ssh.pinned_configuration {
-        value["ssh_pinned_configuration"] =
-            serde_json::to_value(profile).map_err(|_| invalid("cannot encode SSH profile"))?;
-    }
     if let Some(endpoint) = &settings.ssh.endpoint {
         value["ssh_endpoint"] = serde_json::to_value(endpoint)
             .map_err(|_| invalid("cannot encode frozen SSH endpoint"))?;

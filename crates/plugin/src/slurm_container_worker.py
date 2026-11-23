@@ -498,7 +498,7 @@ def node_workspace(root, request, diagnostics=None):
         shutil.rmtree(work)
 
 
-def execute(root, request, *, launch=subprocess.run, work_root=None, heartbeat=None, diagnostics=None):
+def execute(root, request, *, launch=subprocess.run, work_root=None, heartbeat=None, diagnostics=None, runtime_root=None):
     if heartbeat is not None:
         heartbeat.phase('preparing_container')
     root = root.resolve()
@@ -536,13 +536,18 @@ def execute(root, request, *, launch=subprocess.run, work_root=None, heartbeat=N
     if os.getuid() == 0:
         raise WorkerAdmissionError('ROOT_WORKER_REFUSED', 'ordinary site worker must not run as root')
     phase(diagnostics, 'runtime_preparation')
-    runtime = work_root / 'runtime'
-    runtime.mkdir(mode=0o700)
+    runtime = runtime_root if runtime_root is not None else work_root / 'runtime'
+    if runtime_root is None:
+        runtime.mkdir(mode=0o700)
     for name in ('home', 'tmp', 'var-tmp', 'cache', 'session'):
         (runtime / name).mkdir(mode=0o700)
+    prefix = {'apptainer': 'APPTAINER', 'singularity_ce': 'SINGULARITY'}.get(
+        request.get('sif_runtime', 'apptainer'))
+    if prefix is None:
+        raise WorkerAdmissionError('INVALID_SIF_RUNTIME', 'unknown SIF runtime')
     env = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'HOME': str(runtime / 'home'),
-           'TMPDIR': str(runtime / 'tmp'), 'APPTAINER_TMPDIR': str(runtime / 'session'),
-           'APPTAINER_CACHEDIR': str(runtime / 'cache')}
+           'TMPDIR': str(runtime / 'tmp'), prefix + '_TMPDIR': str(runtime / 'session'),
+           prefix + '_CACHEDIR': str(runtime / 'cache')}
     phase(diagnostics, 'environment_admission')
     values = safe_environment(request['env'])
     inherited_proxies = []
@@ -565,7 +570,7 @@ def execute(root, request, *, launch=subprocess.run, work_root=None, heartbeat=N
             raise WorkerAdmissionError('DUPLICATE_PRIVATE_ENVIRONMENT', 'duplicate private environment')
         values.update(secrets)
     values.update(HOME='/home/autonomics', TMPDIR='/tmp')
-    env.update(('APPTAINERENV_' + name, value) for name, value in values.items() if name != 'HOME')
+    env.update((prefix + 'ENV_' + name, value) for name, value in values.items() if name != 'HOME')
     phase(diagnostics, 'gpu_admission')
     if request.get('gpus'):
         visible = os.environ.get('CUDA_VISIBLE_DEVICES', '')
@@ -577,7 +582,7 @@ def execute(root, request, *, launch=subprocess.run, work_root=None, heartbeat=N
             raise WorkerAdmissionError('GPU_ALLOCATION_MISMATCH', 'requested GPU allocation visibility is absent or differs')
         if 'CUDA_VISIBLE_DEVICES' in values:
             raise WorkerAdmissionError('GPU_VISIBILITY_OVERRIDE', 'payload cannot replace scheduler GPU visibility')
-        env['APPTAINERENV_CUDA_VISIBLE_DEVICES'] = visible
+        env[prefix + 'ENV_CUDA_VISIBLE_DEVICES'] = visible
     program = (diagnostics.software['container_runtime']['path']
                if diagnostics is not None and diagnostics.software is not None else request['program'])
     command = [program, 'exec', '--cleanenv', '--no-eval', '--contain', '--ipc',
@@ -771,7 +776,14 @@ def main():
             pass  # Advisory sensor failure is exposed as unknown by the reader.
         with node_workspace(root, request, diagnostics) as work:
             node_path = str(work)
-            result = execute(root, request, work_root=work, heartbeat=heartbeat, diagnostics=diagnostics)
+            runtime = None
+            if request.get('runtime_root'):
+                parent = Path(request['runtime_root']).resolve(strict=True)
+                runtime = Path(tempfile.mkdtemp(prefix='attempt-', dir=parent))
+            result = execute(root, request, work_root=work, heartbeat=heartbeat,
+                             diagnostics=diagnostics, runtime_root=runtime)
+            if runtime is not None:
+                shutil.rmtree(runtime)
         result['node_workspace'] = {'path': node_path,
             'state': 'CLEANED_AFTER_TOOL_WAIT_AND_MEASURED_EXPORT',
             'allocation_stop_proved': False}

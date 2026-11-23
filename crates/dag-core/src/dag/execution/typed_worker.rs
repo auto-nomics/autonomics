@@ -73,6 +73,7 @@ impl WorkerIdentity {
 pub enum TypedPodmanResourceControl {
     #[default]
     DelegatedCgroups,
+    SshDelegatedCgroups,
     SlurmAllocation {
         swap_policy: TypedSlurmSwapPolicy,
     },
@@ -90,10 +91,12 @@ impl<'de> Deserialize<'de> for TypedPodmanResourceControl {
         #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
         enum Wire {
             DelegatedCgroups {},
+            SshDelegatedCgroups {},
             SlurmAllocation { swap_policy: TypedSlurmSwapPolicy },
         }
         Ok(match Wire::deserialize(deserializer)? {
             Wire::DelegatedCgroups {} => Self::DelegatedCgroups,
+            Wire::SshDelegatedCgroups {} => Self::SshDelegatedCgroups,
             Wire::SlurmAllocation { swap_policy } => Self::SlurmAllocation { swap_policy },
         })
     }
@@ -151,6 +154,7 @@ impl TypedPodmanSettings {
                 if matches!(
                     self.resource_control,
                     TypedPodmanResourceControl::DelegatedCgroups
+                        | TypedPodmanResourceControl::SshDelegatedCgroups
                 ) => {}
             (Some(path), Some(hash)) if path.is_absolute() && valid_sha256(hash) => (),
             _ => {
@@ -193,6 +197,8 @@ pub struct TypedWorkerSettings {
     pub plugins_sha256: Option<String>,
     pub apptainer_catalog: Option<PathBuf>,
     pub apptainer_executable: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "super::SifRuntime::is_default")]
+    pub sif_runtime: super::SifRuntime,
     #[serde(default)]
     pub podman: Option<TypedPodmanSettings>,
     pub worker_vfs_manifest: Option<PathBuf>,
@@ -257,6 +263,11 @@ impl TypedWorkerSettings {
                     "typed Apptainer requires absolute catalog and executable paths",
                 ));
             }
+        }
+        if !self.sif_runtime.is_default() && self.apptainer_catalog.is_none() {
+            return Err(failure(
+                "a non-default SIF runtime requires a catalog and executable",
+            ));
         }
         if let Some(podman) = &self.podman {
             podman.validate()?;
@@ -717,6 +728,7 @@ pub struct PlacementTaskExecutor {
     remote: Option<Arc<dyn TaskExecutor>>,
     local_kinds: BTreeSet<String>,
     remote_container_dispatch: bool,
+    worker_container_dispatch: bool,
 }
 
 impl PlacementTaskExecutor {
@@ -739,6 +751,7 @@ impl PlacementTaskExecutor {
             remote,
             local_kinds,
             remote_container_dispatch: false,
+            worker_container_dispatch: false,
         })
     }
 
@@ -748,6 +761,11 @@ impl PlacementTaskExecutor {
     /// the container transport, retaining the loaded plugin identity.
     pub fn with_remote_container_dispatch(mut self) -> Self {
         self.remote_container_dispatch = true;
+        self
+    }
+
+    pub fn with_worker_container_dispatch(mut self) -> Self {
+        self.worker_container_dispatch = true;
         self
     }
 }
@@ -772,8 +790,13 @@ impl TaskExecutor for PlacementTaskExecutor {
                 failure("formal tasks cannot use the ordinary cluster placement executor"),
             );
         }
-        if self.local_kinds.contains(&execution.submission.spec.kind)
-            || (self.remote_container_dispatch && execution.node.delegates_to_container_runtime())
+        let worker_container = self.worker_container_dispatch
+            && (execution.node.plugin_identity().is_some()
+                || execution.node.delegates_to_container_runtime());
+        if !worker_container
+            && (self.local_kinds.contains(&execution.submission.spec.kind)
+                || (self.remote_container_dispatch
+                    && execution.node.delegates_to_container_runtime()))
         {
             return self.local.run(execution).await;
         }

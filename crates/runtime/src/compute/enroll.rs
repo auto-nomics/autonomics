@@ -1,21 +1,105 @@
-//! One-shot composite enrollment: minimal operator input, everything
-//! derivable derived, every cross-consistency rule internalized.
-//!
-//! A raw enrollment touches three APIs with two hand-authored JSON
-//! artifacts and three invariants (domain/mount agreement, read-only
-//! publication mount, scratch inside the data root). [`EnrollRequest`]
-//! takes the handful of facts an operator actually knows about a
-//! cluster and performs the whole sequence: probe the worker binary
-//! over ssh, generate and pin its profile, create the domain's
-//! read-only data-source mount, save the target with a derived
-//! `DataDomain`, and optionally switch the global policy to it.
+//! Remote compute enrollment and its progress events.
 
-use super::*;
+use super::{
+    ComputeBackend, ComputeRegistry, ComputeRegistryState, DataBackend, DataDomain, DataSource,
+    SaveTarget, SelectTarget,
+    cluster_connection::ClusterConnection,
+    identifier, is_domain_absolute, private_dir, source_address_domain,
+    worker::{bundled_worker, worker_profile},
+};
+use crate::config::SlurmConfig;
+use dag_core::dag::execution::typed_worker::TypedPodmanSettings;
+use serde::{Deserialize, Serialize};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+/// Fixed enrollment/repair step identifier. Serialized in snake_case so the
+/// wire contract shared with CLI and graphical clients stays unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollStage {
+    Connection,
+    Authenticate,
+    Validate,
+    RemoteHome,
+    PrepareDataDirectory,
+    PrepareDirectory,
+    CheckPython,
+    Chmod,
+    ProbeWorker,
+    Upload,
+    CommitUpload,
+    WorkerProfile,
+    WorkerPackage,
+    WorkerUpdate,
+    DataSource,
+    SaveTarget,
+    SelectTarget,
+    Ready,
+}
+
+impl EnrollStage {
+    /// Human-facing step label reported through progress events.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Connection => "Connection",
+            Self::Authenticate => "Connecting cluster and verifing credential",
+            Self::Validate => "Validating enrollment parameters",
+            Self::RemoteHome => "Resolving remote home directory",
+            Self::PrepareDataDirectory => "Preparing remote default data directory",
+            Self::PrepareDirectory => "Preparing remote worker directory",
+            Self::CheckPython => "Checking remote Python",
+            Self::Chmod => "Setting worker execution permissions",
+            Self::ProbeWorker => "Probing worker executable and SHA256",
+            Self::Upload => "Uploading worker binary",
+            Self::CommitUpload => "Committing uploaded worker binary",
+            Self::WorkerProfile => "Generating worker profile",
+            Self::WorkerPackage => "Checking system bundled matching worker",
+            Self::WorkerUpdate => "Restoring remote worker",
+            Self::DataSource => "Registering compute target data source",
+            Self::SaveTarget => "Saving compute target",
+            Self::SelectTarget => "Selecting compute target",
+            Self::Ready => "Ready",
+        }
+    }
+
+    /// Wire name of this stage; must stay identical to the serde rename.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Connection => "connection",
+            Self::Authenticate => "authenticate",
+            Self::Validate => "validate",
+            Self::RemoteHome => "remote_home",
+            Self::PrepareDataDirectory => "prepare_data_directory",
+            Self::PrepareDirectory => "prepare_directory",
+            Self::CheckPython => "check_python",
+            Self::Chmod => "chmod",
+            Self::ProbeWorker => "probe_worker",
+            Self::Upload => "upload",
+            Self::CommitUpload => "commit_upload",
+            Self::WorkerProfile => "worker_profile",
+            Self::WorkerPackage => "worker_package",
+            Self::WorkerUpdate => "worker_update",
+            Self::DataSource => "data_source",
+            Self::SaveTarget => "save_target",
+            Self::SelectTarget => "select_target",
+            Self::Ready => "ready",
+        }
+    }
+}
+
+impl std::fmt::Display for EnrollStage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 /// Structured progress shared by CLI and graphical clients.
 #[derive(Clone, Serialize)]
 pub struct EnrollProgressEvent {
-    pub stage: String,
+    pub stage: EnrollStage,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uploaded_bytes: Option<u64>,
@@ -25,35 +109,35 @@ pub struct EnrollProgressEvent {
 
 /// Per-request progress sink, independent of daemon tracing subscribers.
 #[derive(Clone, Default)]
-pub struct EnrollProgress(Option<std::sync::Arc<dyn Fn(&EnrollProgressEvent) + Send + Sync>>);
+pub struct EnrollProgress(Option<Arc<dyn Fn(&EnrollProgressEvent) + Send + Sync>>);
 
 impl EnrollProgress {
-    pub fn new(callback: impl Fn(&str, &str) + Send + Sync + 'static) -> Self {
-        Self::with_events(move |event| callback(&event.stage, &event.message))
+    pub fn new(callback: impl Fn(EnrollStage, &str) + Send + Sync + 'static) -> Self {
+        Self::with_events(move |event| callback(event.stage, &event.message))
     }
 
     pub fn with_events(callback: impl Fn(&EnrollProgressEvent) + Send + Sync + 'static) -> Self {
-        Self(Some(std::sync::Arc::new(callback)))
+        Self(Some(Arc::new(callback)))
     }
 
-    pub(super) fn report(&self, stage: &str, message: &str) {
+    pub(super) fn report(&self, stage: EnrollStage, message: &str) {
         self.emit(stage, message, None, None);
     }
 
     pub(super) fn upload(&self, message: &str, uploaded: u64, total: u64) {
-        self.emit("upload", message, Some(uploaded), Some(total));
+        self.emit(EnrollStage::Upload, message, Some(uploaded), Some(total));
     }
 
     fn emit(
         &self,
-        stage: &str,
+        stage: EnrollStage,
         message: &str,
         uploaded_bytes: Option<u64>,
         total_bytes: Option<u64>,
     ) {
         if let Some(callback) = &self.0 {
             callback(&EnrollProgressEvent {
-                stage: stage.into(),
+                stage,
                 message: message.into(),
                 uploaded_bytes,
                 total_bytes,
@@ -80,12 +164,29 @@ impl EnrollBackend {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EnrollContainerRuntime {
+    Podman {
+        plugins_root: PathBuf,
+        plugins_sha256: String,
+        podman: TypedPodmanSettings,
+    },
+    Sif {
+        image_manifest: PathBuf,
+        #[serde(default)]
+        runtime: dag_core::SifRuntime,
+        singularity_executable: Option<PathBuf>,
+    },
+}
+
 /// Minimal operator input for one-shot enrollment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnrollRequest {
     #[serde(default)]
     pub backend: EnrollBackend,
+    pub container_runtime: Option<EnrollContainerRuntime>,
     pub id: String,
     /// Display name; defaults to the id.
     #[serde(default)]
@@ -97,9 +198,14 @@ pub struct EnrollRequest {
     /// read-only mount at `/data/<id>`.
     #[serde(default)]
     pub data_alias: Option<String>,
-    /// Absolute root of the shared filesystem. An omitted data_alias uses login_alias.
+    /// Absolute root of the shared filesystem.
+    /// The compatibility field for a legacy shared data root.
+    /// An omitted data_alias uses login_alias.
     #[serde(default)]
     pub data_root: Option<String>,
+    /// Root of the unified remote directory layout.
+    #[serde(default)]
+    pub storage_root: Option<String>,
     /// Absolute path of the worker binary on the cluster. Existence,
     /// executability and SHA256 are probed over ssh — no hand-authored
     /// worker profile is involved.
@@ -127,47 +233,76 @@ pub struct EnrollRequest {
     #[serde(default)]
     pub python: Option<String>,
     /// Absolute scratch directory on the cluster; defaults to
-    /// `<data_root>/scratch` when a data home is declared.
-    #[serde(default)]
-    pub scratch_dir: Option<String>,
+    /// `<data_root>/scratch`.
+    #[serde(default, alias = "scratch_dir")]
+    pub data_dir: Option<String>,
     /// Switch the global compute policy to this target afterwards.
     #[serde(default)]
     pub select: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RepairWorkerRequest {
-    pub target_id: String,
-}
-
-/// The coordinator distribution includes its matching standalone worker beside it.
-async fn bundled_worker() -> Result<PathBuf, String> {
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let path = executable.with_file_name("autonomics-worker");
-    validate_worker_package(&path).await?;
-    Ok(path)
-}
-
-async fn validate_worker_package(path: &Path) -> Result<(), String> {
-    let bytes = tokio::fs::read(path).await.map_err(|e| format!("matching worker package unavailable at {}: {e}; install autonomics-worker alongside the gateway from the same build", path.display()))?;
-    let sha = format!("{:x}", Sha256::digest(&bytes));
-    drop(bytes);
-    let output = tokio::process::Command::new(path)
-        .arg("identity")
-        .kill_on_drop(true)
-        .output();
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), output)
-        .await
-        .map_err(|_| "local worker identity check timed out")?
-        .map_err(|e| format!("local worker identity check failed: {e}"))?;
-    if !output.status.success() {
-        return Err("local worker identity check failed".into());
+impl EnrollRequest {
+    fn validate(&self) -> Result<Option<(&str, &str)>, String> {
+        identifier(&self.id)?;
+        if let Some(root) = &self.storage_root {
+            if !is_domain_absolute(root) {
+                return Err("storage_root must be a clean absolute path".into());
+            }
+            if self.data_root.is_some() || self.data_dir.is_some() {
+                return Err("storage_root cannot be combined with data_root or scratch_dir".into());
+            }
+        }
+        if !valid_alias(&self.login_alias) {
+            return Err("login_alias must be a configured ssh host alias".into());
+        }
+        if self.backend == EnrollBackend::Ssh
+            && (self.partition.is_some() || self.account.is_some())
+        {
+            return Err("partition and account require a Slurm target".into());
+        }
+        if self
+            .data_dir
+            .as_ref()
+            .is_some_and(|path| !is_domain_absolute(path))
+        {
+            return Err("scratch_dir must be a clean absolute path".into());
+        }
+        let data = match (self.data_alias.as_deref(), self.data_root.as_deref()) {
+            (alias, Some(root)) => {
+                let alias = alias.unwrap_or(&self.login_alias);
+                if !valid_alias(alias) || !is_domain_absolute(root) {
+                    return Err(
+                        "data_alias must be a valid ssh alias and data_root a clean absolute path"
+                            .into(),
+                    );
+                }
+                Some((alias, root))
+            }
+            (None, None) => None,
+            (Some(alias), None) if self.storage_root.is_some() && valid_alias(alias) => None,
+            (Some(_), None) => {
+                return Err(
+                    "data_alias and data_root must be supplied together (or both omitted)".into(),
+                );
+            }
+        };
+        if !self.worker_executable.is_empty() && !is_domain_absolute(&self.worker_executable) {
+            return Err("worker_executable must be an absolute cluster path".into());
+        }
+        // The local deploy path crosses a process boundary: the daemon —
+        // not the calling shell — resolves it, so a relative path silently
+        // points somewhere else. Reject it with the reason instead.
+        if let Some(local) = &self.deploy_worker
+            && !local.starts_with('/')
+        {
+            return Err(
+                "deploy_worker must be an absolute local path; the daemon (not your shell) \
+                 resolves it"
+                    .into(),
+            );
+        }
+        Ok(data)
     }
-    let identity: dag_core::dag::execution::typed_worker::WorkerIdentity =
-        serde_json::from_slice(&output.stdout)
-            .map_err(|e| format!("invalid local worker identity: {e}"))?;
-    identity.validate(&sha).map_err(|e| e.to_string())
 }
 
 fn valid_alias(alias: &str) -> bool {
@@ -178,161 +313,9 @@ fn valid_alias(alias: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.@:-".contains(&b))
 }
 
-pub(super) fn shq(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-pub(super) fn valid_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 impl ComputeRegistry {
-    /// Replace only the worker pin, preserving the target's remaining configuration.
-    pub async fn repair_worker(
-        &self,
-        request: RepairWorkerRequest,
-    ) -> Result<ComputeRegistryState, String> {
-        self.repair_worker_with_progress(request, EnrollProgress::default())
-            .await
-    }
-
-    pub async fn repair_worker_with_progress(
-        &self,
-        request: RepairWorkerRequest,
-        progress: EnrollProgress,
-    ) -> Result<ComputeRegistryState, String> {
-        progress.report("validate", "正在读取目标已有配置");
-        let state = self.state();
-        let target = state
-            .targets
-            .iter()
-            .rev()
-            .find(|t| t.id == request.target_id)
-            .ok_or("unknown target")?
-            .clone();
-        if state.deleted_target_ids.contains(&target.id) {
-            return Err("target is deleted".into());
-        }
-        let mut settings = match &target.backend {
-            ComputeBackend::Slurm { settings } | ComputeBackend::Ssh { settings } => {
-                settings.clone()
-            }
-            _ => return Err("worker repair requires a remote target".into()),
-        };
-        if let Some(pinned) = target.endpoints.get(&settings.ssh_host) {
-            let current = vfs::SshEndpoint::capture(&settings.ssh_command, &settings.ssh_host)?;
-            if &current != pinned {
-                return Err("SSH endpoint changed since this target was saved; review the target configuration before repair".into());
-            }
-        }
-        let mut profile = if let Some(path) = &settings.typed_worker_config {
-            let bytes = read_owned(path, false)?;
-            if target.capsule_sha256.get("worker.json")
-                != Some(&format!("{:x}", Sha256::digest(&bytes)))
-            {
-                return Err("pinned worker profile hash mismatch".into());
-            }
-            serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|e| e.to_string())?
-        } else {
-            worker_profile("", "")
-        };
-        let old_path = profile["worker"]["executable"]
-            .as_str()
-            .ok_or("worker executable missing from profile")?
-            .to_owned();
-        if !old_path.is_empty() && !is_domain_absolute(&old_path) {
-            return Err("worker executable must be absolute".into());
-        }
-        let connection = super::cluster_connection::ClusterConnection::new(
-            &target.id,
-            &settings.ssh_host,
-            &settings.ssh_command,
-            &settings.remote_python,
-        )
-        .with_progress(progress.clone());
-        connection.authenticate().await?;
-        // A healthy worker only needs a fresh connection and identity observation.
-        // Repair transport failures or stale pins using the bundled worker below.
-        let existing_worker = async {
-            if old_path.is_empty() {
-                return Err("target has no worker profile".to_string());
-            }
-            let sha = connection.probe_worker(&old_path).await?;
-            connection.verify_worker_identity(&old_path, &sha).await?;
-            if profile["worker"]["executable_sha256"] != sha
-                || profile["worker"]["expected_source_revision"] != dag_core::source_revision()
-            {
-                return Err("worker pin needs updating".to_string());
-            }
-            Ok::<_, String>(())
-        }
-        .await;
-        match existing_worker {
-            Ok(()) => {
-                progress.report("ready", "连接及 worker 校验通过，无需更新");
-                return Ok(state);
-            }
-            Err(error) => progress.report("worker_update", &format!("需要恢复 worker：{error}")),
-        }
-        progress.report("worker_package", "正在检查系统随附的匹配 worker");
-        let package = bundled_worker().await?;
-        let parent = if old_path.is_empty() {
-            PathBuf::from(connection.home_directory().await?)
-                .join(".local/share/autonomics/workers")
-        } else {
-            Path::new(&old_path)
-                .parent()
-                .ok_or("worker directory missing")?
-                .to_path_buf()
-        };
-        let destination = parent
-            .join(format!("autonomics-worker-repair-{}", uuid::Uuid::new_v4()))
-            .to_string_lossy()
-            .into_owned();
-        connection
-            .deploy_worker(
-                package.to_str().ok_or("worker package path is not UTF-8")?,
-                &destination,
-            )
-            .await?;
-        let sha = connection.probe_worker(&destination).await?;
-        connection
-            .verify_worker_identity(&destination, &sha)
-            .await?;
-        profile["worker"]["executable"] = serde_json::json!(destination);
-        profile["worker"]["executable_sha256"] = serde_json::json!(sha);
-        profile["worker"]["expected_source_revision"] =
-            serde_json::json!(dag_core::source_revision());
-        let staging = self.root.join("targets").join(format!(
-            "{}-repair-{}",
-            target.id,
-            uuid::Uuid::new_v4()
-        ));
-        private_dir(&staging)?;
-        let path = staging.join("worker.json");
-        write_bytes_new(
-            &path,
-            &serde_json::to_vec(&profile).map_err(|e| e.to_string())?,
-        )?;
-        settings.typed_worker_config = Some(path);
-        progress.report("save_target", "正在保存已验证的 worker 配置");
-        let saved = self.save_target(SaveTarget {
-            id: target.id.clone(),
-            name: target.name,
-            enabled: target.enabled,
-            backend: match target.backend {
-                ComputeBackend::Ssh { .. } => ComputeBackend::Ssh { settings },
-                _ => ComputeBackend::Slurm { settings },
-            },
-            data_domains: target.data_domains,
-        })?;
-        Ok(saved)
-    }
-    /// Enroll (or upgrade) one cluster target from minimal input. The
-    /// sequence is: worker probe → profile generation → data-source
-    /// mount → target with derived domain → optional policy switch.
-    /// Failures name the failing step; already-applied steps stay
-    /// applied and re-running the same request is idempotent.
+    /// Enroll a remote target, register its data source, and optionally select it.
+    /// A failure after data-source registration can leave the mount registered.
     #[tracing::instrument(skip_all, fields(cluster_id = %request.id, alias = %request.login_alias))]
     pub async fn enroll(&self, request: EnrollRequest) -> Result<ComputeRegistryState, String> {
         self.enroll_with_progress(request, EnrollProgress::default())
@@ -345,66 +328,48 @@ impl ComputeRegistry {
         mut request: EnrollRequest,
         progress: EnrollProgress,
     ) -> Result<ComputeRegistryState, String> {
-        progress.report("validate", "正在检查注册参数");
-        tracing::info!(stage = "validate", "cluster enrollment started");
-        identifier(&request.id)?;
-        if !valid_alias(&request.login_alias) {
-            return Err("login_alias must be a configured ssh host alias".into());
-        }
-        if request.backend == EnrollBackend::Ssh
-            && (request.partition.is_some() || request.account.is_some())
-        {
-            return Err("partition and account require a Slurm target".into());
-        }
-        if request
-            .scratch_dir
+        progress.report(EnrollStage::Validate, "正在检查注册参数");
+        tracing::info!(stage = ?EnrollStage::Validate, "cluster enrollment started");
+        let explicit_data = request.validate()?;
+
+        let runtime = request
+            .container_runtime
             .as_ref()
-            .is_some_and(|path| !is_domain_absolute(path))
-        {
-            return Err("scratch_dir must be a clean absolute path".into());
-        }
-        if request.data_root.is_some() && request.data_alias.is_none() {
-            request.data_alias = Some(request.login_alias.clone());
-        }
-        let data = match (&request.data_alias, &request.data_root) {
-            (Some(alias), Some(root)) => {
-                if !valid_alias(alias) || !is_domain_absolute(root) {
-                    return Err(
-                        "data_alias must be a valid ssh alias and data_root a clean absolute path"
-                            .into(),
-                    );
+            .ok_or("compute enrollment requires a container_runtime configuration")?;
+        match (request.backend, runtime) {
+            (
+                EnrollBackend::Ssh,
+                EnrollContainerRuntime::Podman {
+                    plugins_root,
+                    plugins_sha256,
+                    podman,
+                },
+            ) => {
+                crate::host::hpc_placement::validate_ssh_podman(
+                    plugins_root,
+                    plugins_sha256,
+                    podman,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            (EnrollBackend::Slurm, EnrollContainerRuntime::Sif { image_manifest, .. }) => {
+                if !image_manifest.is_absolute() {
+                    return Err("SIF image manifest must be an absolute gateway path".into());
                 }
-                Some((alias.clone(), root.clone()))
+                let bytes = super::read_owned(image_manifest, false)?;
+                let manifest: dag_core::dag::execution::ApptainerSettings =
+                    serde_json::from_slice(&bytes)
+                        .map_err(|e| format!("invalid SIF image manifest: {e}"))?;
+                manifest.validate().map_err(|e| e.to_string())?;
             }
-            (None, None) => None,
-            _ => {
-                return Err(
-                    "data_alias and data_root must be supplied together (or both omitted)".into(),
-                );
-            }
-        };
-        if !request.worker_executable.is_empty() && !is_domain_absolute(&request.worker_executable)
-        {
-            return Err("worker_executable must be an absolute cluster path".into());
-        }
-        // The local deploy path crosses a process boundary: the daemon —
-        // not the calling shell — resolves it, so a relative path silently
-        // points somewhere else. Reject it with the reason instead.
-        if let Some(local) = &request.deploy_worker
-            && !local.starts_with('/')
-        {
-            return Err(
-                "deploy_worker must be an absolute local path; the daemon (not your shell) \
-                 resolves it"
-                    .into(),
-            );
+            _ => return Err("SSH requires Podman and Slurm requires a SIF runtime".into()),
         }
 
         let ssh_command = request
             .ssh_command
             .clone()
             .unwrap_or_else(|| self.config.slurm.ssh_command.clone());
-        let connection = super::cluster_connection::ClusterConnection::new(
+        let connection = ClusterConnection::new(
             &request.id,
             &request.login_alias,
             &ssh_command,
@@ -412,18 +377,67 @@ impl ComputeRegistry {
         )
         .with_progress(progress.clone());
         // Resolve and validate the local package before any remote mutation.
-        if request.worker_executable.is_empty() && request.deploy_worker.is_none() {
-            request.deploy_worker = Some(bundled_worker().await?.to_string_lossy().into_owned());
-        }
+        let deploy_worker =
+            if request.worker_executable.is_empty() && request.deploy_worker.is_none() {
+                Some(bundled_worker().await?.to_string_lossy().into_owned())
+            } else {
+                request.deploy_worker.clone()
+            };
         connection.authenticate().await?;
+        let unified = request.storage_root.is_some()
+            || (explicit_data.is_none() && request.data_dir.is_none());
+        let use_default_data_root = explicit_data.is_none();
+        let home = if (use_default_data_root && request.storage_root.is_none())
+            || request.worker_executable.is_empty()
+        {
+            Some(connection.home_directory().await?)
+        } else {
+            None
+        };
+        let storage_root = if unified {
+            Some(match request.storage_root.clone() {
+                Some(root) => root,
+                None => format!(
+                    "{}/.autonomics/compute/{}",
+                    home.as_deref().ok_or("remote home was not resolved")?,
+                    request.id
+                ),
+            })
+        } else {
+            None
+        };
+        let (data_alias, data_root) = match explicit_data {
+            Some((alias, root)) => (alias.to_owned(), root.to_owned()),
+            None if unified => (
+                request
+                    .data_alias
+                    .clone()
+                    .unwrap_or_else(|| request.login_alias.clone()),
+                format!("{}/data", storage_root.as_deref().unwrap()),
+            ),
+            None => {
+                let home = home.as_deref().ok_or("remote home was not resolved")?;
+                let root = format!("{home}/autonomics-data/{}", request.id);
+                (request.login_alias.clone(), root)
+            }
+        };
+        let scratch_dir = request.data_dir.unwrap_or_else(|| match &storage_root {
+            Some(root) => format!("{root}/dag-tasks"),
+            None => format!("{data_root}/scratch"),
+        });
+        if !unified
+            && (scratch_dir == data_root || !Path::new(&scratch_dir).starts_with(&data_root))
+        {
+            return Err("scratch_dir must be a subdirectory of the mounted data root".into());
+        }
         if request.worker_executable.is_empty() {
+            let home = home.as_deref().ok_or("remote home was not resolved")?;
             request.worker_executable = format!(
-                "{}/.local/share/autonomics/workers/{}/autonomics-worker",
-                connection.home_directory().await?,
+                "{home}/.local/share/autonomics/workers/{}/autonomics-worker",
                 uuid::Uuid::new_v4()
             );
         }
-        if let Some(local) = &request.deploy_worker {
+        if let Some(local) = &deploy_worker {
             connection
                 .deploy_worker(local, &request.worker_executable)
                 .await?;
@@ -433,103 +447,140 @@ impl ComputeRegistry {
             .verify_worker_identity(&request.worker_executable, &sha256)
             .await?;
 
-        // 2. Generate the worker profile where the freezer expects it.
-        progress.report("worker_profile", "正在生成 worker 配置");
-        tracing::info!(stage = "worker_profile", "cluster enrollment step started");
-        let staging = self.root.join("targets").join(format!(
-            "{}-enroll-{}",
-            request.id,
-            uuid::Uuid::new_v4()
-        ));
-        private_dir(&staging)?;
-        let profile_path = staging.join("worker.json");
-        let profile = worker_profile(&request.worker_executable, &sha256);
-        write_bytes_new(&profile_path, profile.to_string().as_bytes())?;
+        progress.report(EnrollStage::WorkerProfile, "正在生成 worker 配置");
+        tracing::info!(stage = ?EnrollStage::WorkerProfile, "cluster enrollment step started");
+        let mut profile = worker_profile(&request.worker_executable, &sha256);
 
-        // 3. Derive transport settings without inheriting another target's worker, data endpoint or container profile.
         let mut settings = SlurmConfig {
-            ssh_host: request.login_alias.clone(),
+            enabled: true,
+            ssh_host: request.login_alias,
             ssh_command,
-            typed_worker_config: Some(profile_path),
-            data_ssh_host: request.data_alias.clone(),
+            typed_worker_config: None,
+            typed_worker: None,
+            data_ssh_host: Some(data_alias.clone()),
             pi_ssh_host: None,
             apptainer_manifest: None,
-            account: request.account.clone(),
+            account: request.account,
+            scratch_remote_dir: scratch_dir,
+            storage_root_v1: storage_root.clone(),
             ..SlurmConfig::default()
         };
-        if let Some(python) = &request.python {
-            settings.remote_python = python.clone();
+        match runtime {
+            EnrollContainerRuntime::Podman {
+                plugins_root,
+                plugins_sha256,
+                podman,
+            } => {
+                profile["worker"]["plugins_root"] = serde_json::json!(plugins_root);
+                profile["worker"]["plugins_sha256"] = serde_json::json!(plugins_sha256);
+                profile["worker"]["podman"] =
+                    serde_json::to_value(podman).map_err(|e| e.to_string())?;
+            }
+            EnrollContainerRuntime::Sif {
+                image_manifest,
+                runtime,
+                singularity_executable,
+            } => {
+                settings.apptainer_manifest = Some(image_manifest.clone());
+                settings.sif_runtime = *runtime;
+                settings.singularity_executable = singularity_executable.clone();
+            }
         }
-        settings.enabled = true;
-        if let Some(partition) = &request.partition {
-            settings.partition = partition.clone();
+        settings.typed_worker = Some(profile);
+        if let Some(python) = request.python {
+            settings.remote_python = python;
         }
-        if let Some(account) = &request.account {
-            settings.account = Some(account.clone());
-        }
-        if let Some(scratch) = &request.scratch_dir {
-            settings.scratch_remote_dir = scratch.clone();
-        } else if let Some((_, root)) = &data {
-            settings.scratch_remote_dir = format!("{root}/scratch");
-        }
-
-        // 4. The domain's read-only mount must exist before the target's
-        //    domain validation runs, so the data source goes first.
-        if let Some((alias, root)) = &data {
-            progress.report("data_source", "正在注册集群数据源");
-            tracing::info!(
-                stage = "data_source",
-                alias,
-                root,
-                "cluster enrollment step started"
-            );
-            let source = DataSource {
-                id: request.id.clone(),
-                name: format!("{} shared filesystem", request.id),
-                backend: DataBackend::Ssh {
-                    alias: alias.clone(),
-                    root: root.clone(),
-                    python: settings.remote_python.clone(),
-                },
-                read_only: true,
-                domain: Some(source_address_domain(&request.id)),
-                endpoint: None,
-                permissions: Default::default(),
-            };
-            self.add_source(SaveDataSource { source })
-                .await
-                .map_err(|error| format!("data source creation failed: {error}"))?;
+        if let Some(partition) = request.partition {
+            settings.partition = partition;
         }
 
-        // 5. The target, with every derived field filled in.
-        progress.report("save_target", "正在保存计算目标");
-        tracing::info!(stage = "save_target", "cluster enrollment step started");
-        let data_domains = data
-            .map(|(alias, root)| {
-                vec![DataDomain {
-                    id: source_address_domain(&request.id),
-                    ssh_aliases: vec![alias],
-                    remote_root: root,
-                    vfs_prefix: format!("/data/{}", request.id),
-                    retained_vfs_prefix: None,
-                    retained_remote_root: None,
-                }]
-            })
-            .unwrap_or_default();
+        let retained_id = if let Some(root) = &storage_root {
+            for subdir in [
+                "data",
+                "dag-tasks",
+                "work",
+                "images/sif",
+                "runtime/apptainer",
+                "panels",
+            ] {
+                connection
+                    .prepare_data_directory(&format!("{root}/{subdir}"))
+                    .await?;
+            }
+            settings.panel_cache_remote_dir = format!("{root}/panels");
+            Some(format!("dag-tasks-{}", request.id))
+        } else {
+            if use_default_data_root {
+                connection.prepare_data_directory(&data_root).await?;
+            }
+            None
+        };
+        // The domain's read-only mount must exist before target validation.
+        progress.report(EnrollStage::DataSource, "正在注册计算目标数据源");
+        let domain = DataDomain {
+            id: source_address_domain(&request.id),
+            ssh_aliases: vec![data_alias.clone()],
+            remote_root: data_root,
+            vfs_prefix: format!("/data/{}", request.id),
+            retained_vfs_prefix: retained_id.as_ref().map(|id| format!("/data/{id}")),
+            retained_remote_root: retained_id
+                .as_ref()
+                .map(|_| settings.scratch_remote_dir.clone()),
+        };
+        let source = DataSource {
+            id: request.id.clone(),
+            name: format!("{} shared filesystem", request.id),
+            backend: DataBackend::Ssh {
+                alias: data_alias,
+                root: domain.remote_root.clone(),
+                python: settings.remote_python.clone(),
+            },
+            read_only: !unified,
+            domain: Some(domain.id.clone()),
+            endpoint: None,
+            permissions: Default::default(),
+        };
+        let source = self.prepare_source(source).await?;
+        let retained = if let Some(id) = retained_id {
+            Some(
+                self.prepare_source(DataSource {
+                    name: format!("{} task artifacts", request.id),
+                    backend: DataBackend::Ssh {
+                        alias: settings.data_ssh_host.clone().unwrap(),
+                        root: settings.scratch_remote_dir.clone(),
+                        python: settings.remote_python.clone(),
+                    },
+                    read_only: true,
+                    domain: Some(id.clone()),
+                    endpoint: None,
+                    permissions: Default::default(),
+                    id,
+                })
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        progress.report(EnrollStage::SaveTarget, "正在保存计算目标");
+        tracing::info!(stage = ?EnrollStage::SaveTarget, "cluster enrollment step started");
         let mut state = self
-            .save_target(SaveTarget {
-                id: request.id.clone(),
-                name: request.name.clone().unwrap_or_else(|| request.id.clone()),
-                enabled: true,
-                backend: request.backend.target(settings),
-                data_domains,
-            })
+            .save_target_with_source(
+                SaveTarget {
+                    id: request.id.clone(),
+                    name: request.name.unwrap_or_else(|| request.id.clone()),
+                    enabled: true,
+                    backend: request.backend.target(settings),
+                    data_domains: vec![domain],
+                },
+                Some((source, retained)),
+                None,
+            )
             .map_err(|error| format!("target save failed: {error}"))?;
 
-        // 6. Optional policy switch.
         if request.select {
-            progress.report("select_target", "正在选择计算目标");
-            tracing::info!(stage = "select_target", "cluster enrollment step started");
+            progress.report(EnrollStage::SelectTarget, "正在选择计算目标");
+            tracing::info!(stage = ?EnrollStage::SelectTarget, "cluster enrollment step started");
             state = self
                 .select(SelectTarget {
                     target_id: request.id.clone(),
@@ -542,55 +593,38 @@ impl ComputeRegistry {
 }
 
 #[cfg(test)]
-mod repair_tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
+mod tests {
+    use super::EnrollStage;
 
-    #[tokio::test]
-    async fn bundled_worker_identity_must_match_coordinator_and_bytes() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("autonomics-worker");
-        for revision in ["old-source", dag_core::source_revision()] {
-            let script = format!(
-                r#"#!/bin/sh
-hash=$(sha256sum -- "$0"); hash=${{hash%% *}}
-printf '{{"artifact":"autonomics-worker","protocol":1,"source_revision":"{}","executable_sha256":"%s","capabilities":["task-worker"]}}\n' "$hash"
-"#,
-                revision
+    /// The manual `as_str` table must stay identical to the serde wire names.
+    #[test]
+    fn stage_as_str_matches_serde_rename() {
+        let stages = [
+            EnrollStage::Connection,
+            EnrollStage::Authenticate,
+            EnrollStage::Validate,
+            EnrollStage::RemoteHome,
+            EnrollStage::PrepareDataDirectory,
+            EnrollStage::PrepareDirectory,
+            EnrollStage::CheckPython,
+            EnrollStage::Chmod,
+            EnrollStage::ProbeWorker,
+            EnrollStage::Upload,
+            EnrollStage::CommitUpload,
+            EnrollStage::WorkerProfile,
+            EnrollStage::WorkerPackage,
+            EnrollStage::WorkerUpdate,
+            EnrollStage::DataSource,
+            EnrollStage::SaveTarget,
+            EnrollStage::SelectTarget,
+            EnrollStage::Ready,
+        ];
+        for stage in stages {
+            assert_eq!(
+                serde_json::to_value(stage).unwrap(),
+                serde_json::json!(stage.as_str()),
+                "wire name drifted for {stage}"
             );
-            fs::write(&path, script).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            let result = validate_worker_package(&path).await;
-            if revision == "old-source" {
-                assert!(result.unwrap_err().contains("differs from coordinator"));
-            } else {
-                result.unwrap();
-            }
         }
-        assert!(
-            validate_worker_package(&dir.path().join("missing"))
-                .await
-                .unwrap_err()
-                .contains("matching worker package unavailable")
-        );
     }
-}
-
-fn worker_profile(executable: &str, sha256: &str) -> serde_json::Value {
-    serde_json::json!({
-        "worker": {
-            "executable": executable,
-            "executable_sha256": sha256,
-            "expected_source_revision": dag_core::source_revision(),
-        },
-        "local_kinds": [
-            "channel", "dynamic_fanout", "table_from_df", "figure_embed",
-            "source_literature", "source_literature_fetch", "literature_fulltext",
-            "source_literature_citations", "source_s2_recommendations", "bib_save",
-            "evidence_merge", "evidence_export",
-            // Local PubMed mirror nodes run in-process (shared DuckDB
-            // handle, read-only) — no container/cluster execution.
-            "source_pubmed_local", "pubmed_mesh_analysis", "pubmed_author_network",
-        ],
-    })
 }

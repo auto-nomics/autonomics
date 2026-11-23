@@ -11,7 +11,6 @@ pub mod file_set_select;
 pub mod file_to_dataframe;
 pub mod file_transform;
 pub mod gmt_import;
-pub mod h5ad_obs_to_dataframe;
 pub mod image_registry;
 pub mod multiomic_concordance;
 pub mod parquet_sql;
@@ -214,17 +213,8 @@ impl NodePlugin for Plugin {
         registry.register(Box::new(file_set_select::FileSetSelectNodeFactory));
         registry.register(Box::new(archive_nodes::ArchiveInspectNodeFactory));
         registry.register(Box::new(archive_nodes::ArchiveExtractNodeFactory));
-        registry.register(Box::new(
-            h5ad_obs_to_dataframe::H5adObsToDataFrameNodeFactory {},
-        ));
         registry.register(Box::new(file_transform::FileTransformNodeFactory {}));
         registry.register(Box::new(process_command::ProcessCommandNodeFactory));
-        // `python_script` and `r_script` are intentionally NOT registered — they
-        // are removed from the DAG surface so the Agent cannot list or add them.
-        // The `script_nodes` module is retained for unit/integration tests of
-        // the underlying ScriptNodeFactory implementation; constructing one
-        // directly still works, but `NodeRegistry::build_node(...)` will return
-        // `Error::FactoryNotFound` for these kinds.
         registry.register(Box::new(gmt_import::GmtImportNodeFactory {}));
         registry.register(Box::new(dataframe_to_file::DataFrameToFileNodeFactory {}));
         registry.register(Box::new(parquet_sql::DataFusionSqlNodeFactory {}));

@@ -61,6 +61,9 @@ pub fn dag_tasks_root() -> PathBuf {
 
 /// Resolve receipts for an explicit runtime state root, including builder overrides.
 pub fn dag_tasks_root_for_state_dir(state_dir: &Path) -> PathBuf {
+    if state_dir.join("storage-layout-v1").is_file() {
+        return state_dir.join("dag-tasks");
+    }
     std::env::var_os(DAG_RECEIPTS_ROOT_ENV)
         .filter(|value| !value.is_empty())
         .or_else(|| std::env::var_os(DAG_TASKS_ROOT_ENV).filter(|value| !value.is_empty()))

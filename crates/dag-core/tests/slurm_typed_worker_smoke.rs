@@ -390,8 +390,7 @@ async fn prepare_smoke(
         std::fs::create_dir(&directory)?;
         std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
     }
-    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host)
-        .with_command_timeout(Duration::from_secs(60));
+    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host);
     let identity = capture(
         &ssh,
         &format!(

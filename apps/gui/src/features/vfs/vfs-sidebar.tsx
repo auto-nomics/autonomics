@@ -8,17 +8,17 @@ import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
  * operations confirm client-side on top of the server contract.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSyncExternalStore } from "react";
 import {
-  ChevronDown, ChevronRight, Cpu, Download, FilePlus2, Folder, FolderOpen, FolderPlus, HardDrive,
-  Lock, Pencil, RefreshCw, Server, Terminal, Trash2, Upload,
+  ChevronDown, ChevronRight, Download, File, FilePlus2, Folder, FolderOpen, FolderPlus, HardDrive,
+  Lock, Pencil, RefreshCw, Server, Trash2, Upload,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   bootstrapTree, getVfsTreeState, reloadSubtree,
-  resetTree, subscribeVfsTree, toggleDir, readOnlyCover, type ComputeGroup, type TreeNode,
+  subscribeVfsTree, toggleDir, readOnlyCover, type ComputeGroup, type TreeNode,
 } from "./vfs-tree";
 import {
   downloadVfsFile, formatBytes, mkdir, moveEntry, pickUploadSource,
@@ -111,15 +111,17 @@ function Row({
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
         {node.is_dir ? (
-          <>
-            {isOpen ? <ChevronDown className="size-3 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3 shrink-0 text-muted-foreground" />}
-            {isOpen ? <FolderOpen className="size-3.5 shrink-0 text-primary" /> : <Folder className="size-3.5 shrink-0 text-primary" />}
-          </>
+          isOpen ? <ChevronDown className="size-3 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
         ) : (
           <span className="size-3 shrink-0" aria-hidden />
         )}
-        {node.readOnly && <Lock className="size-3 shrink-0 text-muted-foreground" aria-label="只读挂载" />}
-        <span className="min-w-0 flex-1 truncate">{node.name}</span>
+        {node.is_dir ? (
+          isOpen ? <FolderOpen className="size-3.5 shrink-0 text-primary" /> : <Folder className="size-3.5 shrink-0 text-primary" />
+        ) : (
+          <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        )}
+        <span className="min-w-0 flex-1 truncate" data-vfs-entry-name>{node.name}</span>
+        {node.readOnly && <Lock className={cn("size-3 shrink-0 text-muted-foreground", !node.is_dir && "group-hover:invisible")} aria-label="只读挂载" />}
         {!node.is_dir && node.size > 0 && (
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70 group-hover:invisible">{formatBytes(node.size)}</span>
         )}
@@ -195,12 +197,6 @@ function Branch({
   );
 }
 
-const BACKEND_ICONS = {
-  local: HardDrive,
-  slurm: Cpu,
-  ssh: Terminal,
-} as const;
-
 const BACKEND_LABELS = {
   local: "本地",
   slurm: "Slurm",
@@ -216,7 +212,6 @@ function GroupHeader({
   collapsed: boolean;
   onToggle: () => void;
 }) {
-  const Icon = BACKEND_ICONS[group.backend];
   const readOnly = group.roots.some((root) => readOnlyCover(root));
   return (
     <button
@@ -229,7 +224,7 @@ function GroupHeader({
       className="flex w-full items-center gap-1 rounded-sm px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent"
     >
       {collapsed ? <ChevronRight className="size-3 shrink-0" /> : <ChevronDown className="size-3 shrink-0" />}
-      <Icon className="size-3.5 shrink-0" />
+      <HardDrive className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{group.name}</span>
       <span className="shrink-0 rounded bg-muted px-1 text-[9px] font-medium normal-case">{BACKEND_LABELS[group.backend]}</span>
       {readOnly && <Lock className="size-3 shrink-0" aria-label="只读挂载" />}
@@ -245,9 +240,23 @@ export function VfsSidebar() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
-    void bootstrapTree();
+  const refreshTree = useCallback(async () => {
+    const remoteRoots = getVfsTreeState().groups
+      .filter((group) => group.backend !== "local")
+      .flatMap((group) => group.roots);
+    if (!await bootstrapTree()) return;
+    const currentRoots = new Set(getVfsTreeState().groups.flatMap((group) => group.roots));
+    setActiveDir((dir) => remoteRoots.some((root) =>
+      !currentRoots.has(root) && (dir === root || dir.startsWith(`${root}/`)),
+    ) ? "/" : dir);
   }, []);
+
+  useEffect(() => {
+    const onComputeChanged = () => void refreshTree();
+    void refreshTree();
+    window.addEventListener("autonomics:compute-changed", onComputeChanged);
+    return () => window.removeEventListener("autonomics:compute-changed", onComputeChanged);
+  }, [refreshTree]);
 
   const reload = (dir: string) => {
     void reloadSubtree(dir);
@@ -323,10 +332,7 @@ export function VfsSidebar() {
           className="ml-auto"
           aria-label="重新加载"
           title="重新加载"
-          onClick={() => {
-            resetTree();
-            void bootstrapTree();
-          }}
+          onClick={() => void refreshTree()}
         >
           <RefreshCw className="size-3.5" />
         </Button>
@@ -360,7 +366,7 @@ export function VfsSidebar() {
                 <Branch
                   key={root}
                   path={root}
-                  depth={0}
+                  depth={1}
                   activeDir={activeDir}
                   onSelect={(node) => setActiveDir(node.path)}
                   onMutated={reload}

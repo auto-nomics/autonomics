@@ -2,27 +2,32 @@
 use super::error::{GatewayError, GatewayResult};
 use super::state::GatewayState;
 use axum::{
-    Json,
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+pub(super) fn routes() -> Router<GatewayState> {
+    Router::new()
+        .route("/hpc/jobs", get(list))
+        .route("/hpc/jobs/watch", post(watch))
+        .route("/hpc/jobs/{id}/stop-monitor", post(stop_monitor))
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/hpc/jobs", tag = "hpc", operation_id = "list_hpc_jobs",
+    responses((status = 200, body = Object), (status = 500, description = "HPC monitor inventory unavailable"))
+)]
 pub(crate) async fn list(State(state): State<GatewayState>) -> GatewayResult<Json<Value>> {
-    let records = state
-        .infra
-        .hpc_monitor
-        .as_ref()
-        .map(|hub| hub.views(None))
-        .transpose()
-        .map_err(|_| {
-            GatewayError::Status(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "HPC monitor inventory unavailable".into(),
-            )
-        })?
-        .unwrap_or_default();
+    let records = state.infra.compute.monitors.views(None).map_err(|_| {
+        GatewayError::Status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "HPC monitor inventory unavailable".into(),
+        )
+    })?;
     Ok(Json(
         json!({"monitors":records,"scientific_admission_granted":false}),
     ))
@@ -37,6 +42,10 @@ pub(crate) struct WatchExisting {
     submission_key: String,
     cluster: Option<String>,
 }
+#[utoipa::path(
+    post, path = "/api/v1/hpc/jobs/watch", tag = "hpc", request_body = Object,
+    responses((status = 200, body = Object), (status = 409, description = "HPC operation unavailable or conflicts with current state"))
+)]
 pub(crate) async fn watch(
     State(state): State<GatewayState>,
     Json(input): Json<WatchExisting>,
@@ -66,9 +75,6 @@ pub(crate) async fn watch(
     {
         return Err(deny());
     }
-    let hub = state.infra.hpc_monitor.as_ref().ok_or_else(|| {
-        GatewayError::Status(StatusCode::CONFLICT, "HPC monitoring is disabled".into())
-    })?;
     let key = input
         .target_id
         .clone()
@@ -79,22 +85,17 @@ pub(crate) async fn watch(
         session_id: input.session_id.to_string(),
     };
     let plan = json!({"operator_attachment":"Verify the existing expected outputs under the original frozen contract; no new computation."});
-    let result = if let Some(registry) = &state.infra.compute {
-        registry
-            .watch_existing_job(
-                &key,
-                input.cluster.as_deref(),
-                &input.submission_key,
-                owner,
-                plan,
-            )
-            .await
-    } else {
-        hub.target_hub(&key)
-            .map_err(GatewayError::Message)?
-            .watch_existing(input.cluster.as_deref(), &input.submission_key, owner, plan)
-            .await
-    };
+    let result = state
+        .infra
+        .compute
+        .watch_existing_job(
+            &key,
+            input.cluster.as_deref(),
+            &input.submission_key,
+            owner,
+            plan,
+        )
+        .await;
     let record = result.map_err(|_| {
         GatewayError::Status(
             StatusCode::CONFLICT,
@@ -121,6 +122,11 @@ pub(crate) struct StopMonitor {
     reason: String,
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/hpc/jobs/{id}/stop-monitor", tag = "hpc", request_body = Object,
+    params(("id" = String, Path)),
+    responses((status = 200, body = Object), (status = 409, description = "HPC operation unavailable or conflicts with current state"))
+)]
 pub(crate) async fn stop_monitor(
     State(state): State<GatewayState>,
     Path(id): Path<String>,
@@ -131,9 +137,7 @@ pub(crate) async fn stop_monitor(
             "bounded operator review reason required".into(),
         ));
     }
-    let hub = state.infra.hpc_monitor.as_ref().ok_or_else(|| {
-        GatewayError::Status(StatusCode::CONFLICT, "HPC monitoring is disabled".into())
-    })?;
+    let hub = &state.infra.compute.monitors;
     let prior = hub
         .views(None)
         .map_err(GatewayError::Message)?

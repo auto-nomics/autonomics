@@ -1386,7 +1386,7 @@ fn cacheable_outputs(outputs: &dag_core::dag::PortOutputs) -> bool {
     !outputs.is_empty()
         && outputs.iter().all(|(_, value)| match value {
             NodeValue::File(file) => reusable(file),
-            NodeValue::FileSet(files) => !files.is_empty() && files.iter().all(reusable),
+            NodeValue::FileSet(files) => files.iter().all(reusable),
             _ => false,
         })
 }
@@ -3719,6 +3719,14 @@ mod tests {
                 serde_json::json!(4)
             ]
         );
+    }
+
+    #[test]
+    fn empty_file_set_output_is_cacheable() {
+        let mut outputs = dag_core::dag::PortOutputs::new();
+        assert!(!cacheable_outputs(&outputs));
+        outputs.insert(0, NodeValue::FileSet(vec![]));
+        assert!(cacheable_outputs(&outputs));
     }
 
     #[test]

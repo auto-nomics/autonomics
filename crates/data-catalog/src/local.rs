@@ -24,6 +24,19 @@ pub const PANEL_CACHE_ROOT_ENV: &str = "AUTONOMICS_PANEL_CACHE_ROOT";
 /// resolve to the same location, so installed packages are mounted by the
 /// runtime without copying.
 pub fn default_panel_cache_root() -> PathBuf {
+    let state_dir = std::env::var_os("AUTONOMICS_STATE_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".autonomics"))
+        });
+    if let Some(state_dir) = state_dir
+        && state_dir.join("storage-layout-v1").is_file()
+    {
+        return state_dir.join("panels");
+    }
     if let Some(root) = std::env::var_os(PANEL_CACHE_ROOT_ENV).filter(|value| !value.is_empty()) {
         return PathBuf::from(root);
     }

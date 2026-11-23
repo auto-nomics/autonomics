@@ -18,8 +18,8 @@ type Result<T> = std::result::Result<T, ContainerRuntimeError>;
 const MAX_FILE: u64 = 64 * 1024;
 const MAX_PROC: u64 = 1024 * 1024;
 const MAX_LEVELS: usize = 64;
-const CGROUP_V1_MAGIC: libc::c_long = 0x27e0eb;
-const PROC_MAGIC: libc::c_long = 0x9fa0;
+const CGROUP_V1_MAGIC: u64 = 0x27e0eb;
+const PROC_MAGIC: u64 = 0x9fa0;
 
 /// Swap policy for inherited Slurm limits, independent of the formal contract.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,12 +350,12 @@ fn proc_uid_line(status: &str, uid: u32) -> Result<String> {
     Ok(lines[0].to_string())
 }
 
-fn required_kernel_text(path: &Path, magic: libc::c_long, maximum: u64) -> Result<String> {
+fn required_kernel_text(path: &Path, magic: u64, maximum: u64) -> Result<String> {
     kernel_text(path, magic, maximum)?
         .ok_or_else(|| invalid(format!("missing kernel file {}", path.display())))
 }
 
-fn kernel_text(path: &Path, magic: libc::c_long, maximum: u64) -> Result<Option<String>> {
+fn kernel_text(path: &Path, magic: u64, maximum: u64) -> Result<Option<String>> {
     if magic == CGROUP_V1_MAGIC {
         let parent = path
             .parent()
@@ -400,14 +400,14 @@ fn kernel_text(path: &Path, magic: libc::c_long, maximum: u64) -> Result<Option<
         .map_err(|_| invalid("kernel control is not UTF-8"))
 }
 
-fn filesystem(file: &File, expected: libc::c_long) -> Result<()> {
+fn filesystem(file: &File, expected: u64) -> Result<()> {
     // SAFETY: fstatfs writes a correctly allocated statfs for an owned fd.
     let mut value = std::mem::MaybeUninit::<libc::statfs>::uninit();
     if unsafe { libc::fstatfs(file.as_raw_fd(), value.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
     let value = unsafe { value.assume_init() };
-    if value.f_type != expected {
+    if value.f_type as u64 != expected {
         return Err(invalid(
             "control path is not the expected real kernel filesystem",
         ));

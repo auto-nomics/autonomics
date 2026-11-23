@@ -69,6 +69,7 @@ struct SifCatalog {
 }
 
 pub struct ApptainerRuntime {
+    singularity_ce: bool,
     workspace_root: PathBuf,
     executable: PathBuf,
     panel_cache_root: Option<PathBuf>,
@@ -200,12 +201,18 @@ impl ApptainerRuntime {
         let executable = executable.into();
         secure_file(&executable)?;
         Ok(Self {
+            singularity_ce: false,
             workspace_root,
             executable,
             panel_cache_root: catalog.panel_cache_root,
             images,
             resource_control: catalog.resource_control,
         })
+    }
+
+    pub(crate) fn with_singularity_ce(mut self, enabled: bool) -> Self {
+        self.singularity_ce = enabled;
+        self
     }
 
     /// Existing cluster panel cache selected only by the operator catalog.
@@ -551,7 +558,11 @@ impl PodmanConnection for ApptainerRuntime {
         &self.workspace_root
     }
     fn name(&self) -> &'static str {
-        "apptainer"
+        if self.singularity_ce {
+            "singularity-ce"
+        } else {
+            "apptainer"
+        }
     }
 
     async fn run(
@@ -580,6 +591,11 @@ impl PodmanConnection for ApptainerRuntime {
         tokio::task::spawn_blocking(move || verify_sif(entry))
             .await
             .map_err(|error| invalid(format!("SIF verification worker failed: {error}")))??;
+        let prefix = if self.singularity_ce {
+            "SINGULARITY"
+        } else {
+            "APPTAINER"
+        };
         let mut command = Command::new(&self.executable);
         command
             .args(arguments)
@@ -589,7 +605,7 @@ impl PodmanConnection for ApptainerRuntime {
             // Keep runtime reconstruction scratch inside this task's owned
             // workspace. The enclosing Slurm job's stop proof governs cleanup.
             .env("TMPDIR", &request.workspace.host_path)
-            .env("APPTAINER_TMPDIR", &request.workspace.host_path)
+            .env(format!("{prefix}_TMPDIR"), &request.workspace.host_path)
             .current_dir("/")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -611,7 +627,7 @@ impl PodmanConnection for ApptainerRuntime {
             });
         }
         for (name, value) in &request.env {
-            command.env(format!("APPTAINERENV_{name}"), value);
+            command.env(format!("{prefix}ENV_{name}"), value);
         }
         let mut child = command.spawn()?;
         let group = ProcessGroup(

@@ -72,15 +72,13 @@ impl BrowserPool {
 pub struct SharedInfra {
     /// Ordinary compute-target registry. `None` when no catalog exists and
     /// no target is enrolled; executors then fall back to `config.slurm`.
-    pub compute: Option<Arc<crate::compute::ComputeRegistry>>,
+    pub compute: Arc<crate::compute::ComputeRegistry>,
     /// Per-agent session manager — each agent gets its own DAG actor task,
     /// fully isolated from other agents. Heavy infrastructure (NodeRegistry,
     /// DagHistory, RuntimeEnv) is shared via `Arc`.
     pub engine_manager: Arc<DataEngineManager>,
     pub file_storage: Arc<OpendalFileStorage>,
     /// Operator-enabled ordinary account tools, shared across agent restarts.
-    pub hpc: Option<Arc<hpc_tools::HpcClient>>,
-    pub hpc_monitor: Option<Arc<crate::hpc_monitor::MonitorHub>>,
     hpc_notifications: Arc<crate::hpc_monitor::NotificationRouter>,
     /// Unix-style virtual filesystem mounted under `vfs://`.
     pub vfs: Arc<vfs::MountedObjectStore>,
@@ -264,41 +262,55 @@ impl SharedInfra {
 
         let (rsi, environments) = open_plugin_rsi(config).await?;
 
+        let state_dir = &config.state_dir;
+        if ![
+            "compute/registry.json",
+            "compute/catalog.json",
+            "vfs.toml",
+            "containers",
+            "containers-overlay",
+        ]
+        .iter()
+        .any(|relative| state_dir.join(relative).exists())
+        {
+            std::fs::create_dir_all(state_dir).map_err(|error| Error::Other(error.to_string()))?;
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(state_dir.join("storage-layout-v1"))
+                .map_err(|error| Error::Other(error.to_string()))?;
+        }
+        if state_dir.join("storage-layout-v1").is_file() {
+            std::fs::create_dir_all(state_dir.join("data"))
+                .map_err(|error| Error::Other(error.to_string()))?;
+        }
         let (vfs, catalog_service, file_storage, catalog_bundles) =
             open_vfs_and_storage(config, &rsi, &environments).await?;
-        let base_containers = open_container_execution(config)?;
+        let base_containers = open_container_execution(config).await?;
         let hpc_monitor = crate::hpc_monitor::MonitorHub::empty();
-        let compute = Some(
-            crate::compute::ComputeRegistry::open(
-                config,
-                file_storage.clone(),
-                vfs.clone(),
-                &base_containers,
-                hpc_monitor.clone(),
-            )
-            .map_err(Error::Other)?,
-        );
-        let container_execution = if let Some(registry) = &compute {
-            let mut containers = (*base_containers).clone();
-            containers.runtime = Arc::new(crate::compute::ContainerRouter {
-                registry: registry.clone(),
-                root: containers.config.workspace_root.clone(),
-            });
-            plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-                .configure_runtime(containers.runtime.clone())
-                .map_err(|e| Error::Other(e.to_string()))?;
-            Arc::new(containers)
-        } else {
-            base_containers
-        };
+        let compute = crate::compute::ComputeRegistry::open(
+            config,
+            file_storage.clone(),
+            vfs.clone(),
+            &base_containers,
+            hpc_monitor.clone(),
+        )
+        .map_err(Error::Other)?;
+        let mut containers = base_containers;
+        containers.runtime = Arc::new(crate::compute::ContainerRouter {
+            registry: compute.clone(),
+            root: containers.config.workspace_root.clone(),
+        });
+        plugin_rsi::PluginDevelopmentToolsetRegistry::global()
+            .configure_runtime(containers.runtime.clone())
+            .map_err(|e| Error::Other(e.to_string()))?;
+        let container_execution = Arc::new(containers);
         let environment_dev =
             open_environment_dev(config, &environments, &container_execution).await?;
         // Reclaim crash residue and expired scratch from previous runs once at
         // startup, then on the configured interval. Failures are logged and
         // never block the host.
-        if config.local_container_execution_required()? {
-            spawn_container_gc(&container_execution);
-        }
+        spawn_container_gc(&container_execution);
         spawn_dag_task_gc(&config.state_dir);
 
         let engine_manager = build_engine_manager(
@@ -308,7 +320,7 @@ impl SharedInfra {
             &container_execution,
             catalog_bundles,
             &rsi,
-            compute.as_ref(),
+            &compute,
         )
         .await?;
 
@@ -335,24 +347,6 @@ impl SharedInfra {
                 .map_err(|error| Error::Other(format!("open resource downloader: {error}")))?,
         );
 
-        let hpc = if config.slurm.tools_enabled {
-            Some(Arc::new(
-                hpc_tools::HpcClient::new(hpc_tools::HpcConfig {
-                    ssh_host: config.slurm.ssh_host.clone(),
-                    data_ssh_host: config.slurm.data_ssh_host.clone(),
-                    pi_ssh_host: config.slurm.pi_ssh_host.clone(),
-                    ssh_command: config.slurm.ssh_command.clone(),
-                    remote_python: config.slurm.remote_python.clone(),
-                    state_dir: config.state_dir.join("hpc-account"),
-                    default_partition: config.slurm.partition.clone(),
-                    default_account: config.slurm.account.clone(),
-                })
-                .map_err(|error| Error::Other(format!("open HPC account tools: {error}")))?,
-            ))
-        } else {
-            None
-        };
-
         let hpc_notifications = crate::hpc_monitor::NotificationRouter::new(storage.clone());
         hpc_monitor.start(hpc_notifications.clone());
 
@@ -360,8 +354,6 @@ impl SharedInfra {
             compute,
             engine_manager,
             file_storage,
-            hpc,
-            hpc_monitor: Some(hpc_monitor),
             hpc_notifications,
             vfs,
             container_execution,
@@ -430,11 +422,9 @@ impl SharedInfra {
             .with_config_json(config_json)
             .with_system_prompt_identity(kind.agent_identity())
             .with_storage(storage.clone());
-        if let Some(registry) = &self.compute {
-            builder = builder.with_context_provider(Arc::new(
-                crate::compute::tools::ComputeContext::new(registry.clone()),
-            ));
-        }
+        builder = builder.with_context_provider(Arc::new(
+            crate::compute::tools::ComputeContext::new(self.compute.clone()),
+        ));
         builder = builder.with_memory_backend(Arc::clone(&memory));
 
         builder = builder.with_system_prompt_section(crate::config::build_system_prompt(&kind));
@@ -541,29 +531,18 @@ impl SharedInfra {
         let engine_client = self.engine_manager.client_for_agent(agent_path.as_str());
 
         let mut tools: Vec<ToolRegistration> = Vec::new();
-        if let Some(registry) = &self.compute {
-            tools.push(crate::compute::tools::readiness_registration(
-                registry.clone(),
-                self.engine_manager.clone(),
-            ));
-            tools.extend(crate::compute::tools::registrations(registry.clone()));
-            if kind.enable_hpc() {
-                tools.extend(crate::compute::tools::hpc_registrations(
-                    registry.clone(),
-                    agent_path.as_str(),
-                    self.storage.clone(),
-                ));
-            }
-        }
-        // hpc_* 交互式集群工具只挂给 hpc-ops kind——集群账务、调度作业
-        // 与数据传输走一条可审计路径;DAG 执行经 coordinator 的
-        // executor 到达远程 target,不依赖任何 agent 工具。
+        tools.push(crate::compute::tools::readiness_registration(
+            self.compute.clone(),
+            self.engine_manager.clone(),
+        ));
+        tools.extend(crate::compute::tools::registrations(self.compute.clone()));
         if kind.enable_hpc() {
-            if let Some(hpc) = &self.hpc {
-                tools.extend(hpc_tools::registrations(hpc.clone()));
-            }
+            tools.extend(crate::compute::tools::hpc_registrations(
+                self.compute.clone(),
+                agent_path.as_str(),
+                self.storage.clone(),
+            ));
         }
-
         // Browser-kind agents get a private BrowserSession allocated on
         // their first tool assembly; the session Arc is cloned into every
         // browser_* tool's struct, so the pool only needs to keep a Weak.
@@ -698,7 +677,7 @@ impl SharedInfra {
 
         Ok(crate::compute::tools::guard_environment_tools(
             tools,
-            self.compute.as_ref(),
+            &self.compute,
         ))
     }
 }
@@ -793,42 +772,37 @@ async fn open_vfs_and_storage(
     Ok((vfs, catalog_service, file_storage, catalog_bundles))
 }
 
-/// Open the process-wide Podman execution infrastructure and teach
-/// the plugin toolset registry its runtime.
-fn open_container_execution(config: &RuntimeConfig) -> Result<Arc<ContainerExecutionInfra>> {
-    let mut container_execution =
-        ContainerExecutionInfra::for_operator_state_dir(&config.state_dir)
-            .map_err(crate::error::Error::Other)?;
-    if config.slurm.enabled && config.slurm.apptainer_manifest.is_some() {
-        let remote = plugin::slurm_runtime::SlurmContainerRuntime::new(
-            slurm_settings(config)?,
-            container_execution.config.workspace_root.clone(),
-            config.state_dir.join("slurm-containers"),
-            config.slurm.panel_cache_remote_dir.clone(),
-            config.slurm.remote_python.clone(),
-        )
-        .and_then(|runtime| runtime.with_gpu_partition(config.slurm.gpu_partition.clone()))
-        .and_then(|runtime| runtime.with_gpu_cpus_per_gpu(config.slurm.gpu_cpus_per_gpu))
-        .and_then(|runtime| match &config.slurm.gpu_qos {
-            Some(qos) => runtime.with_gpu_qos(qos.clone()),
-            None => Ok(runtime),
-        })
-        .map_err(|error| Error::Other(error.to_string()))?;
-        container_execution.runtime = Arc::new(remote);
-    } else if !config.local_container_execution_required()? {
-        super::hpc_placement::disable_local_container_execution(&mut container_execution);
+/// The built-in local target always uses coordinator Podman.
+async fn open_container_execution(config: &RuntimeConfig) -> Result<ContainerExecutionInfra> {
+    let containers =
+        ContainerExecutionInfra::for_operator_state_dir(&config.state_dir).map_err(Error::Other)?;
+    let program = &containers.config.program;
+    let version = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new(program)
+            .arg("--version")
+            .kill_on_drop(true)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+    )
+    .await
+    .map_err(|_| {
+        Error::Other(format!(
+            "local target Podman probe timed out for {program:?}"
+        ))
+    })?
+    .map_err(|error| {
+        Error::Other(format!(
+            "local target requires Podman at {program:?}: {error}"
+        ))
+    })?;
+    if !version.success() {
+        return Err(Error::Other(format!(
+            "local target Podman probe failed for {program:?}: {version}"
+        )));
     }
-    let container_execution = Arc::new(container_execution);
-    tracing::info!(
-        workspace_root = %container_execution.config.workspace_root.display(),
-        panel_cache_root = %container_execution.config.panel_cache_root.display(),
-        backend = container_execution.runtime.name(),
-        "SharedInfra::open: container execution infrastructure configured"
-    );
-    plugin_rsi::PluginDevelopmentToolsetRegistry::global()
-        .configure_runtime(Arc::clone(&container_execution.runtime))
-        .map_err(|error| crate::error::Error::Other(error.to_string()))?;
-    Ok(container_execution)
+    Ok(containers)
 }
 
 /// Open the environment (image) development subsystem when enabled:
@@ -896,7 +870,7 @@ async fn build_engine_manager(
     container_execution: &Arc<ContainerExecutionInfra>,
     catalog_bundles: dag_core::BundleRegistry,
     rsi: &Arc<plugin_rsi::PluginInfra>,
-    compute: Option<&Arc<crate::compute::ComputeRegistry>>,
+    compute: &Arc<crate::compute::ComputeRegistry>,
 ) -> Result<Arc<DataEngineManager>> {
     tracing::info!(
         mounts = ?vfs.mount_paths(),
@@ -919,66 +893,9 @@ async fn build_engine_manager(
 
     let mut engine = engine_builder.build();
     let receipt_root = dag_core::dag_tasks_root_for_state_dir(&config.state_dir);
-    engine.set_task_executor(Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
-        receipt_root.clone(),
-    )));
-    tracing::info!("SharedInfra::open: DataEngine built");
-
-    // ── Task executor selection ─────────────────────────────────
-    // The compute registry (when a target is enrolled) pins placement per
-    // run; otherwise the serialized `slurm` settings route `process` tasks
-    // to the cluster, and everything else stays on the built-in local
-    // executor. Disabled by default — see `SlurmConfig` for the operator
-    // surface.
-    if config.slurm.typed_worker_config.is_some() && !config.slurm.enabled {
-        return Err(Error::Other(
-            "typed-worker placement requires Slurm enabled".into(),
-        ));
-    }
-    if let Some(registry) = compute {
-        // Each target owns admission across sessions. The host CPU count must
-        // not cap remote allocation concurrency; the local target retains its
-        // own shared executor/resource budget.
-        engine.set_unlimited_coordinator_concurrency();
-        engine.set_task_executor(Arc::new(crate::compute::ComputeExecutor(registry.clone())));
-    } else if config.slurm.enabled {
-        let settings = slurm_settings(config)?;
-        let executor = if let Some(path) = &config.slurm.typed_worker_config {
-            // No enrolled target here, so no catalog data domain: the
-            // worker profile's data_home field remains authoritative.
-            let (executor, max_remote_tasks, _) = super::hpc_placement::executor(
-                path,
-                None,
-                settings,
-                &config.state_dir.join("slurm-tasks"),
-                file_storage,
-                config.slurm.apptainer_manifest.is_some(),
-                Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
-                    receipt_root.clone(),
-                )),
-            )?;
-            match max_remote_tasks {
-                Some(limit) => engine.set_coordinator_concurrency(limit)?,
-                None => engine.set_unlimited_coordinator_concurrency(),
-            }
-            executor
-        } else {
-            dag_execution::slurm_backed_executor(
-                settings,
-                config.state_dir.join("slurm-tasks"),
-                Arc::new(dag_core::LocalTaskExecutor::with_workspace_root(
-                    receipt_root.clone(),
-                )),
-            )
-        };
-        engine.set_task_executor(executor);
-        tracing::info!(
-            host = %config.slurm.ssh_host,
-            partition = %config.slurm.partition,
-            typed_workers = config.slurm.typed_worker_config.is_some(),
-            "SharedInfra::open: Slurm task executor enabled"
-        );
-    }
+    // Each target owns admission across sessions, including local concurrency.
+    engine.set_unlimited_coordinator_concurrency();
+    engine.set_task_executor(Arc::new(crate::compute::ComputeExecutor(compute.clone())));
 
     // ── DAG history ──────────────────────────────────────────────
     if config.enable_dag_history {
@@ -1211,14 +1128,33 @@ pub(crate) fn slurm_settings(config: &RuntimeConfig) -> Result<dag_execution::Sl
     } else {
         config.slurm.artifact_root.clone()
     };
+    let apptainer = config
+        .slurm
+        .apptainer_manifest
+        .as_deref()
+        .map(dag_execution::ApptainerSettings::load)
+        .transpose()
+        .map_err(|error| Error::Other(error.to_string()))?
+        .map(|mut settings| {
+            settings.runtime = config.slurm.sif_runtime;
+            if settings.runtime == dag_core::SifRuntime::SingularityCe {
+                settings.program = config
+                    .slurm
+                    .singularity_executable
+                    .clone()
+                    .unwrap_or_else(|| "/usr/bin/singularity".into());
+            }
+            settings.validate().map(|()| settings)
+        })
+        .transpose()
+        .map_err(|error| Error::Other(error.to_string()))?;
+    if !config.slurm.sif_runtime.is_default() && apptainer.is_none() {
+        return Err(Error::Other(
+            "SingularityCE requires an operator SIF manifest".into(),
+        ));
+    }
     Ok(dag_execution::SlurmSettings {
-        apptainer: config
-            .slurm
-            .apptainer_manifest
-            .as_deref()
-            .map(dag_execution::ApptainerSettings::load)
-            .transpose()
-            .map_err(|error| Error::Other(error.to_string()))?,
+        apptainer,
         ssh: dag_execution::SshTarget::new(
             config.slurm.ssh_command.clone(),
             config.slurm.ssh_host.clone(),

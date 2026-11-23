@@ -18,6 +18,7 @@ fn settings() -> TypedWorkerSettings {
         plugins_sha256: None,
         apptainer_catalog: None,
         apptainer_executable: None,
+        sif_runtime: Default::default(),
         podman: None,
         worker_vfs_manifest: None,
         worker_vfs_sha256: None,
@@ -654,7 +655,7 @@ async fn typed_nodes_route_remotely_and_missing_transport_never_falls_back() {
 async fn new_container_plugins_use_bound_backend_only_when_enabled() {
     let local_calls = Arc::new(AtomicUsize::new(0));
     let remote_calls = Arc::new(AtomicUsize::new(0));
-    let placement = || {
+    let placement = |local_kinds| {
         PlacementTaskExecutor::new(
             Arc::new(CaptureExecutor {
                 calls: local_calls.clone(),
@@ -664,7 +665,7 @@ async fn new_container_plugins_use_bound_backend_only_when_enabled() {
                 calls: remote_calls.clone(),
                 capture: false,
             })),
-            vec![],
+            local_kinds,
         )
         .unwrap()
     };
@@ -683,13 +684,13 @@ async fn new_container_plugins_use_bound_backend_only_when_enabled() {
         task
     };
     assert!(matches!(
-        placement().run(invocation()).await,
+        placement(vec![]).run(invocation()).await,
         JobResult::Success { .. }
     ));
     assert_eq!(remote_calls.load(Ordering::SeqCst), 1);
     assert_eq!(local_calls.load(Ordering::SeqCst), 0);
     assert!(matches!(
-        placement()
+        placement(vec![])
             .with_remote_container_dispatch()
             .run(invocation())
             .await,
@@ -701,13 +702,22 @@ async fn new_container_plugins_use_bound_backend_only_when_enabled() {
     let mut native = execution();
     native.submission.spec.spec["delegates_to_container_runtime"] = serde_json::json!(true);
     assert!(matches!(
-        placement()
+        placement(vec![])
             .with_remote_container_dispatch()
             .run(native)
             .await,
         JobResult::Success { .. }
     ));
     assert_eq!(remote_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(local_calls.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        placement(vec!["new-plugin/fresh-container".into()])
+            .with_worker_container_dispatch()
+            .run(invocation())
+            .await,
+        JobResult::Success { .. }
+    ));
+    assert_eq!(remote_calls.load(Ordering::SeqCst), 3);
     assert_eq!(local_calls.load(Ordering::SeqCst), 1);
 }
 

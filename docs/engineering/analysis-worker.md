@@ -17,22 +17,26 @@ cargo build --release -p autonomics-worker
 SSH 主机与 Slurm 集群共用自动接入流程。将同一构建的 `autonomics-worker` 放在 gateway 可执行文件旁边后，最小接入命令为：
 
 ```sh
-autonomics compute enroll ht --backend ssh --login ht
-autonomics compute enroll Csu --backend slurm --login Csu --partition freecpuQ
+autonomics compute enroll ht --backend ssh --login ht --container-runtime-config ./podman.json
+autonomics compute enroll Csu --backend slurm --login Csu --partition freecpuQ --container-runtime-config ./sif.json
 ```
 
 按部署方式提供 gateway 地址和 token。省略 `--worker` 时，系统在远端 `$HOME/.local/share/autonomics/workers/<唯一目录>/autonomics-worker` 部署随附 worker，并校验身份、源码版本与 SHA256，自动生成私有 profile 和端点记录。`--deploy` 可以指定其他本地安装包；显式提供 `--worker` 且省略 `--deploy` 时，只校验该远端已有程序，兼容旧调用。省略 `--backend` 继续按 Slurm 解释，SSH 请求不接受 partition/account。
 
-只填写 `--data-root` 即可使用登录别名创建数据域及只读挂载；不同数据入口再提供 `--data-alias`。scratch 默认位于数据根下的 `scratch`，无数据根则沿用默认远端工作目录。数据源仍可独立配置。
+新 SSH 和 Slurm 目标默认在登录主机创建 `~/.autonomics/compute/<目标ID>`。用 `--storage-root` 指定其他绝对路径，用 `--data-alias` 指定共享文件系统的数据入口。Slurm 根目录必须对登录节点、数据节点和计算节点可见。显式传入旧版 `--data-root` 或 `--scratch` 时沿用旧布局。
 
-GUI 的“接入计算目标”统一选择 SSH / Slurm，路径和传输选项收在“高级选项”。TUI 新建远端目标也调用同一注册接口，不再要求手写 worker profile；现有目标仍可编辑高级配置。自动接入完成只证明连接和 worker 身份已通过校验，实际任务能力仍需 readiness 和任务执行验收。
+统一目录包括 `data/`、`dag-tasks/`、`work/`、`images/`、`runtime/` 和 `panels/`。远端 `data/` 的访问入口是 `<目标域>://`，允许读写，实际能力受 SSH 账号权限约束。任务保留产物有独立的只读域。镜像和运行时目录只由执行器访问。Slurm 的 SIF 文件由运维放入 `images/sif/`，并在目标的清单里登记远端路径和摘要。
+
+已有实例可停机切换。先停止新任务并等待正在运行的任务结束，备份注册表和 VFS 配置。远端建议用新目标 ID 接入统一布局，复制所需数据，准备镜像和清单，验证后选择新目标。保留旧目标对应的数据源和任务目录，供旧 URI 和回滚使用。本地可在 `<state_dir>/storage-layout-v1` 创建标记文件后重启。在启用前，把需要保留的数据和缓存放到 `<state_dir>/data` 和 `<state_dir>/panels`，核对已有 `vfs.toml` 根挂载，原路径上的历史产物应继续可读。新 Podman 仓库位于 `images/podman/`，运行状态位于 `runtime/podman/`。通过镜像仓库或 OCI 归档重新填充镜像，保留旧仓库。回滚时恢复配置并移除标记，再重启。
+
+GUI 的“接入计算目标”统一选择 SSH / Slurm，路径和传输选项收在“高级选项”。TUI 新建远端目标时在 Container runtime JSON 中填写运行时配置；现有目标仍可编辑高级配置。自动接入完成只证明连接和 worker 身份已通过校验，实际任务能力仍需 readiness 和任务执行验收。
 
 在已有 enroll 命令中，将 `--deploy` 改为 worker 的本地绝对路径，`--worker` 仍为远端安装路径：
 
 ```sh
 ./target/release/autonomics compute enroll Csu \
-  --login Csu --data-alias Csu \
-  --data-root /public/home/hpc268211106 \
+  --login Csu --data-alias Csu --container-runtime-config ./sif.json \
+  --storage-root /public/home/hpc268211106/autonomics-compute \
   --worker /public/home/hpc268211106/bin/autonomics-worker \
   --deploy "$PWD/target/release/autonomics-worker" \
   --python /public/home/hpc268211106/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12 \
@@ -47,6 +51,25 @@ GUI 的“接入计算目标”统一选择 SSH / Slurm，路径和传输选项�
 TUI 的 Compute Dashboard 中，选择 SSH 或 Slurm 目标后按 `w` 可直接恢复连接。系统使用已保存的 SSH、Python、worker 和站点配置重新连接并校验；远端 worker 已匹配时直接完成。需要更新时，gateway 自动读取与自身可执行文件同目录的 `autonomics-worker`，验证其身份后部署到新的远端路径，更新该目标的当前配置；正在运行的 DAG 继续使用启动时的执行器。发布和安装 gateway 时须将同一源码构建的独立 worker 一起安装到该目录；修复过程无需填写路径或重新配置目标；旧 SSH 目标没有 worker profile 时，也会自动补装并生成配置。
 
 恢复期间 Dashboard 右侧显示实时事件，包括 SSH 认证、stdout/stderr、worker 身份检查、上传进度及目标激活结果。显示保留最近 200 条事件，长行自动换行并跟随最新输出；失败信息保留在事件视图中。完成后按 Esc 返回目标详情。进度连接中断时不会自动重放修复请求，应先刷新检查目标状态。
+
+### Worker 配置的存储
+
+每个 SSH 或 Slurm 目标的 `backend.settings.typed_worker` 随目标一起保存在网关的 `<状态目录>/compute/registry.json`。GUI 可直接编辑这个 JSON 对象。执行和重启直接读取注册表。保存目标时仍可显式导入网关本地的配置文件。离线镜像清单和插件仍由远端主机提供。
+
+### 直接 SSH 目标使用 Podman
+
+SSH 目标在接入和编辑时都要求 Podman。填写远端插件目录、Podman 可执行文件、离线镜像清单及各自的 SHA-256。编辑时，表单会回填已登记的 worker 信息，其他选项可在「高级 worker 配置（JSON）」中修改。Slurm 目标接入时需要网关本地的 SIF 镜像清单，可选择 Apptainer 或 SingularityCE。本地目标使用网关侧 Podman。
+
+命令行接入使用 `--container-runtime-config <json>`。SSH 的 JSON 包含 `type: "podman"`、`plugins_root`、`plugins_sha256` 和带二进制及镜像清单路径与摘要的 `podman` 对象。Slurm 的 JSON 包含 `type: "sif"`、`image_manifest` 和可选的 `runtime`（`apptainer` 或 `singularity_ce`）。
+
+旧注册表中缺少这些配置的未删除远端目标会导致网关启动失败。升级前需要为这些目标补齐运行时配置。
+
+SSH 站点需要将 worker 放在 cgroup v2 委派父目录下的专用叶子里。父目录须可由远端账号写入、没有内部进程，并为子组启用 CPU、内存和 PID 控制器。保存配置验证 profile，远端 worker 在启动容器前验证实际委派和镜像。SSH 进程组无法证明容器与辅助进程都已停止时，取消会报告状态未确认并保留远端工作区。
+
+### Slurm SIF runtime
+
+在「计算目标 → 编辑」中选择 Apptainer 或 SingularityCE。两种运行时使用相同的 OCI digest 到 SIF 路径和 SHA-256 映射。Apptainer 使用清单中的 `program`。SingularityCE 默认使用计算节点上的 `/usr/bin/singularity`，可在目标配置中用 `singularity_executable` 指定其他绝对路径。旧目标省略 `sif_runtime` 时使用 Apptainer。保存配置后，新运行使用更新后的目标，已有运行继续使用其绑定的执行器。
+
 
 ## 计算目标配置
 

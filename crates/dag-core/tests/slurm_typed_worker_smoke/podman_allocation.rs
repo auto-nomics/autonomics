@@ -172,8 +172,7 @@ print(json.dumps({{'root':p['root'],'uid':s.st_uid,'gid':s.st_gid,'inode':s.st_i
 "#,
         literal = serde_json::to_string(&payload)?
     );
-    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host)
-        .with_command_timeout(Duration::from_secs(60));
+    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host);
     let value = python(
         &ssh,
         &settings.remote_python,
@@ -614,8 +613,7 @@ async fn plugin_readback(
     label: &str,
     expected: &str,
 ) -> SmokeResult<()> {
-    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host)
-        .with_command_timeout(Duration::from_secs(60));
+    let ssh = SshTarget::new(&profile.ssh_program, &profile.ssh_host);
     let evidence = capture(
         &ssh,
         &format!(

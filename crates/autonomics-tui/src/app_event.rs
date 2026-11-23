@@ -158,6 +158,7 @@ pub(crate) enum AppEvent {
     HpcRepairFinished(std::result::Result<serde_json::Value, String>),
     /// Site profile persisted via `PUT /hpc/config`.
     HpcProfileSaved(std::result::Result<serde_json::Value, String>),
+    HpcCheckFinished(std::result::Result<String, String>),
     /// Directory listing from `GET /vfs/list` (cwd + entries).
     VfsListingLoaded(std::result::Result<(String, Vec<vfs::browse::VfsEntry>), String>),
     /// Text preview from `GET /vfs/text`.

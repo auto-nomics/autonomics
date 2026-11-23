@@ -70,7 +70,13 @@ pub fn build_default_registry_with_container_execution(
 
     // ── Phase 3: IO, causal, lcmm, mr, survey bundles ──────────────────
     #[cfg(feature = "bundle-io")]
-    registry.register_plugin(&nodes_io::Plugin::new());
+    {
+        registry.register_plugin(&nodes_io::Plugin::new());
+        registry.register(Box::new(nodes_io::script_nodes::ScriptNodeFactory::python(
+            Arc::clone(&container_execution.runtime),
+            Arc::clone(&container_execution.panel_cache),
+        )));
+    }
     #[cfg(feature = "bundle-opengwas")]
     registry.register_plugin(&nodes_opengwas::Plugin);
     #[cfg(feature = "bundle-causal")]
@@ -134,6 +140,30 @@ pub fn build_default_registry_with_container_execution(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "bundle-io")]
+    #[test]
+    fn python_script_factory_is_registered() {
+        let registry = build_default_registry(
+            datafusion::prelude::SessionContext::new().runtime_env(),
+            None,
+            Arc::new(BundleRegistry::new()),
+        );
+        let kind = nodes_io::script_nodes::PYTHON_SCRIPT_KIND;
+        let spec = serde_json::json!({
+            "code": "result = table",
+            "inputs": [{"name": "table", "kind": "dataframe"}],
+            "outputs": [{"name": "result", "kind": "dataframe"}]
+        });
+
+        assert!(registry.list_nodes().iter().any(|node| node.kind == kind));
+        let ports = registry
+            .get_node_ports_for_spec(kind, spec.clone())
+            .unwrap();
+        assert_eq!(ports.input_ports().len(), 1);
+        assert_eq!(ports.output_ports().len(), 1);
+        registry.build_node(kind, spec).unwrap();
+    }
 
     #[test]
     fn generic_container_command_factory_is_not_registered() {

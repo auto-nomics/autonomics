@@ -28,15 +28,12 @@ The embedding node creates `X_pca`, `X_umap`, neighbor graphs in `obsp`, paramet
 
 | Node | Inputs | Outputs |
 | --- | --- | --- |
-| `h5ad_obs_to_dataframe` | `h5ad` | DataFrame |
 | `sql` | one or more DataFrames | DataFrame |
 | `dataframe_to_file` | DataFrame | selected file |
 | `datafusion_sql` | `parquet` | result `parquet` |
 | `h5ad_subset_by_obs` | `h5ad`, `selection_parquet` | `output.h5ad`, `report.json` |
 
-`h5ad_obs_to_dataframe` is the canonical H5AD metadata path. It reads only `/obs` and explicitly selected `/obsm` matrices, emits `cell_id` first, and streams record batches into DataFusion without materializing a full intermediate Parquet table. Its first release supports numeric arrays, booleans, strings, string-valued categoricals, nullable integer/boolean/string arrays, and numeric `obsm` matrices. `validate_unique_ids` can be disabled when an upstream H5AD node has already enforced the unique-ID contract.
-
-`datafusion_sql` is a generic Parquet-to-Parquet SQL node; it does not read the opaque H5AD main path. The reverse bridge keeps H5AD row order and reports matched and missing IDs.
+`datafusion_sql` is a generic Parquet-to-Parquet SQL node; it does not read the opaque H5AD main path. `h5ad_subset_by_obs` takes an existing Parquet selection and keeps H5AD row order while reporting matched and missing IDs.
 
 ## Workflow shape
 
@@ -50,12 +47,6 @@ file_reference(h5ad)
   -> h5ad_qc_filter
   -> h5ad_pca_neighbors_umap_leiden
   -> h5ad_celltypist_annotate
-
-h5ad_qc_filter
-  -> h5ad_obs_to_dataframe
-  -> sql
-  -> dataframe_to_file
-  -> h5ad_subset_by_obs(h5ad=h5ad_qc_filter.output[0])
 
 h5ad_pca_neighbors_umap_leiden
   -> h5ad_cluster_mean_expression

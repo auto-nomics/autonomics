@@ -33,7 +33,9 @@ export async function startEnrollment(request: EnrollComputeRequest) {
   publish({ targetId: request.id, startedAt: Date.now(), status: "running", stage: "validate", events: [], steps: [
     "validate", "authenticate",
     ...(request.deploy_worker ? ["prepare_directory", "check_python", "upload", "commit_upload", "chmod"] : []),
-    "probe_worker", "worker_profile", ...(request.data_alias ? ["data_source"] : []),
+    "probe_worker", "worker_profile",
+    ...(!request.data_root ? ["prepare_data_directory"] : []),
+    "data_source",
     "save_target", ...(request.select ? ["select_target"] : []),
   ] });
   try {

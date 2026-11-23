@@ -1,7 +1,15 @@
 //! Enrollment connection lifecycle and step diagnostics. Authentication is
 //! reused through the process-wide OpenSSH master policy; this object does
 //! not retain a remote shell or retry operations with side effects.
-use super::enroll::{EnrollProgress, shq, valid_sha256};
+use super::{EnrollProgress, EnrollStage};
+
+fn shq(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
 
 pub(super) struct ClusterConnection {
     id: String,
@@ -35,7 +43,7 @@ impl ClusterConnection {
 
     pub fn with_progress(mut self, progress: EnrollProgress) -> Self {
         progress.report(
-            "connection",
+            EnrollStage::Connection,
             &format!(
                 "连接目标 {}；SSH={}；连接复用={}",
                 self.alias,
@@ -47,30 +55,23 @@ impl ClusterConnection {
         self
     }
 
-    async fn run(&self, stage: &str, script: &str) -> Result<std::process::Output, String> {
-        let label = match stage {
-            "authenticate" => "正在连接集群并验证 SSH 身份",
-            "prepare_directory" => "正在准备远端 worker 目录",
-            "check_python" => "正在检查远端 Python",
-            "chmod" => "正在设置 worker 执行权限",
-            "probe_worker" => "正在校验 worker 可执行文件和 SHA256",
-            _ => stage,
-        };
+    async fn run(&self, stage: EnrollStage, script: &str) -> Result<std::process::Output, String> {
+        let label = stage.label();
         self.progress.report(stage, label);
         let started = std::time::Instant::now();
-        tracing::info!(target = %self.id, alias = %self.alias, stage, "cluster step started");
+        tracing::info!(target = %self.id, alias = %self.alias, stage = ?stage, "cluster step started");
         let observe = |stream: &str, text: &str| {
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
                 self.progress.report(stage, &format!("{stream}: {line}"));
             }
         };
         let output = self.ssh.run_script_once_with_output(script, &observe).await.map_err(|error| {
-            tracing::error!(target = %self.id, alias = %self.alias, stage, %error, "cluster step failed");
+            tracing::error!(target = %self.id, alias = %self.alias, stage = ?stage, %error, "cluster step failed");
             format!("cluster {} step {stage}: {error}", self.alias)
         })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::info!(target = %self.id, alias = %self.alias, stage,
+        tracing::info!(target = %self.id, alias = %self.alias, stage = ?stage,
             elapsed_ms = started.elapsed().as_millis() as u64,
             status = %output.status, stdout = %stdout.trim(), stderr = %stderr.trim(),
             "cluster step finished");
@@ -85,19 +86,21 @@ impl ClusterConnection {
         }
         self.progress.report(
             stage,
-            &format!("完成（{} ms）", started.elapsed().as_millis()),
+            &format!("finished ({} ms)", started.elapsed().as_millis()),
         );
         Ok(output)
     }
 
     pub async fn authenticate(&self) -> Result<(), String> {
-        self.run("authenticate", "printf 'AUTONOMICS_CONNECTED\n'")
+        self.run(EnrollStage::Authenticate, "printf 'AUTONOMICS_CONNECTED\n'")
             .await?;
         Ok(())
     }
 
     pub async fn home_directory(&self) -> Result<String, String> {
-        let output = self.run("remote_home", "printf '%s' \"$HOME\"").await?;
+        let output = self
+            .run(EnrollStage::RemoteHome, "printf '%s' \"$HOME\"")
+            .await?;
         let home = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
         if !super::is_domain_absolute(&home) {
             return Err("remote HOME must be a clean absolute directory".into());
@@ -105,10 +108,19 @@ impl ClusterConnection {
         Ok(home)
     }
 
+    pub async fn prepare_data_directory(&self, root: &str) -> Result<(), String> {
+        self.run(
+            EnrollStage::PrepareDataDirectory,
+            &format!("umask 077; mkdir -p -- {}", shq(root)),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn probe_worker(&self, path: &str) -> Result<String, String> {
         let output = self
             .run(
-                "probe_worker",
+                EnrollStage::ProbeWorker,
                 &format!("test -x {0} && sha256sum {0}", shq(path)),
             )
             .await?;
@@ -124,10 +136,12 @@ impl ClusterConnection {
     }
 
     pub async fn verify_worker_identity(&self, path: &str, sha256: &str) -> Result<(), String> {
-        self.progress
-            .report("probe_worker", "正在验证独立 worker 协议和源码版本");
+        self.progress.report(
+            EnrollStage::ProbeWorker,
+            "正在验证独立 worker 协议和源码版本",
+        );
         let output = self
-            .run("probe_worker", &format!("{} identity", shq(path)))
+            .run(EnrollStage::ProbeWorker, &format!("{} identity", shq(path)))
             .await.map_err(|error| format!(
                 "{error}; deploy the standalone target/release/autonomics-worker, built from the same source revision as the gateway"
             ))?;
@@ -139,7 +153,7 @@ impl ClusterConnection {
             .validate(sha256)
             .map_err(|error| error.to_string())?;
         self.progress.report(
-            "probe_worker",
+            EnrollStage::ProbeWorker,
             &format!(
                 "独立 worker 已就绪；协议={}；源码={}",
                 identity.protocol, identity.source_revision
@@ -166,9 +180,9 @@ impl ClusterConnection {
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "/".into());
         let mkdir = format!("mkdir -p {}", shq(&parent));
-        self.run("prepare_directory", &mkdir).await?;
+        self.run(EnrollStage::PrepareDirectory, &mkdir).await?;
         self.run(
-            "check_python",
+            EnrollStage::CheckPython,
             &format!("{} -I -c {}", shq(python), shq("import sys; print(sys.version); assert sys.version_info >= (3, 7), 'Python 3.7+ required'")),
         )
         .await?;
@@ -194,7 +208,7 @@ impl ClusterConnection {
             vfs::build_ssh_operator_with_program(&self.alias, &root, python, None, &self.program)
                 .map_err(|error| format!("worker deploy channel: {error}"))?;
         let object_path = file_name;
-        tracing::info!(target = %self.id, alias = %self.alias, stage = "upload", bytes = metadata.len(), "cluster step started");
+        tracing::info!(target = %self.id, alias = %self.alias, stage = ?EnrollStage::Upload, bytes = metadata.len(), "cluster step started");
         self.progress.upload(
             &format!("正在上传 worker，共 {} 字节", metadata.len()),
             0,
@@ -222,7 +236,7 @@ impl ClusterConnection {
             opendal::Writer::write(&mut writer, buffer)
             .await
             .map_err(|error| {
-                tracing::error!(target = %self.id, stage = "upload", uploaded, %error, "cluster step failed");
+                tracing::error!(target = %self.id, stage = ?EnrollStage::Upload, uploaded, %error, "cluster step failed");
                 format!("worker deploy upload failed after {uploaded} bytes: {error}")
             })?;
             uploaded += read as u64;
@@ -233,23 +247,23 @@ impl ClusterConnection {
                     uploaded,
                     metadata.len(),
                 );
-                tracing::info!(target = %self.id, stage = "upload", uploaded, total = metadata.len(), "cluster upload progress");
+                tracing::info!(target = %self.id, stage = ?EnrollStage::Upload, uploaded, total = metadata.len(), "cluster upload progress");
             }
         }
-        tracing::info!(target = %self.id, stage = "commit_upload", uploaded, "cluster step started");
+        tracing::info!(target = %self.id, stage = ?EnrollStage::CommitUpload, uploaded, "cluster step started");
         self.progress
             .upload("上传完成，正在提交", uploaded, metadata.len());
         self.progress
-            .report("commit_upload", "正在提交上传文件（原子替换）");
+            .report(EnrollStage::CommitUpload, "正在提交上传文件（原子替换）");
         opendal::Writer::close(&mut writer)
             .await
             .map_err(|error| {
-                tracing::error!(target = %self.id, stage = "commit_upload", %error, "cluster step failed");
+                tracing::error!(target = %self.id, stage = ?EnrollStage::CommitUpload, %error, "cluster step failed");
                 format!("worker deploy commit failed: {error}")
             })?;
-        tracing::info!(target = %self.id, stage = "upload", uploaded, "cluster step finished");
+        tracing::info!(target = %self.id, stage = ?EnrollStage::Upload, uploaded, "cluster step finished");
         let chmod = format!("chmod +x {}", shq(destination));
-        self.run("chmod", &chmod).await?;
+        self.run(EnrollStage::Chmod, &chmod).await?;
         tracing::info!(
             destination,
             bytes = metadata.len(),
@@ -327,7 +341,7 @@ mod tests {
         let events = stages.lock().unwrap().clone();
         let upload: Vec<_> = events
             .iter()
-            .filter(|event| event.stage == "upload")
+            .filter(|event| event.stage == EnrollStage::Upload)
             .collect();
         assert_eq!(upload.first().unwrap().uploaded_bytes, Some(0));
         assert_eq!(upload.last().unwrap().uploaded_bytes, Some(12));

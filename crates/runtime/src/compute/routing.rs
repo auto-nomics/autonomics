@@ -156,7 +156,7 @@ impl PodmanConnection for ContainerRouter {
     }
 }
 
-pub(crate) struct UnavailableContainers {
+pub(crate) struct WorkerContainers {
     pub root: PathBuf,
 }
 
@@ -195,17 +195,19 @@ impl container_runtime::ImageBuildConnection for ImageBuilder {
     }
 }
 #[async_trait]
-impl PodmanConnection for UnavailableContainers {
+impl PodmanConnection for WorkerContainers {
     fn workspace_root(&self) -> &Path {
         &self.root
     }
     fn name(&self) -> &'static str {
-        "unavailable-remote-container"
+        "remote-worker-podman"
     }
     async fn run(
         &self,
         _: ContainerRunRequest,
     ) -> Result<ContainerRunResult, ContainerRuntimeError> {
-        Err(ContainerRuntimeError::Invalid("selected Slurm target has no admitted Apptainer image manifest; local fallback is disabled".into()))
+        Err(ContainerRuntimeError::Invalid(
+            "SSH Podman containers must be dispatched as typed-worker tasks".into(),
+        ))
     }
 }

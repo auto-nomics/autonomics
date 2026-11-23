@@ -480,7 +480,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "windows-sys 0.60.2",
  "x11rb",
@@ -518,7 +518,7 @@ checksum = "ba6958a87117ff5e1d0d7716856a4303752518012ec4a67a68446b6631a1a54d"
 dependencies = [
  "anyhow",
  "cfg-if 1.0.5",
- "ndarray 0.16.1",
+ "ndarray",
  "num-complex 0.4.6",
  "num-integer",
  "num-traits",
@@ -2121,7 +2121,7 @@ dependencies = [
  "derive-new",
  "libm",
  "matrixmultiply",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "portable-atomic-util",
  "rand 0.8.8",
@@ -3210,7 +3210,7 @@ dependencies = [
  "document-features",
  "futures-core",
  "mio",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rustix 1.1.5",
  "signal-hook",
  "signal-hook-mio",
@@ -3679,7 +3679,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
- "parking_lot_core 0.9.12",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -3748,7 +3748,7 @@ dependencies = [
  "nodes-survival",
  "nodes-writing",
  "num-traits",
- "parking_lot 0.12.5",
+ "parking_lot",
  "parquet",
  "plugin",
  "regex",
@@ -3843,7 +3843,7 @@ dependencies = [
  "liblzma",
  "log",
  "object_store",
- "parking_lot 0.12.5",
+ "parking_lot",
  "parquet",
  "rand 0.9.5",
  "regex",
@@ -3876,7 +3876,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
- "parking_lot 0.12.5",
+ "parking_lot",
  "tokio",
 ]
 
@@ -4070,7 +4070,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "object_store",
- "parking_lot 0.12.5",
+ "parking_lot",
  "parquet",
  "tokio",
 ]
@@ -4098,7 +4098,7 @@ dependencies = [
  "futures",
  "log",
  "object_store",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rand 0.9.5",
  "tempfile",
  "url",
@@ -4244,7 +4244,7 @@ dependencies = [
  "datafusion-common",
  "datafusion-expr",
  "datafusion-physical-plan",
- "parking_lot 0.12.5",
+ "parking_lot",
  "paste",
 ]
 
@@ -4324,7 +4324,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap 2.14.2",
  "itertools 0.14.0",
- "parking_lot 0.12.5",
+ "parking_lot",
  "paste",
  "petgraph",
  "recursive",
@@ -4360,7 +4360,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap 2.14.2",
  "itertools 0.14.0",
- "parking_lot 0.12.5",
+ "parking_lot",
 ]
 
 [[package]]
@@ -4409,7 +4409,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "num-traits",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project-lite",
  "tokio",
 ]
@@ -4442,7 +4442,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-physical-plan",
- "parking_lot 0.12.5",
+ "parking_lot",
 ]
 
 [[package]]
@@ -6497,7 +6497,7 @@ checksum = "c55bff2f32f6f5a95bdd43e5e5e01b0656250cffbc48eda19db0afa3d73adf2f"
 dependencies = [
  "gix-hash",
  "hashbrown 0.17.1",
- "parking_lot 0.12.5",
+ "parking_lot",
 ]
 
 [[package]]
@@ -6582,7 +6582,7 @@ checksum = "3dd7dd8df3345933caddd6ce67821c9eec17192564f1011cf0bd0b8cb0d07ffb"
 dependencies = [
  "gix-fs",
  "libc",
- "parking_lot 0.12.5",
+ "parking_lot",
  "tempfile",
  "windows-sys 0.61.2",
 ]
@@ -7042,74 +7042,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "hdf5"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdcd9b131fd67bb827b386d0dc63d3e74196a14616ef800acf87ca5fef741a10"
-dependencies = [
- "bitflags 1.3.2",
- "cfg-if 1.0.5",
- "hdf5-derive",
- "hdf5-sys",
- "hdf5-types",
- "lazy_static",
- "libc",
- "ndarray 0.15.6",
- "parking_lot 0.11.2",
- "paste",
-]
-
-[[package]]
-name = "hdf5-derive"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5a77ac6a41e6880594d506118c0b8bc665ec959fe4636e0c84809756d224820"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.109",
-]
-
-[[package]]
-name = "hdf5-src"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01493db39ddc0519cf2a83d620d2c037fee60f4fed724cb72dc23763f1727a8"
-dependencies = [
- "cmake",
- "libz-sys",
-]
-
-[[package]]
-name = "hdf5-sys"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4842d5980dc311a7c8933c7b45534fdae84df5ae7939a0ae8e449a56d4beb3d2"
-dependencies = [
- "hdf5-src",
- "libc",
- "libloading 0.7.4",
- "libz-sys",
- "pkg-config",
- "regex",
- "serde",
- "serde_derive",
- "winreg 0.10.1",
-]
-
-[[package]]
-name = "hdf5-types"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b47268c0dfb499b1ffe5638b6e7694e7a87fe49fb92eca998a4346e5483e428f"
-dependencies = [
- "ascii",
- "cfg-if 1.0.5",
- "hdf5-sys",
- "libc",
 ]
 
 [[package]]
@@ -8783,7 +8715,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "87b84e47ca7a9d63f5be24c104e216c8263bfada38080cbdfe1082e611a81fd3"
 dependencies = [
  "approx 0.5.1",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "rand 0.8.8",
  "sprs",
@@ -8797,7 +8729,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8e64d10998bf9be17e78ca2886e5f7f543c1a24ace6e5b0c5e819bd5b7aed49"
 dependencies = [
  "linfa",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-stats",
  "thiserror 2.0.20",
 ]
@@ -8811,7 +8743,7 @@ dependencies = [
  "linfa",
  "linfa-linalg",
  "linfa-nn",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "ndarray-stats",
  "noisy_float",
@@ -8830,7 +8762,7 @@ dependencies = [
  "approx 0.5.1",
  "linfa",
  "linfa-linalg",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "thiserror 2.0.20",
 ]
@@ -8843,7 +8775,7 @@ checksum = "28e48cb23c1b19c12ab2e376e26d904730aabdd6db971be959a056ee0129ba28"
 dependencies = [
  "linfa",
  "linfa-trees",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "rand 0.8.8",
 ]
@@ -8857,7 +8789,7 @@ dependencies = [
  "kodama",
  "linfa",
  "linfa-kernel",
- "ndarray 0.16.1",
+ "ndarray",
  "thiserror 2.0.20",
 ]
 
@@ -8869,7 +8801,7 @@ checksum = "a875ea331d6b9772730bb55baff6e04ee428607f118f3572d3f28949a62f28db"
 dependencies = [
  "linfa",
  "linfa-linalg",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "ndarray-stats",
  "num-traits",
@@ -8885,7 +8817,7 @@ checksum = "c3531f4d2c1636a1aad360ad5b8ca6196523b742c981d9b917fcbd2274393987"
 dependencies = [
  "linfa",
  "linfa-nn",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "sprs",
 ]
@@ -8899,7 +8831,7 @@ dependencies = [
  "linfa",
  "linfa-linalg",
  "linfa-preprocessing",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-stats",
  "thiserror 2.0.20",
 ]
@@ -8910,7 +8842,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02a834c0ec063937688a0d13573aa515ab8c425bd8de3154b908dd3b9c197dc4"
 dependencies = [
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "rand 0.8.8",
  "thiserror 1.0.69",
@@ -8926,7 +8858,7 @@ dependencies = [
  "argmin-math",
  "linfa",
  "linfa-linalg",
- "ndarray 0.16.1",
+ "ndarray",
  "num-traits",
  "thiserror 2.0.20",
 ]
@@ -8940,7 +8872,7 @@ dependencies = [
  "argmin",
  "argmin-math",
  "linfa",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-stats",
  "num-traits",
  "thiserror 2.0.20",
@@ -8954,7 +8886,7 @@ checksum = "d7ba257f89880df17b486e67731ef20c4a748a5f5f5eaace010853f69a0beee3"
 dependencies = [
  "kdtree",
  "linfa",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-stats",
  "noisy_float",
  "num-traits",
@@ -8970,7 +8902,7 @@ checksum = "962eef849bea0fa6fd7ba512159c41f890d42ad780ca59ba2f59bc0d7d98fe96"
 dependencies = [
  "linfa",
  "linfa-linalg",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "ndarray-stats",
  "num-traits",
@@ -8989,7 +8921,7 @@ dependencies = [
  "itertools 0.14.0",
  "linfa",
  "linfa-linalg",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "ndarray-stats",
  "regex",
@@ -9007,7 +8939,7 @@ dependencies = [
  "linfa",
  "linfa-kernel",
  "linfa-linalg",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "num-traits",
  "rand 0.8.8",
@@ -9024,7 +8956,7 @@ checksum = "2bd4acc489c5667fc7ed9796e9a0aa2e1138966c2b34d61422d5433e40ca6337"
 dependencies = [
  "linfa",
  "linfa-kernel",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "num-traits",
  "thiserror 2.0.20",
@@ -9037,7 +8969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a11824d0811f8a2d3ae95a6498babc49fc63240d33b8753358e8be105ee2c38"
 dependencies = [
  "linfa",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
 ]
 
@@ -9049,7 +8981,7 @@ checksum = "8b792e979fa8d31c24b9f4a84a918a5e95d53e98dabd43a4f019bce1ab642b42"
 dependencies = [
  "bhtsne",
  "linfa",
- "ndarray 0.16.1",
+ "ndarray",
  "ndarray-rand",
  "pdqselect",
  "thiserror 2.0.20",
@@ -9176,15 +9108,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
 dependencies = [
  "twox-hash",
-]
-
-[[package]]
-name = "lzf-sys"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "411d1ba1d5d217b00615238cb6e9d68fbb93dc422f68e3396b5cf803ad832b6f"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -9568,7 +9491,7 @@ dependencies = [
  "linfa-svm",
  "linfa-trees",
  "linfa-tsne",
- "ndarray 0.16.1",
+ "ndarray",
  "rand 0.8.8",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
@@ -9806,19 +9729,6 @@ dependencies = [
 
 [[package]]
 name = "ndarray"
-version = "0.15.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adb12d4e967ec485a5f71c6311fe28158e9d6f4bc4a447b474184d0f91a8fa32"
-dependencies = [
- "matrixmultiply",
- "num-complex 0.4.6",
- "num-integer",
- "num-traits",
- "rawpointer",
-]
-
-[[package]]
-name = "ndarray"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
@@ -9840,7 +9750,7 @@ version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f093b3db6fd194718dcdeea6bd8c829417deae904e3fcc7732dabcd4416d25d8"
 dependencies = [
- "ndarray 0.16.1",
+ "ndarray",
  "rand 0.8.8",
  "rand_distr 0.4.3",
 ]
@@ -9853,7 +9763,7 @@ checksum = "17ebbe97acce52d06aebed4cd4a87c0941f4b2519b59b82b4feb5bd0ce003dfd"
 dependencies = [
  "indexmap 2.14.2",
  "itertools 0.13.0",
- "ndarray 0.16.1",
+ "ndarray",
  "noisy_float",
  "num-integer",
  "num-traits",
@@ -10113,7 +10023,6 @@ dependencies = [
  "encoding_rs",
  "enrichr-sdk",
  "ensembl",
- "errno",
  "eutils",
  "flate2",
  "futures",
@@ -10121,8 +10030,6 @@ dependencies = [
  "gwascatalog-sdk",
  "hca",
  "hcl",
- "hdf5",
- "hdf5-sys",
  "htan",
  "hubmap",
  "interpro",
@@ -10130,7 +10037,6 @@ dependencies = [
  "kpmp",
  "libc",
  "liblzma",
- "lzf-sys",
  "nemo",
  "openalex",
  "opendal",
@@ -11086,7 +10992,7 @@ dependencies = [
  "http 1.5.0",
  "humantime",
  "itertools 0.14.0",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "thiserror 2.0.20",
  "tokio",
@@ -11509,37 +11415,12 @@ checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
 name = "parking_lot"
-version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d17b78036a60663b797adeaee46f5c9dfebb86948d1255007a1d6be0271ff99"
-dependencies = [
- "instant",
- "lock_api",
- "parking_lot_core 0.8.6",
-]
-
-[[package]]
-name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
 dependencies = [
  "lock_api",
- "parking_lot_core 0.9.12",
-]
-
-[[package]]
-name = "parking_lot_core"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60a2cfe6f0ad2bfc16aefa463b497d5c7a5ecd44a23efa72aa342d90177356dc"
-dependencies = [
- "cfg-if 1.0.5",
- "instant",
- "libc",
- "redox_syscall 0.2.16",
- "smallvec",
- "winapi",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -11550,7 +11431,7 @@ checksum = "2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1"
 dependencies = [
  "cfg-if 1.0.5",
  "libc",
- "redox_syscall 0.5.18",
+ "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
 ]
@@ -12269,7 +12150,7 @@ version = "31.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf52d87428247c5aa3760ac8e7d8b13ec7b3579b955a8c3f311668b6860acba5"
 dependencies = [
- "parking_lot 0.12.5",
+ "parking_lot",
 ]
 
 [[package]]
@@ -13062,15 +12943,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ba239c1c1693315d3cc0e601db3b3965543afbf48c41730fdca2f069f510f4a"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "redox_syscall"
-version = "0.2.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb5a58c1855b4b6819d59012155603f0b22ad30cad752600aadfcb695265519a"
-dependencies = [
- "bitflags 1.3.2",
 ]
 
 [[package]]
@@ -14468,7 +14340,7 @@ dependencies = [
  "futures-util",
  "log",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "serial_test_derive",
 ]
 
@@ -14817,7 +14689,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-quartz-core",
  "raw-window-handle",
- "redox_syscall 0.5.18",
+ "redox_syscall",
  "tracing",
  "wasm-bindgen",
  "web-sys",
@@ -14900,7 +14772,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "704ef26d974e8a452313ed629828cd9d4e4fa34667ca1ad9d6b1fffa43c6e166"
 dependencies = [
  "alga",
- "ndarray 0.16.1",
+ "ndarray",
  "num-complex 0.4.6",
  "num-traits",
  "num_cpus",
@@ -15039,7 +14911,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a18596f8c785a729f2819c0f6a7eae6ebeebdfffbfe4214ae6b087f690e31901"
 dependencies = [
  "new_debug_unreachable",
- "parking_lot 0.12.5",
+ "parking_lot",
  "phf_shared 0.13.1",
  "precomputed-hash",
 ]
@@ -15524,7 +15396,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-ui-kit",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "percent-encoding",
  "raw-window-handle",
  "tao-macros",
@@ -16237,7 +16109,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9048a889effe34a5cddee0af7f53285198b16dca3be510858d38dfdb3e62a04e"
 dependencies = [
  "bitflags 2.13.2",
- "parking_lot 0.12.5",
+ "parking_lot",
  "rustix 1.1.5",
  "signal-hook",
  "windows-sys 0.61.2",
@@ -16555,7 +16427,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
@@ -17171,7 +17043,7 @@ dependencies = [
  "num-bigint 0.4.8",
  "num-traits",
  "pack1",
- "parking_lot 0.12.5",
+ "parking_lot",
  "pastey",
  "polling",
  "rand 0.9.5",
@@ -17247,7 +17119,7 @@ checksum = "18c1dc1c0304348c39b97bc6b27cdcb1d7292454ebd0de0f30b5ee3a4c61f9bb"
 dependencies = [
  "bindgen 0.69.5",
  "env_logger",
- "parking_lot 0.12.5",
+ "parking_lot",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -17299,7 +17171,7 @@ dependencies = [
  "bindgen 0.69.5",
  "env_logger",
  "genawaiter",
- "parking_lot 0.12.5",
+ "parking_lot",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -18391,7 +18263,7 @@ dependencies = [
  "js-sys",
  "log",
  "naga",
- "parking_lot 0.12.5",
+ "parking_lot",
  "profiling",
  "raw-window-handle",
  "smallvec",
@@ -18419,7 +18291,7 @@ dependencies = [
  "log",
  "naga",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "profiling",
  "raw-window-handle",
  "rustc-hash 1.1.0",
@@ -18460,7 +18332,7 @@ dependencies = [
  "ndk-sys 0.5.0+25.2.9519653",
  "objc",
  "once_cell",
- "parking_lot 0.12.5",
+ "parking_lot",
  "profiling",
  "range-alloc",
  "raw-window-handle",
@@ -19192,7 +19064,6 @@ version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
- "serde",
  "winapi",
 ]
 

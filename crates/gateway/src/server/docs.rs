@@ -4,8 +4,8 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityRequirement
 use utoipa::{Modify, OpenApi};
 
 use super::{
-    agents, context, events, hydration, lifecycle, model_config, plugin_environments, plugins,
-    settings, storage, vfs,
+    agents, compute, context, events, hpc_config, hpc_jobs, hydration, lifecycle, model_config,
+    plugin_environments, plugins, settings, storage, vfs,
 };
 use crate::proto::*;
 
@@ -18,6 +18,24 @@ use crate::proto::*;
     ),
     paths(
         lifecycle::gateway_status,
+        compute::status,
+        compute::readiness,
+        compute::enroll,
+        compute::enroll_stream,
+        compute::repair_worker,
+        compute::repair_worker_stream,
+        compute::target,
+        compute::target_data_source,
+        compute::delete_target,
+        compute::check,
+        compute::select,
+        compute::source,
+        compute::image_evidence,
+        hpc_config::show,
+        hpc_config::update,
+        hpc_jobs::list,
+        hpc_jobs::watch,
+        hpc_jobs::stop_monitor,
         hydration::get_state,
         hydration::get_profiles,
         events::get_events,
@@ -127,6 +145,8 @@ use crate::proto::*;
     )),
     tags(
         (name = "gateway", description = "Daemon lifecycle and health"),
+        (name = "compute", description = "Compute targets and data sources"),
+        (name = "hpc", description = "Slurm settings and existing job monitors"),
         (name = "hydration", description = "Frontend state bootstrap and SSE"),
         (name = "agents", description = "Live agent control"),
         (name = "context", description = "Agent working-context control"),
@@ -219,6 +239,21 @@ impl Modify for BearerSecurityAddon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_streams_are_documented_as_authenticated_sse() {
+        let doc = serde_json::to_value(ApiDoc::for_server(false)).unwrap();
+        for path in [
+            "/api/v1/compute/enroll/stream",
+            "/api/v1/compute/repair-worker/stream",
+        ] {
+            let operation = &doc["paths"][path]["post"];
+            assert!(operation["responses"]["200"]["content"]["text/event-stream"].is_object());
+            let security = operation["security"].as_array().unwrap();
+            assert!(!security.is_empty());
+            assert!(security.iter().all(|rule| rule != &serde_json::json!({})));
+        }
+    }
 
     #[test]
     fn bibliography_auth_matches_server_configuration() {

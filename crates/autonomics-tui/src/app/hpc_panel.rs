@@ -11,6 +11,10 @@ impl App {
     /// Open the panel and kick off both fetches.
     pub(super) fn open_hpc_panel(&mut self) {
         self.state.hpc_panel.visible = true;
+        self.dirty = true;
+        if self.state.hpc_panel.loading || self.state.hpc_panel.repair_show_events {
+            return;
+        }
         self.state.hpc_panel.dashboard_ready = true;
         self.state.hpc_panel.tab = crate::widgets::hpc_panel_widget::HpcTab::Targets;
         self.state.hpc_panel.dashboard_focus_form = false;
@@ -19,7 +23,6 @@ impl App {
         self.state.hpc_panel.status = None;
         self.fetch_hpc_targets();
         self.fetch_hpc_jobs();
-        self.dirty = true;
     }
 
     fn fetch_hpc_targets(&mut self) {
@@ -90,6 +93,59 @@ impl App {
                     event_tx.send(crate::app_event::AppEvent::HpcProfileSaved(result));
                 });
             }
+            Some(HpcPanelCommand::CheckTarget(id)) => {
+                self.state.hpc_panel.loading = true;
+                self.state.hpc_panel.status = Some(format!("Checking {id}…"));
+                let client = self.client.clone();
+                let event_tx = self.app_event_tx.clone();
+                self.spawn_client_task("compute_check", move || async move {
+                    let result = client
+                        .check_compute_target(&id)
+                        .await
+                        .map(|report| {
+                            if report["configuration_valid"] == true {
+                                format!("{id}: configuration check passed")
+                            } else {
+                                let detail = report["error"].as_str().unwrap_or("check failed");
+                                format!("{id}: {detail}")
+                            }
+                        })
+                        .map_err(|error| format!("{id}: {error}"));
+                    event_tx.send(crate::app_event::AppEvent::HpcCheckFinished(result));
+                });
+            }
+            Some(HpcPanelCommand::CheckReadiness) => {
+                self.state.hpc_panel.loading = true;
+                self.state.hpc_panel.status = Some("Checking readiness…".into());
+                let client = self.client.clone();
+                let event_tx = self.app_event_tx.clone();
+                self.spawn_client_task("compute_readiness", move || async move {
+                    let result = client
+                        .compute_readiness(&Default::default())
+                        .await
+                        .map(|report| {
+                            let state = report["state"].as_str().unwrap_or("Unknown readiness");
+                            let blockers = report["blockers"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|item| {
+                                    item["detail"]
+                                        .as_str()
+                                        .or(item["message"].as_str())
+                                        .or(item["code"].as_str())
+                                })
+                                .collect::<Vec<_>>();
+                            if blockers.is_empty() {
+                                state.into()
+                            } else {
+                                format!("{state}: {}", blockers.join(" · "))
+                            }
+                        })
+                        .map_err(|error| error.to_string());
+                    event_tx.send(crate::app_event::AppEvent::HpcCheckFinished(result));
+                });
+            }
             Some(HpcPanelCommand::SaveTarget(request)) => {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.dashboard_pending_id =
@@ -112,6 +168,7 @@ impl App {
             Some(HpcPanelCommand::EnrollTarget(request)) => {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.repair_show_events = true;
+                self.state.hpc_panel.enrollment_progress = true;
                 self.state.hpc_panel.repair_events.clear();
                 self.state.hpc_panel.dashboard_pending_id =
                     request["id"].as_str().map(str::to_owned);
@@ -139,6 +196,7 @@ impl App {
             Some(HpcPanelCommand::RepairWorker(request)) => {
                 self.state.hpc_panel.loading = true;
                 self.state.hpc_panel.repair_show_events = true;
+                self.state.hpc_panel.enrollment_progress = false;
                 self.state.hpc_panel.repair_events.clear();
                 self.state
                     .hpc_panel

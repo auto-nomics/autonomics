@@ -356,6 +356,15 @@ impl SshTaskTransport {
                 attempt.dispatch.spec.id
             )));
         }
+        let envelope = &attempt.dispatch.spec.spec["typed_dispatch"];
+        if envelope["worker"]["podman"]["resource_control"]["mode"] == "ssh_delegated_cgroups"
+            && envelope["plugin_identity"].is_object()
+        {
+            return Err(DagError::Schedule(format!(
+                "SSH Podman attempt `{}`: supervisor stopped but container helper stop is unconfirmed; retain remote workspace and pending lease",
+                attempt.dispatch.spec.id
+            )));
+        }
         // The supervisor is gone, so this cannot be overwritten by a late
         // write. A later wait reads the cancellation, not a stale success.
         let cancel = format!(

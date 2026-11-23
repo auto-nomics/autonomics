@@ -107,6 +107,8 @@ try {
   await cdp.send('Input.imeSetComposition', { text: 'dan', selectionStart: 3, selectionEnd: 3 });
   assert.equal(await filter.inputValue(), 'dan', 'IME preedit stays visible');
   assert.ok(await tree.getByRole('treeitem', { name: 'Research', exact: true }).isVisible(), 'preedit does not filter the tree');
+  await filter.press('ArrowDown');
+  assert.ok(await filter.evaluate(input => input === document.activeElement), 'IME retains keyboard focus');
   await page.keyboard.insertText('单');
   assert.equal(await filter.inputValue(), '单', 'IME text is committed');
   await page.getByText('No matching collections').waitFor();

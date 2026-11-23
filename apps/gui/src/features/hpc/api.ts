@@ -4,11 +4,12 @@
  */
 import { gatewayEnrollment, gatewayRequest } from "@/gateway";
 import type {
+  ComputeBackend,
   ComputeRegistryState,
   DataDomain,
   ComputeStatus,
   HpcJobsResponse,
-  ReadinessReport,
+  ComputeTargetCheck,
 } from "./types";
 
 export async function fetchComputeStatus(): Promise<ComputeStatus> {
@@ -23,28 +24,46 @@ export async function selectComputeTarget(
   });
 }
 
+export async function deleteComputeTarget(targetId: string): Promise<ComputeRegistryState> {
+  return gatewayRequest("DELETE", `/compute/targets/${encodeURIComponent(targetId)}`);
+}
+
+export type TargetMountSettings = {
+  alias: string;
+  root: string;
+  python: string;
+};
+
 export async function saveComputeTarget(
   target: {
     id: string;
     name: string;
     enabled: boolean;
-    backend: Record<string, unknown>;
+    backend: ComputeBackend;
     data_domains?: DataDomain[];
   },
+  mount?: TargetMountSettings,
 ): Promise<ComputeRegistryState> {
-  return gatewayRequest("PUT", "/compute/targets", {
-    ...target,
-  });
+  if (mount) {
+    return gatewayRequest("PUT", "/compute/target-data-source", { target, ...mount });
+  }
+  return gatewayRequest("PUT", "/compute/targets", target);
 }
 
 export type EnrollComputeRequest = {
   backend?: "ssh" | "slurm";
+  container_runtime:
+    | { type: "sif"; image_manifest: string; runtime: "apptainer" | "singularity_ce" }
+    | { type: "podman"; plugins_root: string; plugins_sha256: string; podman: {
+      executable: string; executable_sha256: string; image_catalog: string; image_catalog_sha256: string;
+    } };
   id: string;
   name?: string;
   login_alias: string;
   worker_executable?: string;
   data_alias?: string;
   data_root?: string;
+  storage_root?: string;
   partition?: string;
   account?: string;
   scratch_dir?: string;
@@ -63,20 +82,8 @@ export async function enrollComputeTarget(
   return gatewayEnrollment(request, onProgress);
 }
 
-export async function addComputeDataSource(
-  source: Record<string, unknown>,
-): Promise<ComputeRegistryState> {
-  return gatewayRequest("POST", "/compute/data-sources", {
-    source,
-  });
-}
-
-export async function checkComputeTarget(id: string): Promise<ReadinessReport> {
+export async function checkComputeTarget(id: string): Promise<ComputeTargetCheck> {
   return gatewayRequest("POST", `/compute/targets/${encodeURIComponent(id)}/check`);
-}
-
-export async function fetchComputeReadiness(): Promise<ReadinessReport> {
-  return gatewayRequest("POST", "/compute/readiness", {});
 }
 
 export async function fetchHpcJobs(): Promise<HpcJobsResponse> {

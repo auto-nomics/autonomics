@@ -35,33 +35,25 @@ impl ComputeContext {
 #[async_trait]
 impl agentik_core::context::ContextProvider for ComputeContext {
     async fn poll(&self) -> Option<String> {
-        let state = self.registry.state();
-        let mounts = vfs::agent_mounts(&self.registry.storage).ok()?;
-        let domains: Vec<_> = mounts.iter()
-            .filter(|m| m.domain_root.as_deref() == Some(m.uri.as_str()))
-            .map(|m| json!({"domain":m.domain,"uri":m.uri,"virtual_path":m.virtual_path,"read_only":m.read_only}))
-            .collect();
-        let sources: Vec<_> = state.data_sources.iter().map(|source| {
-            let virtual_path = source.mount_path();
-            let uri = self.registry.storage.canonical_uri(&virtual_path).ok();
-            json!({"id":source.id,"uri":uri,"virtual_path":virtual_path,"read_only":source.read_only})
-        }).collect();
-        let deployment = self
-            .registry
-            .target(&state.policy.target_id)
-            .ok()?
-            .deployment();
-        let status = serde_json::to_string(&json!({
-            "policy":state.policy,"data_sources":sources,"filesystem_domains":domains,"deployment":deployment
-        }))
-        .ok()?;
+        let status = {
+            let state = self.registry.state.read().ok()?;
+            let targets = self.registry.built.read().ok()?;
+            let target = targets.get(&state.policy.target_id)?;
+            json!({
+                "target_id": target.target.id,
+                "source_compatible": target.ensure_source_compatible().is_ok(),
+                "worker_source_revision": target.typed_worker_revision,
+                "coordinator_source_revision": dag_core::source_revision(),
+            })
+            .to_string()
+        };
         let mut last = self.last_snapshot.lock().ok()?;
         if last.as_ref() == Some(&status) {
             return None;
         }
         *last = Some(status.clone());
         Some(format!(
-            "[Operator compute policy]\n{status}\nNew DAG runs bind this target once. Existing runs and jobs retain their original target configuration. If deployment.source_compatible is false, report both source revisions: the operator must deploy a measured matching worker and update the target. Retrying a DAG or approving a download cannot repair that mismatch. Data-source VFS mounts are independent and remain accessible after compute switches. Use canonical domain://path URIs from filesystem_domains/data_sources for VFS and DAG inputs. local:// is the coordinator namespace; compute target names are not filesystem domains. Use vfs mount_list for current canonical mount URIs and permission submounts, and compute_status for bindings. Never repeat uncertain work on another server."
+            "[Operator compute policy]\n{status}\nNew DAG runs bind the selected target. Observe existing jobs on their original target. Use vfs mount_list for canonical data URIs and compute_status for deployment details."
         ))
     }
 }
@@ -70,11 +62,8 @@ impl agentik_core::context::ContextProvider for ComputeContext {
 /// Direct tool callers use the same gate as an agent session.
 pub(crate) fn guard_environment_tools(
     tools: Vec<ToolRegistration>,
-    registry: Option<&Arc<ComputeRegistry>>,
+    registry: &Arc<ComputeRegistry>,
 ) -> Vec<ToolRegistration> {
-    let Some(registry) = registry else {
-        return tools;
-    };
     tools
         .into_iter()
         .map(|template| {
@@ -145,7 +134,7 @@ impl DynToolFunction for EnvironmentTool {
 
 #[agentik_proc::tool(
     name = "compute_status",
-    description = "Read the operator's current compute target, target configurations, independent data-source mounts and recorded run bindings. Compute selection does not remove data access. Use canonical domain://path URIs discovered with vfs mount_list; mount virtual_path values are compatibility metadata, and filesystem domains need not match compute target names. Agents cannot change the global target. Existing jobs must be observed at their original target_id; never repeat an uncertain submission on another target."
+    description = "Read the operator's current compute target, target configurations and data-source mounts. Compute selection does not remove data access. Use canonical domain://path URIs discovered with vfs mount_list; mount virtual_path values are compatibility metadata, and filesystem domains need not match compute target names. Agents cannot change the global target. Existing jobs must be observed at their original target_id; never repeat an uncertain submission on another target."
 )]
 pub struct StatusInput {}
 struct StatusTool(Arc<ComputeRegistry>);
@@ -213,8 +202,17 @@ impl ToolFunction for ImageEvidenceTool {
 impl ToolFunction for StatusTool {
     type Input = StatusInput;
     async fn run(&self, _: StatusInput) -> Result<ToolResult, ToolError> {
-        let mut status = serde_json::to_value(self.0.status().map_err(error)?)
-            .map_err(|e| error(e.to_string()))?;
+        let mut snapshot = self.0.status().map_err(error)?;
+        for target in &mut snapshot.state.targets {
+            match &mut target.backend {
+                super::ComputeBackend::Slurm { settings }
+                | super::ComputeBackend::Ssh { settings } => {
+                    settings.typed_worker = None;
+                }
+                super::ComputeBackend::Local => {}
+            }
+        }
+        let mut status = serde_json::to_value(snapshot).map_err(|e| error(e.to_string()))?;
         status["mounts"] = serde_json::to_value(vfs::agent_mounts(&self.0.storage)?)
             .map_err(|e| error(e.to_string()))?;
         if let Some(sources) = status["state"]["data_sources"].as_array_mut() {
@@ -246,13 +244,7 @@ pub(crate) fn hpc_registrations(
     agent_path: &str,
     storage: Arc<dyn AgentStorage>,
 ) -> Vec<ToolRegistration> {
-    // Definitions need no live connection or state-directory creation.
-    let state = registry.state();
-    let candidate = state
-        .targets
-        .iter()
-        .find_map(|t| registry.target(&t.id).ok().and_then(|b| b.hpc.clone()));
-    let client = candidate.unwrap_or_else(|| Arc::new(hpc_tools::HpcClient::definition_only()));
+    let client = Arc::new(hpc_tools::HpcClient::definition_only());
     let templates = hpc_tools::registrations(client);
     let mut tools = Vec::with_capacity(templates.len());
     for mut template in templates {

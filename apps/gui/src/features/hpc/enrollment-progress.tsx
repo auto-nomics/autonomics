@@ -13,6 +13,7 @@ const labels: Record<string, string> = {
   prepare_directory: "准备安装目录", check_python: "检查 Python",
   upload: "上传 worker", commit_upload: "提交安装文件", chmod: "设置执行权限",
   probe_worker: "校验 worker", worker_profile: "生成 worker 配置",
+  remote_home: "解析远端主目录", prepare_data_directory: "准备默认数据目录",
   data_source: "挂载数据源", save_target: "保存计算目标", select_target: "选择计算目标",
 };
 const bytes = (value: number) => `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -95,7 +96,7 @@ export function EnrollmentProgressPanel({ run }: { run: EnrollmentRun }) {
       <CardFooter className="flex flex-wrap justify-between gap-2">
         <p className="text-xs text-muted-foreground">{run.status === "running"
           ? "切换页面不会中断安装；关闭或刷新窗口可能失去进度连接。"
-          : run.status === "unknown" ? "后台可能仍在安装，请先刷新目标状态，避免重复部署。" : run.status === "error" ? "已完成的步骤会保留。重试前请确认目标的当前状态。" : "可在目标列表中查看配置并执行就绪检查。"}</p>
+          : run.status === "unknown" ? "后台可能仍在安装，请先刷新目标状态，避免重复部署。" : run.status === "error" ? "已完成的步骤会保留。重试前请确认目标的当前状态。" : "可在目标列表中查看配置并检查连接。"}</p>
         {run.status !== "running" ? <Button size="sm" variant="ghost" onClick={clearEnrollment}>收起进度</Button> : null}
       </CardFooter>
     </Card>

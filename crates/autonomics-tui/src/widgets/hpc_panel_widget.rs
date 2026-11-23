@@ -1,4 +1,4 @@
-//! Compute panel — edit the selected Slurm target and inspect jobs and targets.
+//! Compute panel for remote enrollment, target configuration, and job inspection.
 
 use ratatui::{
     buffer::Buffer,
@@ -111,7 +111,7 @@ pub const FIELD_DEFS: &[FieldDef] = &[
     },
     FieldDef {
         key: "typed_worker_config",
-        label: "Typed worker profile",
+        label: "Import typed worker profile",
         kind: FieldKind::Text,
     },
     FieldDef {
@@ -135,6 +135,19 @@ pub const FIELD_DEFS: &[FieldDef] = &[
         kind: FieldKind::Text,
     },
 ];
+
+const DATA_ROOT: usize = 4 + FIELD_DEFS.len();
+const WORKER_PATH: usize = DATA_ROOT + 1;
+const DEPLOY_PACKAGE: usize = DATA_ROOT + 2;
+const SELECT_AFTER_ENROLL: usize = DATA_ROOT + 3;
+const CONTAINER_RUNTIME: usize = DATA_ROOT + 4;
+
+fn settings_index(key: &str) -> usize {
+    4 + FIELD_DEFS
+        .iter()
+        .position(|field| field.key == key)
+        .unwrap()
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 // State
@@ -219,6 +232,7 @@ pub struct HpcPanelState {
     pub dashboard_show_jobs: bool,
     pub repair_events: Vec<String>,
     pub repair_show_events: bool,
+    pub enrollment_progress: bool,
 }
 
 impl HpcPanelState {
@@ -233,59 +247,51 @@ impl HpcPanelState {
         self.repair_events.push(bounded);
     }
     fn dashboard_visible_fields(&self) -> Vec<usize> {
-        if self.dashboard_new
-            && self
-                .dashboard_fields
-                .get(2)
-                .is_some_and(|kind| kind != "local")
-        {
-            let slurm = self.dashboard_fields[2] == "slurm";
-            return (0..self.dashboard_fields.len())
-                .filter(|&index| {
-                    index < 3
-                        || (index >= 4
-                            && index < 4 + FIELD_DEFS.len()
-                            && (matches!(
-                                FIELD_DEFS[index - 4].key,
-                                "ssh_host" | "ssh_command" | "remote_python" | "scratch_remote_dir"
-                            ) || slurm
-                                && matches!(FIELD_DEFS[index - 4].key, "partition" | "account")))
-                })
-                .collect();
+        if self.dashboard_fields.is_empty() {
+            return Vec::new();
         }
-        if self
-            .dashboard_fields
-            .get(2)
-            .is_some_and(|kind| kind == "local")
-        {
-            vec![0, 1, 2, 3, 4 + FIELD_DEFS.len()]
-        } else if self
-            .dashboard_fields
-            .get(2)
-            .is_some_and(|kind| kind == "ssh")
-        {
-            (0..self.dashboard_fields.len())
-                .filter(|&index| {
-                    index < 4
-                        || index == 4 + FIELD_DEFS.len()
-                        || !matches!(
-                            FIELD_DEFS[index - 4].key,
-                            "partition"
-                                | "account"
-                                | "mem_per_cpu"
-                                | "default_time"
-                                | "gpu_partition"
-                                | "gpu_cpus_per_gpu"
-                                | "gpu_qos"
-                                | "poll_interval_secs"
-                                | "apptainer_manifest"
-                                | "tools_enabled"
-                        )
-                })
-                .collect()
+        let kind = self.dashboard_fields[2].as_str();
+        if self.dashboard_new {
+            let mut fields = vec![
+                2,
+                0,
+                1,
+                settings_index("ssh_host"),
+                CONTAINER_RUNTIME,
+                DATA_ROOT,
+            ];
+            if kind == "slurm" {
+                fields.extend([settings_index("partition"), settings_index("account")]);
+            }
+            fields.extend([
+                WORKER_PATH,
+                DEPLOY_PACKAGE,
+                settings_index("remote_python"),
+                settings_index("data_ssh_host"),
+                settings_index("scratch_remote_dir"),
+                settings_index("ssh_command"),
+                SELECT_AFTER_ENROLL,
+            ]);
+            return fields;
+        }
+
+        let mut fields = if self.dashboard_editing {
+            vec![1, 3]
         } else {
-            (0..self.dashboard_fields.len()).collect()
+            vec![0, 1, 2, 3]
+        };
+        if kind != "local" {
+            fields.extend(["ssh_host", "ssh_command", "scratch_remote_dir"].map(settings_index));
+            if kind == "slurm" {
+                fields.extend(["partition", "gpu_partition", "account"].map(settings_index));
+            }
+            fields.push(settings_index("typed_worker_config"));
+            if kind == "slurm" {
+                fields.push(settings_index("apptainer_manifest"));
+            }
+            fields.extend(["data_ssh_host", "remote_python"].map(settings_index));
         }
+        fields
     }
 
     fn dashboard_move_field(&mut self, down: bool) {
@@ -309,16 +315,22 @@ impl HpcPanelState {
         match self.dashboard_field {
             0 => "ID: letters, digits, _ or -; fixed after creation.",
             1 => "Name: a recognizable display name.",
-            2 if self.dashboard_new => "Backend: Enter cycles Slurm, SSH and local.",
+            2 if self.dashboard_new => "Backend: Enter switches between SSH and Slurm.",
             2 => "Backend is fixed after creation.",
             3 => "Enabled: Enter toggles whether the target can be selected.",
-            index if index == 4 + FIELD_DEFS.len() => {
-                "Data domains: JSON array; [] means no in-place data domain."
+            DATA_ROOT => {
+                "Blank creates ~/autonomics-data/<target ID>; enter an existing absolute path to override."
+            }
+            WORKER_PATH => "Blank installs the worker automatically; an explicit path is verified.",
+            DEPLOY_PACKAGE => "Optional absolute path to a worker package on the gateway.",
+            SELECT_AFTER_ENROLL => "Enter toggles whether enrollment selects this target.",
+            CONTAINER_RUNTIME => {
+                "Required JSON. SSH expects type=podman. Slurm expects type=sif and image_manifest."
             }
             index if index >= 4 => match FIELD_DEFS[index - 4].key {
                 "ssh_host" => "SSH host: a configured alias or user@host, available to the daemon.",
                 "typed_worker_config" => {
-                    "Worker profile: generated by automatic enrollment; edit only to use a custom profile."
+                    "Worker profile import: optional absolute gateway path; saved profiles live in the registry."
                 }
                 "apptainer_manifest" => {
                     "Image manifest: absolute daemon-side path; needed for remote container workloads."
@@ -328,6 +340,9 @@ impl HpcPanelState {
                 }
                 "scratch_remote_dir" => {
                     "Scratch directory on the remote host; ~/ expands to the remote home."
+                }
+                "data_ssh_host" if self.dashboard_new => {
+                    "Blank uses the login alias; an explicit data alias requires a data root."
                 }
                 "account" | "gpu_qos" | "data_ssh_host" | "pi_ssh_host" => {
                     "Optional: leave blank to clear."
@@ -421,75 +436,22 @@ impl HpcPanelState {
                 serde_json::Value::Number(v) => v.to_string(),
                 _ => String::new(),
             }));
-        self.dashboard_fields.push(
-            self.dashboard_draft
-                .get("data_domains")
-                .map(serde_json::Value::to_string)
-                .unwrap_or_else(|| "[]".into()),
-        );
         self.dashboard_field = 0;
     }
 
     fn dashboard_save_command(&mut self) -> Option<HpcPanelCommand> {
-        match self.dashboard_save() {
-            Ok(request) => {
+        let result = if self.dashboard_new {
+            self.enrollment_request().map(HpcPanelCommand::EnrollTarget)
+        } else {
+            self.dashboard_save().map(HpcPanelCommand::SaveTarget)
+        };
+        match result {
+            Ok(command) => {
                 self.status = None;
-                if self.dashboard_new && request["backend"]["type"] != "local" {
-                    let settings = &request["backend"]["settings"];
-                    let mut enrollment = serde_json::json!({
-                        "id": request["id"], "name": request["name"],
-                        "backend": request["backend"]["type"],
-                        "login_alias": settings["ssh_host"], "select": false,
-                    });
-                    for (source, destination) in [
-                        ("ssh_command", "ssh_command"),
-                        ("remote_python", "python"),
-                        ("scratch_remote_dir", "scratch_dir"),
-                        ("partition", "partition"),
-                        ("account", "account"),
-                    ] {
-                        if request["backend"]["type"] == "ssh"
-                            && matches!(source, "partition" | "account")
-                        {
-                            continue;
-                        }
-                        if let Some(value) =
-                            settings[source].as_str().filter(|value| !value.is_empty())
-                        {
-                            enrollment[destination] = serde_json::json!(value);
-                        }
-                    }
-                    Some(HpcPanelCommand::EnrollTarget(enrollment))
-                } else {
-                    Some(HpcPanelCommand::SaveTarget(request))
-                }
+                Some(command)
             }
-            Err(error) => {
-                self.dashboard_field = if error.contains("ID") {
-                    0
-                } else if error.contains("name") {
-                    1
-                } else if error.contains("Backend") {
-                    2
-                } else if error.contains("SSH host") {
-                    4 + FIELD_DEFS
-                        .iter()
-                        .position(|field| field.key == "ssh_host")
-                        .unwrap()
-                } else if error.contains("Worker profile") {
-                    4 + FIELD_DEFS
-                        .iter()
-                        .position(|field| field.key == "typed_worker_config")
-                        .unwrap()
-                } else if error.contains("Data domains") {
-                    4 + FIELD_DEFS.len()
-                } else {
-                    FIELD_DEFS
-                        .iter()
-                        .position(|field| error.contains(field.label))
-                        .map(|index| index + 4)
-                        .unwrap_or(self.dashboard_field)
-                };
+            Err((field, error)) => {
+                self.dashboard_field = field;
                 self.dashboard_focus_form = true;
                 self.status = Some(error);
                 None
@@ -497,109 +459,127 @@ impl HpcPanelState {
         }
     }
 
-    fn dashboard_save(&self) -> Result<serde_json::Value, String> {
-        let id = self.dashboard_fields[0].trim();
-        let name = self.dashboard_fields[1].trim();
-        let kind = self.dashboard_fields[2].trim();
-        let enabled = self.dashboard_fields[3]
-            .parse::<bool>()
-            .map_err(|_| "Enabled must be true or false")?;
-        if id.is_empty() {
-            return Err("ID is required".into());
-        }
-        if name.is_empty() && !self.dashboard_new {
-            return Err("Target name is required".into());
-        }
-        if id.len() > 64
+    fn enrollment_request(&self) -> Result<serde_json::Value, (usize, String)> {
+        let value = |index: usize| self.dashboard_fields[index].trim();
+        let id = value(0);
+        if id.is_empty()
+            || id.len() > 64
             || !id
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
         {
-            return Err("ID must contain 1–64 letters, digits, underscores or dashes".into());
+            return Err((
+                0,
+                "ID must contain 1–64 letters, digits, underscores or dashes".into(),
+            ));
         }
-        if self.dashboard_new
-            && self
-                .dashboard_targets
-                .iter()
-                .any(|target| target["id"] == id)
+        if self
+            .dashboard_targets
+            .iter()
+            .any(|target| target["id"] == id)
         {
-            return Err("Target ID already exists".into());
+            return Err((0, "Target ID already exists".into()));
         }
-        if !matches!(kind, "local" | "slurm" | "ssh") {
-            return Err("Backend must be local, slurm or ssh".into());
+        let kind = value(2);
+        if !matches!(kind, "ssh" | "slurm") {
+            return Err((2, "Choose SSH or Slurm".into()));
         }
-        if !self.dashboard_new && !enabled && self.target_id.as_deref() == Some(id) {
-            return Err("Select another target before disabling this one".into());
+        let host = settings_index("ssh_host");
+        if value(host).is_empty() {
+            return Err((host, "SSH host is required".into()));
         }
-        let mut settings = self.dashboard_draft["backend"]["settings"]
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        for (index, field) in FIELD_DEFS.iter().enumerate() {
-            let value = self.dashboard_fields[index + 4].trim();
-            if value.is_empty() {
-                if matches!(
-                    field.key,
-                    "account"
-                        | "gpu_qos"
-                        | "apptainer_manifest"
-                        | "typed_worker_config"
-                        | "data_ssh_host"
-                        | "pi_ssh_host"
-                ) {
-                    settings.insert(field.key.into(), serde_json::Value::Null);
-                } else {
-                    settings.remove(field.key);
-                }
-                continue;
+        let data_alias = settings_index("data_ssh_host");
+        if !value(data_alias).is_empty() && value(DATA_ROOT).is_empty() {
+            return Err((
+                DATA_ROOT,
+                "A data SSH alias requires a shared directory absolute path".into(),
+            ));
+        }
+
+        let container_runtime = serde_json::from_str::<serde_json::Value>(value(CONTAINER_RUNTIME))
+            .map_err(|_| {
+                (
+                    CONTAINER_RUNTIME,
+                    "Container runtime JSON is required".into(),
+                )
+            })?;
+        let runtime_type = if kind == "ssh" { "podman" } else { "sif" };
+        if container_runtime["type"] != runtime_type {
+            return Err((
+                CONTAINER_RUNTIME,
+                format!("{kind} requires a {runtime_type} container runtime"),
+            ));
+        }
+
+        let mut request = serde_json::json!({
+            "id": id, "backend": kind, "login_alias": value(host),
+            "container_runtime": container_runtime,
+            "select": value(SELECT_AFTER_ENROLL) == "true",
+        });
+        let mut optional = vec![
+            (1, "name"),
+            (DATA_ROOT, "data_root"),
+            (data_alias, "data_alias"),
+            (WORKER_PATH, "worker_executable"),
+            (DEPLOY_PACKAGE, "deploy_worker"),
+            (settings_index("remote_python"), "python"),
+            (settings_index("scratch_remote_dir"), "scratch_dir"),
+            (settings_index("ssh_command"), "ssh_command"),
+        ];
+        if kind == "slurm" {
+            optional.extend([
+                (settings_index("partition"), "partition"),
+                (settings_index("account"), "account"),
+            ]);
+        }
+        for (field, key) in optional {
+            if !value(field).is_empty() {
+                request[key] = serde_json::json!(value(field));
             }
-            let value = match field.kind {
-                FieldKind::Bool => serde_json::Value::Bool(
-                    value
-                        .parse()
-                        .map_err(|_| format!("{} must be true or false", field.label))?,
-                ),
-                FieldKind::Number => serde_json::json!(
-                    value
-                        .parse::<u64>()
-                        .map_err(|_| format!("{} must be a number", field.label))?
-                ),
-                FieldKind::Text => serde_json::json!(value),
-            };
-            settings.insert(field.key.into(), value);
         }
-        if kind != "local"
-            && settings
-                .get("ssh_host")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|v| v.trim().is_empty())
-        {
-            return Err("SSH host is required".into());
+        Ok(request)
+    }
+
+    fn dashboard_save(&self) -> Result<serde_json::Value, (usize, String)> {
+        let name = self.dashboard_fields[1].trim();
+        if name.is_empty() {
+            return Err((1, "Target name is required".into()));
         }
-        if !self.dashboard_new
-            && kind == "slurm"
-            && id != "legacy-slurm"
-            && settings
-                .get("typed_worker_config")
-                .and_then(serde_json::Value::as_str)
-                .is_none_or(|path| path.trim().is_empty())
-        {
-            return Err("Worker profile is required for Slurm".into());
+        let mut backend = self.dashboard_draft["backend"].clone();
+        if backend["type"] != "local" {
+            let host = settings_index("ssh_host");
+            if self.dashboard_fields[host].trim().is_empty() {
+                return Err((host, "SSH host is required".into()));
+            }
+            for index in self
+                .dashboard_visible_fields()
+                .into_iter()
+                .filter(|&index| index >= 4)
+            {
+                let key = FIELD_DEFS[index - 4].key;
+                let value = &self.dashboard_fields[index];
+                let original = backend["settings"][key].as_str().unwrap_or("");
+                if value == original {
+                    continue;
+                }
+                backend["settings"][key] = if value.is_empty()
+                    && matches!(
+                        key,
+                        "account" | "typed_worker_config" | "apptainer_manifest" | "data_ssh_host"
+                    ) {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!(value)
+                };
+            }
         }
-        let backend = if kind == "local" {
-            serde_json::json!({"type":"local"})
-        } else {
-            serde_json::json!({"type":kind,"settings":settings})
-        };
-        let domains: serde_json::Value =
-            serde_json::from_str(&self.dashboard_fields[4 + FIELD_DEFS.len()])
-                .map_err(|_| "Data domains must be a JSON array")?;
-        if !domains.is_array() {
-            return Err("Data domains must be a JSON array".into());
-        }
-        Ok(
-            serde_json::json!({"id":id,"name":if name.is_empty() { id } else { name },"enabled":enabled,"backend":backend,"data_domains":domains}),
-        )
+        Ok(serde_json::json!({
+            "id": self.dashboard_draft["id"],
+            "name": name,
+            "enabled": self.dashboard_fields[3] == "true",
+            "backend": backend,
+            "data_domains": self.dashboard_draft["data_domains"].as_array().cloned().unwrap_or_default(),
+        }))
     }
     /// Fill selected target settings from a `GET /hpc/config` reply.
     pub fn load_config(&mut self, reply: &serde_json::Value) {
@@ -736,6 +716,8 @@ pub enum HpcPanelCommand {
     /// Persist the profile as assembled by [`HpcPanelState::build_profile`].
     SaveProfile(serde_json::Value),
     SelectTarget(String),
+    CheckTarget(String),
+    CheckReadiness,
     SaveTarget(serde_json::Value),
     EnrollTarget(serde_json::Value),
     RepairWorker(serde_json::Value),
@@ -878,7 +860,8 @@ impl HpcPanelState {
         use crossterm::event::{KeyCode, KeyModifiers};
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if self.loading {
-            return None;
+            return (self.repair_show_events && key.code == KeyCode::Esc)
+                .then_some(HpcPanelCommand::Close);
         }
         if let Some(buffer) = &mut self.edit_buffer {
             if matches!(
@@ -967,6 +950,8 @@ impl HpcPanelState {
             KeyCode::Esc if self.dashboard_editing => {
                 self.dashboard_editing = false;
                 self.dashboard_new = false;
+                self.dashboard_focus_form = false;
+                self.status = None;
                 self.load_dashboard_draft();
             }
             KeyCode::Esc => return Some(HpcPanelCommand::Close),
@@ -995,6 +980,16 @@ impl HpcPanelState {
             }
             KeyCode::Char('r') if !self.dashboard_editing => {
                 return Some(HpcPanelCommand::RefreshSnapshot);
+            }
+            KeyCode::Char('c') if !self.dashboard_editing && self.tab == HpcTab::Targets => {
+                return self
+                    .dashboard_targets
+                    .get(self.selected_target)
+                    .and_then(|target| target["id"].as_str())
+                    .map(|id| HpcPanelCommand::CheckTarget(id.into()));
+            }
+            KeyCode::Char('R') if !self.dashboard_editing && self.tab == HpcTab::Targets => {
+                return Some(HpcPanelCommand::CheckReadiness);
             }
             KeyCode::Char('w') if !self.dashboard_editing && self.tab == HpcTab::Targets => {
                 if !matches!(
@@ -1031,17 +1026,12 @@ impl HpcPanelState {
                 self.dashboard_new = true;
                 self.dashboard_editing = true;
                 self.dashboard_focus_form = true;
-                self.dashboard_draft = serde_json::json!({"id":"", "name":"", "enabled":true,"backend":{"type":"slurm","settings":{}},"data_domains":[]});
-                self.dashboard_fields = vec!["".into(), "".into(), "slurm".into(), "true".into()];
-                self.dashboard_fields.extend(FIELD_DEFS.iter().map(|f| {
-                    if f.kind == FieldKind::Bool {
-                        "false".into()
-                    } else {
-                        String::new()
-                    }
-                }));
-                self.dashboard_fields.push("[]".into());
-                self.dashboard_field = 0;
+                self.dashboard_draft = serde_json::Value::Null;
+                self.dashboard_fields = vec![String::new(); CONTAINER_RUNTIME + 1];
+                self.dashboard_fields[2] = "ssh".into();
+                self.dashboard_fields[settings_index("remote_python")] = "python3".into();
+                self.dashboard_fields[SELECT_AFTER_ENROLL] = "true".into();
+                self.dashboard_field = 2;
             }
             KeyCode::Char('e') if !self.dashboard_editing && !self.dashboard_targets.is_empty() => {
                 self.repair_show_events = false;
@@ -1069,6 +1059,10 @@ impl HpcPanelState {
                 return self
                     .dashboard_targets
                     .get(self.selected_target)
+                    .filter(|target| {
+                        target["enabled"] == true
+                            && target["id"].as_str() != self.target_id.as_deref()
+                    })
                     .and_then(|target| target["id"].as_str())
                     .map(|id| HpcPanelCommand::SelectTarget(id.to_string()));
             }
@@ -1110,12 +1104,12 @@ impl HpcPanelState {
                     self.status = Some("ID and backend are fixed for existing targets".into());
                 } else if self.dashboard_new && self.dashboard_field == 2 {
                     self.dashboard_fields[2] = match self.dashboard_fields[2].as_str() {
-                        "slurm" => "ssh",
-                        "ssh" => "local",
-                        _ => "slurm",
+                        "ssh" => "slurm",
+                        _ => "ssh",
                     }
                     .into();
                 } else if self.dashboard_field == 3
+                    || self.dashboard_field == SELECT_AFTER_ENROLL
                     || (self.dashboard_field >= 4
                         && self.dashboard_field < 4 + FIELD_DEFS.len()
                         && FIELD_DEFS[self.dashboard_field - 4].kind == FieldKind::Bool)
@@ -1250,12 +1244,16 @@ impl StatefulWidgetRef for HpcPanelWidget {
 impl HpcPanelWidget {
     fn render_dashboard(&self, area: Rect, buf: &mut Buffer, state: &HpcPanelState) {
         let theme = theme::current();
-        let hint = if state.dashboard_editing {
+        let hint = if state.loading && state.repair_show_events {
+            "Esc close panel · operation continues"
+        } else if state.repair_show_events {
+            "Esc return to form or details"
+        } else if state.dashboard_editing {
             "Tab/↑↓ field · Enter edit/toggle · Ctrl+S save · Esc cancel"
         } else if state.tab == HpcTab::Jobs {
             "Tab switch · ↑↓ jobs · r reload gateway snapshot · Esc close"
         } else {
-            "Tab switch · ↑↓ move · n new · e edit · w repair worker · x select · Ctrl+X delete · r reload snapshot · Esc close"
+            "Tab switch · ↑↓ move · n enroll · e edit · c check · R readiness · x select · w repair · Ctrl+X delete · r reload · Esc close"
         };
         let mut footer = Vec::new();
         if let Some(status) = &state.status {
@@ -1304,7 +1302,7 @@ impl HpcPanelWidget {
             height: 0,
             ..rows[1]
         };
-        let columns = if state.tab == HpcTab::Targets {
+        let columns = if state.tab == HpcTab::Targets && !state.dashboard_editing {
             let split =
                 Layout::horizontal([Constraint::Percentage(35), Constraint::Percentage(65)])
                     .split(rows[1]);
@@ -1365,12 +1363,14 @@ impl HpcPanelWidget {
             .render(list_area, buf);
 
         let right = Block::default()
-            .title(if state.repair_show_events {
+            .title(if state.repair_show_events && state.enrollment_progress {
+                " Enrollment progress "
+            } else if state.repair_show_events {
                 " Connection recovery events "
             } else if state.dashboard_show_jobs {
                 " Jobs "
             } else if state.dashboard_new {
-                " New target "
+                " Enroll compute target "
             } else if state.dashboard_editing {
                 " Edit target "
             } else {
@@ -1407,15 +1407,25 @@ impl HpcPanelWidget {
         } else if state.dashboard_fields.is_empty() {
             form.push(Line::from("Press n to add a target"));
         } else {
-            let labels = ["ID", "Name", "Backend (local/slurm/ssh)", "Enabled"];
+            if !state.dashboard_editing {
+                if let Some(source) = state.dashboard_draft["data_source"]["id"].as_str() {
+                    form.push(Line::from(format!("Data source: /data/{source}")));
+                }
+            }
+            let labels = ["ID", "Name", "Backend", "Enabled"];
             for i in state.dashboard_visible_fields() {
                 let value = &state.dashboard_fields[i];
                 let label = if i < 4 {
                     labels[i]
-                } else if i == 4 + FIELD_DEFS.len() {
-                    "Data domains (JSON)"
                 } else {
-                    FIELD_DEFS[i - 4].label
+                    match i {
+                        DATA_ROOT => "Shared directory (absolute)",
+                        WORKER_PATH => "Remote worker path",
+                        DEPLOY_PACKAGE => "Gateway worker package",
+                        SELECT_AFTER_ENROLL => "Select after enrollment",
+                        CONTAINER_RUNTIME => "Container runtime JSON",
+                        _ => FIELD_DEFS[i - 4].label,
+                    }
                 };
                 let display = if state.dashboard_editing
                     && i == state.dashboard_field
@@ -1715,10 +1725,17 @@ mod tests {
                 .position(|field| field.key == "typed_worker_config")
                 .unwrap();
             assert!(!panel.dashboard_visible_fields().contains(&profile));
+            let runtime_type = if kind == "ssh" { "podman" } else { "sif" };
+            panel.dashboard_fields[CONTAINER_RUNTIME] =
+                serde_json::json!({"type": runtime_type}).to_string();
             match panel.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)) {
                 Some(HpcPanelCommand::EnrollTarget(request)) => {
                     assert_eq!(request["backend"], kind);
-                    assert_eq!(request["name"], "remote");
+                    assert_eq!(request["container_runtime"]["type"], runtime_type);
+                    assert!(request.get("name").is_none());
+                    assert_eq!(request["select"], true);
+                    assert_eq!(request["python"], "python3");
+                    assert!(request.get("data_root").is_none());
                     assert_eq!(request["login_alias"], "remote-host");
                     assert!(request.get("worker_executable").is_none());
                 }
@@ -1765,7 +1782,7 @@ mod tests {
         panel.handle_key(key(KeyCode::Backspace));
         panel.handle_key(key(KeyCode::Tab));
         assert_eq!(panel.dashboard_fields[1], "中好文");
-        assert_eq!(panel.dashboard_field, 2);
+        assert_eq!(panel.dashboard_field, 3);
     }
 
     #[test]
@@ -1791,8 +1808,6 @@ mod tests {
         panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
         panel.handle_key(key(KeyCode::Char('n')));
-        panel.dashboard_field = 2;
-        panel.handle_key(key(KeyCode::Enter));
         assert_eq!(panel.dashboard_fields[2], "ssh");
         let partition = 4 + FIELD_DEFS
             .iter()
@@ -1809,7 +1824,7 @@ mod tests {
     #[test]
     fn dashboard_edits_highlighted_target_without_changing_selection() {
         let mut panel = HpcPanelState::default();
-        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}, {"id":"remote","name":"Remote 2","enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server"}},"data_domains":[]}]}}));
+        panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}, {"id":"remote","name":"Remote 2","enabled":true,"backend":{"type":"ssh","settings":{"ssh_host":"server","ssh_connect_timeout_secs":47}},"data_domains":[{"id":"remote"}]}]}}));
         assert_eq!(panel.dashboard_targets.len(), 2);
         panel.selected_target = 1;
         panel.load_dashboard_draft();
@@ -1817,6 +1832,14 @@ mod tests {
         let request = panel.dashboard_save().unwrap();
         assert_eq!(request["id"], "remote");
         assert_eq!(request["name"], "Changed");
+        assert_eq!(
+            request["backend"]["settings"]["ssh_connect_timeout_secs"],
+            47
+        );
+        assert_eq!(
+            request["data_domains"],
+            serde_json::json!([{"id":"remote"}])
+        );
 
         assert_eq!(panel.target_id.as_deref(), Some("local"));
     }
@@ -1892,13 +1915,13 @@ mod tests {
         panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         panel.dashboard_field = 3;
         panel.dashboard_move_field(true);
-        assert_eq!(panel.dashboard_field, 4 + FIELD_DEFS.len());
-        panel.dashboard_move_field(false);
         assert_eq!(panel.dashboard_field, 3);
+        panel.dashboard_move_field(false);
+        assert_eq!(panel.dashboard_field, 2);
     }
 
     #[test]
-    fn dashboard_creates_local_target_from_form() {
+    fn dashboard_enrolls_with_explicit_data_and_worker_paths() {
         let mut panel = HpcPanelState::default();
         panel.load_dashboard(&serde_json::json!({"state":{"policy":{"target_id":"local"},"targets":[{"id":"local","name":"Local","enabled":true,"backend":{"type":"local"}}]}}));
         let key = |c| {
@@ -1909,14 +1932,25 @@ mod tests {
         };
         panel.handle_key(key('n'));
         panel.dashboard_fields[0] = "new-host".into();
-        panel.dashboard_fields[1] = "New host".into();
-        panel.dashboard_fields[2] = "local".into();
+        panel.dashboard_fields[settings_index("ssh_host")] = "login".into();
+        panel.dashboard_fields[settings_index("data_ssh_host")] = "storage".into();
+        assert!(panel.handle_key(key('s')).is_none());
+        assert_eq!(panel.dashboard_field, DATA_ROOT);
+        panel.dashboard_fields[DATA_ROOT] = "/srv/shared".into();
+        panel.dashboard_fields[WORKER_PATH] = "/opt/bin/worker".into();
+        panel.dashboard_fields[DEPLOY_PACKAGE] = "/opt/gateway/worker".into();
+        panel.dashboard_fields[CONTAINER_RUNTIME] =
+            serde_json::json!({"type": "podman"}).to_string();
+        panel.dashboard_fields[SELECT_AFTER_ENROLL] = "false".into();
         match panel.handle_key(key('s')) {
-            Some(HpcPanelCommand::SaveTarget(request)) => {
-                assert_eq!(request["id"], "new-host");
-                assert_eq!(request["backend"]["type"], "local");
+            Some(HpcPanelCommand::EnrollTarget(request)) => {
+                assert_eq!(request["data_alias"], "storage");
+                assert_eq!(request["data_root"], "/srv/shared");
+                assert_eq!(request["worker_executable"], "/opt/bin/worker");
+                assert_eq!(request["deploy_worker"], "/opt/gateway/worker");
+                assert_eq!(request["select"], false);
             }
-            other => panic!("expected target save, got {other:?}"),
+            other => panic!("expected enrollment, got {other:?}"),
         }
     }
 

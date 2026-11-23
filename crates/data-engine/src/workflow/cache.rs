@@ -37,13 +37,10 @@ pub enum CachedOutput {
 }
 
 impl CachedOutput {
-    fn as_node_value(&self) -> Option<NodeValue> {
+    fn as_node_value(&self) -> NodeValue {
         match self {
-            CachedOutput::File(file) => Some(NodeValue::File(file.clone())),
-            CachedOutput::Files(files) if !files.is_empty() => {
-                Some(NodeValue::FileSet(files.clone()))
-            }
-            CachedOutput::Files(_) => None,
+            CachedOutput::File(file) => NodeValue::File(file.clone()),
+            CachedOutput::Files(files) => NodeValue::FileSet(files.clone()),
         }
     }
 }
@@ -52,8 +49,7 @@ impl CachedOutput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CachedInstance {
     pub fingerprint: String,
-    /// File-backed outputs keyed by port. Ports that carried DataFrame or
-    /// Channel values are absent — their absence makes the instance a miss.
+    /// File-backed outputs keyed by port. An empty map is a cache miss.
     pub outputs: BTreeMap<u8, CachedOutput>,
 }
 
@@ -62,14 +58,10 @@ impl CachedInstance {
     /// port is representable (defensive: record never stores such entries).
     pub fn to_port_outputs(&self) -> Option<PortOutputs> {
         let mut outputs = PortOutputs::new();
-        let mut any = false;
         for (port, cached) in &self.outputs {
-            if let Some(value) = cached.as_node_value() {
-                outputs.insert(*port, value);
-                any = true;
-            }
+            outputs.insert(*port, cached.as_node_value());
         }
-        any.then_some(outputs)
+        (!self.outputs.is_empty()).then_some(outputs)
     }
 
     /// Cheap validity: every cached file must still exist with the size the
@@ -130,9 +122,8 @@ impl InstanceCache {
     }
 
     /// Record one instance's file-backed outputs under `fingerprint`.
-    /// Ports carrying non-file values are dropped; an instance whose outputs
-    /// are entirely non-file stores an empty entry (which always misses —
-    /// visible, honest, and cheap).
+    /// If any output cannot be replayed, record an empty entry so resume
+    /// re-executes the instance and produces all its outputs.
     pub fn record(
         &mut self,
         process: &str,
@@ -140,18 +131,18 @@ impl InstanceCache {
         fingerprint: String,
         outputs: &PortOutputs,
     ) {
-        let mut cached = BTreeMap::new();
-        for (port, value) in outputs.iter() {
-            match value {
-                NodeValue::File(file) => {
-                    cached.insert(*port, CachedOutput::File(file.clone()));
-                }
-                NodeValue::FileSet(files) if !files.is_empty() => {
-                    cached.insert(*port, CachedOutput::Files(files.clone()));
-                }
-                _ => {}
-            }
-        }
+        let cached = outputs
+            .iter()
+            .map(|(port, value)| {
+                let value = match value {
+                    NodeValue::File(file) => CachedOutput::File(file.clone()),
+                    NodeValue::FileSet(files) => CachedOutput::Files(files.clone()),
+                    _ => return None,
+                };
+                Some((*port, value))
+            })
+            .collect::<Option<BTreeMap<_, _>>>()
+            .unwrap_or_default();
         self.entries.entry(process.to_string()).or_default().insert(
             item_key.unwrap_or("0").to_string(),
             CachedInstance {
@@ -246,18 +237,33 @@ mod tests {
         assert!(cache.lookup("qc", Some("b")).is_some());
     }
 
-    #[test]
-    fn dataframe_only_outputs_store_an_empty_entry() {
+    #[tokio::test]
+    async fn empty_file_sets_survive_cache_round_trip() {
         let mut outputs = PortOutputs::new();
-        outputs.insert(0, NodeValue::File(file("x", 1)));
-        // A DataFrame port is not representable; simulating via FileSet empty
-        // (also unrepresentable) plus one file port.
-        outputs.insert(1, NodeValue::FileSet(vec![]));
+        outputs.insert(0, NodeValue::FileSet(vec![]));
         let mut cache = InstanceCache::new();
         cache.record("p", Some("k"), "fp".into(), &outputs);
-        let cached = cache.lookup("p", Some("k")).unwrap();
-        assert_eq!(cached.outputs.len(), 1);
-        assert!(cached.outputs.contains_key(&0));
+
+        let restored = InstanceCache::from_json(cache.to_json()).unwrap();
+        let cached = restored.lookup("p", Some("k")).unwrap();
+        assert!(cached.still_valid(None).await);
+        let reused = cached.to_port_outputs().unwrap();
+        assert!(matches!(reused.get(&0), Some(NodeValue::FileSet(files)) if files.is_empty()));
+    }
+
+    #[test]
+    fn file_set_with_channel_output_cannot_be_partially_replayed() {
+        let mut outputs = PortOutputs::new();
+        outputs.insert(0, NodeValue::FileSet(vec![]));
+        outputs.insert(
+            1,
+            NodeValue::Channel(dag_core::value::ChannelValue {
+                items: vec![serde_json::json!("value")],
+            }),
+        );
+        let mut cache = InstanceCache::new();
+        cache.record("p", None, "fp".into(), &outputs);
+        assert!(cache.lookup("p", None).unwrap().to_port_outputs().is_none());
     }
 
     #[tokio::test]

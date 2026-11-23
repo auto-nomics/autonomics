@@ -6,13 +6,17 @@
  */
 
 export type SlurmSettings = {
+  storage_root_v1?: string;
   enabled?: boolean;
   ssh_host?: string;
   ssh_command?: string;
   scratch_remote_dir?: string;
   artifact_root?: string | null;
   typed_worker_config?: string | null;
+  typed_worker?: Record<string, unknown> | null;
   apptainer_manifest?: string | null;
+  sif_runtime?: "apptainer" | "singularity_ce";
+  singularity_executable?: string | null;
   partition?: string;
   gpu_partition?: string;
   gpu_cpus_per_gpu?: number;
@@ -47,6 +51,8 @@ export type ComputeTarget = {
   name: string;
   enabled: boolean;
   backend: ComputeBackend;
+  data_source?: DataSource;
+  retained_data_sources?: DataSource[];
   data_domains?: DataDomain[];
   capsule_sha256?: Record<string, string>;
   endpoints?: Record<string, SshEndpoint>;
@@ -66,6 +72,7 @@ export type DataBackend =
   | { type: "ssh"; alias: string; root: string; python: string };
 
 export type DataSource = {
+  domain?: string;
   id: string;
   name: string;
   backend: DataBackend;
@@ -86,12 +93,6 @@ export type ComputeRegistryState = {
   data_sources: DataSource[];
 };
 
-export type ExecutionBinding = {
-  id: string;
-  target_id: string;
-  target_sha256: string;
-};
-
 export type MountDefinition = {
   path: string;
   backend?: string;
@@ -103,19 +104,11 @@ export type ComputeStatus = {
   deployment: Record<string, unknown> & { source_compatible?: boolean };
   state: ComputeRegistryState;
   mounts: MountDefinition[];
-  runs: ExecutionBinding[];
 };
 
-export type ReadinessBlocker = {
-  code: string;
-  [key: string]: unknown;
-};
-
-export type ReadinessReport = {
-  state: string;
-  blockers?: ReadinessBlocker[];
-  deployment?: Record<string, unknown>;
-  [key: string]: unknown;
+export type ComputeTargetCheck = {
+  configuration_valid: boolean;
+  error?: string;
 };
 
 export type MonitorView = {
