@@ -5,6 +5,7 @@
 //! flows from drifting apart while allowing each picker to keep its own data.
 
 use agentik_core::AgentKind;
+use i18n::t;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -83,7 +84,7 @@ pub fn split_content(content: Rect, list_width: u16) -> PickerContent {
 
 pub fn render_search(area: Rect, buf: &mut Buffer, accent: Color, query: &str, noun: &str) {
     let theme = crate::theme::current();
-    let placeholder = format!(" search {noun}…");
+    let placeholder = t!("tui.treePicker.searchPlaceholder", noun = noun).to_string();
     let line = if query.is_empty() {
         Line::from(vec![
             Span::styled("> ", Style::default().fg(theme.text_faint)),
@@ -200,7 +201,7 @@ fn tree_line<T: PickerTreeRow>(row: &T, selected: bool, accent: Color) -> Line<'
 
 pub fn render_preview_frame(area: Rect, buf: &mut Buffer, accent: Color) -> Rect {
     let block = Block::default().borders(Borders::NONE).title(Span::styled(
-        " Preview ",
+        t!("tui.treePicker.preview").to_string(),
         Style::default().fg(accent).add_modifier(Modifier::BOLD),
     ));
     let inner = block.inner(area);
@@ -236,11 +237,11 @@ pub fn kind_preview_lines(
         .map(|(label, value)| field_line(label, value))
         .collect::<Vec<_>>();
 
-    lines.push(field_line("Profile", kind.name().to_string()));
-    lines.push(field_line("Desc", kind.description().to_string()));
-    lines.push(field_line("Identity", kind.agent_identity().to_string()));
+    lines.push(field_line(&t!("tui.treePicker.profile"), kind.name().to_string()));
+    lines.push(field_line(&t!("tui.treePicker.desc"), kind.description().to_string()));
+    lines.push(field_line(&t!("tui.treePicker.identity"), kind.agent_identity().to_string()));
     lines.push(Line::from(""));
-    lines.push(section_line("Capabilities"));
+    lines.push(section_line(&t!("tui.treePicker.capabilities")));
 
     for (name, enabled) in [
         ("bibliography", kind.enable_bibliography()),

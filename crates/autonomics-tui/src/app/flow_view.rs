@@ -4,6 +4,7 @@
 //! batch-workflow counterpart to the node-granular DAG view (Ctrl+O).
 
 use data_engine::flow::FlowView;
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
@@ -80,11 +81,11 @@ impl App {
         match (&self.state.flow_view, &self.state.flow_view_error) {
             (_, Some(error)) => {
                 lines.push(Line::from(Span::styled(
-                    format!("flow load failed: {error}"),
+                    t!("tui.flow.loadFailed", error = error).to_string(),
                     Style::default().fg(theme.error),
                 )));
             }
-            (None, None) => lines.push(Line::from("loading flow…")),
+            (None, None) => lines.push(Line::from(t!("tui.flow.loading").to_string())),
             (Some(view), None) => {
                 collect_flow_lines(view, &theme, &mut lines);
                 total_lines = lines.len();
@@ -130,7 +131,7 @@ fn collect_flow_lines(view: &FlowView, theme: &crate::theme::Theme, lines: &mut 
     if let Some(run) = &view.last_run {
         let tone = if run.ok { theme.success } else { theme.error };
         lines.push(Line::from(vec![
-            Span::styled("last run: ", Style::default().fg(theme.text_dim)),
+            Span::styled(t!("tui.flow.lastRun").to_string(), Style::default().fg(theme.text_dim)),
             Span::styled(
                 if run.cancelled {
                     "cancelled"
@@ -169,19 +170,20 @@ fn collect_flow_lines(view: &FlowView, theme: &crate::theme::Theme, lines: &mut 
                     theme.success
                 };
                 lines.push(Line::from(Span::styled(
-                    format!(
-                        "    {} total · {} ok · {} failed · {} skipped · {} reused{}",
-                        summary.total,
-                        summary.succeeded,
-                        summary.failed,
-                        summary.skipped,
-                        summary.reused,
-                        if summary.ignored > 0 {
-                            format!(" · {} ignored", summary.ignored)
+                    t!(
+                        "tui.flow.summary",
+                        total = summary.total,
+                        ok = summary.succeeded,
+                        failed = summary.failed,
+                        skipped = summary.skipped,
+                        reused = summary.reused,
+                        ignored = if summary.ignored > 0 {
+                            t!("tui.flow.ignoredSuffix", count = summary.ignored).to_string()
                         } else {
                             String::new()
                         }
-                    ),
+                    )
+                    .to_string(),
                     Style::default().fg(tone),
                 )));
             }

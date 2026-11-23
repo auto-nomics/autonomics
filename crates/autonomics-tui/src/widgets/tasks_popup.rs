@@ -5,6 +5,7 @@
 //! to that child agent's leaf, preserving the pane's old navigation.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
@@ -107,7 +108,7 @@ pub fn render_tasks_popup(
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
         .title(Span::styled(
-            " Tasks ",
+            t!("tui.tasks.title").to_string(),
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -117,7 +118,7 @@ pub fn render_tasks_popup(
     block.render(popup, buf);
 
     if tasks.is_empty() {
-        Paragraph::new("(no background tasks)")
+        Paragraph::new(t!("tui.tasks.noTasks").to_string())
             .style(Style::default().fg(theme.text_faint))
             .centered()
             .render(inner, buf);

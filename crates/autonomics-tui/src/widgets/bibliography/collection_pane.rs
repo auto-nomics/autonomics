@@ -1,6 +1,7 @@
 //! Left navigation pane: virtual all-articles row plus collections.
 
 use bib_base::Collection;
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::{Buffer, StatefulWidget},
@@ -29,9 +30,9 @@ impl Widget for CollectionPane<'_> {
         let block = Block::default()
             .title(Span::styled(
                 if self.recursive {
-                    " Collections (+ descendants) "
+                    t!("tui.bib.collectionsWithDesc").to_string()
                 } else {
-                    " Collections "
+                    t!("tui.bib.collections").to_string()
                 },
                 if self.focused {
                     Style::new().fg(self.accent).add_modifier(Modifier::BOLD)
@@ -49,7 +50,7 @@ impl Widget for CollectionPane<'_> {
         if self.selected.is_none() {
             state.select(Some(0));
         }
-        items.push(row("All articles", self.selected.is_none(), inner.width));
+        items.push(row(&t!("tui.bib.allArticles"), self.selected.is_none(), inner.width));
         for (index, (collection, depth)) in self.rows.iter().enumerate() {
             if self.selected == Some(collection.id.as_str()) {
                 state.select(Some(index + 1));

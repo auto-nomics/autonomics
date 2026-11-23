@@ -4,6 +4,7 @@
 //! `runtime_events`.
 
 use crossterm::event::{KeyCode, KeyEvent};
+use i18n::t;
 
 use super::*;
 
@@ -95,7 +96,7 @@ impl App {
             }
             Some(HpcPanelCommand::CheckTarget(id)) => {
                 self.state.hpc_panel.loading = true;
-                self.state.hpc_panel.status = Some(format!("Checking {id}…"));
+                self.state.hpc_panel.status = Some(t!("tui.hpc.checking", id = id).to_string());
                 let client = self.client.clone();
                 let event_tx = self.app_event_tx.clone();
                 self.spawn_client_task("compute_check", move || async move {
@@ -104,13 +105,13 @@ impl App {
                         .await
                         .map(|report| {
                             if report["configuration_valid"] == true {
-                                format!("{id}: configuration check passed")
+                                t!("tui.hpc.checkPassed", id = id).to_string()
                             } else {
-                                let detail = report["error"].as_str().unwrap_or("check failed");
+                                let detail = report["error"].as_str().map(str::to_string).unwrap_or_else(|| t!("tui.hpc.checkFailed").to_string());
                                 format!("{id}: {detail}")
                             }
                         })
-                        .map_err(|error| format!("{id}: {error}"));
+                        .map_err(|error| t!("tui.hpc.checkError", id = id, error = error).to_string());
                     event_tx.send(crate::app_event::AppEvent::HpcCheckFinished(result));
                 });
             }
@@ -139,7 +140,7 @@ impl App {
                             if blockers.is_empty() {
                                 state.into()
                             } else {
-                                format!("{state}: {}", blockers.join(" · "))
+                                t!("tui.hpc.stateWithBlockers", state = state, blockers = blockers.join(" · ")).to_string()
                             }
                         })
                         .map_err(|error| error.to_string());
@@ -182,7 +183,7 @@ impl App {
                         let state = client
                             .compute_enroll_with_progress(&request, |stage, message| {
                                 event_tx.send(crate::app_event::AppEvent::HpcRepairProgress(
-                                    format!("[{stage}] {message}"),
+                                    t!("tui.hpc.repairEvent", stage = stage, message = message).to_string(),
                                 ));
                             })
                             .await
@@ -260,7 +261,7 @@ impl App {
     pub(super) fn apply_hpc_save_failed(&mut self, error: String) {
         self.state.hpc_panel.loading = false;
         self.state.hpc_panel.dashboard_pending_id = None;
-        self.state.hpc_panel.status = Some(format!("save failed: {error}"));
+        self.state.hpc_panel.status = Some(t!("tui.hpc.saveFailed", error = error).to_string());
         self.dirty = true;
     }
 }

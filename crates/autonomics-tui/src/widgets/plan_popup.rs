@@ -5,6 +5,7 @@
 //! arrows; Esc closes.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
@@ -96,9 +97,9 @@ pub fn render_plan_popup(
 
     Clear.render(popup, buf);
     let title = if plan.revision > 0 {
-        format!(" Plan · r{} ", plan.revision)
+        t!("tui.plan.titleWithRevision", revision = plan.revision).to_string()
     } else {
-        " Plan ".to_string()
+        t!("tui.plan.title").to_string()
     };
     let block = ratatui::widgets::Block::default()
         .borders(ratatui::widgets::Borders::ALL)
@@ -113,7 +114,7 @@ pub fn render_plan_popup(
     block.render(popup, buf);
 
     if plan.is_empty() {
-        Paragraph::new("(no active plan)")
+        Paragraph::new(t!("tui.plan.noActivePlan").to_string())
             .style(Style::default().fg(theme.text_faint))
             .centered()
             .render(inner, buf);

@@ -4,6 +4,7 @@
 //! the resulting [`ModelDraft`] to application persistence commands.
 
 use agentik_sdk::model::ModelInfo;
+use i18n::t;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -269,10 +270,10 @@ impl ModelEditorState {
         value
             .trim()
             .parse::<u64>()
-            .map_err(|_| format!("{label} must be a non-negative integer"))
+            .map_err(|_| t!("tui.modelEditor.errNonNegative", label = label).to_string())
             .and_then(|parsed| {
                 if parsed == 0 {
-                    Err(format!("{label} must be greater than zero"))
+                    Err(t!("tui.modelEditor.errPositive", label = label).to_string())
                 } else {
                     Ok(parsed)
                 }
@@ -286,10 +287,10 @@ impl ModelEditorState {
         } else {
             trimmed
                 .parse::<f64>()
-                .map_err(|_| format!("{label} must be a number"))?
+                .map_err(|_| t!("tui.modelEditor.errNumber", label = label).to_string())?
         };
         if !parsed.is_finite() || parsed < 0.0 {
-            return Err(format!("{label} cannot be negative"));
+            return Err(t!("tui.modelEditor.errNotNegative", label = label).to_string());
         }
         Ok(parsed)
     }
@@ -298,19 +299,19 @@ impl ModelEditorState {
         let parsed = (|| -> Result<ModelDraft, String> {
             let model_name = self.model_name.text().trim();
             if model_name.is_empty() {
-                return Err("Model name is required".to_string());
+                return Err(t!("tui.modelEditor.errNameRequired").to_string());
             }
             Ok(ModelDraft {
                 model_name: model_name.to_string(),
-                context_length: Self::parse_u64(self.context_length.text(), "Context length")?,
-                max_output_tokens: Self::parse_u64(self.max_output_tokens.text(), "Max output")?,
+                context_length: Self::parse_u64(self.context_length.text(), &t!("tui.modelEditor.ctxLength"))?,
+                max_output_tokens: Self::parse_u64(self.max_output_tokens.text(), &t!("tui.modelEditor.maxOutput"))?,
                 vision_ability: self.vision,
                 supports_function_calling: self.function_calling,
                 supports_streaming: self.streaming,
                 supports_thinking: self.thinking,
                 thinking_enabled: self.thinking_enabled,
-                input_token_price: Self::parse_price(self.input_price.text(), "Input price")?,
-                output_token_price: Self::parse_price(self.output_price.text(), "Output price")?,
+                input_token_price: Self::parse_price(self.input_price.text(), &t!("tui.modelEditor.inputPrice"))?,
+                output_token_price: Self::parse_price(self.output_price.text(), &t!("tui.modelEditor.outputPrice"))?,
             })
         })();
 
@@ -334,9 +335,9 @@ impl StatefulWidget for ModelEditorWidget {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let theme = crate::theme::current();
         let title = if state.original_model_name.is_some() {
-            " Edit Custom Model "
+            t!("tui.modelEditor.editTitle").to_string()
         } else {
-            " Add Custom Model "
+            t!("tui.modelEditor.addTitle").to_string()
         };
         let block = Block::default()
             .borders(Borders::ALL)
@@ -350,7 +351,7 @@ impl StatefulWidget for ModelEditorWidget {
                 ),
             ]))
             .title_bottom(
-                Line::from("[Tab/↑↓] field  [Space] toggle  [Enter] save  [Esc] cancel")
+                Line::from(t!("tui.modelEditor.footer").to_string())
                     .alignment(Alignment::Center),
             );
         let inner = block.inner(area);
@@ -358,7 +359,7 @@ impl StatefulWidget for ModelEditorWidget {
         block.render(area, buf);
 
         if inner.width < 36 || inner.height < 14 {
-            Paragraph::new("  Increase terminal height to edit models.")
+            Paragraph::new(t!("tui.modelEditor.tooShort").to_string())
                 .style(Style::default().fg(theme.text_faint))
                 .render(inner, buf);
             state.cursor_pos = None;
@@ -409,7 +410,7 @@ impl StatefulWidget for ModelEditorWidget {
         };
 
         Paragraph::new(Line::from(vec![
-            Span::styled(label("Provider"), label_style),
+            Span::styled(label(&t!("tui.modelEditor.provider")), label_style),
             Span::styled(state.provider_name.clone(), Style::default().fg(theme.text)),
         ]))
         .render(rows[0], buf);
@@ -443,35 +444,35 @@ impl StatefulWidget for ModelEditorWidget {
         render_text(
             1,
             ModelField::ModelName,
-            "Model",
+            &t!("tui.modelEditor.model"),
             &state.model_name,
             &mut state.model_name_state,
         );
         render_text(
             2,
             ModelField::ContextLength,
-            "Context Length",
+            &t!("tui.modelEditor.ctxLengthLabel"),
             &state.context_length,
             &mut state.context_length_state,
         );
         render_text(
             3,
             ModelField::MaxOutput,
-            "Max Output",
+            &t!("tui.modelEditor.maxOutputLabel"),
             &state.max_output_tokens,
             &mut state.max_output_tokens_state,
         );
         render_text(
             4,
             ModelField::InputPrice,
-            "Input $/M Tok",
+            &t!("tui.modelEditor.inputPriceTok"),
             &state.input_price,
             &mut state.input_price_state,
         );
         render_text(
             5,
             ModelField::OutputPrice,
-            "Output $/M Tok",
+            &t!("tui.modelEditor.outputPriceTok"),
             &state.output_price,
             &mut state.output_price_state,
         );
@@ -509,19 +510,19 @@ impl StatefulWidget for ModelEditorWidget {
             .render(target, buf);
         };
 
-        render_bool(7, ModelField::Vision, "Vision", state.vision);
+        render_bool(7, ModelField::Vision, &t!("tui.modelEditor.vision"), state.vision);
         render_bool(
             8,
             ModelField::FunctionCalling,
-            "Function Calling",
+            &t!("tui.modelEditor.functionCalling"),
             state.function_calling,
         );
-        render_bool(9, ModelField::Streaming, "Streaming", state.streaming);
-        render_bool(10, ModelField::Thinking, "Thinking", state.thinking);
+        render_bool(9, ModelField::Streaming, &t!("tui.modelEditor.streaming"), state.streaming);
+        render_bool(10, ModelField::Thinking, &t!("tui.modelEditor.thinking"), state.thinking);
         render_bool(
             11,
             ModelField::ThinkingEnabled,
-            "Thinking Enabled",
+            &t!("tui.modelEditor.thinkingEnabled"),
             state.thinking_enabled,
         );
 
@@ -535,7 +536,7 @@ impl StatefulWidget for ModelEditorWidget {
             }
             None => {
                 Paragraph::new(Line::from(Span::styled(
-                    " Custom models override built-in metadata.",
+                    t!("tui.modelEditor.overrideNote").to_string(),
                     dim_style,
                 )))
                 .render(rows[12], buf);

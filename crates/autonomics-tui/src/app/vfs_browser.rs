@@ -4,6 +4,7 @@
 //! in `runtime_events`.
 
 use crossterm::event::{KeyCode, KeyEvent};
+use i18n::t;
 
 use super::*;
 use crate::widgets::vfs_browser::{VfsBrowserCommand, VfsBrowserState};
@@ -128,7 +129,7 @@ impl App {
             }
             Some(VfsBrowserCommand::Mkdir(path)) => {
                 self.state.vfs_browser.status = Some("创建目录…".into());
-                self.run_vfs_mutation(format!("已创建 {path}"), move |client| {
+                self.run_vfs_mutation(t!("tui.vfs.created", path = path).to_string(), move |client| {
                     Box::pin(
                         async move { client.vfs_mkdir(&path).await.map_err(|e| e.to_string()) },
                     )
@@ -137,7 +138,7 @@ impl App {
             Some(VfsBrowserCommand::NewFile(path)) => {
                 self.state.vfs_browser.status = Some("创建文件…".into());
                 let path_for_save = path.clone();
-                self.run_vfs_mutation(format!("已创建 {path}"), move |client| {
+                self.run_vfs_mutation(t!("tui.vfs.created", path = path).to_string(), move |client| {
                     Box::pin(async move {
                         client
                             .vfs_write_text(&path_for_save, "")
@@ -148,7 +149,7 @@ impl App {
             }
             Some(VfsBrowserCommand::Rename { src, dst }) => {
                 self.state.vfs_browser.status = Some("重命名…".into());
-                self.run_vfs_mutation(format!("已重命名为 {dst}"), move |client| {
+                self.run_vfs_mutation(t!("tui.vfs.renamed", dst = dst).to_string(), move |client| {
                     Box::pin(
                         async move { client.vfs_move(&src, &dst).await.map_err(|e| e.to_string()) },
                     )
@@ -156,7 +157,7 @@ impl App {
             }
             Some(VfsBrowserCommand::Remove { path, recursive }) => {
                 self.state.vfs_browser.status = Some("删除…".into());
-                self.run_vfs_mutation(format!("已删除 {path}"), move |client| {
+                self.run_vfs_mutation(t!("tui.vfs.deleted", path = path).to_string(), move |client| {
                     Box::pin(async move {
                         client
                             .vfs_delete(&path, recursive)

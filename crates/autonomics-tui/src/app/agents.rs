@@ -1,6 +1,7 @@
 //! Agent creation, restoration, deletion, and lifecycle management.
 
 use super::*;
+use i18n::t;
 
 impl App {
     /// Spawn a new agent from a profile asynchronously.
@@ -42,8 +43,8 @@ impl App {
         if self.state.active_model_spec.is_none() {
             tracing::warn!("no model configured — configure one in Config tab first");
             self.state.toasts.error(
-                "Agent creation failed",
-                Some("Configure a model before creating agents".into()),
+                t!("tui.agents.creationFailed").to_string(),
+                Some(t!("tui.agents.configureModelFirst").to_string()),
             );
             return;
         }
@@ -211,7 +212,7 @@ impl App {
                     context: response.context,
                 }),
                 Err(error) => tx.send(crate::app_event::AppEvent::ShowError {
-                    title: "Failed to load agent context".into(),
+                    title: t!("tui.agents.loadContextFailed").to_string(),
                     detail: Some(error.to_string()),
                 }),
             }

@@ -8,6 +8,7 @@
 //! paste while remaining a single-line field.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -249,15 +250,17 @@ pub fn render_command_palette(
     buf: &mut ratatui::prelude::Buffer,
     state: &mut CommandPaletteState,
 ) {
-    let picker = SearchablePicker::new(" Command Palette ")
+    let picker_title = t!("tui.commandPalette.title");
+    let picker_footer = t!("tui.commandPalette.footer");
+    let picker = SearchablePicker::new(&picker_title)
         .accent(crate::theme::current().accent)
-        .footer_hint(" Enter run  ↑↓ navigate  Esc cancel");
+        .footer_hint(&picker_footer);
 
     if !state.picker.visible {
         return;
     }
 
-    let popup = Popup::new(" Command Palette ", PopupControls::default())
+    let popup = Popup::new(&picker_title, PopupControls::default())
         .accent(crate::theme::current().accent);
     let inner = popup.render(frame_area, buf);
     let regions = Layout::default()
@@ -300,7 +303,8 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut CommandPaletteS
         let placeholder_style = Style::default()
             .fg(theme.text_faint)
             .add_modifier(Modifier::DIM);
-        let placeholder = "search commands…";
+        let placeholder = t!("tui.commandPalette.placeholder").to_string();
+        let placeholder = placeholder.as_str();
         let truncated: String = placeholder.chars().take(ta_area.width as usize).collect();
         buf.set_string(ta_area.x, ta_area.y, truncated, placeholder_style);
         state.cursor_pos = Some((ta_area.x, ta_area.y));
@@ -321,162 +325,162 @@ fn render_search_input(area: Rect, buf: &mut Buffer, state: &mut CommandPaletteS
 fn default_commands() -> Vec<Command> {
     vec![
         Command {
-            title: "New agent".into(),
+            title: t!("tui.commandPalette.newAgent").to_string(),
             keywords: "spawn create start profile picker".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::NewAgent,
         },
         Command {
-            title: "Resume agent".into(),
+            title: t!("tui.commandPalette.resumeAgent").to_string(),
             keywords: "restore reconnect continue previous session agent record".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::ResumeAgent,
         },
         Command {
-            title: "Close agent".into(),
+            title: t!("tui.commandPalette.closeAgent").to_string(),
             keywords: "close kill terminate shutdown tab leaf".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::CloseAgent,
         },
         Command {
-            title: "Delete agent".into(),
+            title: t!("tui.commandPalette.deleteAgent").to_string(),
             keywords: "delete remove destroy purge storage permanent erase".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::DeleteAgent,
         },
         Command {
-            title: "Select model".into(),
+            title: t!("tui.commandPalette.selectModel").to_string(),
             keywords: "model config provider api key switch agent".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::ModelConfig,
         },
         Command {
-            title: "Compute Dashboard".into(),
+            title: t!("tui.commandPalette.computeDashboard").to_string(),
             keywords: "hpc slurm cluster site config jobs monitor ssh partition apptainer sbatch"
                 .into(),
-            category: "system".into(),
+            category: t!("tui.commandPalette.catSystem").to_string(),
             action: CommandAction::HpcPanel,
         },
         Command {
-            title: "VFS browser".into(),
+            title: t!("tui.commandPalette.vfsBrowser").to_string(),
             keywords:
                 "vfs files browse mounts container outputs upload downloads rename delete mkdir"
                     .into(),
-            category: "system".into(),
+            category: t!("tui.commandPalette.catSystem").to_string(),
             action: CommandAction::VfsBrowser,
         },
         Command {
-            title: "Embedding model".into(),
+            title: t!("tui.commandPalette.embeddingModel").to_string(),
             keywords: "embedding ollama model provider config vector".into(),
-            category: "model".into(),
+            category: t!("tui.commandPalette.catModel").to_string(),
             action: CommandAction::EmbeddingConfig,
         },
         Command {
-            title: "Agent settings".into(),
+            title: t!("tui.commandPalette.agentSettings").to_string(),
             keywords: "agent settings memory runtime use generate per agent".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::AgentConfig,
         },
         Command {
-            title: "View DAG".into(),
+            title: t!("tui.commandPalette.viewDag").to_string(),
             keywords: "dag graph pipeline topology data engine node edges ctrl o".into(),
-            category: "data".into(),
+            category: t!("tui.commandPalette.catData").to_string(),
             action: CommandAction::ViewDag,
         },
         Command {
-            title: "Bibliography library".into(),
+            title: t!("tui.commandPalette.bibliographyLibrary").to_string(),
             keywords: "bib bibliography literature papers articles fulltext collections".into(),
-            category: "research".into(),
+            category: t!("tui.commandPalette.catResearch").to_string(),
             action: CommandAction::BibliographyPanel,
         },
         Command {
-            title: "Search history".into(),
+            title: t!("tui.commandPalette.searchHistory").to_string(),
             keywords: "ctrl r recall previous prompt".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::HistorySearch,
         },
         Command {
-            title: "Cancel agent".into(),
+            title: t!("tui.commandPalette.cancelAgent").to_string(),
             keywords: "stop abort interrupt request".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::CancelAgent,
         },
         Command {
-            title: "Compact conversation".into(),
+            title: t!("tui.commandPalette.compactConversation").to_string(),
             keywords: "compact compress summarize context memory shrink reduce".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::Compact,
         },
         Command {
-            title: "Scroll to bottom".into(),
+            title: t!("tui.commandPalette.scrollToBottom").to_string(),
             keywords: "tail follow latest end".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ScrollToBottom,
         },
         Command {
-            title: "Scroll to top".into(),
+            title: t!("tui.commandPalette.scrollToTop").to_string(),
             keywords: "home beginning first".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ScrollToTop,
         },
         Command {
-            title: "Toggle auto-scroll".into(),
+            title: t!("tui.commandPalette.toggleAutoScroll").to_string(),
             keywords: "follow pin lock ctrl g".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ToggleAutoScroll,
         },
         Command {
-            title: "Toggle thinking blocks".into(),
+            title: t!("tui.commandPalette.toggleThinkingBlocks").to_string(),
             keywords: "collapse fold hide thinking reasoning".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ToggleCollapseThinking,
         },
         Command {
-            title: "Toggle tool calls".into(),
+            title: t!("tui.commandPalette.toggleToolCalls").to_string(),
             keywords: "collapse fold hide tool call function".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ToggleCollapseToolCalls,
         },
         Command {
-            title: "Chat-only view".into(),
+            title: t!("tui.commandPalette.chatOnlyView").to_string(),
             keywords: "clean dialogue hide tools thinking transcript chat only".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ToggleChatOnly,
         },
         Command {
-            title: "Agents popup".into(),
+            title: t!("tui.commandPalette.agentsPopup").to_string(),
             keywords: "switch agent picker popup search filter ctrl t".into(),
-            category: "agent".into(),
+            category: t!("tui.commandPalette.catAgent").to_string(),
             action: CommandAction::FocusAgentsPanel,
         },
         Command {
-            title: "Toggle tool results".into(),
+            title: t!("tui.commandPalette.toggleToolResults").to_string(),
             keywords: "collapse fold hide tool result output response".into(),
-            category: "view".into(),
+            category: t!("tui.commandPalette.catView").to_string(),
             action: CommandAction::ToggleCollapseToolResults,
         },
         Command {
-            title: "Copy message".into(),
+            title: t!("tui.commandPalette.copyMessage").to_string(),
             keywords: "copy clipboard snippet transcript chat pick select text message".into(),
-            category: "clipboard".into(),
+            category: t!("tui.commandPalette.catClipboard").to_string(),
             action: CommandAction::CopyMessage,
         },
         Command {
-            title: "Reload config".into(),
+            title: t!("tui.commandPalette.reloadConfig").to_string(),
             keywords: "refresh providers model".into(),
-            category: "config".into(),
+            category: t!("tui.commandPalette.catConfig").to_string(),
             action: CommandAction::ReloadConfig,
         },
         Command {
-            title: "Toggle theme".into(),
+            title: t!("tui.commandPalette.toggleTheme").to_string(),
             keywords: "theme color colourscheme dark light appearance skin".into(),
-            category: "app".into(),
+            category: t!("tui.commandPalette.catApp").to_string(),
             action: CommandAction::CycleTheme,
         },
         Command {
-            title: "Quit".into(),
+            title: t!("tui.commandPalette.quit").to_string(),
             keywords: "exit close bye".into(),
-            category: "app".into(),
+            category: t!("tui.commandPalette.catApp").to_string(),
             action: CommandAction::Quit,
         },
     ]

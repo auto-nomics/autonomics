@@ -1,6 +1,7 @@
 //! Right pane: selected article metadata, extracted text, and annotations.
 
 use bib_base::{Annotation, Article, FullText};
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::{Buffer, StatefulWidget},
@@ -75,7 +76,7 @@ impl ArticlePane<'_> {
     fn lines(&self) -> Vec<Line<'static>> {
         let Some(article) = self.article else {
             return vec![Line::styled(
-                "No article selected",
+                t!("tui.bib.noArticleSelected").to_string(),
                 Style::new().fg(crate::theme::current().text_faint),
             )];
         };
@@ -89,9 +90,9 @@ impl ArticlePane<'_> {
     fn metadata(&self, article: &Article) -> Vec<Line<'static>> {
         let theme = crate::theme::current();
         let mut lines = vec![
-            field("Title", article.title.clone()),
+            field(&t!("tui.bib.fTitle"), article.title.clone()),
             field(
-                "Authors",
+                &t!("tui.bib.fAuthors"),
                 article
                     .authors
                     .iter()
@@ -100,16 +101,16 @@ impl ArticlePane<'_> {
                     .join(", "),
             ),
             field(
-                "Year",
+                &t!("tui.bib.fYear"),
                 article.year.map(|y| y.to_string()).unwrap_or_default(),
             ),
-            field("Journal", article.journal.clone().unwrap_or_default()),
-            field("DOI", article.doi().unwrap_or_default().to_string()),
-            field("PMID", article.pmid().unwrap_or_default().to_string()),
-            field("Keywords", article.keywords.join(", ")),
+            field(&t!("tui.bib.fJournal"), article.journal.clone().unwrap_or_default()),
+            field(&t!("tui.bib.fDoi"), article.doi().unwrap_or_default().to_string()),
+            field(&t!("tui.bib.fPmid"), article.pmid().unwrap_or_default().to_string()),
+            field(&t!("tui.bib.fKeywords"), article.keywords.join(", ")),
             Line::raw(""),
             Line::styled(
-                "Abstract",
+                t!("tui.bib.fAbstract").to_string(),
                 Style::new().fg(theme.text_dim).add_modifier(Modifier::BOLD),
             ),
         ];
@@ -117,7 +118,7 @@ impl ArticlePane<'_> {
             lines.extend(text.lines().map(|line| Line::raw(line.to_string())));
         } else {
             lines.push(Line::styled(
-                "Not available",
+                t!("tui.bib.notAvailable").to_string(),
                 Style::new().fg(theme.text_faint),
             ));
         }
@@ -136,16 +137,16 @@ impl ArticlePane<'_> {
                 .collect(),
             Some(ft) => vec![
                 Line::styled(
-                    "Full text uploaded; extraction pending",
+                    t!("tui.bib.fullTextPending").to_string(),
                     Style::new().fg(theme.warning),
                 ),
-                field("File", &ft.file_path),
-                field("Extractor", ft.extracted_by.clone().unwrap_or_default()),
+                field(&t!("tui.bib.fFile"), &ft.file_path),
+                field(&t!("tui.bib.fExtractor"), ft.extracted_by.clone().unwrap_or_default()),
             ],
             None => vec![
-                Line::styled("No full text stored", Style::new().fg(theme.text_faint)),
+                Line::styled(t!("tui.bib.noFullText").to_string(), Style::new().fg(theme.text_faint)),
                 Line::styled(
-                    format!("Article ID: {}", article.id),
+                    t!("tui.bib.articleId", id = article.id).to_string(),
                     Style::new().fg(theme.text_faint),
                 ),
             ],
@@ -155,7 +156,7 @@ impl ArticlePane<'_> {
     fn notes(&self, article: &Article) -> Vec<Line<'static>> {
         let theme = crate::theme::current();
         let empty = vec![Line::styled(
-            "No notes yet",
+            t!("tui.bib.noNotesYet").to_string(),
             Style::new().fg(theme.text_faint),
         )];
         let Some(notes) = self.annotations else {
@@ -176,7 +177,7 @@ impl ArticlePane<'_> {
         }
         lines.push(Line::raw(""));
         lines.push(Line::styled(
-            format!("Article ID: {}", article.id),
+            t!("tui.bib.articleId", id = article.id).to_string(),
             Style::new().fg(theme.text_faint),
         ));
         lines

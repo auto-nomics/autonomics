@@ -24,6 +24,7 @@
 //! commands; persistence stays in the daemon.
 
 use agentik_sdk::model::{ModelInfo, ProviderType};
+use i18n::t;
 use agentik_sdk::provider::registry;
 use crossterm::event::KeyModifiers;
 use ratatui::{
@@ -861,7 +862,7 @@ fn render_search_bar(area: Rect, buf: &mut Buffer, state: &mut ModelConfigState)
         let placeholder_style = Style::default()
             .fg(theme.text_faint)
             .add_modifier(Modifier::DIM);
-        let placeholder = "search…  Ctrl+A add  Ctrl+O edit  Ctrl+X delete";
+        let placeholder = t!("tui.modelConfig.searchPlaceholder").to_string();
         let truncated = placeholder.chars().take(textarea_area.width as usize);
         let text: String = truncated.collect();
         buf.set_string(textarea_area.x, textarea_area.y, text, placeholder_style);
@@ -952,12 +953,13 @@ fn render_tree(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(Line::from(vec![
-                    Span::styled(" Providers ", Style::default().fg(theme.warning)),
+                    Span::styled(t!("tui.modelConfig.providers").to_string(), Style::default().fg(theme.warning)),
                     Span::styled(
-                        format!(
-                            "({} configured) ",
-                            state.providers.iter().filter(|p| p.configured).count()
-                        ),
+                        t!(
+                            "tui.modelConfig.configuredCount",
+                            count = state.providers.iter().filter(|p| p.configured).count()
+                        )
+                        .to_string(),
                         Style::default().fg(theme.text_faint),
                     ),
                 ])),
@@ -986,7 +988,7 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(Span::styled(
-            " Details ",
+            t!("tui.modelConfig.details").to_string(),
             Style::default().fg(theme.warning),
         ));
     let inner = block.inner(area);
@@ -994,7 +996,7 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 
     let flat = state.flat_items();
     let Some(&item) = flat.get(state.cursor) else {
-        let p = Paragraph::new("  (nothing selected)").style(Style::default().fg(theme.text_faint));
+        let p = Paragraph::new(t!("tui.modelConfig.nothingSelected").to_string()).style(Style::default().fg(theme.text_faint));
         ratatui::widgets::Widget::render(p, inner, buf);
         return;
     };
@@ -1010,9 +1012,9 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
             let red = |v: String| Span::styled(v, Style::default().fg(theme.error));
 
             vec![
-                Line::from(vec![label("Provider"), val(p.name.clone())]),
+                Line::from(vec![label(&t!("tui.modelConfig.fProvider")), val(p.name.clone())]),
                 Line::from(vec![
-                    label("Custom Models"),
+                    label(&t!("tui.modelConfig.fCustomModels")),
                     val(format!(
                         "{}/{}",
                         p.models.iter().filter(|m| m.custom).count(),
@@ -1020,36 +1022,36 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
                     )),
                 ]),
                 Line::from(vec![
-                    label("Shortcut"),
-                    dim("Ctrl+A add  Ctrl+O edit  Ctrl+X delete".to_string()),
+                    label(&t!("tui.modelConfig.fShortcut")),
+                    dim(t!("tui.modelConfig.shortcutValue").to_string()),
                 ]),
-                Line::from(vec![label("Type"), dim(format!("{:?}", p.provider_type))]),
-                Line::from(vec![label("Base URL"), dim(p.selected_base_url.clone())]),
+                Line::from(vec![label(&t!("tui.modelConfig.fType")), dim(format!("{:?}", p.provider_type))]),
+                Line::from(vec![label(&t!("tui.modelConfig.fBaseUrl")), dim(p.selected_base_url.clone())]),
                 Line::from(vec![
-                    label("Endpoints"),
+                    label(&t!("tui.modelConfig.fEndpoints")),
                     dim(format!("{}", p.base_urls.len())),
                 ]),
                 Line::from(vec![
-                    label("Status"),
+                    label(&t!("tui.modelConfig.fStatus")),
                     if p.configured {
-                        green("configured".to_string())
+                        green(t!("tui.modelConfig.statusConfigured").to_string())
                     } else {
-                        red("not configured".to_string())
+                        red(t!("tui.modelConfig.statusNotConfigured").to_string())
                     },
                 ]),
                 Line::from(vec![
-                    label("Models"),
-                    val(format!("{} (built-in)", p.models.len())),
+                    label(&t!("tui.modelConfig.fModels")),
+                    val(t!("tui.modelConfig.modelsBuiltIn", count = p.models.len()).to_string()),
                 ]),
             ]
             .into_iter()
             .chain(p.chatgpt.as_ref().map(|blob| {
                 Line::from(vec![
-                    label("Login"),
+                    label(&t!("tui.modelConfig.fLogin")),
                     green(format!(
                         "{} ({})",
-                        blob.email.as_deref().unwrap_or("email unknown"),
-                        blob.plan_type.as_deref().unwrap_or("plan unknown"),
+                        blob.email.as_deref().unwrap_or(&t!("tui.modelConfig.emailUnknown")),
+                        blob.plan_type.as_deref().unwrap_or(&t!("tui.modelConfig.planUnknown")),
                     )),
                 ])
             }))
@@ -1067,48 +1069,48 @@ fn render_detail(area: Rect, buf: &mut Buffer, state: &ModelConfigState) {
 
             vec![
                 Line::from(vec![
-                    label("Model"),
+                    label(&t!("tui.modelConfig.fModel")),
                     val(m.model_name.clone()),
                     if active {
-                        Span::styled("  ● active", Style::default().fg(theme.success))
+                        Span::styled(t!("tui.modelConfig.activeMark").to_string(), Style::default().fg(theme.success))
                     } else {
                         Span::raw("")
                     },
                 ]),
-                Line::from(vec![label("Provider"), val(p.name.clone())]),
+                Line::from(vec![label(&t!("tui.modelConfig.fProvider")), val(p.name.clone())]),
                 Line::from(vec![
-                    label("Origin"),
+                    label(&t!("tui.modelConfig.fOrigin")),
                     if m.custom {
-                        val("custom (editable)".to_string())
+                        val(t!("tui.modelConfig.originCustom").to_string())
                     } else {
-                        dim("built-in (read-only)".to_string())
+                        dim(t!("tui.modelConfig.originBuiltIn").to_string())
                     },
                 ]),
                 Line::from(vec![
-                    label("Context Len"),
+                    label(&t!("tui.modelConfig.fContextLen")),
                     val(format!("{}", m.context_length)),
                 ]),
                 Line::from(vec![
-                    label("Max Output"),
+                    label(&t!("tui.modelConfig.fMaxOutput")),
                     val(format!("{}", m.max_output_tokens)),
                 ]),
-                Line::from(vec![label("FnCall"), val(yn(m.supports_function_calling))]),
-                Line::from(vec![label("Streaming"), val(yn(m.supports_streaming))]),
+                Line::from(vec![label(&t!("tui.modelConfig.fFnCall")), val(yn(m.supports_function_calling))]),
+                Line::from(vec![label(&t!("tui.modelConfig.fStreaming")), val(yn(m.supports_streaming))]),
                 Line::from(vec![
-                    label("Thinking"),
+                    label(&t!("tui.modelConfig.fThinking")),
                     val(format!(
                         "{}{}",
                         yn(m.supports_thinking),
                         if m.thinking_enabled { " (on)" } else { "" }
                     )),
                 ]),
-                Line::from(vec![label("Vision"), val(yn(m.vision_ability))]),
+                Line::from(vec![label(&t!("tui.modelConfig.fVision")), val(yn(m.vision_ability))]),
                 Line::from(vec![
-                    label("In Price"),
+                    label(&t!("tui.modelConfig.fInPrice")),
                     dim(format!("${:.2}/M tok", m.input_token_price)),
                 ]),
                 Line::from(vec![
-                    label("Out Price"),
+                    label(&t!("tui.modelConfig.fOutPrice")),
                     dim(format!("${:.2}/M tok", m.output_token_price)),
                 ]),
             ]
@@ -1135,12 +1137,12 @@ fn render_chatgpt_panel(
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme.warning))
         .title(Line::from(vec![
-            Span::styled(" ChatGPT login ", Style::default().fg(theme.warning)),
+            Span::styled(t!("tui.modelConfig.chatgptLogin").to_string(), Style::default().fg(theme.warning)),
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(theme.text)),
         ]))
         .title_bottom(
-            Line::from("[L] log in / log in again  [Esc] close").alignment(Alignment::Center),
+            Line::from(t!("tui.modelConfig.loginFooter").to_string()).alignment(Alignment::Center),
         );
     let inner = block.inner(area);
     block.render(area, buf);
@@ -1153,16 +1155,16 @@ fn render_chatgpt_panel(
 
     let mut lines: Vec<Line> = vec![
         Line::from(vec![
-            label("Mode"),
-            val("ChatGPT subscription (Plus/Pro) OAuth login".to_string()),
+            label(&t!("tui.modelConfig.fMode")),
+            val(t!("tui.modelConfig.modeValue").to_string()),
         ]),
         Line::from(vec![
-            label("About"),
-            dim("No API key needed: press L and finish OpenAI authorization".to_string()),
+            label(&t!("tui.modelConfig.fAbout")),
+            dim(t!("tui.modelConfig.aboutLine1").to_string()),
         ]),
         Line::from(vec![
             Span::raw("            "),
-            dim("in the browser; the authorize URL is copied to the clipboard.".to_string()),
+            dim(t!("tui.modelConfig.aboutLine2").to_string()),
         ]),
         Line::raw(""),
     ];
@@ -1170,16 +1172,16 @@ fn render_chatgpt_panel(
     match provider.and_then(|p| p.chatgpt.as_ref()) {
         Some(blob) => {
             lines.push(Line::from(vec![
-                label("Status"),
-                green("Signed in".to_string()),
+                label(&t!("tui.modelConfig.fStatus")),
+                green(t!("tui.modelConfig.signedIn").to_string()),
             ]));
             lines.push(Line::from(vec![
-                label("Account"),
-                val(blob.email.clone().unwrap_or_else(|| "email unknown".into())),
+                label(&t!("tui.modelConfig.fAccount")),
+                val(blob.email.clone().unwrap_or_else(|| t!("tui.modelConfig.emailUnknown").into())),
             ]));
             lines.push(Line::from(vec![
-                label("Plan"),
-                val(blob.plan_type.clone().unwrap_or_else(|| "unknown".into())),
+                label(&t!("tui.modelConfig.fPlan")),
+                val(blob.plan_type.clone().unwrap_or_else(|| t!("tui.modelConfig.unknown").into())),
             ]));
             let tail: String = blob
                 .account_id
@@ -1187,27 +1189,27 @@ fn render_chatgpt_panel(
                 .skip(blob.account_id.chars().count().saturating_sub(6))
                 .collect();
             lines.push(Line::from(vec![
-                label("Account ID"),
+                label(&t!("tui.modelConfig.fAccountId")),
                 dim(format!("…{tail}")),
             ]));
             lines.push(Line::from(vec![
-                label("Last refresh"),
+                label(&t!("tui.modelConfig.fLastRefresh")),
                 dim(blob.last_refresh.format("%Y-%m-%d %H:%M UTC").to_string()),
             ]));
             lines.push(Line::raw(""));
             lines.push(Line::from(dim(
-                "Press R/L to log in again (switch accounts or refresh stale credentials)"
+                t!("tui.modelConfig.reloginHint").to_string()
                     .to_string(),
             )));
         }
         None => {
             lines.push(Line::from(vec![
-                label("Status"),
-                Span::styled("Not signed in", Style::default().fg(theme.error)),
+                label(&t!("tui.modelConfig.fStatus")),
+                Span::styled(t!("tui.modelConfig.notSignedIn").to_string(), Style::default().fg(theme.error)),
             ]));
             lines.push(Line::raw(""));
             lines.push(Line::from(dim(
-                "Press L to start the ChatGPT login".to_string()
+                t!("tui.modelConfig.startLoginHint").to_string()
             )));
         }
     }
@@ -1235,12 +1237,12 @@ fn render_config_panel(
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme.warning))
         .title(Line::from(vec![
-            Span::styled(" Configure ", Style::default().fg(theme.warning)),
+            Span::styled(t!("tui.modelConfig.configure").to_string(), Style::default().fg(theme.warning)),
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(theme.text)),
         ]))
         .title_bottom(
-            Line::from("[Tab] switch field  [↑/↓] cycle URL preset  [Enter] save  [Esc] cancel")
+            Line::from(t!("tui.modelConfig.configureFooter").to_string())
                 .alignment(Alignment::Center),
         );
     let inner = block.inner(area);
@@ -1273,7 +1275,7 @@ fn render_config_panel(
         .split(inner);
 
     Paragraph::new(Line::from(vec![
-        Span::styled(" Provider       : ", label_style),
+        Span::styled(t!("tui.modelConfig.labelProvider").to_string(), label_style),
         Span::styled(provider_name.to_string(), value_style),
     ]))
     .render(rows[0], buf);
@@ -1282,7 +1284,7 @@ fn render_config_panel(
         .map(|p| format!("{:?}", p.provider_type))
         .unwrap_or_default();
     Paragraph::new(Line::from(vec![
-        Span::styled(" Type           : ", label_style),
+        Span::styled(t!("tui.modelConfig.labelType").to_string(), label_style),
         Span::styled(type_str, dim_style),
     ]))
     .render(rows[1], buf);
@@ -1294,9 +1296,9 @@ fn render_config_panel(
         label_style
     };
     Paragraph::new(Line::from(vec![
-        Span::styled(" API Key        :", api_label_style),
+        Span::styled(t!("tui.modelConfig.labelApiKey"), api_label_style),
         Span::raw(" "),
-        Span::styled("(required)", dim_style),
+        Span::styled(t!("tui.modelConfig.required").to_string(), dim_style),
     ]))
     .render(rows[3], buf);
 
@@ -1320,11 +1322,11 @@ fn render_config_panel(
     // a known preset, otherwise "[custom]".
     let cur_url = base_url.text();
     let preset_tag = if cur_url.is_empty() {
-        "(empty)".to_string()
+        t!("tui.modelConfig.emptyPreset").to_string()
     } else if let Some(idx) = base_url_presets.iter().position(|u| u == cur_url) {
         format!("[{}/{} preset]", idx + 1, base_url_presets.len())
     } else {
-        "[custom]".to_string()
+        t!("tui.modelConfig.customPreset").to_string()
     };
     let url_label_style = if focused_field == ConfigField::BaseUrl {
         focused_label_style
@@ -1332,7 +1334,7 @@ fn render_config_panel(
         label_style
     };
     Paragraph::new(Line::from(vec![
-        Span::styled(" Base URL       :", url_label_style),
+        Span::styled(t!("tui.modelConfig.labelBaseUrl"), url_label_style),
         Span::raw(" "),
         Span::styled(preset_tag, dim_style),
     ]))
@@ -1361,9 +1363,9 @@ fn render_config_panel(
 
 fn yn(b: bool) -> String {
     if b {
-        "Yes".to_string()
+        t!("tui.modelConfig.yes").to_string()
     } else {
-        "No".to_string()
+        t!("tui.modelConfig.no").to_string()
     }
 }
 
@@ -1384,12 +1386,12 @@ fn render_delete_confirm(
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(theme.error))
         .title(Line::from(vec![
-            Span::styled(" Delete Custom Model ", Style::default().fg(theme.error)),
+            Span::styled(t!("tui.modelConfig.deleteTitle").to_string(), Style::default().fg(theme.error)),
             Span::raw(" "),
             Span::styled(provider_name, Style::default().fg(theme.text)),
         ]))
         .title_bottom(
-            Line::from("[Ctrl+X] confirm  [any other key] cancel").alignment(Alignment::Center),
+            Line::from(t!("tui.modelConfig.deleteFooter").to_string()).alignment(Alignment::Center),
         );
     let inner = block.inner(area);
     block.render(area, buf);
@@ -1404,20 +1406,20 @@ fn render_delete_confirm(
     let lines = vec![
         Line::from(""),
         Line::from(vec![Span::styled(
-            "  This permanently removes the custom model row from storage.",
+            t!("tui.modelConfig.deleteCustomDetail").to_string(),
             warn,
         )]),
         Line::from(""),
         Line::from(vec![label("Provider"), Span::styled(provider_name, white)]),
-        Line::from(vec![label("Model"), Span::styled(model_name, white)]),
+        Line::from(vec![label(&t!("tui.modelConfig.fModel")), Span::styled(model_name, white)]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "  Built-in SDK presets are read-only and cannot be deleted.",
+            t!("tui.modelConfig.deleteBuiltinDetail").to_string(),
             dim,
         )]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "  Press Ctrl+X again to confirm, or any other key to cancel.",
+            t!("tui.modelConfig.deleteConfirmHint").to_string(),
             white,
         )]),
     ];

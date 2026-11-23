@@ -1,6 +1,7 @@
 //! Global terminal-input routing and top-level key dispatch.
 
 use super::overlays::Overlay;
+use i18n::t;
 use super::*;
 
 impl App {
@@ -168,10 +169,8 @@ impl App {
             }
             super::leader::LeaderResolve::Miss => {
                 self.state.toasts.info(
-                    "Leader",
-                    Some(format!(
-                        "␣{ch} is not bound; Esc cancels, ␣␣ opens the palette"
-                    )),
+                    t!("tui.cmd.leaderTitle").to_string(),
+                    Some(format!("{}", t!("tui.cmd.leaderDetail", ch = ch))),
                 );
             }
         }

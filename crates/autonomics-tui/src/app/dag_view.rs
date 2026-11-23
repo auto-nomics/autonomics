@@ -7,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Paragraph, StatefulWidget, Widget as _},
 };
+use i18n::t;
 
 use super::*;
 
@@ -29,7 +30,7 @@ impl App {
             .map(|session| session.name.clone())
         else {
             self.state.dag_view_error =
-                Some("No active agent. The DAG view is scoped to an agent session.".to_string());
+                Some(t!("tui.dagView.noActiveAgent").to_string());
             return;
         };
         let client = self.client.clone();
@@ -79,8 +80,9 @@ impl App {
         let theme = crate::theme::current();
         let popup_width = area.width.saturating_sub(4).max(60).min(area.width);
         let popup_height = area.height.saturating_sub(4).max(16).min(area.height);
+        let dag_title = t!("tui.dagView.title").to_string();
         let popup = crate::widgets::popup::Popup::new(
-            " Data DAG ",
+            &dag_title,
             crate::widgets::popup::PopupControls::new(false, false),
         )
         .width(popup_width)
@@ -89,11 +91,12 @@ impl App {
         let inner = popup.render(area, buf);
 
         let Some(snapshot) = self.state.dag_snapshot.as_ref() else {
+            let loading = t!("tui.dagView.loading").to_string();
             let message = self
                 .state
                 .dag_view_error
                 .as_deref()
-                .unwrap_or("Loading DAG snapshot…");
+                .unwrap_or(&loading);
             Paragraph::new(Line::from(Span::styled(
                 message.to_string(),
                 Style::default().fg(if self.state.dag_view_error.is_some() {

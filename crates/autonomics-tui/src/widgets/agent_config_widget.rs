@@ -1,6 +1,7 @@
 //! Per-agent runtime configuration popup.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
@@ -154,7 +155,8 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
     }
 
     let theme = crate::theme::current();
-    let popup = Popup::new(" Agent Config ", PopupControls::default())
+    let title = t!("tui.agentConfig.title").to_string();
+    let popup = Popup::new(&title, PopupControls::default())
         .width(64.min(frame_area.width))
         .height(15.min(frame_area.height))
         .vertically_centered(true)
@@ -164,7 +166,7 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled(" Agent  ", Style::default().fg(theme.text_faint)),
+            Span::styled(t!("tui.agentConfig.agent").to_string(), Style::default().fg(theme.text_faint)),
             Span::styled(
                 state.agent_path.clone(),
                 Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
@@ -175,18 +177,18 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
 
     if state.loading {
         lines.push(Line::from(Span::styled(
-            " Loading runtime config...",
+            t!("tui.agentConfig.loading").to_string(),
             Style::default().fg(theme.text_faint),
         )));
     } else {
         lines.push(setting_line(
-            "Memory injection",
+            &t!("tui.agentConfig.memoryInjection"),
             state.runtime.use_memory,
             state.effective.map(|config| config.use_memory),
             state.cursor == 0,
         ));
         lines.push(setting_line(
-            "Memory generation",
+            &t!("tui.agentConfig.memoryGeneration"),
             state.runtime.generate_memory,
             state.effective.map(|config| config.generate_memory),
             state.cursor == 1,
@@ -201,12 +203,12 @@ pub fn render_agent_config(frame_area: Rect, buf: &mut Buffer, state: &mut Agent
     lines.push(Line::raw(""));
     if state.saving {
         lines.push(Line::from(Span::styled(
-            " Saving...",
+            t!("tui.agentConfig.saving").to_string(),
             Style::default().fg(theme.warning),
         )));
     } else {
         lines.push(Line::from(Span::styled(
-            " Up/Down select  Space cycle  Enter save  Esc cancel",
+            t!("tui.agentConfig.footer").to_string(),
             Style::default().fg(theme.text_faint),
         )));
     }
@@ -264,9 +266,9 @@ fn effort_line(
 ) -> Line<'static> {
     let override_text = value
         .map(|effort| effort.as_str().to_string())
-        .unwrap_or_else(|| "inherit".to_string());
+        .unwrap_or_else(|| t!("tui.agentConfig.inherit").to_string());
     let effective_text = match effective {
-        Some(effort) => format!("effective {}", effort.as_str()),
+        Some(effort) => t!("tui.agentConfig.effectiveEffort", effort = effort.as_str()).to_string(),
         None => "effective model default".to_string(),
     };
     let marker = if selected { ">" } else { " " };
@@ -282,7 +284,7 @@ fn effort_line(
         Span::styled(marker, Style::default().fg(theme.accent)),
         Span::raw(" "),
         Span::styled(
-            "Reasoning effort".to_string(),
+            t!("tui.agentConfig.reasoningEffort").to_string(),
             Style::default().fg(if selected { theme.text } else { theme.text_dim }),
         ),
         Span::raw("  "),

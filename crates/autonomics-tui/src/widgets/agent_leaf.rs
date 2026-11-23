@@ -6,6 +6,7 @@ use ratatui::{
     widgets::StatefulWidgetRef,
     widgets::{Block, Padding, Paragraph},
 };
+use i18n::t;
 use unicode_width::{UnicodeWidthChar as _, UnicodeWidthStr};
 
 use crate::state::{AgentStatus, AgentTabState, DisplaySettings, InputMode};
@@ -247,9 +248,9 @@ impl StatefulWidgetRef for AgentLeaf<'_> {
                 InputMode::Input => "Type to queue a message… (Ctrl+P → Cancel agent to cancel)",
                 InputMode::Browse => {
                     if queued > 0 {
-                        "Agent running — pending input waits for next request…"
+                        &t!("tui.agentLeaf.runningPendingInput")
                     } else {
-                        "Agent running… (Ctrl+P → Cancel agent to cancel)"
+                        &t!("tui.agentLeaf.runningHint")
                     }
                 }
             }
@@ -313,9 +314,9 @@ fn render_compact_preview(area: Rect, buf: &mut Buffer, compact: &crate::state::
         .as_ref()
         .map(|p| match p.trigger {
             CompactTrigger::Manual => "manual".to_string(),
-            CompactTrigger::MidTurn { used_pct } => format!("auto · mid-turn · ctx {used_pct}%"),
+            CompactTrigger::MidTurn { used_pct } => t!("tui.agentLeaf.compactTriggerMidTurn", pct = used_pct).to_string(),
             CompactTrigger::PreRequest { used_pct } => {
-                format!("auto · pre-request · ctx {used_pct}%")
+                t!("tui.agentLeaf.compactTriggerPreRequest", pct = used_pct).to_string()
             }
         })
         .unwrap_or_default();
@@ -329,7 +330,7 @@ fn render_compact_preview(area: Rect, buf: &mut Buffer, compact: &crate::state::
         .add_modifier(Modifier::ITALIC);
 
     let mut lines = vec![Line::styled(
-        format!("⟳ compacting — {phase}  ({trigger})"),
+        t!("tui.agentLeaf.compacting", phase = phase, trigger = trigger).to_string(),
         header_style,
     )];
     if compact.summary.is_empty() {
@@ -385,7 +386,7 @@ fn render_pending_queue(area: Rect, buf: &mut Buffer, messages: &[String]) {
         .fg(theme.text_faint)
         .add_modifier(Modifier::ITALIC);
     let mut lines = vec![Line::styled(
-        format!("Pending input ({})", messages.len()),
+        t!("tui.agentLeaf.pendingInput", count = messages.len()).to_string(),
         header_style,
     )];
     lines.extend(
@@ -397,7 +398,7 @@ fn render_pending_queue(area: Rect, buf: &mut Buffer, messages: &[String]) {
 
     if messages.len() > PENDING_PREVIEW_LIMIT {
         lines.push(Line::styled(
-            format!("  + {} more", messages.len() - PENDING_PREVIEW_LIMIT),
+            t!("tui.agentLeaf.pendingMore", count = messages.len() - PENDING_PREVIEW_LIMIT).to_string(),
             message_style,
         ));
     }

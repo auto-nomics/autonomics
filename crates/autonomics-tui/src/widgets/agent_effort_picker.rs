@@ -7,6 +7,7 @@
 //! apply path skips and counts them in the summary toast.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::Rect,
     prelude::Buffer,
@@ -25,7 +26,7 @@ pub type EffortStop = Option<ReasoningEffort>;
 /// Label for a stop: `inherit (model default)` or the effort name.
 pub fn effort_stop_label(stop: EffortStop) -> String {
     match stop {
-        None => "inherit (model default)".into(),
+        None => t!("tui.effortPicker.inheritDefault").to_string(),
         Some(effort) => effort.as_str().into(),
     }
 }
@@ -137,7 +138,8 @@ pub fn render_agent_effort_picker(
 
     let theme = crate::theme::current();
     let height = EFFORT_STOPS.len() as u16 + 2;
-    let popup = Popup::new(" Set Effort (bulk) ", PopupControls::default())
+    let title = t!("tui.effortPicker.title").to_string();
+    let popup = Popup::new(&title, PopupControls::default())
         .accent(theme.accent)
         .width(36.min(frame_area.width))
         .height(height.min(frame_area.height));

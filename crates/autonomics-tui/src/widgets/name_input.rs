@@ -5,6 +5,7 @@
 //! edits and presses Enter to confirm, or Esc to cancel.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use i18n::t;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::Buffer,
@@ -140,7 +141,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
         .areas(inner);
 
     Paragraph::new(Line::from(Span::styled(
-        "Name",
+        t!("tui.nameInput.title").to_string(),
         Style::default()
             .fg(theme.warning)
             .add_modifier(Modifier::BOLD),
@@ -158,7 +159,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
     };
 
     if state.textarea.is_empty() {
-        let placeholder: String = "Enter a name…"
+        let placeholder: String = t!("tui.nameInput.placeholder").to_string()
             .chars()
             .take(editor_area.width as usize)
             .collect();
@@ -180,7 +181,7 @@ pub fn render_name_input(area: Rect, buf: &mut Buffer, state: &mut NameInputStat
 
     // Footer hint
     Paragraph::new(Line::from(Span::styled(
-        " Enter create  Esc cancel",
+        t!("tui.nameInput.footer").to_string(),
         Style::default()
             .fg(theme.text_faint)
             .add_modifier(Modifier::DIM),

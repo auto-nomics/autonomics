@@ -5,6 +5,7 @@
 //! and adds selection, status colors, scrolling, and the help line.
 
 use std::collections::HashMap;
+use i18n::t;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -208,7 +209,7 @@ impl RenderModel {
             let payload = format!(
                 "{}\n{}",
                 node.kind,
-                if node.dirty { "dirty *" } else { "cached" }
+                if node.dirty { t!("tui.dag.dirtyMark").to_string() } else { t!("tui.dag.cachedMark").to_string() }
             );
             ascii_to_id.insert(ascii_id, node.id.clone());
             ascii_to_status.insert(ascii_id, node.status);
@@ -368,17 +369,18 @@ impl StatefulWidget for DagTuiWidget<'_> {
             .border_style(Style::default().fg(accent))
             .title(Line::from(vec![
                 Span::styled(
-                    " DAG ",
+                    t!("tui.dag.title").to_string(),
                     Style::default().fg(accent).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!(
-                        "{} nodes · {} edges · {} running · {} failed ",
-                        self.snapshot.nodes.len(),
-                        self.snapshot.edges.len(),
-                        self.snapshot.status_count(RuntimeStatus::Running),
-                        self.snapshot.status_count(RuntimeStatus::Failed),
-                    ),
+                    t!(
+                        "tui.dag.stats",
+                        nodes = self.snapshot.nodes.len(),
+                        edges = self.snapshot.edges.len(),
+                        running = self.snapshot.status_count(RuntimeStatus::Running),
+                        failed = self.snapshot.status_count(RuntimeStatus::Failed),
+                    )
+                    .to_string(),
                     Style::default().fg(theme.text_faint),
                 ),
             ]));
@@ -392,7 +394,7 @@ impl StatefulWidget for DagTuiWidget<'_> {
             buf.set_string(
                 canvas.left(),
                 canvas.top(),
-                "No DAG nodes. Ask the agent to add one.",
+                t!("tui.dag.noNodes").to_string(),
                 Style::default().fg(theme.text_faint),
             );
             return;
@@ -406,7 +408,7 @@ impl StatefulWidget for DagTuiWidget<'_> {
             buf.set_string(
                 canvas.left(),
                 canvas.top(),
-                "DAG layout failed",
+                t!("tui.dag.layoutFailed").to_string(),
                 Style::default().fg(theme.error),
             );
             return;
@@ -674,9 +676,9 @@ fn render_status_line(
         ),
         Span::styled(
             if node.dirty {
-                " · dirty"
+                t!("tui.dag.footerDirty").to_string()
             } else {
-                " · cached"
+                t!("tui.dag.footerCached").to_string()
             },
             Style::default().fg(if node.dirty {
                 theme.warning
@@ -687,12 +689,12 @@ fn render_status_line(
     ];
     if focused {
         let fixture_hint = if fixture_help {
-            " · Space fixture"
+            t!("tui.dag.footerFixture").to_string()
         } else {
-            ""
+            String::new()
         };
         spans.push(Span::styled(
-            format!("  ←→ dataflow · ↑↓ siblings · Tab next{fixture_hint} · R refresh · Esc close"),
+            format!("{}{}", t!("tui.dag.footer"), fixture_hint),
             Style::default().fg(theme.text_faint),
         ));
     }
