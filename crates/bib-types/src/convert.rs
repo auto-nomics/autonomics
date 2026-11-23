@@ -159,6 +159,7 @@ pub fn build_article(
     Article {
         id: id.into(),
         title: title.into(),
+        citekey: None,
         authors,
         identifiers,
         abstract_text: None,

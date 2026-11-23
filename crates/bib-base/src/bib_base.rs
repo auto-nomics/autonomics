@@ -25,6 +25,7 @@ use bib_types::{Article, ArticleSource, Author, CollectionStatus, IdKind, Identi
 const SCHEMA_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS articles (
     id          TEXT PRIMARY KEY,
+    citekey     TEXT UNIQUE,
     title       TEXT NOT NULL,
     abstract    TEXT,
     year        INTEGER,
@@ -410,6 +411,52 @@ impl BibCore {
             .execute_batch(crate::reliability::SCHEMA)
             .await?;
 
+        // --- article citekeys ----------------------------------------------
+        // Databases created before stable citation keys lack the column.
+        // Detect-and-ALTER, then backfill each existing article with a
+        // `stable_citekey` (semantic stem + random 4-char suffix, unique by
+        // construction). Keys are assigned once and never recomputed.
+        let mut has_citekey = false;
+        {
+            let mut rows = conn
+                .query("PRAGMA table_info(articles)", turso::params![])
+                .await?;
+            while let Some(row) = rows.next().await? {
+                if row.get::<String>(1)? == "citekey" {
+                    has_citekey = true;
+                }
+            }
+        }
+        if !has_citekey {
+            conn.execute_batch(
+                "ALTER TABLE articles ADD COLUMN citekey TEXT; \
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_articles_citekey ON articles(citekey);",
+            )
+            .await?;
+            // Backfill from hydrated articles (cite_key needs first author
+            // + year + first title word, all from child/joined rows).
+            let ids = {
+                let mut rows = conn
+                    .query("SELECT id FROM articles", turso::params![])
+                    .await?;
+                let mut ids = Vec::new();
+                while let Some(row) = rows.next().await? {
+                    ids.push(row.get::<String>(0)?);
+                }
+                ids
+            };
+            for id in ids {
+                if let Some(article) = Self::get_article_on(&conn, &id).await? {
+                    let key = bib_types::evidence::stable_citekey(&article);
+                    conn.execute(
+                        "UPDATE articles SET citekey = ?1 WHERE id = ?2",
+                        turso::params![key, id],
+                    )
+                    .await?;
+                }
+            }
+        }
+
         crate::saved_searches::ensure(&conn).await?;
         crate::saved_searches::ensure(&self.conn()).await?;
         crate::discovery_import::ensure(&conn).await?;
@@ -533,14 +580,46 @@ impl BibCore {
     /// Insert or update one article, preserving rows that are not synchronized
     /// from `Article` metadata.
     pub(crate) async fn upsert_article_in_tx(conn: &Connection, article: &Article) -> Result<()> {
+        // Assign a stable citation key for a newly inserted article. The key
+        // is deliberately NOT recomputed on update: once assigned it is the
+        // permanent public handle for the record (wiki citations, tool
+        // calls), so a metadata refresh must never change it.
+        let citekey = match article.citekey.clone() {
+            Some(existing) => Some(existing),
+            None => {
+                let mut candidate = bib_types::evidence::stable_citekey(article);
+                let mut taken = true;
+                for _ in 0..8 {
+                    let mut rows = conn
+                        .query(
+                            "SELECT 1 FROM articles WHERE citekey = ?1 AND id != ?2",
+                            turso::params![candidate.clone(), article.id.clone()],
+                        )
+                        .await?;
+                    taken = rows.next().await?.is_some();
+                    drop(rows);
+                    if !taken {
+                        break;
+                    }
+                    candidate = bib_types::evidence::stable_citekey(article);
+                }
+                if taken {
+                    return Err(Error::Unknown(
+                        "could not allocate a unique citekey".into(),
+                    ));
+                }
+                Some(candidate)
+            }
+        };
+
         // A real UPSERT is important here. `INSERT OR REPLACE` deletes the old
         // parent row first, which can cascade to annotations, fulltexts, and
         // collection memberships that should survive a metadata refresh.
         conn.execute(
             "INSERT INTO articles \
-             (id, title, abstract, year, month, journal, volume, issue, pages, \
+             (id, citekey, title, abstract, year, month, journal, volume, issue, pages, \
               issn, essn, language, pub_types, keywords, source, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
              ON CONFLICT(id) DO UPDATE SET \
                 title = excluded.title, \
                 abstract = excluded.abstract, \
@@ -560,6 +639,7 @@ impl BibCore {
                 updated_at = excluded.updated_at",
             turso::params![
                 article.id.clone(),
+                citekey,
                 article.title.clone(),
                 article.abstract_text.clone(),
                 article.year.map(|y| y as i64),
@@ -660,6 +740,34 @@ impl BibCore {
         Ok(())
     }
 
+    /// Light-weight citekey lookup for a batch of article ids — no child-row
+    /// hydration. Used to annotate search results without full loads.
+    pub(crate) async fn get_citekeys(&self, ids: &[String]) -> Result<Vec<Option<String>>> {
+        let conn = self.conn();
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let mut rows = conn
+                .query(
+                    "SELECT citekey FROM articles WHERE id = ?1",
+                    turso::params![id.clone()],
+                )
+                .await?;
+            let key = match rows.next().await? {
+                Some(row) => {
+                    let k = row.get::<Option<String>>(0)?;
+                    drop(rows);
+                    k
+                }
+                None => {
+                    drop(rows);
+                    None
+                }
+            };
+            out.push(key);
+        }
+        Ok(out)
+    }
+
     /// Look up a single article by its internal ID.
     pub async fn get_article(&self, id: &str) -> Result<Option<Article>> {
         let conn = self.conn();
@@ -673,7 +781,7 @@ impl BibCore {
         let mut rows = conn
             .query(
                 "SELECT id, title, abstract, year, month, journal, volume, issue, pages, \
-                 issn, essn, language, pub_types, keywords, source, created_at, updated_at, COALESCE((SELECT data FROM articleExtraFields e WHERE e.articleID=articles.id),'{}') \
+                 issn, essn, language, pub_types, keywords, source, created_at, updated_at, COALESCE((SELECT data FROM articleExtraFields e WHERE e.articleID=articles.id),'{}'), COALESCE(citekey, '') \
                  FROM articles WHERE id = ?1",
                 turso::params![id],
             )
@@ -703,6 +811,10 @@ impl BibCore {
             .unwrap_or_default();
 
         article.extra_fields = serde_json::from_str(&row.get::<String>(17)?)?;
+        article.citekey = match row.get::<String>(18)? {
+            s if !s.is_empty() => Some(s),
+            _ => None,
+        };
         article.created_at = opt_string(row.get_value(15)?)
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
             .map(|d| d.with_timezone(&chrono::Utc));
@@ -761,6 +873,33 @@ impl BibCore {
         }
 
         Ok(Some(article))
+    }
+
+    /// Find an article by its stable citation key (e.g. `smith2024a-k3x9`).
+    ///
+    /// The preferred lookup path for tools and wiki citations: short,
+    /// human-readable, and permanently stable once assigned.
+    pub async fn find_by_citekey(&self, citekey: &str) -> Result<Option<Article>> {
+        let conn = self.conn();
+        Self::find_by_citekey_on(&conn, citekey).await
+    }
+
+    pub(crate) async fn find_by_citekey_on(
+        conn: &Connection,
+        citekey: &str,
+    ) -> Result<Option<Article>> {
+        let mut rows = conn
+            .query(
+                "SELECT id FROM articles WHERE citekey = ?1 AND id NOT IN (SELECT articleID FROM articleTrash) LIMIT 1",
+                turso::params![citekey],
+            )
+            .await?;
+        let article_id = match rows.next().await? {
+            Some(row) => row.get::<String>(0)?,
+            None => return Ok(None),
+        };
+        drop(rows);
+        Self::get_article_on(conn, &article_id).await
     }
 
     /// Find an article by an external identifier (DOI, PMID, …).
@@ -943,6 +1082,24 @@ impl BibBase {
     pub async fn delete_article(&self, id: &str) -> Result<u64> {
         self.call(|reply| BibCommand::DeleteArticle {
             id: id.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Light-weight batch citekey lookup (see [`BibCore::get_citekeys`]).
+    pub async fn get_citekeys(&self, ids: &[String]) -> Result<Vec<Option<String>>> {
+        self.call(|reply| BibCommand::GetCitekeys {
+            ids: ids.to_owned(),
+            reply,
+        })
+        .await
+    }
+
+    /// Find an article by its stable citation key (see [`BibCore::find_by_citekey`]).
+    pub async fn find_by_citekey(&self, citekey: &str) -> Result<Option<Article>> {
+        self.call(|reply| BibCommand::FindByCitekey {
+            citekey: citekey.to_owned(),
             reply,
         })
         .await

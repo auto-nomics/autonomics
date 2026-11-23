@@ -16,7 +16,8 @@ use crate::service::WikiHandle;
     description = "Incremental edit of a wiki entry's content: replace an exact old_string \
                    with new_string (fuzzy line matching: exact / rstrip / trim / \
                    Unicode-normalised, same engine as the VFS edit tool). Fails without \
-                   writing when the pattern is not found or is ambiguous."
+                   writing when the pattern is not found or is ambiguous. Keep the \
+                   replacement in the entry's fact-first, third-person, structured style."
 )]
 pub struct WikiEditInput {
     #[desc = "Entry id (UUID string)"]

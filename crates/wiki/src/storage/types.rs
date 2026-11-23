@@ -141,6 +141,12 @@ pub trait WikiIndexStorage: Send + Sync {
     /// wiki 链接指向它)的其他未删除词条 id,按 id 升序。这是补链
     /// (auto-link)的候选来源。
     async fn get_mentions(&self, id: &str) -> Result<Vec<String>>;
+    /// 词条正文引用的文献键(pandoc `[@citekey]`,去重后按 citekey
+    /// 字典序;回收站词条报 NotFound)。
+    async fn get_citations(&self, id: &str) -> Result<Vec<String>>;
+    /// 反查:引用了该文献键的未删除词条 id,按 id 升序。悬空键
+    /// (文献尚未导入)照样可查 —— 这是"导入后谁在引用它"的钩子。
+    async fn get_citing_entries(&self, citekey: &str) -> Result<Vec<String>>;
 }
 
 /// 全文检索能力:BM25,中英文混合分词(见 [`crate::search`])。

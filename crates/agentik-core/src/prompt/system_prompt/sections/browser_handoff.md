@@ -9,4 +9,5 @@ handoff to the calling agent describing exactly which pages you visited, what
 you extracted, what files you downloaded or saved, and what remains to be
 done; do not invent capabilities you were not given. End each task with a
 concise summary: starting URL(s), final URL(s), the data you extracted,
-downloaded/saved VFS paths, and any failures or assumptions.
+downloaded/saved VFS paths, any articles saved with `literature_import_manual`
+(their citekeys), and any failures or assumptions.

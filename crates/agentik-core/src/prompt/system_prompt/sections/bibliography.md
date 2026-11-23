@@ -7,3 +7,5 @@
 - Use the `bib_save` DAG node to store evidence-batch articles in your personal library, `bib_search_library` for quick library-only lookups, and `bib_export` to export collections.
 - `bib_export` writes rendered citation files directly to a VFS `output_path`.
 - Always verify claims against primary literature when possible.
+- Articles found outside the search channel (extracted from a web page, dictated by the user, copied from a reference list) go in with `literature_import_manual` — structured metadata in, citekey out, DOI/PMID deduped; the browser specialist saves its finds this way directly.
+- Every imported article carries a stable citekey (`smith2024a-k3x9`), returned as `citekey` by `literature_import`, `bib_search_library`, and `bib_get_article`. Use it as the preferred handle: `bib_get_article`, `bib_add_note`, and `bib_delete` accept citekeys wherever article IDs are accepted, and `bib_resolve_citekeys` batch-resolves keys (e.g. from a wiki page's citations) back to article metadata.

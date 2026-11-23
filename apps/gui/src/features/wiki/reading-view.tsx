@@ -11,6 +11,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { openBibRecordEditor } from "@/features/bibliography/bib-record-opener";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { extractWikiTargets, useWikiMarkdown } from "./markdown";
 import { findEntryByTitle, formatTime, type WikiEntry } from "./wiki-api";
@@ -111,11 +112,21 @@ export function ReadingView({
     });
   }, [linkExists, html]);
 
-  // Click routing for rendered content: code copy buttons and wikilinks.
+  // Click routing for rendered content: code copy buttons, wikilinks, and
+  // citation chips (`[@citekey]` — the bib record endpoint resolves the
+  // citekey, so the chip navigates straight to the article record).
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const openCitation = (hit: HTMLElement | null) => {
+      const chip = hit?.closest<HTMLElement>("[data-citekey]");
+      const citekey = chip?.dataset.citekey;
+      if (!citekey) return false;
+      openBibRecordEditor({ articleId: citekey });
+      return true;
+    };
     const open = (hit: HTMLElement | null, event: MouseEvent) => {
+      if (openCitation(hit)) return;
       const link = hit?.closest<HTMLElement>("[data-wikilink]");
       if (!link) return;
       const target = link.dataset.wikilink;

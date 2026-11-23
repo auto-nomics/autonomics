@@ -331,7 +331,7 @@ export function registerWorkbenchEditorKinds(): void {
     name: (editor) => String(editor.params.entryId ?? ""),
     icon: () => NotebookText,
     body: WikiEntryEditorBody,
-    // Keep-alive: unsaved block-editor drafts survive tab switches; the
+    // Keep-alive: unsaved editor drafts survive tab switches; the
     // confirmLeave veto guards closing while editing.
     mount: "keep-alive",
     confirmLeave: (editor) => {

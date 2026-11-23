@@ -219,6 +219,34 @@ pub fn cite_key(article: &Article) -> String {
     format!("{author_part}{year_part}{title_part}")
 }
 
+/// Random 4-character base-36 suffix (from a UUID v4, so no extra crate
+/// state is needed beyond `uuid` which callers already depend on).
+///
+/// 36^4 ≈ 1.7M combinations per base key; combined with a UNIQUE index and
+/// a retry loop in the storage layer, collisions are effectively impossible.
+pub fn citekey_suffix() -> String {
+    let uuid = uuid::Uuid::new_v4().as_u128();
+    let mut out = String::with_capacity(4);
+    let mut v = uuid;
+    for _ in 0..4 {
+        out.push(std::char::from_digit((v % 36) as u32, 36).unwrap_or('0'));
+        v /= 36;
+    }
+    out
+}
+
+/// Build a stable citation key: the semantic [`cite_key`] stem plus a short
+/// random suffix (`smith2024a-k3x9`).
+///
+/// The suffix makes the key unique by construction (no author-year
+/// disambiguation ladder needed) and — once persisted — permanently stable:
+/// the key is assigned at library insertion and never recomputed, so wiki
+/// entries citing `[@smith2024a-k3x9]` cannot break when metadata changes
+/// or a namesake paper arrives.
+pub fn stable_citekey(article: &Article) -> String {
+    format!("{}-{}", cite_key(article), citekey_suffix())
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

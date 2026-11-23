@@ -555,7 +555,19 @@ impl SharedInfra {
             let session = self
                 .browser_session_for(agent_path.as_str(), self.browser_options_template.clone())
                 .await?;
-            tools.extend(browser_use::tools::registrations(session));
+            tools.extend(browser_use::tools::registrations(session.clone()));
+            // 浏览器提取的文献直接进库:browser agent 拿到唯一的 bib 写
+            // 入点(手工导入,带 DOI/PMID 去重)。这是它除 vfs 之外唯一
+            // 的持久化通道 —— 完整的 bib 工具组仍只属于文献 kind。
+            // archive_current_page=true 时,工具经 CurrentPageSource 从
+            // 会话活跃 tab 服务端抓取 HTML 存为附件 —— agent 不必把已
+            // 提取的页面内容再回传一遍。
+            tools.push(agentik_core::tools::ToolRegistration::from(
+                bib_base::library_tools::LiteratureImportManualTool {
+                    shared: self.bib.clone(),
+                    page: Some(std::sync::Arc::new(BrowserPageSource { session })),
+                },
+            ));
         }
 
         tools.extend(vfs::vbash_registrations(file_storage.clone()));
@@ -662,6 +674,14 @@ impl SharedInfra {
         // 长期记忆保持只读,知识维护走一条可审计的路径。
         if kind.enable_wiki_read() {
             tools.extend(wiki::tools::wiki_read_registrations(self.wiki.clone()));
+            // wiki ↔ bib 桥:词条里的 [@citekey] 引用解析到文献元数据。
+            // 只读,与 wiki 读组同粒度挂给所有 kind(读 wiki 必然要能
+            // 解析其中的引用)。
+            tools.push(agentik_core::tools::ToolRegistration::from(
+                bib_base::library_tools::BibResolveCitekeysTool {
+                    bib: self.bib.bib.clone(),
+                },
+            ));
         }
         if kind.enable_wiki_write() {
             tools.extend(wiki::tools::wiki_write_registrations(self.wiki.clone()));
@@ -1019,6 +1039,25 @@ async fn open_memory(config: &RuntimeConfig) -> Result<Arc<MemoryBackend>> {
         memory_store,
         None,
     )))
+}
+
+
+/// [`bib_base::library_tools::CurrentPageSource`] over the browser agent's
+/// live session: captures the active tab's URL/title/HTML without the agent
+/// round-tripping bytes back through the tool call.
+struct BrowserPageSource {
+    session: Arc<browser_use::BrowserSession>,
+}
+
+#[async_trait::async_trait]
+impl bib_base::library_tools::CurrentPageSource for BrowserPageSource {
+    async fn current_page(&self) -> std::result::Result<(String, String, String), String> {
+        let tab = self.session.tab(None).await.map_err(|e| e.to_string())?;
+        let url = tab.url().await.map_err(|e| e.to_string())?.unwrap_or_default();
+        let title = tab.title().await.map_err(|e| e.to_string())?.unwrap_or_default();
+        let html = tab.html().await.map_err(|e| e.to_string())?;
+        Ok((url, title, html))
+    }
 }
 
 /// Open the bibliography store + literature gateway once and publish

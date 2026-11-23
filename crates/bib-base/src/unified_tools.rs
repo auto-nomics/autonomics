@@ -282,8 +282,12 @@ pub struct ImportCandidateRef {
                   fetch (PMC open access) runs as a background job per article. \
                   \
                   Run with dry_run=true first to preview matches, or directly for \
-                  the import. After importing, use `bib_get_article` for full text \
-                  and `bib_add_to_collection` to organize. \
+                  the import. Each imported article gets a stable citekey \
+                  (`smith2024a-k3x9`) returned in the outcome — the preferred \
+                  handle for citing it in wiki entries (`[@citekey]`) and for \
+                  `article_id` parameters of bib tools. After importing, use \
+                  `bib_get_article` for full text and `bib_add_to_collection` \
+                  to organize. \
                   \
                   **Example**: session_id=\"…\", candidates=[{candidate_id:\"…\", \
                   expected_fingerprint:\"…\"}], collection_id=\"ABC123\", \
@@ -366,6 +370,24 @@ impl ToolFunction for LiteratureImportTool {
                 ),
             })));
         }
+        // citekeys are assigned inside the storage layer, so re-read them for
+        // the imported articles and surface the short keys in the outcome —
+        // agents should cite and address articles through them from here on.
+        let saved_ids: Vec<String> = response
+            .outcomes
+            .iter()
+            .filter_map(|o| o.article.as_ref().map(|a| a.id.clone()))
+            .collect();
+        let mut citekey_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for (id, key) in saved_ids
+            .iter()
+            .zip(self.shared.bib.get_citekeys(&saved_ids).await.unwrap_or_default())
+        {
+            if let Some(k) = key {
+                citekey_map.insert(id.clone(), k);
+            }
+        }
         let outcomes: Vec<serde_json::Value> = response
             .outcomes
             .iter()
@@ -374,6 +396,7 @@ impl ToolFunction for LiteratureImportTool {
                     "candidate_id": outcome.candidate_id,
                     "status": outcome.status,
                     "article_id": outcome.article.as_ref().map(|article: &Article| article.id.clone()),
+                    "citekey": outcome.article.as_ref().and_then(|article| citekey_map.get(&article.id).cloned()),
                     "related_article_ids": outcome.related_article_ids,
                     "collection_added": outcome.collection_added,
                     "changed": outcome.changed,

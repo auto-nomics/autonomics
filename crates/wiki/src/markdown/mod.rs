@@ -6,4 +6,4 @@
 
 mod parse;
 
-pub use parse::{ExtractedLink, LinkKind, Parser};
+pub use parse::{ExtractedCitation, ExtractedLink, LinkKind, Parser};

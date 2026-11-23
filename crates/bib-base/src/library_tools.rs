@@ -36,11 +36,14 @@ use agentik_sdk::types::{ToolResult as AgentToolResult, ToolResultBlock};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use bib_types::{
-    AddedBy, ArticleRole, CollectionStatus, FetchStatus, IdKind, Identifier, TextFormat,
+    AddedBy, Article, ArticleRole, ArticleSource, CollectionStatus, ExtractStatus, FetchStatus,
+    FileFormat, FullText, FullTextSource, IdKind, Identifier, TextFormat,
 };
 
 use crate::bib_base::BibBase;
+use crate::Error;
 use crate::collections::CollectionAddOutcome;
+use crate::managed_fulltext::{ImportMode, ManagedImport};
 
 // ===========================================================================
 // bib_create_collection
@@ -835,11 +838,18 @@ impl BibSearchLibraryTool {
             }
         };
 
+        // Annotate hits with their stable citekeys so the agent can cite and
+        // address articles by the short key from here on.
+        let ids: Vec<String> = hits.iter().map(|h| h.article_id.clone()).collect();
+        let citekeys = self.bib.get_citekeys(&ids).await.unwrap_or_default();
+
         let results: Vec<serde_json::Value> = hits
             .iter()
-            .map(|h| {
+            .enumerate()
+            .map(|(i, h)| {
                 serde_json::json!({
                     "article_id": h.article_id,
+                    "citekey": citekeys.get(i).cloned().flatten(),
                     "title": h.title,
                     "snippet": h.snippet,
                 })
@@ -856,6 +866,27 @@ impl BibSearchLibraryTool {
     }
 }
 
+
+/// Resolve an article reference for tool inputs: exact internal id first,
+/// then the stable citekey. Returns the hydrated article so callers can use
+/// `article.id` for downstream operations.
+pub(crate) async fn resolve_article_ref(
+    bib: &BibBase,
+    reference: &str,
+) -> Result<Option<bib_types::Article>, ToolError> {
+    let reference = reference.trim();
+    if let Some(a) = bib
+        .get_article(reference)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed { source: e.to_string().into() })?
+    {
+        return Ok(Some(a));
+    }
+    bib.find_by_citekey(reference)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed { source: e.to_string().into() })
+}
+
 // ===========================================================================
 // bib_get_article — full metadata + full-text file refs from local library (batch)
 // ===========================================================================
@@ -866,6 +897,8 @@ impl BibSearchLibraryTool {
 #[derive(serde::Serialize)]
 struct GetArticleResult {
     article_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    citekey: Option<String>,
     found: bool,
     title: Option<String>,
     authors: Vec<String>,
@@ -925,6 +958,7 @@ impl GetArticleResult {
     fn err(article_id: impl Into<String>, found: bool, msg: impl Into<String>) -> Self {
         Self {
             article_id: article_id.into(),
+            citekey: None,
             found,
             title: None,
             authors: Vec::new(),
@@ -963,8 +997,10 @@ impl GetArticleResult {
                   reference** (VFS path, format, sha256, extraction status) when one is \
                   stored. \
                   \
-                  Pass a list of article IDs — each is fetched concurrently from the \
-                  local database. Articles must have been saved via a `bib_save` DAG \
+                  Pass a list of article references — internal IDs or stable \
+                  citekeys (e.g. `smith2024a-k3x9`, returned as `citekey` by \
+                  import/search) — each is fetched concurrently from the local \
+                  database. Articles must have been saved via a `bib_save` DAG \
                   node first; missing IDs are returned with `found: false` rather \
                   than failing the whole call. \
                   \
@@ -979,7 +1015,7 @@ impl GetArticleResult {
                   • article_ids=[\"a1\", \"a2\", \"a3\"] — batch (fetched concurrently)"
 )]
 pub struct BibGetArticleInput {
-    #[desc = "One or more article IDs (from a `bib_save` DAG node or `bib_search_library` results)"]
+    #[desc = "One or more article references: internal IDs or citekeys (from `bib_save`, `bib_search_library`, or `literature_import`)"]
     pub article_ids: Vec<String>,
 }
 
@@ -1032,20 +1068,23 @@ impl BibGetArticleTool {
     /// Never errors — failures are captured in `GetArticleResult::error` so
     /// one bad ID doesn't abort the batch.
     async fn get_one(&self, article_id: &str) -> GetArticleResult {
-        let article = match self.bib.get_article(article_id).await {
+        let article = match resolve_article_ref(&self.bib, article_id).await {
             Ok(Some(a)) => a,
             Ok(None) => {
                 return GetArticleResult::err(
                     article_id,
                     false,
                     format!(
-                        "Article '{article_id}' not found in local library. \
+                        "Article '{article_id}' not found in local library \
+                         (looked up by internal ID, then citekey). \
                          Import it with a `bib_save` DAG node first."
                     ),
                 );
             }
             Err(e) => return GetArticleResult::err(article_id, false, e.to_string()),
         };
+        // Downstream operations key on the canonical internal id.
+        let article_id = &article.id;
 
         // The full-text row is the pointer: VFS path (or a legacy synthetic
         // pointer), format, hash, size, and the extraction lifecycle. The
@@ -1125,6 +1164,7 @@ impl BibGetArticleTool {
 
         GetArticleResult {
             article_id: article.id.clone(),
+            citekey: article.citekey.clone(),
             found: true,
             title: Some(article.title),
             authors,
@@ -1246,7 +1286,7 @@ impl ToolFunction for BibRequestFulltextTool {
                   quote or open Reading Mode to regenerate the source map before retrying."
 )]
 pub struct BibAddNoteInput {
-    #[desc = "Article ID (from a `bib_save` DAG node or `bib_search_library`)"]
+    #[desc = "Article reference: internal ID or citekey (from `bib_save`, `bib_search_library`, or `literature_import`)"]
     pub article_id: String,
     #[desc = "Verbatim passage from the article's full text this note is attached to"]
     pub quote: String,
@@ -1272,11 +1312,21 @@ impl ToolFunction for BibAddNoteTool {
     type Input = BibAddNoteInput;
 
     async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let article = resolve_article_ref(&self.bib, &input.article_id)
+            .await
+            .map_err(box_error)?
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                source: format!(
+                    "article '{}' not found (looked up by internal ID, then citekey)",
+                    input.article_id
+                )
+                .into(),
+            })?;
         let anchored = self
             .bib
             .add_anchored_annotation(crate::annotations::AnchoredNoteInput {
                 pdf_storage: self.storage.clone(),
-                article_id: input.article_id.clone(),
+                article_id: article.id.clone(),
                 quote: input.quote,
                 note: Some(input.note),
                 near_line: input.near_line,
@@ -1289,7 +1339,8 @@ impl ToolFunction for BibAddNoteTool {
 
         Ok(AgentToolResult::success_json(serde_json::json!({
             "annotation_id": anchored.annotation.id,
-            "article_id": input.article_id,
+            "article_id": article.id,
+            "citekey": article.citekey,
             "kind": anchored.annotation.kind.as_str(),
             "content": anchored.annotation.content,
             "comment": anchored.annotation.comment,
@@ -1440,7 +1491,15 @@ impl ToolFunction for BibDeleteTool {
         }
 
         if let Some(internal) = &input.article_ids {
-            resolved.extend(internal.iter().cloned());
+            for reference in internal {
+                // Resolve citekeys to internal ids; unresolved references flow
+                // through unchanged so the preview below reports them as
+                // `found: false` instead of silently dropping them.
+                match resolve_article_ref(&self.bib, reference).await {
+                    Ok(Some(art)) => resolved.push(art.id),
+                    _ => resolved.push(reference.trim().to_owned()),
+                }
+            }
         }
 
         // Deduplicate while preserving call order.
@@ -1806,6 +1865,7 @@ pub fn bib_library_registrations(
         R::from(BibListCollectionTool { bib: bib.clone() }),
         R::from(BibSearchLibraryTool { bib: bib.clone() }),
         R::from(BibGetArticleTool { bib: bib.clone() }),
+        R::from(BibResolveCitekeysTool { bib: bib.clone() }),
         R::from(BibRequestFulltextTool { bib: bib.clone() }),
         R::from(BibAddNoteTool {
             bib: bib.clone(),
@@ -1850,7 +1910,429 @@ pub fn bib_all_registrations(shared: Arc<BibShared>) -> Vec<ToolRegistration> {
     // Literature *retrieval* now flows through the DAG evidence channel
     // (source_literature / source_literature_fetch / citation-graph nodes);
     // this registration covers only the local-library management tools.
-    bib_library_registrations(shared.bib.clone(), file_storage)
+    let mut tools = bib_library_registrations(shared.bib.clone(), file_storage);
+    tools.push(agentik_core::tools::ToolRegistration::from(
+        LiteratureImportManualTool {
+            shared: shared.clone(),
+            page: None,
+        },
+    ));
+    tools
+}
+
+
+// ===========================================================================
+// bib_resolve_citekeys — citekey → article metadata bridge (batch, read-only)
+// ===========================================================================
+
+#[tool(
+    name = "bib_resolve_citekeys",
+    description = "Resolve stable citation keys (e.g. smith2024a-k3x9) to article metadata \
+                  — the bridge between wiki citations ([@citekey] in entry bodies, \
+                  returned by wiki_get / wiki_citations) and the literature library. \
+                  Returns, per key: {citekey, found, article_id, title, authors, year, \
+                  journal, doi, pmid} — enough to render a reference or verify a claim \
+                  without loading the full record. Unresolved (not yet imported) keys \
+                  come back with found: false, not an error; import them with \
+                  literature_search + literature_import."
+)]
+pub struct BibResolveCitekeysInput {
+    #[desc = "One or more citekeys (from wiki_get/wiki_citations output or literature_import results)"]
+    pub citekeys: Vec<String>,
+}
+
+pub struct BibResolveCitekeysTool {
+    pub bib: Arc<BibBase>,
+}
+
+#[derive(serde::Serialize)]
+struct ResolvedCitekey {
+    citekey: String,
+    found: bool,
+    article_id: Option<String>,
+    title: Option<String>,
+    authors: Vec<String>,
+    year: Option<u16>,
+    journal: Option<String>,
+    doi: Option<String>,
+    pmid: Option<String>,
+}
+
+#[async_trait]
+impl ToolFunction for BibResolveCitekeysTool {
+    type Input = BibResolveCitekeysInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        if input.citekeys.is_empty() {
+            return Err(ToolError::ValidationFailed {
+                message: "at least one citekey is required".into(),
+            });
+        }
+        let mut results = Vec::with_capacity(input.citekeys.len());
+        let mut missing = 0usize;
+        for key in &input.citekeys {
+            let key = key.trim();
+            match self.bib.find_by_citekey(key).await.map_err(box_error)? {
+                Some(a) => {
+                    let doi = a.doi().map(str::to_owned);
+                    let pmid = a.pmid().map(str::to_owned);
+                    results.push(ResolvedCitekey {
+                        citekey: key.to_owned(),
+                        found: true,
+                        article_id: Some(a.id),
+                        title: Some(a.title),
+                        authors: a.authors.iter().map(|x| x.display_name()).collect(),
+                        year: a.year,
+                        journal: a.journal,
+                        doi,
+                        pmid,
+                    })
+                }
+                None => {
+                    missing += 1;
+                    results.push(ResolvedCitekey {
+                        citekey: key.to_owned(),
+                        found: false,
+                        article_id: None,
+                        title: None,
+                        authors: Vec::new(),
+                        year: None,
+                        journal: None,
+                        doi: None,
+                        pmid: None,
+                    });
+                }
+            }
+        }
+        let total = results.len();
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "total": total,
+            "found": total - missing,
+            "missing": missing,
+            "results": results,
+        })))
+    }
+}
+
+
+// ===========================================================================
+// literature_import_manual — structured metadata straight into the library
+// (browser-extracted papers and other out-of-band finds)
+// ===========================================================================
+
+#[tool(
+    name = "literature_import_manual",
+    description = "Save an article to the local library from structured metadata — \
+                  the import path for articles found outside the search channel \
+                  (extracted from a web page by a browser agent, dictated by the \
+                  user, or copied from a reference list). Provide title (required) \
+                  plus whatever identifiers the source exposed (doi / pmid / arxiv); \
+                  identifiers are preferred because they deduplicate: an article \
+                  already in the library is returned as already_present with its \
+                  existing citekey, never overwritten. Returns the assigned \
+                  citekey — cite the article in wiki entries with [@citekey]. \
+                  For articles found through literature_search, use \
+                  literature_import instead."
+)]
+pub struct LiteratureImportManualInput {
+    #[desc = "Article title (required)"]
+    pub title: String,
+    #[desc = "Authors as display strings ('Smith John', 'Garcia M') — first token is the last name"]
+    pub authors: Option<Vec<String>>,
+    #[desc = "Publication year"]
+    pub year: Option<u16>,
+    #[desc = "Journal or venue name"]
+    pub journal: Option<String>,
+    #[desc = "DOI (preferred identifier — strongest dedup)"]
+    pub doi: Option<String>,
+    #[desc = "PubMed ID"]
+    pub pmid: Option<String>,
+    #[desc = "arXiv ID"]
+    pub arxiv: Option<String>,
+    #[desc = "Source URL of the page the metadata was extracted from (kept as provenance)"]
+    pub url: Option<String>,
+    #[desc = "Abstract text if available"]
+    pub abstract_text: Option<String>,
+    #[desc = "Archive the current browser page's HTML as the article's attachment (browser agents only; needs a live session)"]
+    pub archive_current_page: Option<bool>,
+}
+
+pub struct LiteratureImportManualTool {
+    pub shared: Arc<BibShared>,
+    /// Server-side page capture (the browser agent's live session). When
+    /// attached and `archive_current_page` is set, the tool pulls the page
+    /// HTML itself — the agent never re-sends bytes it already extracted.
+    pub page: Option<Arc<dyn CurrentPageSource>>,
+}
+
+/// A live page the importing agent is looking at (its browser session's
+/// active tab). Implemented by the runtime over `BrowserSession`; keeps
+/// `bib-base` free of any browser dependency.
+#[async_trait]
+pub trait CurrentPageSource: Send + Sync {
+    /// `(url, title, html)` of the active tab.
+    async fn current_page(&self) -> Result<(String, String, String), String>;
+}
+
+#[async_trait]
+impl ToolFunction for LiteratureImportManualTool {
+    type Input = LiteratureImportManualInput;
+
+    async fn run(&self, input: Self::Input) -> Result<AgentToolResult, ToolError> {
+        let title = input.title.trim();
+        if title.is_empty() {
+            return Err(ToolError::ValidationFailed {
+                message: "title is required".into(),
+            });
+        }
+
+        // Optional server-side page capture, taken BEFORE any dedup short-
+        // circuit so already-present articles archive their page too.
+        let snapshot = if input.archive_current_page.unwrap_or(false) {
+            let source = self.page.as_ref().ok_or_else(|| ToolError::ValidationFailed {
+                message: "archive_current_page needs a live browser session \
+                          (only browser agents have one)".into(),
+            })?;
+            let (url, page_title, html) = source
+                .current_page()
+                .await
+                .map_err(|e| ToolError::ExecutionFailed { source: e.into() })?;
+            if html.trim().is_empty() {
+                return Err(ToolError::ExecutionFailed {
+                    source: "current page has no HTML content to archive".into(),
+                });
+            }
+            Some((url, page_title, html))
+        } else {
+            None
+        };
+        let archive = |article_id: String, snap: Option<(String, String, String)>| async move {
+            archive_page_attachment(&self.shared, &article_id, snap).await
+        };
+
+        // Structured identifiers: trim, keep only non-empty ones, in
+        // descending dedup priority.
+        let mut identifiers: Vec<(IdKind, String)> = Vec::new();
+        for (kind, raw) in [
+            (IdKind::Doi, input.doi.as_deref()),
+            (IdKind::Pmid, input.pmid.as_deref()),
+            (IdKind::Arxiv, input.arxiv.as_deref()),
+        ] {
+            let value = raw.map(str::trim).filter(|v| !v.is_empty());
+            if let Some(value) = value {
+                if !identifiers.iter().any(|(_, v)| v == value) {
+                    identifiers.push((kind, value.to_owned()));
+                }
+            }
+        }
+
+        // Dedup: a known identifier means the article is already in the
+        // library — report it, never overwrite (same contract as
+        // literature_import).
+        for (kind, value) in &identifiers {
+            if let Some(existing) = self
+                .shared
+                .bib
+                .find_by_identifier(*kind, value)
+                .await
+                .map_err(box_error)?
+            {
+                let attachment = if snapshot.is_some() {
+                    Some(
+                        archive(existing.id.clone(), snapshot.clone())
+                            .await
+                            .map_err(box_error)?,
+                    )
+                } else {
+                    None
+                };
+                return Ok(AgentToolResult::success_json(serde_json::json!({
+                    "status": "already_present",
+                    "article_id": existing.id,
+                    "citekey": existing.citekey,
+                    "title": existing.title,
+                    "matched_identifier": kind.as_str(),
+                    "attachment": attachment,
+                    "message": format!(
+                        "already in the library (matched {} {}); nothing was changed",
+                        kind.as_str(),
+                        value
+                    ),
+                })));
+            }
+        }
+
+        let mut article = Article::new(
+            identifiers
+                .first()
+                .map(|(kind, value)| format!("{}:{value}", kind.as_str()))
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            title,
+        );
+        article.authors = input
+            .authors
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|display| parse_display_author(display))
+            .collect();
+        article.year = input.year;
+        article.journal = input.journal.map(|j| j.trim().to_owned()).filter(|j| !j.is_empty());
+        article.abstract_text = input
+            .abstract_text
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty());
+        article.source = ArticleSource::Manual;
+        article
+            .identifiers
+            .extend(identifiers.iter().map(|(k, v)| Identifier::new(*k, v.clone())));
+        if let Some(url) = input.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            article.extra_fields.insert("url".into(), url.to_owned());
+        }
+
+        self.shared
+            .bib
+            .upsert_article(&article)
+            .await
+            .map_err(box_error)?;
+        // The citekey is assigned inside the storage layer; read it back.
+        let saved = self
+            .shared
+            .bib
+            .get_article(&article.id)
+            .await
+            .map_err(box_error)?
+            .ok_or_else(|| ToolError::ExecutionFailed {
+                source: "article vanished right after insert".into(),
+            })?;
+
+        let attachment = if snapshot.is_some() {
+            Some(archive(saved.id.clone(), snapshot).await.map_err(box_error)?)
+        } else {
+            None
+        };
+        Ok(AgentToolResult::success_json(serde_json::json!({
+            "status": "imported",
+            "article_id": saved.id,
+            "citekey": saved.citekey,
+            "title": saved.title,
+            "attachment": attachment,
+            "message": format!(
+                "imported; cite with [@{}]",
+                saved.citekey.as_deref().unwrap_or("?")
+            ),
+        })))
+    }
+}
+
+
+/// Write the captured page HTML into managed attachment storage and commit
+/// it as the article's attachment (HTML extraction queued in the backgound),
+/// mirroring [`crate::attach_tool`]'s import path.
+async fn archive_page_attachment(
+    shared: &Arc<BibShared>,
+    article_id: &str,
+    snapshot: Option<(String, String, String)>,
+) -> crate::Result<serde_json::Value> {
+    let Some((url, page_title, html)) = snapshot else {
+        return Err(Error::Unknown("no page snapshot to archive".into()));
+    };
+    let storage = shared
+        .file_storage
+        .as_ref()
+        .ok_or_else(|| Error::Unknown("bibliography VFS storage is not configured".into()))?;
+
+    // File name: slug of the page title (fallback: URL host+path), .html.
+    let slug_base = if !page_title.trim().is_empty() {
+        page_title.trim().to_string()
+    } else {
+        url.trim_start_matches("https://").trim_start_matches("http://").to_string()
+    };
+    let mut slug: String = slug_base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { ' ' })
+        .collect();
+    slug = slug.split_whitespace().collect::<Vec<_>>().join("-");
+    slug.truncate(80);
+    let filename = format!("{}.html", if slug.is_empty() { "page".to_string() } else { slug });
+
+    let bytes = html.into_bytes();
+    if bytes.is_empty() {
+        return Err(Error::Unknown("captured page HTML is empty".into()));
+    }
+    let key = uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase();
+    let stored = crate::stored_attachment(article_id, &key, &filename, &bytes)
+        .canonicalized(storage)
+        .map_err(|e| Error::Unknown(e.to_string()))?;
+    let path = crate::vfs_virtual_path(&stored.path)
+        .ok_or_else(|| Error::Unknown("invalid managed storage URI".into()))?;
+    let fulltext = FullText {
+        article_id: article_id.to_owned(),
+        attachment_key: Some(key.clone()),
+        file_path: stored.path.clone(),
+        file_format: FileFormat::Html,
+        text_content: None,
+        source: FullTextSource::UserUpload,
+        file_hash: Some(stored.file_hash),
+        file_size: Some(bytes.len() as i64),
+        uploaded_at: Some(chrono::Utc::now()),
+        extract_status: Some(ExtractStatus::Pending),
+        text_format: None,
+        extracted_by: None,
+        extract_error: None,
+    };
+    storage
+        .write_bytes(&path, bytes)
+        .await
+        .map_err(|e| Error::Unknown(e.to_string()))?;
+    let result = shared
+        .bib
+        .commit_managed_import(ManagedImport {
+            fulltext,
+            filename: filename.clone(),
+            source_url: Some(url.clone()),
+            mode: ImportMode::Attach {
+                title: Some(format!("Archived page: {}", page_title.is_empty().then(|| url.as_str()).unwrap_or(&page_title))),
+                content_type: "text/html".into(),
+                make_preferred: false,
+            },
+        })
+        .await;
+    match result {
+        Ok(Some(_)) => {}
+        other => {
+            let _ = storage.delete_object(&path).await;
+            other?;
+            return Err(Error::Unknown("attachment import did not commit".into()));
+        }
+    }
+    crate::spawn_attachment_extraction(shared.as_ref().clone(), article_id.to_owned(), key.clone());
+    Ok(serde_json::json!({
+        "attachment_key": key,
+        "filename": filename,
+        "file_path": stored.path,
+        "source_url": url,
+        "extraction_queued": true,
+    }))
+}
+
+/// `Last First` display string → [`Author`] (same split as the HTTP layer).
+fn parse_display_author(display: &str) -> Option<bib_types::Author> {
+    let display = display.trim();
+    if display.is_empty() {
+        return None;
+    }
+    let (last_name, fore_name) = match display.split_once(' ') {
+        Some((last, fore)) => (last.to_owned(), Some(fore.trim().to_owned())),
+        None => (display.to_owned(), None),
+    };
+    Some(bib_types::Author {
+        last_name,
+        fore_name,
+        initials: None,
+        affiliation: None,
+        orcid: None,
+        corresponding: false,
+    })
 }
 
 // ===========================================================================

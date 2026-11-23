@@ -122,6 +122,14 @@ impl WikiIndexStorage for FakeStorage {
     async fn get_mentions(&self, _id: &str) -> Result<Vec<String>> {
         Ok(vec!["mention".to_string()])
     }
+
+    async fn get_citations(&self, _id: &str) -> Result<Vec<String>> {
+        Ok(vec!["cite2020key".to_string()])
+    }
+
+    async fn get_citing_entries(&self, _citekey: &str) -> Result<Vec<String>> {
+        Ok(vec!["citing".to_string()])
+    }
 }
 
 #[async_trait]
