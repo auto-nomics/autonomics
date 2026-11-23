@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+i18n = { path = "../../crates/i18n" }
 manuscript-engine = { path = "../../crates/manuscript-engine" }
 color-eyre = "0.6.5"
 # The interactive frontend (app/widgets/xai_textarea) lives in the

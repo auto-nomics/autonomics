@@ -1,0 +1,15 @@
+_version: 2
+en:
+  locale:
+    name: English
+  common:
+    yes: "Yes"
+    no: "No"
+    cancel: Cancel
+    confirm: Confirm
+    close: Close
+    retry: Retry
+    loading: Loading…
+    error: Error
+    none: none
+    search: Search

@@ -1,0 +1,28 @@
+{
+  "app": {
+    "boot": {
+      "connecting": "Connecting to gateway…",
+      "tokenTitle": "Gateway token required",
+      "tokenBody": "The token lives on the machine running the gateway: ~/.autonomics/gateway.token (or the AUTONOMICS_HTTP_API_TOKEN environment variable). Submit it once; an HttpOnly session cookie keeps you logged in afterwards.",
+      "tokenPlaceholder": "Gateway token",
+      "connectingBusy": "Connecting…",
+      "connect": "Connect",
+      "gatewayDown": "Gateway is not running",
+      "noAgent": "No agent selected"
+    },
+    "language": {
+      "label": "Language",
+      "switch": "Switch language"
+    }
+  },
+  "workbench": {
+    "statusbar": {
+      "label": "Status bar",
+      "connected": "Gateway connected",
+      "disconnected": "Gateway disconnected",
+      "model": "Active model",
+      "noModel": "no model",
+      "editor": "Active editor"
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import ReactDOM from "react-dom/client";
 import "./app.css";
+import "@/i18n";
 import { App } from "@/app/app-view";
 import { ContextMenuPolicy } from "@/app/context-menu-policy";
 import { Toaster } from "@/components/ui/sonner";

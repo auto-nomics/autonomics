@@ -27,6 +27,7 @@ members = [
   "crates/node-bundles/nodes-mice",
   "apps/autonomics",
   "apps/autonomics-worker",
+  "crates/i18n",
   "crates/autonomics-tui",
   "apps/gui/src-tauri",
   "crates/opengwas",

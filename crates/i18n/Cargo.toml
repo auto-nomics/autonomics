@@ -1,0 +1,9 @@
+[package]
+name = "i18n"
+version = "0.1.0"
+edition.workspace = true
+license = "MIT"
+description = "Shared message catalogs (zh/en) for the autonomics TUI and CLI"
+
+[dependencies]
+rust-i18n = "3"

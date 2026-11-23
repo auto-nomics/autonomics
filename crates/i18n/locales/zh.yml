@@ -1,0 +1,15 @@
+_version: 2
+zh:
+  locale:
+    name: 中文
+  common:
+    yes: 是
+    no: 否
+    cancel: 取消
+    confirm: 确认
+    close: 关闭
+    retry: 重试
+    loading: 加载中…
+    error: 错误
+    none: 无
+    search: 搜索
