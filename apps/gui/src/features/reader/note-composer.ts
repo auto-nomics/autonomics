@@ -1,5 +1,7 @@
 /** Draft notes before persisting them; closing or cancelling never writes an
  * empty annotation. The editor is shared by point notes and selected-text notes. */
+import { i18next } from './i18n';
+
 export class NoteComposer {
   private popup = document.createElement('form');
   private disposed = false;
@@ -9,13 +11,13 @@ export class NoteComposer {
     this.popup.className = 'reader-note-composer';
     this.popup.hidden = true;
     this.popup.setAttribute('role', 'dialog');
-    this.popup.setAttribute('aria-label', 'Add note');
+    this.popup.setAttribute('aria-label', i18next.t('reader:composer.aria'));
     root.append(this.popup);
   }
 
   open(point: { x: number; y: number }, save: (text: string) => Promise<boolean>) {
     if (this.saving) return;
-    this.popup.innerHTML = `<label>New note<textarea aria-label="Note text" placeholder="Write a note…" rows="4" required></textarea></label><div class="reader-note-actions"><button type="button" data-action="cancel-note">Cancel</button><button type="submit" disabled>Save note</button></div>`;
+    this.popup.innerHTML = `<label>${i18next.t('reader:composer.newNote')}<textarea aria-label="${i18next.t('reader:composer.noteText')}" placeholder="${i18next.t('reader:composer.placeholder')}" rows="4" required></textarea></label><div class="reader-note-actions"><button type="button" data-action="cancel-note">${i18next.t('reader:composer.cancel')}</button><button type="submit" disabled>${i18next.t('reader:composer.save')}</button></div>`;
     this.popup.hidden = false;
     this.popup.style.left = `${Math.max(8, Math.min(point.x, window.innerWidth - 300))}px`;
     this.popup.style.top = `${Math.max(8, Math.min(point.y + 12, window.innerHeight - 240))}px`;
@@ -27,11 +29,11 @@ export class NoteComposer {
       event.preventDefault();
       const text = input.value.trim();
       if (!text || this.saving) return;
-      this.saving = true; input.disabled = true; button.disabled = true; button.textContent = 'Saving…';
+      this.saving = true; input.disabled = true; button.disabled = true; button.textContent = i18next.t('reader:composer.saving');
       const saved = await save(text);
       this.saving = false;
       if (this.disposed) return;
-      input.disabled = false; button.disabled = false; button.textContent = 'Save note';
+      input.disabled = false; button.disabled = false; button.textContent = i18next.t('reader:composer.save');
       if (saved) this.close();
       else input.focus();
     };

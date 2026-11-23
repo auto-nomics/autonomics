@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { i18next } from "./i18n";
 import type { OutlineEntry, SlideSpec } from "./deck-api";
 
 /** Compatibility for older servers: show a flat page list. */
 export function outlineOrPages(outline: OutlineEntry[] | undefined, slides: SlideSpec[]): OutlineEntry[] {
-  return outline ?? slides.map(slide => ({ slide: slide.index + 1, title: slide.title || `第 ${slide.index + 1} 页`, level: slide.level ?? 1, depth: 0, parent: null, isSection: false, sectionTitle: slide.title || "", sectionPath: [], hidden: !!slide.frontmatter.hideInToc }));
+  return outline ?? slides.map(slide => ({ slide: slide.index + 1, title: slide.title || i18next.t("deck:outline.untitledPage", { n: slide.index + 1 }), level: slide.level ?? 1, depth: 0, parent: null, isSection: false, sectionTitle: slide.title || "", sectionPath: [], hidden: !!slide.frontmatter.hideInToc }));
 }
 
 export function DeckOutline({ entries, currentSlide, onNavigate }: { entries: OutlineEntry[]; currentSlide: number; onNavigate: (slide: number) => void }): React.ReactNode {
+  const { t } = useTranslation("deck");
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   const bySlide = useMemo(() => new Map(entries.map(entry => [entry.slide, entry])), [entries]);
   // Skip hidden entries when calculating the visible tree, retaining their
@@ -32,8 +35,8 @@ export function DeckOutline({ entries, currentSlide, onNavigate }: { entries: Ou
     // Do not reopen user-collapsed sections on each background refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentSlide]);
-  if (!visible.length) return <p className="px-2 py-3 text-xs text-muted-foreground">没有可显示的页面。</p>;
-  return <div role="list" aria-label="页面目录">{visible.map(entry => {
+  if (!visible.length) return <p className="px-2 py-3 text-xs text-muted-foreground">{t("outline.noPages")}</p>;
+  return <div role="list" aria-label={t("outline.listAria")}>{visible.map(entry => {
     let parent = parentMap.get(entry.slide) ?? null;
     let depth = 0;
     let concealed = false;
@@ -42,7 +45,7 @@ export function DeckOutline({ entries, currentSlide, onNavigate }: { entries: Ou
     const hasChildren = parents.has(entry.slide);
     const isCollapsed = collapsed.has(entry.slide);
     return <div role="listitem" key={entry.slide} className={`deck-outline-row ${currentSlide === entry.slide ? "deck-toc-item--active" : ""}`} style={{ paddingLeft: `${4 + Math.min(depth, 6) * 13}px` }}>
-      {hasChildren ? <button type="button" className="deck-outline-toggle" aria-label={`${isCollapsed ? "展开" : "折叠"} ${entry.title}`} aria-expanded={!isCollapsed} onClick={() => setCollapsed(previous => { const next = new Set(previous); if (next.has(entry.slide)) next.delete(entry.slide); else next.add(entry.slide); return next; })}>{isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button> : <span className="deck-outline-toggle" aria-hidden="true" />}
+      {hasChildren ? <button type="button" className="deck-outline-toggle" aria-label={t("outline.toggleAria", { action: isCollapsed ? t("outline.expand") : t("outline.collapse"), title: entry.title })} aria-expanded={!isCollapsed} onClick={() => setCollapsed(previous => { const next = new Set(previous); if (next.has(entry.slide)) next.delete(entry.slide); else next.add(entry.slide); return next; })}>{isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button> : <span className="deck-outline-toggle" aria-hidden="true" />}
       <button type="button" className="deck-outline-link" aria-current={currentSlide === entry.slide ? "page" : undefined} title={entry.title} onClick={() => onNavigate(entry.slide)}><span className="deck-toc-no">{entry.slide}</span><span className="deck-toc-label">{entry.title}</span></button>
     </div>;
   })}</div>;

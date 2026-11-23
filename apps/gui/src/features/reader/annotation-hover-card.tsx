@@ -1,4 +1,5 @@
 import { useCallback, type ComponentProps } from 'react';
+import { i18next } from './i18n';
 import { createRoot, type Root } from 'react-dom/client';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 
@@ -43,7 +44,7 @@ function AnnotationCard({ state, editor, container, triggerId, onDismiss }: {
       />
       <HoverCardContent
         role="dialog"
-        aria-label="Annotation details"
+        aria-label={i18next.t('reader:inspector.details')}
         className="reader-annotation-popup p-0"
         positionerClassName="reader-annotation-positioner"
         portalContainer={container}

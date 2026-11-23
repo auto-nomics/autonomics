@@ -14,6 +14,7 @@
  *     per-slide/per-click captures.
  */
 import ReactDOM from "react-dom/client";
+import "@/i18n";
 import { fetchPrintData } from "../deck-api-print";
 import { PrintDeck } from "./print-deck";
 

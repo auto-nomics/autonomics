@@ -3,6 +3,8 @@ import { AddToContext, useContextBasket } from "@/features/context/context-baske
 import { articleContext } from "@/features/context/context-model";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import type { TFunction } from "i18next";
+import { useTranslation } from "react-i18next";
 import {
   BookOpen,
   ChevronDown,
@@ -126,13 +128,13 @@ function authorName(author: BibAuthor) {
   return [author.last_name, author.fore_name].filter(Boolean).join(", ");
 }
 
-function creatorDisplay(article: BibArticle) {
+function creatorDisplay(article: BibArticle, unknownLabel: string, etAl: (surname: string) => string) {
   const authors = article.authors ?? [];
-  if (!authors.length) return article.source || article.journal || "Unknown";
+  if (!authors.length) return article.source || article.journal || unknownLabel;
   if (authors.length === 1) return authorName(authors[0]);
   const first = authors[0];
   const surname = first.last_name || first.name?.split(/\s+/).slice(-1)[0] || first.name;
-  return surname ? `${surname} et al.` : "Unknown";
+  return surname ? etAl(surname) : unknownLabel;
 }
 
 function creatorsText(article: BibArticle) {
@@ -181,46 +183,46 @@ function formatFileSize(size: number | null | undefined) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function attachmentFileName(path?: string | null) {
-  if (!path) return "Full text";
+function attachmentFileName(path: string | null | undefined, fullTextLabel: string) {
+  if (!path) return fullTextLabel;
   const normalized = path.split(/[\\/]/).filter(Boolean).pop();
-  if (!normalized) return "Full text";
+  if (!normalized) return fullTextLabel;
   try { return decodeURIComponent(normalized); } catch { return normalized; }
 }
 
-function attachmentEntries(article: BibArticle, detail: BibDetail | null): AttachmentEntry[] {
+function attachmentEntries(article: BibArticle, detail: BibDetail | null, t: TFunction): AttachmentEntry[] {
   const entries: AttachmentEntry[] = [];
   const fullText = detail?.fulltext;
 
   if (detail?.attachments?.length) {
     for (const attachment of detail.attachments) {
       const format = /pdf/i.test(attachment.content_type ?? "") || /\.pdf$/i.test(attachment.original_filename ?? "") ? "pdf" : "txt";
-      if (attachment.link_mode === 3 && attachment.source_url) entries.push({key:attachment.key,kind:"link",label:attachment.title || "Linked file",caption:attachment.source_url,href:attachment.source_url});
-      else entries.push({key:attachment.key,attachmentKey:attachment.key,preferred:attachment.key === fullText?.attachment_key,filename:attachment.original_filename || attachmentFileName(attachment.path || attachment.vfs_path),expectedHash:attachment.storage_hash,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || "Attachment",caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
+      if (attachment.link_mode === 3 && attachment.source_url) entries.push({key:attachment.key,kind:"link",label:attachment.title || t("main.linkedFile"),caption:attachment.source_url,href:attachment.source_url});
+      else entries.push({key:attachment.key,attachmentKey:attachment.key,preferred:attachment.key === fullText?.attachment_key,filename:attachment.original_filename || attachmentFileName(attachment.path || attachment.vfs_path, t("main.fullText")),expectedHash:attachment.storage_hash,kind:format === "pdf" ? "pdf" : "text",format,label:attachment.title || attachment.original_filename || t("main.attachment"),caption:[format.toUpperCase(),formatFileSize(attachment.file_size)].filter(Boolean).join(" · ")});
     }
   } else if (fullText) {
     const format = fullText.file_format?.toLowerCase() ?? null;
     entries.push({
       key: "fulltext",
       attachmentKey: fullText.attachment_key,
-      filename: attachmentFileName(fullText.file_path),
+      filename: attachmentFileName(fullText.file_path, t("main.fullText")),
       kind: format === "txt" ? "text" : "pdf",
       format,
-      label: attachmentFileName(fullText.file_path),
+      label: attachmentFileName(fullText.file_path, t("main.fullText")),
       caption: [
-        fullText.file_format?.toUpperCase() || "File",
+        fullText.file_format?.toUpperCase() || t("main.file"),
         formatFileSize(fullText.file_size),
-        fullText.extract_status === "done" ? "Indexed" : fullText.extract_status || null,
+        fullText.extract_status === "done" ? t("main.indexed") : fullText.extract_status || null,
       ].filter(Boolean).join(" · "),
     });
   }
 
   const identifierLabels: Record<string, string> = {
-    pmid: "PubMed entry",
-    doi: "DOI entry",
-    pmc: "PMC entry",
-    arxiv: "arXiv entry",
-    openalex: "OpenAlex entry",
+    pmid: t("main.pubmedEntry"),
+    doi: t("main.doiEntry"),
+    pmc: t("main.pmcEntry"),
+    arxiv: t("main.arxivEntry"),
+    openalex: t("main.openalexEntry"),
   };
   const identifierKinds = ["pmid", "doi", "pmc", "arxiv", "openalex"];
   for (const kind of identifierKinds) {
@@ -230,7 +232,7 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
     entries.push({
       key: `identifier-${kind}`,
       kind: "link",
-      label: identifierLabels[kind] ?? `${kind} entry`,
+      label: identifierLabels[kind] ?? t("main.identifierEntry", { kind }),
       caption: value,
       href,
     });
@@ -240,8 +242,8 @@ function attachmentEntries(article: BibArticle, detail: BibDetail | null): Attac
     entries.push({
       key: "notes",
       kind: "notes",
-      label: "Notes",
-      caption: `${detail.annotations.length} item${detail.annotations.length === 1 ? "" : "s"}`,
+      label: t("main.notesLabel"),
+      caption: t("main.itemCount", { count: detail.annotations.length }),
     });
   }
 
@@ -257,6 +259,7 @@ function MetadataTable({ children }: { children: ReactNode }) {
 }
 
 function MetadataRow({ label, value, href, children }: MetadataRowProps) {
+  const { t } = useTranslation("bibliography");
   if (!value && !children) return null;
 
   return (
@@ -274,7 +277,7 @@ function MetadataRow({ label, value, href, children }: MetadataRowProps) {
             href={href}
             target="_blank"
             rel="noreferrer"
-            aria-label={`Open ${label}`}
+            aria-label={t("main.openLabelAria", { label })}
             className={cn(
               buttonVariants({ variant: "ghost", size: "icon-xs" }),
               "mt-px opacity-0 transition-opacity group-hover/row:opacity-100 focus-visible:opacity-100",
@@ -313,6 +316,7 @@ function Section({
 
 
 function AttachmentRow({ entry }: { entry: AttachmentEntry }) {
+  const { t } = useTranslation("bibliography");
   const Icon =
     entry.kind === "pdf" ? FileText
     : entry.kind === "text" ? File
@@ -343,35 +347,36 @@ function AttachmentRow({ entry }: { entry: AttachmentEntry }) {
         {content}
       </button>
       {entry.onPrefer && <Button type="button" size="icon-xs" variant="ghost" className="shrink-0"
-        aria-label={`Set ${entry.label} as preferred`} title={entry.preferred ? "Preferred attachment" : "Set as preferred attachment"}
+        aria-label={t("main.setPreferredAria", { label: entry.label })} title={entry.preferred ? t("main.preferredAttachment") : t("main.setPreferredAttachment")}
         disabled={entry.mutating || entry.preferred} onClick={entry.onPrefer}><Star className={entry.preferred ? "fill-current" : ""} /></Button>}
       {entry.onDownload && (
         <Button type="button" size="icon-sm" variant="ghost" className="shrink-0"
-          aria-label={`Download ${entry.label}`} title={entry.downloading ? "Downloading…" : `Download ${entry.filename || entry.label}`}
+          aria-label={t("main.downloadAria", { label: entry.label })} title={entry.downloading ? t("main.downloading") : t("main.downloadTitle", { name: entry.filename || entry.label })}
           disabled={entry.downloading} aria-busy={entry.downloading}
           onClick={entry.onDownload}>
           {entry.downloading ? <LoaderCircle className="animate-spin" /> : <Download />}
         </Button>
       )}
       {entry.onRemove && <Button type="button" size="icon-xs" variant="ghost" className="shrink-0"
-        aria-label={`Delete ${entry.label}`} title="Delete this attachment" disabled={entry.mutating} onClick={entry.onRemove}><Trash2 /></Button>}
+        aria-label={t("main.deleteAttachmentAria", { label: entry.label })} title={t("main.deleteAttachmentTitle")} disabled={entry.mutating} onClick={entry.onRemove}><Trash2 /></Button>}
     </div>
   );
 }
 
 function AttachmentTypeIcons({ summary }: { summary: AttachmentSummary }) {
+  const { t } = useTranslation("bibliography");
   const items = [
-    { key: "pdf", show: summary.pdf, icon: FileText, label: "PDF attachment" },
-    { key: "snapshot", show: summary.snapshot, icon: Camera, label: "HTML snapshot" },
-    { key: "link", show: summary.link, icon: Link2, label: "Linked attachment" },
-    { key: "file", show: summary.file, icon: File, label: "Stored file" },
-    { key: "note", show: summary.note, icon: StickyNote, label: "Notes" },
+    { key: "pdf", show: summary.pdf, icon: FileText, label: t("main.pdfAttachment") },
+    { key: "snapshot", show: summary.snapshot, icon: Camera, label: t("main.htmlSnapshot") },
+    { key: "link", show: summary.link, icon: Link2, label: t("main.linkedAttachment") },
+    { key: "file", show: summary.file, icon: File, label: t("main.storedFile") },
+    { key: "note", show: summary.note, icon: StickyNote, label: t("main.notesLabel") },
   ].filter((item) => item.show);
 
   if (!items.length) {
     return (
       <FileQuestion
-        aria-label="No attachments"
+        aria-label={t("main.noAttachments")}
         className="size-3.5 text-muted-foreground/35"
       />
     );
@@ -410,6 +415,7 @@ export function BibliographyView({ workspace = "library", active = true, focusAr
 }
 
 function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar, onOpenSidebar }: { focusArticleId?: string | null; focusNonce?: number | null; sidebarSlot?: HTMLElement | null; externalSidebar: boolean; onOpenSidebar?: () => void }) {
+  const { t } = useTranslation("bibliography");
   const contextBasket = useContextBasket();
   const contextBasketRef = useRef(contextBasket);
   contextBasketRef.current = contextBasket;
@@ -511,7 +517,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
   const articleLoaderRef = useRef<HTMLDivElement | null>(null);
   const resultsViewport = useRef<HTMLDivElement | null>(null);
   const buttonColumns=["24px","minmax(0,1fr)",...(wideColumns&&columns.creator?["160px"]:[]),...(columns.year?["56px"]:[]),...(wideColumns&&columns.journal?["160px"]:[]),...(columns.files?[wideColumns?"80px":"56px"]:[])].join(" ");
-  const scopeLabel = selectedCollection === "@unfiled" ? "Unfiled" : selectedCollection ? collectionPath(collections, selectedCollection) : "All references";
+  const scopeLabel = selectedCollection === "@unfiled" ? t("main.unfiledScope") : selectedCollection ? collectionPath(collections, selectedCollection) : t("main.allReferences");
   const currentRequest = useMemo<SearchRequest>(() => ({
     mode, semantic_query: mode === "hybrid" ? topic : null,
     query: expression ? "" : query, expression, default_fields: defaultFields, filters, sort,
@@ -771,7 +777,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
     ?? detail?.article
     ?? null;
   const activeDetail = selected && detail?.article.id === selected.id ? detail : null;
-  const attachments = selected ? attachmentEntries(selected, activeDetail) : [];
+  const attachments = selected ? attachmentEntries(selected, activeDetail, t) : [];
   const identifierRows = [
     { kind: "doi", label: "DOI" },
     { kind: "pmid", label: "PMID" },
@@ -781,7 +787,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
   ];
 
   const importArticle = async () => {
-    const identifier = window.prompt("DOI, PMID, PMCID, arXiv, or OpenAlex ID (or URL)");
+    const identifier = window.prompt(t("main.importPrompt"));
     if (!identifier) return;
     setBusy("import");
     setError(null);
@@ -842,8 +848,8 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
       host: contextBasket ? libraryContainer.current ?? undefined : undefined,
       onReference: contextBasket ? selection => {
         const basket = contextBasketRef.current;
-        if (!basket?.available) { window.alert("请先选择 Agent 会话"); return; }
-        basket.add({ kind: "evidence", id: JSON.stringify([article.id, attachmentKey, selection.page, selection.start, selection.end, selection.text]), title: `${article.title} · 选中文本`, scope: "阅读器选中文本（非全文）", source: `bib:${article.id}${attachmentKey ? ` · ${attachmentKey}` : ""}${selection.page ? ` · 第 ${selection.page} 页` : ""}${selection.start !== undefined ? ` · 字符 ${selection.start}–${selection.end}` : ""}`, content: selection.text });
+        if (!basket?.available) { window.alert(t("main.selectAgentSessionFirst")); return; }
+        basket.add({ kind: "evidence", id: JSON.stringify([article.id, attachmentKey, selection.page, selection.start, selection.end, selection.text]), title: `${article.title} · ${t("main.selectedText")}`, scope: t("main.readerSelectionScope"), source: `bib:${article.id}${attachmentKey ? ` · ${attachmentKey}` : ""}${selection.page ? t("main.pageN", { page: selection.page }) : ""}${selection.start !== undefined ? t("main.charRange", { start: selection.start, end: selection.end }) : ""}`, content: selection.text });
       } : undefined,
     })
       .then((handle) => { if (libraryAlive.current) readerRef.current = handle; else handle.close(); })
@@ -875,7 +881,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
     try {
       await downloadBibAttachment(article.id, entry.filename || entry.label, entry.attachmentKey, entry.expectedHash);
     } catch (cause) {
-      setError(`Unable to download attachment: ${String(cause)}`);
+      setError(t("main.downloadFailed", { error: String(cause) }));
     } finally {
       downloadLocks.current.delete(key);
       setDownloadingAttachments(new Set(downloadLocks.current));
@@ -883,7 +889,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
   };
   const changeAttachment = async (article: BibArticle, entry: AttachmentEntry, remove: boolean) => {
     if (!entry.attachmentKey) return;
-    if (remove && !window.confirm(`Delete attachment “${entry.label}”? This cannot be undone.`)) return;
+    if (remove && !window.confirm(t("main.deleteAttachmentConfirm", { label: entry.label }))) return;
     setBusy("attachment"); setError(null);
     try {
       await gatewayRequest(remove ? "DELETE" : "PUT", `/bib/articles/${encodeURIComponent(article.id)}/attachments/${encodeURIComponent(entry.attachmentKey)}${remove ? "" : "/preferred"}`);
@@ -924,7 +930,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
         } catch (failure) { failures.push(`${typeof file === "string" ? file.split(/[\\/]/).pop() : file.name}: ${String(failure)}`); }
       }
       if (files.length && selectionRef.current === article.id) selectArticle(article.id);
-      if (failures.length) setError(`Some attachments could not be uploaded: ${failures.join("; ")}`);
+      if (failures.length) setError(t("main.uploadFailures", { failures: failures.join("; ") }));
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(null); }
   };
@@ -937,7 +943,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
   };
 
   const deleteFulltextFor = async (article: BibArticle) => {
-    if (!window.confirm(`Delete the preferred attachment for “${article.title}”? This cannot be undone.`)) return;
+    if (!window.confirm(t("main.deleteFulltextConfirm", { title: article.title }))) return;
     setBusy("delete-attachment");
     setError(null);
     try {
@@ -953,7 +959,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
   };
 
   const deleteArticleFor = async (article: BibArticle) => {
-    if (!window.confirm(`Move “${article.title}” to article trash? Its attachments and notes can be restored.`)) return;
+    if (!window.confirm(t("main.deleteArticleConfirm", { title: article.title }))) return;
     setBusy("delete-article");
     setError(null);
     readerRef.current?.close();
@@ -986,7 +992,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
         if (creatingArticle) {
           if (selectedCollection && selectedCollection !== "@unfiled") {
             try { await gatewayRequest("POST", `/bib/collections/${encodeURIComponent(selectedCollection)}/articles`, { article_id: article.id }); }
-            catch (failure) { membershipFailure = `Article created, but could not add it to the collection: ${String(failure)}`; }
+            catch (failure) { membershipFailure = t("main.membershipFailure", { error: String(failure) }); }
           }
           selectArticle(article.id);
         }
@@ -998,7 +1004,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
       {((!externalSidebar && libraryOpen) || detailsOpen) && (
         <button
           type="button"
-          aria-label="Close panel"
+          aria-label={t("main.closePanel")}
           onClick={() => {
             setLibraryOpen(false);
             setDetailsOpen(false);
@@ -1011,7 +1017,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
           <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
           <SavedSearches request={draftRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy" || (mode === "hybrid" && !topicDraft.trim())} onSelect={(search) => { onOpenSidebar?.(); applySavedSearch(search); }} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
           <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
-          <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />Show items from subcollections</label>
+          <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />{t("main.showSubcollections")}</label>
         </ScrollArea>, sidebarSlot,
       )}
       {!externalSidebar && <aside
@@ -1022,13 +1028,13 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
         )}
       >
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
-          <span className="text-xs font-semibold tracking-wide uppercase">Library</span>
+          <span className="text-xs font-semibold tracking-wide uppercase">{t("main.library")}</span>
           <div className="flex shrink-0 items-center gap-1">
-            <Badge variant="secondary" aria-label="Articles in library" title="All articles, independent of the current search">{libraryTotal.toLocaleString()}</Badge>
+            <Badge variant="secondary" aria-label={t("main.articlesInLibraryAria")} title={t("main.articlesInLibraryTitle")}>{libraryTotal.toLocaleString()}</Badge>
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label="Close library"
+              aria-label={t("main.closeLibrary")}
               className={cn(roomy && "hidden")}
               onClick={() => setLibraryOpen(false)}
             >
@@ -1040,7 +1046,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
           <CollectionTree collections={collections} selected={selectedCollection} total={libraryTotal} onSelect={selectCollection} onAction={collectionAction} />
           <SavedSearches request={draftRequest} scopeLabel={scopeLabel} activeId={activeSavedId} disabled={indexEngine === "legacy" || (mode === "hybrid" && !topicDraft.trim())} onSelect={applySavedSearch} onSaved={applySavedSearch} onDeleted={id => {if (id === activeSavedId) setActiveSavedId(null);}} />
           <SearchIndexStatus onEngine={setIndexEngine} onSourceChange={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} />
-          <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />Show items from subcollections</label>
+          <label className="mt-3 flex items-start gap-2 border-t px-2 py-3 text-xs text-muted-foreground"><input type="checkbox" checked={includeDescendants} onChange={e => setIncludeDescendants(e.target.checked)} />{t("main.showSubcollections")}</label>
         </ScrollArea>
       </aside>}
 
@@ -1049,7 +1055,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
           <Button
             size="icon-sm"
             variant="ghost"
-            aria-label="Open library"
+            aria-label={t("main.openLibrary")}
             className={cn(!externalSidebar && roomy && "hidden")}
             onClick={() => externalSidebar ? onOpenSidebar?.() : setLibraryOpen(true)}
           >
@@ -1066,11 +1072,11 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
             <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={searchInputRef}
-              aria-label="Search bibliography"
+              aria-label={t("main.searchBibliographyAria")}
               value={mode === "hybrid" ? topicDraft : queryDraft}
               onCompositionStart={() => { composing.current = true; setIsComposing(true); }}
               onCompositionEnd={(event) => { composing.current = false; setIsComposing(false); if (mode === "hybrid") setTopicDraft(event.currentTarget.value); else setQueryDraft(event.currentTarget.value); }}
-              placeholder={mode === "hybrid" ? "Describe a research topic, then press Enter" : `Search ${total.toLocaleString()} items`}
+              placeholder={mode === "hybrid" ? t("main.topicPlaceholder") : t("main.searchPlaceholder", { count: total.toLocaleString() })}
               className="h-7 pl-8 text-[13px]"
               onChange={(event) => {setLocationError("");if (mode === "hybrid") setTopicDraft(event.target.value); else setQueryDraft(event.target.value);}}
               onKeyDown={(event) => {
@@ -1084,74 +1090,74 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
               }}
             />
           </form>
-          {mode === "hybrid" && <Button size="xs" variant="secondary" disabled={!topicDraft.trim() || isComposing} onClick={commitMainQuery}>Search topic</Button>}
-          {mode === "hybrid" && loading && <Button size="xs" variant="ghost" aria-label="Cancel search" onClick={() => {requestSequence.current++;listAbort.current?.abort();setLoading(false);setError(null);setSearchCancelled(true);}}>Cancel</Button>}
-          <Button size="xs" variant="ghost" disabled={indexEngine === "legacy"} onClick={() => setAdvancedOpen(true)}>Advanced</Button>
-          <Button size="icon-sm" variant="ghost" aria-label="New article" title="New article" onClick={() => { setEditingRevision(undefined); setCreatingArticle(true); }}><Plus /></Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Article trash" title="Article trash" onClick={() => setTrashOpen(true)}><Trash2 /></Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Import article" title="Import article" onClick={() => void importArticle()} disabled={busy === "import"}>
+          {mode === "hybrid" && <Button size="xs" variant="secondary" disabled={!topicDraft.trim() || isComposing} onClick={commitMainQuery}>{t("main.searchTopic")}</Button>}
+          {mode === "hybrid" && loading && <Button size="xs" variant="ghost" aria-label={t("main.cancelSearchAria")} onClick={() => {requestSequence.current++;listAbort.current?.abort();setLoading(false);setError(null);setSearchCancelled(true);}}>{t("main.cancel")}</Button>}
+          <Button size="xs" variant="ghost" disabled={indexEngine === "legacy"} onClick={() => setAdvancedOpen(true)}>{t("main.advanced")}</Button>
+          <Button size="icon-sm" variant="ghost" aria-label={t("main.newArticle")} title={t("main.newArticle")} onClick={() => { setEditingRevision(undefined); setCreatingArticle(true); }}><Plus /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label={t("main.articleTrash")} title={t("main.articleTrash")} onClick={() => setTrashOpen(true)}><Trash2 /></Button>
+          <Button size="icon-sm" variant="ghost" aria-label={t("main.importArticle")} title={t("main.importArticle")} onClick={() => void importArticle()} disabled={busy === "import"}>
             <Link2 />
           </Button>
           <Button
             size="icon-sm"
             variant="ghost"
-            aria-label="Open entry details"
+            aria-label={t("main.openEntryDetails")}
             className={cn(roomy && "hidden")}
             onClick={() => setDetailsOpen(true)}
           >
             <PanelRight />
           </Button>
-          <Button size="icon-sm" variant="ghost" aria-label="Export BibTeX" title={retrieval ? "Export retrieved candidates as BibTeX" : "Export BibTeX"} onClick={() => void exportLibrary()} disabled={loading || busy === "export" || (mode === "hybrid" && resultContext !== JSON.stringify(currentRequest))}>
+          <Button size="icon-sm" variant="ghost" aria-label={t("main.exportBibtexAria")} title={retrieval ? t("main.exportCandidatesTitle") : t("main.exportBibtexAria")} onClick={() => void exportLibrary()} disabled={loading || busy === "export" || (mode === "hybrid" && resultContext !== JSON.stringify(currentRequest))}>
             <Download />
           </Button>
         </div>
 
-        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1" aria-label="Library actions">
+        <div className="flex shrink-0 flex-wrap items-center gap-1 border-b px-2 py-1" aria-label={t("main.libraryActionsAria")}>
           <BrowserConnectorHelp />
           <ZoteroBundleImport onImported={() => { invalidateMetadata(); void loadLibrary(query); }} />
-          <Button size="xs" variant="ghost" onClick={() => setTransferMode("import")}><Upload />Import file</Button>
-          <Button size="xs" variant="ghost" disabled={!checkedIds.length && !selected} title="Format the checked records, or the selected record" onClick={() => { setExportIds(checkedIds.length ? [...checkedIds] : selected ? [selected.id] : []); setTransferMode("export"); }}><Quote />Export and cite</Button>
-          <Button size="xs" variant="ghost" onClick={() => setDuplicatesOpen(true)}><Copy />Find duplicates</Button>
-          {checkedIds.length > 0 && <Button size="xs" variant="secondary" onClick={() => setOrganizingIds([...checkedIds])}>Organize ({checkedIds.length})</Button>}
+          <Button size="xs" variant="ghost" onClick={() => setTransferMode("import")}><Upload />{t("main.importFile")}</Button>
+          <Button size="xs" variant="ghost" disabled={!checkedIds.length && !selected} title={t("main.exportCheckedTitle")} onClick={() => { setExportIds(checkedIds.length ? [...checkedIds] : selected ? [selected.id] : []); setTransferMode("export"); }}><Quote />{t("main.exportAndCite")}</Button>
+          <Button size="xs" variant="ghost" onClick={() => setDuplicatesOpen(true)}><Copy />{t("main.findDuplicates")}</Button>
+          {checkedIds.length > 0 && <Button size="xs" variant="secondary" onClick={() => setOrganizingIds([...checkedIds])}>{t("main.organize", { count: checkedIds.length })}</Button>}
         </div>
         <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
-          <select aria-label="Search mode" className="rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={mode} onChange={event => {setLocationError("");setMode(event.target.value as SearchMode);}}><option value="lexical">Keywords</option><option value="hybrid">Topic · experimental</option></select>
-          <span className="min-w-0 truncate text-muted-foreground">{scopeLabel}{selectedCollection && includeDescendants ? " · including subcollections" : ""}</span>
-          <select aria-label="Quick search fields" title="Default fields for words without an explicit field" className="max-w-44 rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={Object.keys(quickFields).find(key => JSON.stringify(quickFields[key]) === JSON.stringify(defaultFields)) ?? "custom"} onChange={event => setDefaultFields(quickFields[event.target.value] ?? [])}><option value="all">Everything</option><option value="title">Title, year, author</option><option value="metadata">Metadata and notes</option><option value="custom" disabled>Custom fields</option></select>
-          <Button size="xs" variant={filtersOpen ? "secondary" : "ghost"} disabled={indexEngine === "legacy"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>Filters</Button>
-          <label className="flex items-center gap-1" title="Positive conditions must match the same evidence object"><input type="checkbox" disabled={indexEngine === "legacy"} checked={sameChild} onChange={event => setSameChild(event.target.checked)} />Same attachment</label>
+          <select aria-label={t("main.searchModeAria")} className="rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={mode} onChange={event => {setLocationError("");setMode(event.target.value as SearchMode);}}><option value="lexical">{t("main.modeKeywords")}</option><option value="hybrid">{t("main.modeTopic")}</option></select>
+          <span className="min-w-0 truncate text-muted-foreground">{scopeLabel}{selectedCollection && includeDescendants ? t("main.includingSubcollections") : ""}</span>
+          <select aria-label={t("main.quickFieldsAria")} title={t("main.quickFieldsTitle")} className="max-w-44 rounded border bg-background p-0.5" disabled={indexEngine === "legacy"} value={Object.keys(quickFields).find(key => JSON.stringify(quickFields[key]) === JSON.stringify(defaultFields)) ?? "custom"} onChange={event => setDefaultFields(quickFields[event.target.value] ?? [])}><option value="all">{t("main.fieldsEverything")}</option><option value="title">{t("main.fieldsTitle")}</option><option value="metadata">{t("main.fieldsMetadata")}</option><option value="custom" disabled>{t("main.fieldsCustom")}</option></select>
+          <Button size="xs" variant={filtersOpen ? "secondary" : "ghost"} disabled={indexEngine === "legacy"} aria-expanded={filtersOpen} onClick={() => setFiltersOpen(!filtersOpen)}>{t("main.filters")}</Button>
+          <label className="flex items-center gap-1" title={t("main.sameAttachmentTitle")}><input type="checkbox" disabled={indexEngine === "legacy"} checked={sameChild} onChange={event => setSameChild(event.target.checked)} />{t("main.sameAttachment")}</label>
           <SearchAssist topic={mode === "hybrid"} history={history} onClear={clearHistory} onPick={text=>{if (mode === "hybrid") {setTopicDraft(text);setTopic(text);} else {setQueryDraft(text);commitQuery(text);}searchInputRef.current?.focus();}} />
           <ColumnsPicker columns={columns} onChange={setColumns} snippets={showSnippets} onSnippets={setShowSnippets} />
-          <span role="status" className="ml-auto text-muted-foreground">{loading ? "Searching…" : `${total.toLocaleString()} ${retrieval ? "candidate articles" : `article${total === 1 ? "" : "s"}`}`}</span>
-          <select aria-label="Search sort" disabled={indexEngine === "legacy"} className="rounded border bg-background px-1 py-0.5" value={sort} onChange={event => setSort(event.target.value as SearchSort)}><option value="relevance">Relevance</option><option value="newest">Newest</option><option value="oldest">Oldest</option><option value="title">Title</option></select>
-          {searchActive && <Button size="xs" variant="ghost" onClick={clearSearch}>Clear search</Button>}
+          <span role="status" className="ml-auto text-muted-foreground">{loading ? t("main.searching") : t(retrieval ? "main.candidateCount" : "main.articleCount", { count: total.toLocaleString() })}</span>
+          <select aria-label={t("main.sortAria")} disabled={indexEngine === "legacy"} className="rounded border bg-background px-1 py-0.5" value={sort} onChange={event => setSort(event.target.value as SearchSort)}><option value="relevance">{t("main.sortRelevance")}</option><option value="newest">{t("main.sortNewest")}</option><option value="oldest">{t("main.sortOldest")}</option><option value="title">{t("main.sortTitle")}</option></select>
+          {searchActive && <Button size="xs" variant="ghost" onClick={clearSearch}>{t("main.clearSearch")}</Button>}
         </div>
         {mode === "hybrid" && <>
           <div className="space-y-1 border-b px-2 py-2 text-xs">
-            <label className="flex flex-wrap items-center gap-2">Required conditions<Input aria-label="Required search conditions" className="h-7 min-w-40 flex-1 text-xs" value={queryDraft} placeholder="Optional: year:2020..2026 NOT tag:excluded" onChange={event => {setLocationError("");setQueryDraft(event.target.value);}} onCompositionStart={() => {composing.current=true;setIsComposing(true);}} onCompositionEnd={event => {composing.current=false;setIsComposing(false);setQueryDraft(event.currentTarget.value);}} onKeyDown={event => {if (event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) {event.preventDefault();commitQuery();}}} /></label>
-            <p className="text-muted-foreground">Required conditions, scope and filters always apply. The topic is a natural-language description, not Boolean syntax.</p>
-            {(!topic.trim() || topicDraft.trim() !== topic) && <p role="status">Enter a topic and submit it to apply your changes.</p>}
+            <label className="flex flex-wrap items-center gap-2">{t("main.requiredConditions")}<Input aria-label={t("main.requiredConditionsAria")} className="h-7 min-w-40 flex-1 text-xs" value={queryDraft} placeholder={t("main.requiredConditionsPlaceholder")} onChange={event => {setLocationError("");setQueryDraft(event.target.value);}} onCompositionStart={() => {composing.current=true;setIsComposing(true);}} onCompositionEnd={event => {composing.current=false;setIsComposing(false);setQueryDraft(event.currentTarget.value);}} onKeyDown={event => {if (event.key === "Enter" && !event.nativeEvent.isComposing && !composing.current) {event.preventDefault();commitQuery();}}} /></label>
+            <p className="text-muted-foreground">{t("main.requiredConditionsHint")}</p>
+            {(!topic.trim() || topicDraft.trim() !== topic) && <p role="status">{t("main.submitTopicHint")}</p>}
           </div>
           <SemanticSearchControls onInvalidate={() => {setUpdatesPending(true);setNextCursor(null);setHasMoreArticles(false);}} onReady={() => {if (!loading && articleOffset <= 50) latestReload.current();else setUpdatesPending(true);}} onKeyword={() => setMode("lexical")} />
         </>}
-        {resultContext && resultContext !== JSON.stringify(currentRequest) && <p role="status" className="border-b px-2 py-1 text-xs text-muted-foreground">Previous results are retained until the new search succeeds.</p>}
-        {mode === "hybrid" && searchCancelled && <p role="status" className="border-b px-2 py-1 text-xs text-muted-foreground">Search cancelled. Previous results are retained.</p>}
-        {retrieval && <p className="border-b px-2 py-1 text-xs text-muted-foreground">Retrieved candidate pool · {retrieval.eligible_articles.toLocaleString()} articles satisfy the required conditions. Facet counts describe the required query and filters; sorting and export apply to retrieved candidates.</p>}
+        {resultContext && resultContext !== JSON.stringify(currentRequest) && <p role="status" className="border-b px-2 py-1 text-xs text-muted-foreground">{t("main.previousResultsRetained")}</p>}
+        {mode === "hybrid" && searchCancelled && <p role="status" className="border-b px-2 py-1 text-xs text-muted-foreground">{t("main.searchCancelled")}</p>}
+        {retrieval && <p className="border-b px-2 py-1 text-xs text-muted-foreground">{t("main.candidatePoolNote", { count: retrieval.eligible_articles.toLocaleString() })}</p>}
         {filtersOpen && <SearchFiltersPanel value={filters} facets={facets} onChange={setFilters} />}
-        {updatesPending && <div className="flex items-center justify-between border-b px-2 py-1 text-xs">Library or search index updated<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Refresh results</Button></div>}
+        {updatesPending && <div className="flex items-center justify-between border-b px-2 py-1 text-xs">{t("main.indexUpdated")}<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>{t("main.refreshResults")}</Button></div>}
         {facets && !filtersOpen && <div className="flex flex-wrap items-center gap-2 border-b px-2 py-1.5 text-xs">
-          <select aria-label="Exact tag filter" value={filters.tag_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,tag_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">All tags</option>{facets.tags.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
-          <select aria-label="Exact creator filter" value={filters.creator_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,creator_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">All authors</option>{facets.creators.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
-          <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_fulltext === true} onChange={event => setFilters(current => ({...current,has_fulltext:event.target.checked ? true : null}))}/>Has full text</label>
-          <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_annotations === true} onChange={event => setFilters(current => ({...current,has_annotations:event.target.checked ? true : null}))}/>Has notes</label>
+          <select aria-label={t("main.tagFilterAria")} value={filters.tag_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,tag_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">{t("main.allTags")}</option>{facets.tags.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
+          <select aria-label={t("main.creatorFilterAria")} value={filters.creator_ids?.[0] ?? ""} onChange={event => setFilters(current => ({...current,creator_ids:event.target.value ? [Number(event.target.value)] : []}))} className="max-w-40 rounded border bg-background p-1"><option value="">{t("main.allAuthors")}</option>{facets.creators.map(value => <option key={value.value} value={value.value}>{value.label} ({value.count})</option>)}</select>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_fulltext === true} onChange={event => setFilters(current => ({...current,has_fulltext:event.target.checked ? true : null}))}/>{t("searchFilters.hasFullTextLabel")}</label>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={filters.has_annotations === true} onChange={event => setFilters(current => ({...current,has_annotations:event.target.checked ? true : null}))}/>{t("searchFilters.hasNotesLabel")}</label>
         </div>}
-        {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">{error}<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>Retry</Button></div>}
+        {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">{error}<Button size="xs" variant="ghost" onClick={() => void loadLibrary(query)}>{t("main.retry")}</Button></div>}
         {/* Mirror the row structure (24px checkbox track outside the row's
             px-2 padding) so the header checkbox lands on the row checkboxes. */}
         <div className="grid h-8 shrink-0 grid-cols-[24px_minmax(0,1fr)] items-center border-b bg-muted/60 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
           <span className="flex items-center justify-center">
             <Checkbox
-              aria-label="Select all visible articles"
+              aria-label={t("main.selectAllAria")}
               checked={allVisibleChecked}
               indeterminate={!allVisibleChecked && someVisibleChecked}
               onCheckedChange={(checked) => toggleAllChecked(checked === true)}
@@ -1159,15 +1165,15 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
           </span>
           <div style={{gridTemplateColumns:buttonColumns}} className="grid h-8 items-center px-2">
             <span />
-            <span>Title{checkedIds.length ? ` (${checkedIds.length} selected)` : ""}</span>
-            {wideColumns && columns.creator && <span>Creator</span>}
-            {columns.year && <span>Year</span>}
-            {wideColumns && columns.journal && <span>Journal</span>}
-            {columns.files && <span className="text-center">Files</span>}
+            <span>{t("main.titleColumn")}{checkedIds.length ? t("main.selectedCount", { count: checkedIds.length }) : ""}</span>
+            {wideColumns && columns.creator && <span>{t("main.creatorColumn")}</span>}
+            {columns.year && <span>{t("main.yearColumn")}</span>}
+            {wideColumns && columns.journal && <span>{t("main.journalColumn")}</span>}
+            {columns.files && <span className="text-center">{t("main.filesColumn")}</span>}
           </div>
         </div>
 
-        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel="Literature results viewport" viewportTabIndex={0} viewportClassName="focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
+        <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6" viewportRef={resultsViewport} viewportLabel={t("virtualList.viewport")} viewportTabIndex={0} viewportClassName="focus-visible:ring-1 focus-visible:ring-ring" tabIndex={-1}>
           {loading && !visibleArticles.length && (
             <div className="space-y-px">
               {Array.from({ length: 10 }).map((_, index) => (
@@ -1200,7 +1206,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                   >
                     <span className="flex h-9 items-center justify-center">
                       <Checkbox
-                        aria-label={`Select ${article.title}`}
+                        aria-label={t("main.selectArticleAria", { title: article.title })}
                         checked={checkedIds.includes(article.id)}
                         onCheckedChange={(checked) => toggleChecked(article.id, checked === true)}
                       />
@@ -1224,7 +1230,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                         )}
                       </span>
                       <span className="min-w-0 truncate pr-3 text-[13px]">{article.title}</span>
-                      {wideColumns && columns.creator && <span className="min-w-0 truncate pr-3 text-[13px] text-muted-foreground">{creatorDisplay(article)}</span>}
+                      {wideColumns && columns.creator && <span className="min-w-0 truncate pr-3 text-[13px] text-muted-foreground">{creatorDisplay(article, t("main.unknown"), surname => t("main.etAl", { surname }))}</span>}
                       {columns.year && <span className="text-xs text-muted-foreground">{article.year ?? "—"}</span>}
                       {wideColumns && columns.journal && <span className="min-w-0 truncate pr-3 text-xs text-muted-foreground">{article.journal ?? "—"}</span>}
                       {columns.files && <span className="flex items-center justify-center text-muted-foreground"><AttachmentTypeIcons summary={summary} /></span>}
@@ -1235,15 +1241,15 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                     <RecallLabel recall={retrieval?.hits[article.id]} />
                     <span className="mr-2 font-medium">{searchHits[article.id].matched_field}</span>
                     <SearchSnippet text={searchHits[article.id].snippet} ranges={searchHits[article.id].highlight_ranges} />
-                    <Button size="xs" variant="ghost" onClick={() => selectArticle(article.id)}>View evidence</Button>
+                    <Button size="xs" variant="ghost" onClick={() => selectArticle(article.id)}>{t("main.viewEvidence")}</Button>
                   </div>}
                   {isSelected && attachmentsOpen && (
                     <div className="bg-muted/25">
                       {detailLoading && (
-                        <div className="px-7 py-2 text-xs text-muted-foreground">Loading attachments…</div>
+                        <div className="px-7 py-2 text-xs text-muted-foreground">{t("main.loadingAttachments")}</div>
                       )}
                       {!detailLoading && !attachments.length && (
-                        <div className="px-7 py-2 text-xs text-muted-foreground">No attachments</div>
+                        <div className="px-7 py-2 text-xs text-muted-foreground">{t("main.noAttachments")}</div>
                       )}
                       {!detailLoading && attachments.map((entry) => (
                         <div key={entry.key} className="pl-7 pr-2">
@@ -1259,11 +1265,11 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                     onClick={() => openReaderFor(article)}
                   >
                     <BookOpen />
-                    Read
+                    {t("main.read")}
                   </ContextMenuItem>
                   <ContextMenuItem disabled={busy === "upload"} onClick={() => void uploadForArticle(article)}>
                     <Upload />
-                    Upload attachment
+                    {t("main.uploadAttachment")}
                   </ContextMenuItem>
                   <ContextMenuItem
                     variant="destructive"
@@ -1271,7 +1277,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                     onClick={() => void deleteFulltextFor(article)}
                   >
                     <FileX2 />
-                    Delete attachment
+                    {t("main.deleteAttachment")}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
@@ -1280,7 +1286,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                     onClick={() => void deleteArticleFor(article)}
                   >
                     <Trash2 />
-                    Delete article
+                    {t("main.deleteArticle")}
                   </ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
@@ -1288,12 +1294,12 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
           }}</VirtualArticleList>
 
           {!loading && !visibleArticles.length && (
-            <div className="grid h-full place-items-center text-sm text-muted-foreground">{error ? "Search could not run. Correct the query or retry." : "No matching articles"}</div>
+            <div className="grid h-full place-items-center text-sm text-muted-foreground">{error ? t("main.searchFailed") : t("main.noMatchingArticles")}</div>
           )}
           {!loading && hasMoreArticles && (
             <div ref={articleLoaderRef} className="p-3 text-center">
               <Button size="sm" variant="secondary" onClick={loadMoreArticles}>
-                Load more ({articleOffset.toLocaleString()} / {total.toLocaleString()})
+                {t("main.loadMore", { loaded: articleOffset.toLocaleString(), total: total.toLocaleString() })}
               </Button>
             </div>
           )}
@@ -1324,18 +1330,18 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
       >
         <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-3">
           <span className="min-w-0 truncate text-[13px] font-medium">
-            {selected ? "Entry details" : "Bibliography"}
+            {selected ? t("main.entryDetails") : t("main.bibliography")}
           </span>
           <div className="flex shrink-0 items-center gap-1">
-            {selected && <Button size="icon-xs" variant="ghost" aria-label="Edit metadata" title="Edit metadata"
+            {selected && <Button size="icon-xs" variant="ghost" aria-label={t("main.editMetadata")} title={t("main.editMetadata")}
               disabled={detailLoading || !activeDetail} onClick={() => { if (activeDetail) { setEditingRevision(activeDetail.revision); setEditingArticle(activeDetail.article); } }}><Pencil /></Button>}
-            {selected && <Button size="icon-xs" variant="ghost" aria-label="Upload attachment" title="Upload attachment"
+            {selected && <Button size="icon-xs" variant="ghost" aria-label={t("main.uploadAttachment")} title={t("main.uploadAttachment")}
               disabled={busy === "upload"} onClick={() => void uploadForArticle(selected)}><Upload /></Button>}
-            {detailLoading && <Badge variant="secondary">Loading</Badge>}
+            {detailLoading && <Badge variant="secondary">{t("main.loading")}</Badge>}
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label="Close entry details"
+              aria-label={t("main.closeEntryDetails")}
               className={cn(roomy && "hidden")}
               onClick={() => setDetailsOpen(false)}
             >
@@ -1346,7 +1352,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
 
         {detailDropActive && selected && (
           <div className="pointer-events-none absolute inset-0 z-[40] m-2 flex items-center justify-center rounded-md border-2 border-dashed border-primary/60 bg-background/70">
-            <span className="rounded bg-background px-2 py-1 text-xs font-medium text-primary">Drop to attach to this record</span>
+            <span className="rounded bg-background px-2 py-1 text-xs font-medium text-primary">{t("main.dropToAttach")}</span>
           </div>
         )}
 
@@ -1358,15 +1364,15 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
           )}
 
           {!selected ? (
-            <div className="grid h-full place-items-center text-sm text-muted-foreground">Select an item</div>
+            <div className="grid h-full place-items-center text-sm text-muted-foreground">{t("main.selectAnItem")}</div>
           ) : (
             <div className="space-y-3">
               <AddToContext resource={articleContext(selected)} />
               {searchActive && indexGeneration && resultContext===JSON.stringify(currentRequest) && articles.some(article=>article.id===selected.id) && <SearchEvidencePanel articleId={selected.id} request={currentRequest} generation={indexGeneration} onOpen={evidence => void openEvidence(evidence)} />}
-              <Section title="Attachment Info" count={attachments.length} action={
+              <Section title={t("main.attachmentInfo")} count={attachments.length} action={
                 <Button size="xs" variant="ghost" className="h-6 gap-1 px-1.5 text-[11px]" disabled={busy === "upload"}
                   onClick={() => void uploadForArticle(selected)}>
-                  <Upload className="size-3" />Upload
+                  <Upload className="size-3" />{t("main.upload")}
                 </Button>
               }>
                 {!detailLoading && attachments.length ? (
@@ -1377,10 +1383,10 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                   </div>
                 ) : (
                   <div className="text-xs text-muted-foreground">
-                    {detailLoading ? "Loading…" : (
+                    {detailLoading ? t("main.loading") : (
                       <button type="button" className="w-full rounded-md border border-dashed border-border px-2 py-3 text-center text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground disabled:opacity-50"
                         disabled={busy === "upload"} onClick={() => void uploadForArticle(selected)}>
-                        {busy === "upload" ? "Uploading…" : "No attachment — click to upload a file"}
+                        {busy === "upload" ? t("main.uploading") : t("main.noAttachmentUpload")}
                       </button>
                     )}
                   </div>
@@ -1389,26 +1395,26 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
 
               <LiteratureExploration article={selected} importTarget={selectedCollection && selectedCollection !== "@unfiled" ? { collection_id: selectedCollection } : { library_id: libraryId ?? 1 }} targetLabel={scopeLabel} onImported={() => { invalidateMetadata(); void loadLibrary(query); }} />
 
-              <Section title="Details">
+              <Section title={t("main.detailsSection")}>
                 <MetadataTable>
-                  <MetadataRow label="Title" value={selected.title} />
+                  <MetadataRow label={t("main.f_title")} value={selected.title} />
                   {(selected.authors ?? []).map((author, index) => (
                     <MetadataRow
                       key={`${author.name ?? author.last_name ?? author.fore_name ?? "author"}-${index}`}
-                      label={index === 0 ? "Authors" : ""}
+                      label={index === 0 ? t("main.f_authors") : ""}
                       value={authorName(author)}
                     />
                   ))}
-                  <MetadataRow label="Item type" value={selected.pub_types?.join(", ")} />
-                  <MetadataRow label="Publication" value={selected.journal} />
-                  <MetadataRow label="Volume" value={selected.volume} />
-                  <MetadataRow label="Issue" value={selected.issue} />
-                  <MetadataRow label="Pages" value={selected.pages} />
-                  <MetadataRow label="Language" value={selected.language} />
-                  <MetadataRow label="ISSN" value={selected.issn} />
-                  <MetadataRow label="Electronic ISSN" value={selected.essn} />
-                  <MetadataRow label="Date" value={selected.year} />
-                  <MetadataRow label="Source" value={selected.source} />
+                  <MetadataRow label={t("main.f_itemType")} value={selected.pub_types?.join(", ")} />
+                  <MetadataRow label={t("main.f_publication")} value={selected.journal} />
+                  <MetadataRow label={t("main.f_volume")} value={selected.volume} />
+                  <MetadataRow label={t("main.f_issue")} value={selected.issue} />
+                  <MetadataRow label={t("main.f_pages")} value={selected.pages} />
+                  <MetadataRow label={t("main.f_language")} value={selected.language} />
+                  <MetadataRow label={t("main.f_issn")} value={selected.issn} />
+                  <MetadataRow label={t("main.f_essn")} value={selected.essn} />
+                  <MetadataRow label={t("main.f_date")} value={selected.year} />
+                  <MetadataRow label={t("main.f_source")} value={selected.source} />
                   {identifierRows.map(({ kind, label }) => {
                     const value = articleIdentifier(selected, kind);
                     return (
@@ -1420,22 +1426,22 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                       />
                     );
                   })}
-                  {(selected.identifiers ?? []).filter(identifier => identifier.kind === "other" && /^https?:\/\//i.test(identifier.value)).map(identifier => <MetadataRow key={identifier.value} label="URL" value={identifier.value} href={identifier.value} />)}
-                  {Object.entries(selected.extra_fields ?? {}).map(([key, value]) => <MetadataRow key={`extra-${key}`} label={extraFieldLabels[key] ?? key} value={value} href={key === "url" && /^https?:\/\//i.test(value) ? value : null} />)}
-                  <MetadataRow label="Abstract" value={selected.abstract_text} />
-                  <MetadataRow label="Record" value={selected.id} />
+                  {(selected.identifiers ?? []).filter(identifier => identifier.kind === "other" && /^https?:\/\//i.test(identifier.value)).map(identifier => <MetadataRow key={identifier.value} label={t("main.f_url")} value={identifier.value} href={identifier.value} />)}
+                  {Object.entries(selected.extra_fields ?? {}).map(([key, value]) => <MetadataRow key={`extra-${key}`} label={t(`metadataEditor.extraFields.${key}`, { defaultValue: extraFieldLabels[key] ?? key })} value={value} href={key === "url" && /^https?:\/\//i.test(value) ? value : null} />)}
+                  <MetadataRow label={t("main.f_abstract")} value={selected.abstract_text} />
+                  <MetadataRow label={t("main.f_record")} value={selected.id} />
                 </MetadataTable>
               </Section>
               <DiscoveryProvenance key={selected.id} articleId={selected.id} />
 
-              <Section title="Collections" count={associations.filter(a => a.article_id === selected.id).length}>
+              <Section title={t("main.collectionsSection")} count={associations.filter(a => a.article_id === selected.id).length}>
                 <div className="space-y-2">
-                  {associations.filter(a => a.article_id === selected.id).map(a => <div key={a.collection_id} className="flex items-center gap-1 text-xs"><button className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => selectCollection(a.collection_id)}>{collectionPath(collections, a.collection_id)}</button><Button size="icon-xs" variant="ghost" aria-label={`Remove from ${collectionPath(collections, a.collection_id)}`} onClick={() => void updateMembership(a.collection_id, selected.id, true)}><X /></Button></div>)}
-                  <select aria-label="Add article to collection" value="" className="w-full rounded border bg-background p-1.5 text-xs" onChange={e => { if (e.target.value) void updateMembership(e.target.value, selected.id); }}><option value="">Add to collection…</option>{collections.filter(c => !c.deleted && !associations.some(a => a.article_id === selected.id && a.collection_id === c.id)).map(c => <option key={c.id} value={c.id}>{collectionPath(collections, c.id)}</option>)}</select>
+                  {associations.filter(a => a.article_id === selected.id).map(a => <div key={a.collection_id} className="flex items-center gap-1 text-xs"><button className="min-w-0 flex-1 truncate text-left hover:underline" onClick={() => selectCollection(a.collection_id)}>{collectionPath(collections, a.collection_id)}</button><Button size="icon-xs" variant="ghost" aria-label={t("main.removeFromCollectionAria", { name: collectionPath(collections, a.collection_id) })} onClick={() => void updateMembership(a.collection_id, selected.id, true)}><X /></Button></div>)}
+                  <select aria-label={t("main.addToCollectionAria")} value="" className="w-full rounded border bg-background p-1.5 text-xs" onChange={e => { if (e.target.value) void updateMembership(e.target.value, selected.id); }}><option value="">{t("main.addToCollection")}</option>{collections.filter(c => !c.deleted && !associations.some(a => a.article_id === selected.id && a.collection_id === c.id)).map(c => <option key={c.id} value={c.id}>{collectionPath(collections, c.id)}</option>)}</select>
                 </div>
               </Section>
 
-              <Section title="Tags" count={selected.keywords?.length ?? 0}>
+              <Section title={t("main.tagsSection")} count={selected.keywords?.length ?? 0}>
                 {selected.keywords?.length ? (
                   <div className="flex flex-wrap gap-1">
                     {selected.keywords.map((keyword) => (
@@ -1445,25 +1451,25 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
                     ))}
                   </div>
                 ) : (
-                  <div className="text-xs text-muted-foreground">No tags</div>
+                  <div className="text-xs text-muted-foreground">{t("main.noTags")}</div>
                 )}
               </Section>
 
-              <Section title="Notes" count={activeDetail?.annotations.length ?? 0}>
+              <Section title={t("main.notesLabel")} count={activeDetail?.annotations.length ?? 0}>
                 {activeDetail?.annotations.length ? (
                   <div className="space-y-2">
                     {activeDetail.annotations.map((note) => (
                       <article id={`bib-note-${note.id}`} tabIndex={-1} key={note.id} className="rounded-md border p-2">
                         <div className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                           <StickyNote className="size-3" />
-                          {note.kind || "Note"}
+                          {note.kind || t("main.note")}
                         </div>
                         <p className="text-[13px] leading-5 break-words whitespace-pre-wrap">{note.content}</p>
                       </article>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-xs text-muted-foreground">No notes</div>
+                  <div className="text-xs text-muted-foreground">{t("main.noNotes")}</div>
                 )}
               </Section>
             </div>
@@ -1479,7 +1485,7 @@ function LibraryView({ focusArticleId, focusNonce, sidebarSlot, externalSidebar,
               disabled={!activeDetail?.fulltext}
             >
               <FileText />
-              {activeDetail?.fulltext?.file_format?.toLowerCase() === "txt" ? "Read TXT" : "Read PDF"}
+              {activeDetail?.fulltext?.file_format?.toLowerCase() === "txt" ? t("main.readTxt") : t("main.readPdf")}
             </Button>
             <span className="truncate text-xs text-muted-foreground">
               {creatorsText(selected) || selected.source || ""}

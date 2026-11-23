@@ -1,3 +1,4 @@
+import i18next from "i18next";
 import { cn } from "@/lib/utils";
 
 /** Structured payload rendering for tool calls and results: field rows for
@@ -59,7 +60,7 @@ function JsonValue({ value, depth }: { value: unknown; depth: number }) {
 
 /** Choose a useful subject instead of exposing serialization order and defaults. */
 function payloadSummary(value: object): string {
-  if (Array.isArray(value)) return `${value.length} items`;
+  if (Array.isArray(value)) return i18next.t("agent:json.items", { count: value.length });
   const fields = value as Record<string, unknown>;
   const text = (keys: string[]) => {
     for (const key of keys) {
@@ -71,14 +72,14 @@ function payloadSummary(value: object): string {
   const subject = text(["error", "message", "summary", "command", "cmd", "query", "pattern", "path", "file_path", "dst", "url", "ref_id", "run_id", "name"]);
   const action = text(["action", "operation", "op"]);
   const collection = ["entries", "results", "matches", "files", "nodes", "items", "records"].find((key) => Array.isArray(fields[key]));
-  const count = collection ? `${(fields[collection] as unknown[]).length} ${collection}` : "";
+  const count = collection ? i18next.t("agent:json.collectionCount", { count: (fields[collection] as unknown[]).length, collection }) : "";
   const primary = [action, subject].filter(Boolean).join(" · ");
   if (primary || count) return [primary, count].filter(Boolean).join(" · ");
   // Unknown schemas get one meaningful value, never a row of optional flags.
   const fallback = Object.entries(fields).find(([key, item]) =>
     typeof item === "string" && item.trim() && !/^(fields|filter|sort|format)/.test(key));
   if (fallback) return String(fallback[1]).replace(/\s+/g, " ").trim();
-  return `${Object.keys(fields).length} fields`;
+  return i18next.t("agent:json.fields", { count: Object.keys(fields).length });
 }
 
 export function ToolPayloadPreview({ value }: { value: object }) {

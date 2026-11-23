@@ -1,4 +1,5 @@
 import { createRoot, type Root } from "react-dom/client";
+import { i18next } from "./i18n";
 import { Dialog as Primitive } from "@base-ui/react/dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogPortal, DialogOverlay, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -31,8 +32,8 @@ export class ReaderAlertDialog {
                 {options.description && <DialogDescription>{options.description}</DialogDescription>}
               </DialogHeader>
               <DialogFooter>
-                <Button variant="outline" onClick={() => this.close(false)}>{options.cancelLabel ?? "Cancel"}</Button>
-                <Button variant={options.destructive ? "destructive" : "default"} onClick={() => this.close(true)}>{options.actionLabel ?? "OK"}</Button>
+                <Button variant="outline" onClick={() => this.close(false)}>{options.cancelLabel ?? i18next.t("reader:dialog.cancel")}</Button>
+                <Button variant={options.destructive ? "destructive" : "default"} onClick={() => this.close(true)}>{options.actionLabel ?? i18next.t("reader:dialog.ok")}</Button>
               </DialogFooter>
             </Primitive.Popup>
           </DialogPortal>

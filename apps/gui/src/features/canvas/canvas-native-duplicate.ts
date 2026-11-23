@@ -1,6 +1,7 @@
 /** Runtime-only provenance copied by Excalidraw 0.18's deepCopyElement.
  * toJSON deliberately omits the complete marker from scene/clipboard exports.
  */
+import i18n from "@/i18n";
 type Element = {readonly id:string;readonly groupIds:readonly string[];readonly customData?:Record<string,unknown>;readonly fileId?:string|null;readonly type?:string};
 const markerKey=`__autonomics_copy_${Math.random().toString(36).slice(2)}`;
 const omit=()=>undefined;
@@ -20,14 +21,14 @@ export function repairNativeDuplicate<T extends Element>(next:readonly T[],previ
   const previousIds=new Set(previous.map(e=>e.id)),copies=next.filter(e=>!previousIds.has(e.id));
   const controlled=copies.some(e=>['semanticAnchorId','visualAssetElementId','visualAssetGroupId','visualLabelIds','inset','annotationKind'].some(key=>e.customData?.[key]!=null));
   if(!controlled)return [...next];
-  if(copies.some(e=>e.customData?.inset!=null||e.customData?.annotationKind!=null))throw new Error('批注和放大图暂不支持原生复制；本次复制未完成。');
+  if(copies.some(e=>e.customData?.inset!=null||e.customData?.annotationKind!=null))throw new Error(i18n.t("canvas:nativeDuplicate.copyUnsupported"));
   const identities=new Map<string,string>(),groups=new Map<string,string>();
   for(const copy of copies){
     const source=marker(copy);
-    if(!source||identities.has(source.id))throw new Error('未取得唯一复制标识，本次复制未完成；请使用复制组件修改。');
+    if(!source||identities.has(source.id))throw new Error(i18n.t("canvas:nativeDuplicate.missingIdentity"));
     identities.set(source.id,copy.id);
-    if(source.groups.length!==copy.groupIds.length)throw new Error('组合结构发生变化，本次复制未完成；请使用复制组件修改。');
-    source.groups.forEach((group,i)=>{const target=copy.groupIds[i];if(groups.has(group)&&groups.get(group)!==target)throw new Error('无法确认复制组合，本次复制未完成。');groups.set(group,target);});
+    if(source.groups.length!==copy.groupIds.length)throw new Error(i18n.t("canvas:nativeDuplicate.groupChanged"));
+    source.groups.forEach((group,i)=>{const target=copy.groupIds[i];if(groups.has(group)&&groups.get(group)!==target)throw new Error(i18n.t("canvas:nativeDuplicate.groupAmbiguous"));groups.set(group,target);});
   }
   const result=next.map(element=>{
     if(previousIds.has(element.id)||!element.customData)return element;
@@ -35,12 +36,12 @@ export function repairNativeDuplicate<T extends Element>(next:readonly T[],previ
     delete data[markerKey];
     for(const key of ['semanticAnchorId','visualAssetElementId']){
       if(data[key]==null)continue;
-      if(typeof data[key]!=='string')throw new Error('组件归属格式无效，本次复制未完成。');
+      if(typeof data[key]!=='string')throw new Error(i18n.t("canvas:nativeDuplicate.invalidOwnership"));
       const target=identities.get(data[key]);
       if(target)data[key]=target;else delete data[key];
     }
-    if(data.visualLabelIds!=null){if(!Array.isArray(data.visualLabelIds)||!data.visualLabelIds.every(id=>typeof id==='string'))throw new Error('标签归属格式无效，本次复制未完成。');data.visualLabelIds=data.visualLabelIds.flatMap(id=>typeof id==='string'&&identities.has(id)?[identities.get(id)!]:[]);}
-    if(data.visualAssetGroupId!=null){if(typeof data.visualAssetGroupId!=='string')throw new Error('素材组合格式无效，本次复制未完成。');const target=groups.get(data.visualAssetGroupId);if(target)data.visualAssetGroupId=target;else if(data.visualAssetElementId)throw new Error('无法确认素材组合，本次复制未完成。');else delete data.visualAssetGroupId;}
+    if(data.visualLabelIds!=null){if(!Array.isArray(data.visualLabelIds)||!data.visualLabelIds.every(id=>typeof id==='string'))throw new Error(i18n.t("canvas:nativeDuplicate.invalidLabels"));data.visualLabelIds=data.visualLabelIds.flatMap(id=>typeof id==='string'&&identities.has(id)?[identities.get(id)!]:[]);}
+    if(data.visualAssetGroupId!=null){if(typeof data.visualAssetGroupId!=='string')throw new Error(i18n.t("canvas:nativeDuplicate.invalidAssetGroup"));const target=groups.get(data.visualAssetGroupId);if(target)data.visualAssetGroupId=target;else if(data.visualAssetElementId)throw new Error(i18n.t("canvas:nativeDuplicate.assetGroupAmbiguous"));else delete data.visualAssetGroupId;}
     // Alt-drag fixes native bindings after this callback using these same new objects.
     Object.assign(element,{customData:identity?.hadData===false&&!Object.keys(data).length?undefined:data});
     return element;
@@ -50,22 +51,22 @@ export function repairNativeDuplicate<T extends Element>(next:readonly T[],previ
 
 /** Paste provenance lives inside customData only across native restoreElements. */
 export function prepareNativePaste<T extends Element,F extends {dataURL:unknown;id?:string}>(elements:readonly T[],files:Record<string,F>|undefined,existing:Record<string,{dataURL:unknown}>) {
-  if(elements.some(e=>e.customData?.inset!=null||e.customData?.annotationKind!=null))throw new Error('批注和放大图暂不支持粘贴；目标画布未改变。');
+  if(elements.some(e=>e.customData?.inset!=null||e.customData?.annotationKind!=null))throw new Error(i18n.t("canvas:nativeDuplicate.pasteUnsupported"));
   const controlled=elements.some(e=>['semanticAnchorId','visualAssetElementId','visualAssetGroupId','visualLabelIds'].some(key=>e.customData?.[key]!=null));
-  if(controlled&&new Set(elements.map(e=>e.id)).size!==elements.length)throw new Error('粘贴对象身份重复。');
+  if(controlled&&new Set(elements.map(e=>e.id)).size!==elements.length)throw new Error(i18n.t("canvas:nativeDuplicate.pasteDuplicateIds"));
   const remap=new Map<string,string>(),nextFiles={...files};
   for(const [id,file] of Object.entries(files??{})){
-    if(typeof file.dataURL!=='string'||!/^data:image\//i.test(file.dataURL))throw new Error('粘贴图片数据无效。');
+    if(typeof file.dataURL!=='string'||!/^data:image\//i.test(file.dataURL))throw new Error(i18n.t("canvas:nativeDuplicate.pasteInvalidImage"));;
     if(existing[id]&&existing[id].dataURL!==file.dataURL){
       let target:string;do{target=`paste_${Array.from(crypto.getRandomValues(new Uint32Array(4)),v=>v.toString(16)).join('_')}`;}while(existing[target]||nextFiles[target]);
       remap.set(id,target);delete nextFiles[id];nextFiles[target]={...file,id:target};
     }
   }
   const prepared=elements.map(e=>{
-    if(e.type==='image'&&(!e.fileId||!files?.[e.fileId]))throw new Error('粘贴缺少原始图片数据，目标画布未改变。');
+    if(e.type==='image'&&(!e.fileId||!files?.[e.fileId]))throw new Error(i18n.t("canvas:nativeDuplicate.pasteMissingImage"));;
     const copy={...e,...(e.fileId&&remap.has(e.fileId)?{fileId:remap.get(e.fileId)!}:{})};
     if(controlled){
-      if(!e.id||!Array.isArray(e.groupIds)||!e.groupIds.every(g=>typeof g==='string')||(e.customData!=null&&(typeof e.customData!=='object'||Array.isArray(e.customData))))throw new Error('粘贴对象缺少完整身份或组合信息。');
+      if(!e.id||!Array.isArray(e.groupIds)||!e.groupIds.every(g=>typeof g==='string')||(e.customData!=null&&(typeof e.customData!=='object'||Array.isArray(e.customData))))throw new Error(i18n.t("canvas:nativeDuplicate.pasteIncompleteIdentity"));;
       Object.assign(copy,{customData:{...e.customData,[markerKey]:{id:e.id,groups:[...e.groupIds],hadData:e.customData!=null,toJSON:omit}}});
     }
     return copy;

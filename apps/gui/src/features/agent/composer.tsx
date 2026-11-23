@@ -1,6 +1,8 @@
 import { parseContextMessage, resourceKey, serializeContext } from "@/features/context/context-model";
 import { DraftContextAttachments } from "@/features/context/draft-context-attachments";
+import i18next from "i18next";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Archive,
   ArrowUp,
@@ -26,20 +28,23 @@ import { cn } from "@/lib/utils";
 import { agentStatusTone, statusLabel } from "./agent";
 
 /** Reasoning-effort ladder; mirrors `ReasoningEffort` in
- *  crates/agentik-types/src/reasoning.rs — every variant must appear. */
+ *  crates/agentik-types/src/reasoning.rs — every variant must appear.
+ *  `label` stays a zh fallback for callers outside the i18n tree; the
+ *  composer resolves `labelKey` through the "agent" namespace. */
 export const EFFORT_OPTIONS = [
-  { value: "none", label: "关闭", hint: "none" },
-  { value: "minimal", label: "极简", hint: "minimal" },
-  { value: "low", label: "低", hint: "low" },
-  { value: "medium", label: "中", hint: "medium" },
-  { value: "high", label: "高", hint: "high" },
-  { value: "xhigh", label: "超高", hint: "xhigh" },
-  { value: "max", label: "最大", hint: "max" },
-  { value: "ultra", label: "极致", hint: "ultra" },
+  { value: "none", label: "关闭", labelKey: "effort.none", hint: "none" },
+  { value: "minimal", label: "极简", labelKey: "effort.minimal", hint: "minimal" },
+  { value: "low", label: "低", labelKey: "effort.low", hint: "low" },
+  { value: "medium", label: "中", labelKey: "effort.medium", hint: "medium" },
+  { value: "high", label: "高", labelKey: "effort.high", hint: "high" },
+  { value: "xhigh", label: "超高", labelKey: "effort.xhigh", hint: "xhigh" },
+  { value: "max", label: "最大", labelKey: "effort.max", hint: "max" },
+  { value: "ultra", label: "极致", labelKey: "effort.ultra", hint: "ultra" },
 ] as const;
 
 export function effortLabel(effort: string | null | undefined) {
-  return EFFORT_OPTIONS.find((option) => option.value === effort)?.label ?? "推理";
+  const key = EFFORT_OPTIONS.find((option) => option.value === effort)?.labelKey ?? "effort.label";
+  return i18next.t(`agent:${key}`);
 }
 
 /** `provider:model` spec → display short name (last `:` segment). */
@@ -100,6 +105,7 @@ export type AgentComposerProps = {
 /** 回合操作中心:消息输入 + 发送/终止键 + 模型/推理力度切换 + 压缩/DAG。
  *  回合进行中发送键变终止键,外圈虚线环旋转,颜色随生命周期状态。 */
 export function AgentComposer(props: AgentComposerProps) {
+  const { t } = useTranslation("agent");
   const { activeAgent, draft, busy, streamingActive, status } = props;
   const attachedDraft = parseContextMessage(draft), visibleDraft = attachedDraft?.text ?? draft;
 
@@ -203,17 +209,17 @@ export function AgentComposer(props: AgentComposerProps) {
             <div className="flex h-9 items-center gap-1.5 border-b px-1.5">
               <Cpu className="size-3.5 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1 [&>div]:p-0">
-                <CommandInput autoFocus placeholder="搜索模型，Enter 切换，Esc 关闭" />
+                <CommandInput autoFocus placeholder={t("modelPicker.placeholder")} />
               </div>
             </div>
             <CommandList className="max-h-64">
               {modelPickerError ? (
-                <div className="p-4 text-xs text-destructive">模型目录加载失败: {modelPickerError}</div>
+                <div className="p-4 text-xs text-destructive">{t("modelPicker.loadFailed", { error: modelPickerError })}</div>
               ) : (
                 <>
                   {!props.modelCatalog.length && (
                     <div className="p-4 text-center text-sm text-muted-foreground">
-                      模型目录为空，请先在「设置 → 模型」中添加
+                      {t("modelPicker.empty")}
                     </div>
                   )}
                   <CommandGroup>
@@ -253,7 +259,7 @@ export function AgentComposer(props: AgentComposerProps) {
           className="absolute bottom-full left-2 z-30 mb-2 w-48 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-lg sm:left-3"
         >
           {props.agentEffort === null ? (
-            <div className="p-3 text-xs text-muted-foreground">当前模型不支持思考</div>
+            <div className="p-3 text-xs text-muted-foreground">{t("composer.noThinking")}</div>
           ) : (
             <div className="p-1">
               {EFFORT_OPTIONS.map((option) => {
@@ -269,7 +275,7 @@ export function AgentComposer(props: AgentComposerProps) {
                     data-checked={active ? "true" : undefined}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none hover:bg-accent focus-visible:bg-accent"
                   >
-                    <span>{option.label}</span>
+                    <span>{t(option.labelKey)}</span>
                     <span className="text-xs text-muted-foreground">{option.hint}</span>
                     {active && <Check className="ml-auto size-3.5 shrink-0" />}
                   </button>
@@ -283,7 +289,7 @@ export function AgentComposer(props: AgentComposerProps) {
           round send button, meta row below (model / hints / streaming). */}
       <div className="rounded-xl border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50">
         {imageError && <p role="alert" className="px-3 pt-2 text-xs text-destructive">{imageError}</p>}
-        {pasting && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">正在读取图片…</p>}
+        {pasting && <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">{t("image.reading")}</p>}
         <DraftContextAttachments resources={attachedDraft?.resources ?? []} onRemove={resource => props.onDraftChange(visibleDraft + serializeContext((attachedDraft?.resources ?? []).filter(item => resourceKey(item) !== resourceKey(resource))))} />
         <div className="flex items-end gap-2 px-2.5 pt-2">
           <Textarea
@@ -301,21 +307,21 @@ export function AgentComposer(props: AgentComposerProps) {
               setImageError(null);
               try {
                 const images = await Promise.all(files.map(async file => {
-                  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) throw new Error("支持 PNG、JPEG、WebP 和 GIF 图片");
-                  if (file.size > 1300000) throw new Error("图片过大，请缩小图片后重试（总计约 1 MB）");
+                  if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)) throw new Error(t("image.unsupported"));
+                  if (file.size > 1300000) throw new Error(t("image.tooLarge"));
                   const content = await new Promise<string>((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = () => resolve(String(reader.result));
-                    reader.onerror = () => reject(new Error("图片读取失败，请重试"));
+                    reader.onerror = () => reject(new Error(t("image.readFailed")));
                     reader.readAsDataURL(file);
                   });
-                  return { kind: "image" as const, id: crypto.randomUUID(), title: file.name || "粘贴的图片", scope: "本次消息图片", source: "clipboard", content };
+                  return { kind: "image" as const, id: crypto.randomUUID(), title: file.name || t("image.pastedTitle"), scope: t("image.scope"), source: "clipboard", content };
                 }));
                 if (latestDraft.current.activeAgent !== agent) return;
                 const current = parseContextMessage(latestDraft.current.draft);
                 const resources = [...(current?.resources ?? []), ...images];
                 const next = (current?.text ?? latestDraft.current.draft) + pastedText + serializeContext(resources);
-                if (new TextEncoder().encode(next).length > 1800000) throw new Error("图片附件总大小过大，请缩小图片后重试（总计约 1 MB）");
+                if (new TextEncoder().encode(next).length > 1800000) throw new Error(t("image.totalTooLarge"));
                 props.onDraftChange(next);
               } catch (cause) { setImageError(cause instanceof Error ? cause.message : String(cause)); }
               finally { setPasting(false); }
@@ -326,7 +332,7 @@ export function AgentComposer(props: AgentComposerProps) {
                 props.onSend();
               }
             }}
-            placeholder="输入消息…"
+            placeholder={t("composer.placeholder")}
             className="max-h-48 min-h-9 resize-none overflow-y-auto border-0 bg-transparent px-0 py-1 focus-visible:ring-0 md:text-sm dark:bg-transparent"
           />
           {turnActive ? (
@@ -347,8 +353,8 @@ export function AgentComposer(props: AgentComposerProps) {
                 variant="secondary"
                 className="rounded-full"
                 onClick={props.onCancel}
-                aria-label="终止"
-                title={`终止当前回复（状态：${running || "running"}）`}
+                aria-label={t("composer.cancel")}
+                title={t("composer.cancelTitle", { status: running || t("composer.runningDefault") })}
               >
                 <Square className="size-3.5 fill-current" />
               </Button>
@@ -359,8 +365,8 @@ export function AgentComposer(props: AgentComposerProps) {
               size="icon"
               className="mb-0.5 shrink-0 rounded-full"
               disabled={!hasContent || pasting}
-              aria-label="发送"
-              title="发送（Ctrl+Enter）"
+              aria-label={t("composer.send")}
+              title={t("composer.sendTitle")}
             >
               <ArrowUp />
             </Button>
@@ -372,15 +378,15 @@ export function AgentComposer(props: AgentComposerProps) {
             data-composer-popover=""
             onClick={() => void toggleModelPicker()}
             aria-expanded={modelPickerOpen}
-            aria-label="切换模型"
-            title={props.currentModelSpec ? `当前模型 ${props.currentModelSpec}，点击切换` : "选择模型"}
+            aria-label={t("composer.switchModel")}
+            title={props.currentModelSpec ? t("composer.currentModelTitle", { spec: props.currentModelSpec }) : t("composer.chooseModel")}
             className={cn(
               "flex max-w-[45%] shrink-0 items-center gap-1 rounded-md border border-transparent px-1.5 py-0.5 transition hover:border-border hover:bg-background",
               modelPickerOpen && "border-border bg-background",
             )}
           >
             <Cpu className="size-3 shrink-0" />
-            <span className="truncate">{currentModelShort ?? "选择模型"}</span>
+            <span className="truncate">{currentModelShort ?? t("composer.chooseModel")}</span>
             <ChevronDown className={cn("size-3 shrink-0 transition-transform", modelPickerOpen && "rotate-180")} />
           </button>
           <button
@@ -388,9 +394,9 @@ export function AgentComposer(props: AgentComposerProps) {
             data-composer-popover=""
             onClick={toggleEffortPicker}
             aria-expanded={effortPickerOpen}
-            aria-label="推理力度"
+            aria-label={t("composer.effortLabel")}
             disabled={props.agentEffort === null}
-            title={props.agentEffort === null ? "当前模型不支持思考" : `推理力度：${effortLabel(props.agentEffort)}，点击切换`}
+            title={props.agentEffort === null ? t("composer.noThinking") : t("composer.effortTitle", { effort: effortLabel(props.agentEffort) })}
             className={cn(
               "flex shrink-0 items-center gap-1 rounded-md border border-transparent px-1.5 py-0.5 transition hover:border-border hover:bg-background disabled:pointer-events-none disabled:opacity-50",
               effortPickerOpen && "border-border bg-background",
@@ -400,15 +406,15 @@ export function AgentComposer(props: AgentComposerProps) {
             <span className="truncate">{effortLabel(props.agentEffort)}</span>
             <ChevronDown className={cn("size-3 shrink-0 transition-transform", effortPickerOpen && "rotate-180")} />
           </button>
-          <span className="truncate">Ctrl+Enter 发送 · Ctrl+R 搜索 prompt 历史</span>
+          <span className="truncate">{t("composer.hint")}</span>
           {/* 回合操作收进 composer:压缩 / DAG(fork);右侧是进行中
            * 或已终止的状态提示。 */}
           <div className="ml-auto flex shrink-0 items-center gap-0.5">
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label="压缩对话"
-              title="压缩对话（Compact）"
+              aria-label={t("composer.compact")}
+              title={t("composer.compactTitle")}
               disabled={!activeAgent}
               onClick={props.onCompact}
             >
@@ -417,8 +423,8 @@ export function AgentComposer(props: AgentComposerProps) {
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label="查看 agent DAG"
-              title="查看 agent DAG"
+              aria-label={t("composer.viewDag")}
+              title={t("composer.viewDag")}
               disabled={!activeAgent}
               onClick={props.onOpenDag}
             >
@@ -427,15 +433,15 @@ export function AgentComposer(props: AgentComposerProps) {
             {turnActive ? (
               <span
                 className={cn("flex items-center gap-1 pl-1", tone.text)}
-                title={`回合进行中：${running || "running"}`}
+                title={t("composer.turnRunningTitle", { status: running || t("composer.runningDefault") })}
               >
                 <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
-                {running || "running"}…
+                {running || t("composer.runningDefault")}…
               </span>
             ) : terminated ? (
-              <span className="flex items-center gap-1 pl-1 text-muted-foreground" title="上一回合已被终止">
+              <span className="flex items-center gap-1 pl-1 text-muted-foreground" title={t("composer.terminatedTitle")}>
                 <CircleSlash className="size-3" />
-                已终止
+                {t("composer.terminated")}
               </span>
             ) : null}
           </div>

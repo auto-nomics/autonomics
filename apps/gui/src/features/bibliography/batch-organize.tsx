@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest } from "@/gateway";
 import type { BibCollection, BibDetail } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import { collectionPath } from "./collection-tree-model";
 export function BatchOrganize({ ids, collections, onClose, onChanged }: {
   ids: string[]; collections: BibCollection[]; onClose: () => void; onChanged: () => void;
 }) {
+  const { t } = useTranslation("bibliography");
   const [operation, setOperation] = useState("add-tags");
   const [tags, setTags] = useState("");
   const [collection, setCollection] = useState("");
@@ -38,19 +40,19 @@ export function BatchOrganize({ ids, collections, onClose, onChanged }: {
     }
     setFailures(failed); setBusy(false); onChanged();
   };
-  return <SearchDialog title="Organize selected articles" onClose={() => { if (!busy) onClose(); }} footer={
-    <div className="flex justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={onClose}>Close</Button>
-      <Button disabled={busy || done.length === ids.length || (operation.endsWith("tags") ? !tags.split(",").some(value => value.trim()) : !collection)} onClick={() => void run()}>{busy ? "Applying…" : failures.length ? "Retry failed articles" : "Apply"}</Button></div>
+  return <SearchDialog title={t("batchOrganize.title")} onClose={() => { if (!busy) onClose(); }} footer={
+    <div className="flex justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={onClose}>{t("batchOrganize.close")}</Button>
+      <Button disabled={busy || done.length === ids.length || (operation.endsWith("tags") ? !tags.split(",").some(value => value.trim()) : !collection)} onClick={() => void run()}>{busy ? t("batchOrganize.applying") : failures.length ? t("batchOrganize.retryFailed") : t("batchOrganize.apply")}</Button></div>
   }>
-    <p className="mb-3 text-sm">{ids.length} selected articles. {done.length} updated.</p>
+    <p className="mb-3 text-sm">{t("batchOrganize.summary", { selected: ids.length, updated: done.length })}</p>
     <fieldset disabled={busy || started} className="space-y-3">
-      <label className="block">Operation<select aria-label="Batch operation" className="mt-1 block w-full rounded border bg-background p-2" value={operation} onChange={event => setOperation(event.target.value)}>
-        <option value="add-tags">Add tags</option><option value="remove-tags">Remove tags</option><option value="add-collection">Add to collection</option><option value="remove-collection">Remove from collection</option>
+      <label className="block">{t("batchOrganize.operation")}<select aria-label={t("batchOrganize.operationAria")} className="mt-1 block w-full rounded border bg-background p-2" value={operation} onChange={event => setOperation(event.target.value)}>
+        <option value="add-tags">{t("batchOrganize.opAddTags")}</option><option value="remove-tags">{t("batchOrganize.opRemoveTags")}</option><option value="add-collection">{t("batchOrganize.opAddCollection")}</option><option value="remove-collection">{t("batchOrganize.opRemoveCollection")}</option>
       </select></label>
-      {operation.endsWith("tags") ? <label className="block">Tags (comma separated)<Input aria-label="Batch tags" value={tags} onChange={event => setTags(event.target.value)} /></label>
-        : <label className="block">Collection<select aria-label="Batch collection" className="mt-1 block w-full rounded border bg-background p-2" value={collection} onChange={event => setCollection(event.target.value)}><option value="">Select collection…</option>{collections.filter(item => !item.deleted).map(item => <option key={item.id} value={item.id}>{collectionPath(collections, item.id)}</option>)}</select></label>}
+      {operation.endsWith("tags") ? <label className="block">{t("batchOrganize.tags")}<Input aria-label={t("batchOrganize.tagsAria")} value={tags} onChange={event => setTags(event.target.value)} /></label>
+        : <label className="block">{t("batchOrganize.collection")}<select aria-label={t("batchOrganize.collectionAria")} className="mt-1 block w-full rounded border bg-background p-2" value={collection} onChange={event => setCollection(event.target.value)}><option value="">{t("batchOrganize.selectCollection")}</option>{collections.filter(item => !item.deleted).map(item => <option key={item.id} value={item.id}>{collectionPath(collections, item.id)}</option>)}</select></label>}
     </fieldset>
-    {failures.length > 0 && <div role="alert" className="mt-3 text-sm text-destructive"><p>{failures.length} articles could not be updated. Successful changes are retained.</p><ul>{failures.map(item => <li key={item.id}>{item.id}: {item.error}</li>)}</ul></div>}
-    {done.length === ids.length && <p role="status" className="mt-3 text-sm">All selected articles updated.</p>}
+    {failures.length > 0 && <div role="alert" className="mt-3 text-sm text-destructive"><p>{t("batchOrganize.failures", { count: failures.length })}</p><ul>{failures.map(item => <li key={item.id}>{item.id}: {item.error}</li>)}</ul></div>}
+    {done.length === ids.length && <p role="status" className="mt-3 text-sm">{t("batchOrganize.allUpdated")}</p>}
   </SearchDialog>;
 }

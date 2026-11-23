@@ -1,0 +1,212 @@
+{
+  "compaction": {
+    "ariaLabel": "Context compaction",
+    "rebuilding": "Rebuilding context",
+    "compressing": "Compacting context",
+    "failed": "Compaction failed",
+    "done": "Compaction complete",
+    "noop": "Nothing to compact",
+    "plan": "Summarizing {{head}} messages (about {{headTokens}} tokens), keeping the last {{tail}}",
+    "stats": "{{before}} → {{after}} messages · freed about {{freed}} tokens · {{seconds}}s"
+  },
+  "thinking": {
+    "streaming": "Thinking…",
+    "done": "Thought process"
+  },
+  "message": {
+    "attachedRefs": "References sent with the message ({{count}})",
+    "generating": "Generating…",
+    "assistant": "Assistant",
+    "copyReply": "Copy assistant reply",
+    "result": "Result",
+    "failed": "Failed",
+    "agentLabel": "Agent",
+    "agentFromLabel": "Agent · {{from}}",
+    "systemLabel": "System"
+  },
+  "transcript": {
+    "loadEarlier": "Load earlier messages ({{count}})",
+    "empty": "This session has no messages yet",
+    "scrollToBottom": "Scroll to bottom",
+    "copiedCode": "Copied!",
+    "copyCode": "Copy"
+  },
+  "header": {
+    "noAgentOpen": "No agent open",
+    "noModel": "no model"
+  },
+  "picker": {
+    "searchAgents": "Search agents",
+    "closeSearch": "Close agent search",
+    "openSearch": "Search agents",
+    "placeholder": "Type to switch / search agents, Esc to go back",
+    "empty": "No matching agents",
+    "newGroup": "New",
+    "newAgent": "New agent…",
+    "openGroup": "Open agents",
+    "runningGroup": "Running (not open)",
+    "storedGroup": "Stored agents (select to resume)"
+  },
+  "queued": {
+    "ariaLabel": "Pending messages",
+    "title": "Pending messages",
+    "messageN": "Message {{n}}",
+    "sending": "Sending…",
+    "queuedWaiting": "Queued · waiting for the agent to pick up",
+    "attachedRefs": "{{count}} attached references"
+  },
+  "workspace": {
+    "selectAgent": "Select an agent from the sidebar, or click + to create one"
+  },
+  "effort": {
+    "label": "Reasoning",
+    "none": "Off",
+    "minimal": "Minimal",
+    "low": "Low",
+    "medium": "Medium",
+    "high": "High",
+    "xhigh": "X-high",
+    "max": "Max",
+    "ultra": "Ultra"
+  },
+  "modelPicker": {
+    "placeholder": "Search models, Enter to switch, Esc to close",
+    "loadFailed": "Failed to load model catalog: {{error}}",
+    "empty": "The model catalog is empty — add models in Settings → Models first"
+  },
+  "composer": {
+    "placeholder": "Type a message…",
+    "cancel": "Cancel",
+    "cancelTitle": "Cancel the current reply (status: {{status}})",
+    "send": "Send",
+    "sendTitle": "Send (Ctrl+Enter)",
+    "switchModel": "Switch model",
+    "currentModelTitle": "Current model {{spec}}, click to switch",
+    "chooseModel": "Choose model",
+    "effortLabel": "Reasoning effort",
+    "effortTitle": "Reasoning effort: {{effort}}, click to switch",
+    "noThinking": "The current model does not support thinking",
+    "compact": "Compact conversation",
+    "compactTitle": "Compact conversation (Compact)",
+    "viewDag": "View agent DAG",
+    "turnRunningTitle": "Turn in progress: {{status}}",
+    "runningDefault": "running",
+    "terminated": "Cancelled",
+    "terminatedTitle": "The previous turn was cancelled",
+    "hint": "Ctrl+Enter to send · Ctrl+R to search prompt history"
+  },
+  "image": {
+    "reading": "Reading image…",
+    "unsupported": "Only PNG, JPEG, WebP and GIF images are supported",
+    "tooLarge": "Image is too large — shrink it and try again (about 1 MB total)",
+    "readFailed": "Failed to read the image, please retry",
+    "pastedTitle": "Pasted image",
+    "scope": "Image for this message",
+    "totalTooLarge": "Attached images are too large in total — shrink them and try again (about 1 MB total)"
+  },
+  "copy": {
+    "copied": "Copied message",
+    "failed": "Copy failed: {{reason}}"
+  },
+  "spawn": {
+    "title": "New agent",
+    "description": "Spawn a resident agent under an existing path.",
+    "namePlaceholder": "agent name",
+    "profileLabel": "Agent profile",
+    "submit": "Spawn"
+  },
+  "dialogs": {
+    "loadFailed": "Failed to load persisted agents: {{reason}}",
+    "noTextMessages": "No text messages available",
+    "cmdResume": "Resume agent",
+    "cmdHistory": "Search prompt history",
+    "cmdCopy": "Copy message",
+    "resumeTitle": "Resume persisted agent",
+    "resumeDescription": "Restore a stored agent. Existing runtime instances are focused.",
+    "resumePlaceholder": "Search by path or profile",
+    "focus": "Focus",
+    "resuming": "Resuming…",
+    "resume": "Resume",
+    "rename": "Rename",
+    "delete": "Delete",
+    "save": "Save",
+    "confirmPlaceholder": "type \"yes\"",
+    "deleteForever": "Delete forever",
+    "defaultModel": "default model",
+    "copyTitle": "Copy message",
+    "copyDescription": "Click a transcript message to copy it.",
+    "filterMessages": "Filter messages",
+    "roleUser": "YOU",
+    "roleAssistant": "AI",
+    "noMatchingMessages": "No matching messages",
+    "historyTitle": "Prompt history",
+    "historyDescription": "Select a previous prompt to restore it in the composer.",
+    "filterPrompts": "Filter prompts",
+    "noMatchingPrompts": "No matching prompts"
+  },
+  "inspector": {
+    "overview": "Overview",
+    "noAgent": "No agent",
+    "model": "Model",
+    "status": "Status",
+    "tokens": "Tokens",
+    "dagFlow": "DAG / Flow",
+    "nodes": "Nodes",
+    "flow": "Flow",
+    "noAgentSelected": "No agent selected",
+    "browser": "Browser",
+    "plan": "Plan",
+    "planCompletionAria": "Plan completion",
+    "planCompleted": "{{done}} / {{total}} completed",
+    "planStepsAria": "Plan steps",
+    "stepN": "Step {{n}}",
+    "stepCompleted": "Completed",
+    "stepInProgress": "In progress",
+    "stepCancelled": "Cancelled",
+    "stepPending": "Pending",
+    "noActivePlan": "No active plan",
+    "view": "View",
+    "collapseThinking": "Collapse thinking",
+    "collapseToolCalls": "Collapse tool calls",
+    "collapseToolResults": "Collapse tool results",
+    "actions": "Actions",
+    "copy": "Copy",
+    "history": "History",
+    "refresh": "Refresh"
+  },
+  "browser": {
+    "noAgentSelected": "No agent selected",
+    "unavailable": "Browser monitor unavailable",
+    "noSession": "No live browser session — browser agents only",
+    "screenshotAlt": "Active browser tab screenshot",
+    "noCapture": "No capture",
+    "openTabsAria": "Open tabs",
+    "tabN": "Tab {{n}}"
+  },
+  "usage": {
+    "input": "Input {{value}}",
+    "output": "Output {{value}}",
+    "cache": "Cache {{value}}",
+    "ariaLabel": "Token usage: {{detail}}"
+  },
+  "json": {
+    "items": "{{count}} items",
+    "fields": "{{count}} fields",
+    "collectionCount": "{{count}} {{collection}}"
+  },
+  "generative": {
+    "renderFailed": "Interactive UI failed to render.",
+    "showRaw": "Show raw content",
+    "loading": "Loading interactive UI…"
+  },
+  "drawing": {
+    "iframeTitle": "Interactive drawing",
+    "sectionAria": "Interactive explanation",
+    "drawing": "Drawing interactive figure…",
+    "supplementing": "Filling in graphics and interactions…",
+    "loadTimeout": "Timed out loading the drawing, please retry.",
+    "runFailed": "The drawing did not run to completion: {{error}}",
+    "preparing": "Preparing interactive figure…",
+    "parseFailed": "Could not parse the drawing reply: {{error}}"
+  }
+}

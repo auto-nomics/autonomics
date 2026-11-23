@@ -1,4 +1,5 @@
 /** Deck feature barrel: layers may only import through here. */
+import "./i18n";
 import "./deck.css";
 
 export { fetchDeck, fetchDeckList, assetUrl, resolveAssetRefs } from "./deck-api";

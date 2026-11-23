@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useTranslation } from "react-i18next";
 import type { BibArticle } from "@/types";
 
 type Props = { articles: BibArticle[]; total: number; viewport: RefObject<HTMLDivElement | null>; contextKey: string; estimatedHeight: number; selectedId: string | null; revealId?: string | null; onNavigate: (id: string) => void; onToggle: (id: string) => void; children: (article: BibArticle) => ReactNode };
@@ -22,6 +23,7 @@ function containing(offsets: number[], position: number): number {
 /** Variable-height windowing keeps expanded attachments and snippets in the
  * normal keyboard/selection model while limiting mounted DOM rows. */
 export function VirtualArticleList({ articles, total, viewport, contextKey, estimatedHeight, selectedId, revealId, onNavigate, onToggle, children }: Props) {
+  const { t } = useTranslation("bibliography");
   const heights = useRef(new Map<string, number>());
   const activeContext = useRef(contextKey);
   const [version, setVersion] = useState(0);
@@ -116,7 +118,7 @@ export function VirtualArticleList({ articles, total, viewport, contextKey, esti
   const indices = new Set(Array.from({length:Math.max(0,end-start)},(_,index)=>start+index));
   const focusedIndex = focusedId ? layout.positions.get(focusedId) : undefined;
   if (focusedIndex !== undefined) indices.add(focusedIndex);
-  return <div ref={container} onFocusCapture={event => setFocusedId((event.target as HTMLElement).closest<HTMLElement>("[data-article-id]")?.dataset.articleId ?? null)} onBlurCapture={event => {if (!event.currentTarget.contains(event.relatedTarget)) setFocusedId(null);}} role="list" data-loaded-count={articles.length} aria-label="Literature results" style={{ position: "relative", height: layout.offsets.at(-1) ?? 0, overflowAnchor: "none" }}>
+  return <div ref={container} onFocusCapture={event => setFocusedId((event.target as HTMLElement).closest<HTMLElement>("[data-article-id]")?.dataset.articleId ?? null)} onBlurCapture={event => {if (!event.currentTarget.contains(event.relatedTarget)) setFocusedId(null);}} role="list" data-loaded-count={articles.length} aria-label={t("virtualList.aria")} style={{ position: "relative", height: layout.offsets.at(-1) ?? 0, overflowAnchor: "none" }}>
     {[...indices].sort((a,b)=>a-b).map(index => {const article=articles[index];return <MeasuredRow key={article.id} id={article.id} top={layout.offsets[index]} index={index} total={total} onMeasure={measure}>{children(article)}</MeasuredRow>;})}
   </div>;
 }

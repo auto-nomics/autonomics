@@ -1,4 +1,5 @@
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
+import { i18next } from './i18n';
 import { highlightNoteIndicator } from './highlight-note-indicator';
 import { defaultAnnotationColor } from '@/lib/annotation-colors';
 import { TextQuoteIndex, normalizeQuote, type ReadingTextRange } from './reading-text-range';
@@ -79,7 +80,7 @@ export class ReadingModeView {
     }, { root: container, rootMargin: '600px' });
     this.article.querySelectorAll<HTMLElement>('.sdt-source-crop').forEach(figure => {
       const label = document.createElement('span');
-      label.className = 'reader-crop-status'; label.textContent = 'Loading original figure…';
+      label.className = 'reader-crop-status'; label.textContent = i18next.t('reader:image.loadingFigure');
       figure.append(label);
       this.cropObserver.observe(figure);
     });
@@ -274,7 +275,7 @@ export class ReadingModeView {
       for (const rect of (isNote ? rects.slice(0, 1) : rects)) {
         const mark = document.createElement('div');
         mark.className = isNote ? 'reader-reflow-highlight reader-note-marker' : 'reader-reflow-highlight'; mark.dataset.annotationId = annotation.id;
-        if (isNote) { mark.textContent = '✎'; mark.title = 'Note'; }
+        if (isNote) { mark.textContent = '✎'; mark.title = i18next.t('reader:inspector.note'); }
         Object.assign(mark.style, {
           left: `${rect.left - origin.left + this.container.scrollLeft}px`,
           top: `${rect.top - origin.top + this.container.scrollTop}px`,
@@ -316,12 +317,12 @@ export class ReadingModeView {
       }
       const status = figure.querySelector('.reader-crop-status');
       if (byPage.size) status?.remove();
-      else if (status) status.textContent = 'Source figure is unavailable';
+      else if (status) status.textContent = i18next.t('reader:image.figureUnavailable');
       this.scheduleOverlays();
     } catch {
       if (!this.disposed) {
         const status = figure.querySelector('.reader-crop-status');
-        if (status) status.textContent = 'Could not render figure. View it in the original PDF.';
+        if (status) status.textContent = i18next.t('reader:image.figureRenderFailed');
       }
     }
   }
@@ -331,8 +332,8 @@ export class ReadingModeView {
     source.tabIndex = 0;
     source.setAttribute('role', 'button');
     source.setAttribute('aria-haspopup', 'dialog');
-    source.setAttribute('aria-label', 'Enlarge image');
-    source.title = 'Click to enlarge';
+    source.setAttribute('aria-label', i18next.t('reader:image.enlargeAria'));
+    source.title = i18next.t('reader:image.clickToEnlarge');
   }
 
   private openImage(source: HTMLCanvasElement | HTMLImageElement) {

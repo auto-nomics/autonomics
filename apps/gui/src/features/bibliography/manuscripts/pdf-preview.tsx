@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import * as pdfjs from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
@@ -20,6 +21,7 @@ export function PdfPreview({
   bytes: Uint8Array | null;
   title: string;
 }) {
+  const { t } = useTranslation("bibliography");
   const preview = useRef<HTMLElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const paper = useRef<HTMLDivElement>(null);
@@ -127,17 +129,17 @@ export function PdfPreview({
       );
   };
   return (
-    <section ref={preview} className="manuscript-preview" aria-label="Compiled PDF">
+    <section ref={preview} className="manuscript-preview" aria-label={t("manuscripts.pdf.sectionAria")}>
       <div className="manuscript-pane-heading">
         <span>
-          <FileText size={14} /> PDF 预览
+          <FileText size={14} /> {t("manuscripts.pdf.heading")}
         </span>
         <div className="manuscript-inline">
           <Button
             variant="ghost"
             size="icon-xs"
-            aria-label="Fit PDF width"
-            title="适应宽度"
+            aria-label={t("manuscripts.pdf.fitAria")}
+            title={t("manuscripts.pdf.fitTitle")}
             onClick={() => setFit(true)}
           >
             <Maximize2 />
@@ -145,8 +147,8 @@ export function PdfPreview({
           <Button
             variant="ghost"
             size="icon-xs"
-            title="缩小"
-            aria-label="Zoom out"
+            title={t("manuscripts.pdf.zoomOutTitle")}
+            aria-label={t("manuscripts.pdf.zoomOutAria")}
             onClick={() => {
               setFit(false);
               setZoom(Math.max(0.2, zoom - 0.1));
@@ -158,8 +160,8 @@ export function PdfPreview({
           <Button
             variant="ghost"
             size="icon-xs"
-            title="放大"
-            aria-label="Zoom in"
+            title={t("manuscripts.pdf.zoomInTitle")}
+            aria-label={t("manuscripts.pdf.zoomInAria")}
             onClick={() => {
               setFit(false);
               setZoom(Math.min(2, zoom + 0.1));
@@ -170,8 +172,8 @@ export function PdfPreview({
           <Button
             variant="ghost"
             size="icon-xs"
-            title="下载 PDF"
-            aria-label="Download PDF"
+            title={t("manuscripts.pdf.downloadTitle")}
+            aria-label={t("manuscripts.pdf.downloadAria")}
             disabled={!bytes}
             onClick={download}
           >
@@ -187,13 +189,13 @@ export function PdfPreview({
       {bytes ? (
         <>
           <div className="manuscript-paper-scroll" ref={paper}>
-            <canvas ref={canvas} aria-label={`PDF page ${page}`} />
+            <canvas ref={canvas} aria-label={t("manuscripts.pdf.pageAria", { page })} />
           </div>
           <div className="manuscript-pagination">
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Previous page"
+              aria-label={t("manuscripts.pdf.prevAria")}
               disabled={page <= 1}
               onClick={() => setPage(page - 1)}
             >
@@ -205,7 +207,7 @@ export function PdfPreview({
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Next page"
+              aria-label={t("manuscripts.pdf.nextAria")}
               disabled={!document || page >= document.numPages}
               onClick={() => setPage(page + 1)}
             >
@@ -216,8 +218,8 @@ export function PdfPreview({
       ) : (
         <div className="manuscript-preview-empty">
           <FileText size={36} strokeWidth={1} />
-          <h3>从源文件到论文</h3>
-          <p>编译 LaTeX 后，PDF 将显示在这里。</p>
+          <h3>{t("manuscripts.pdf.emptyTitle")}</h3>
+          <p>{t("manuscripts.pdf.emptyBody")}</p>
           <small>Tectonic · XeTeX / BibTeX</small>
         </div>
       )}

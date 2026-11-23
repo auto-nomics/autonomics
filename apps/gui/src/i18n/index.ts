@@ -10,11 +10,39 @@ import { LANGUAGE_STORAGE_KEY, type Language, languages, resolveLanguage } from 
 
 import zhCommon from "./locales/zh/common.json";
 import enCommon from "./locales/en/common.json";
+import zhAgent from "./locales/zh/agent.json";
+import enAgent from "./locales/en/agent.json";
+import zhBibliography from "./locales/zh/bibliography.json";
+import enBibliography from "./locales/en/bibliography.json";
+import zhCanvas from "./locales/zh/canvas.json";
+import enCanvas from "./locales/en/canvas.json";
+import zhDeck from "./locales/zh/deck.json";
+import enDeck from "./locales/en/deck.json";
+import zhDiscovery from "./locales/zh/discovery.json";
+import enDiscovery from "./locales/en/discovery.json";
+import zhReader from "./locales/zh/reader.json";
+import enReader from "./locales/en/reader.json";
 
 export const defaultNS = "common";
 export const resources = {
-  zh: { common: zhCommon },
-  en: { common: enCommon },
+  zh: {
+    common: zhCommon,
+    agent: zhAgent,
+    bibliography: zhBibliography,
+    canvas: zhCanvas,
+    deck: zhDeck,
+    discovery: zhDiscovery,
+    reader: zhReader,
+  },
+  en: {
+    common: enCommon,
+    agent: enAgent,
+    bibliography: enBibliography,
+    canvas: enCanvas,
+    deck: enDeck,
+    discovery: enDiscovery,
+    reader: enReader,
+  },
 } as const;
 
 void i18next.use(initReactI18next).init({
@@ -40,3 +68,7 @@ export function setLanguage(lang: Language): void {
 }
 
 document.documentElement.lang = i18next.language === "en" ? "en" : "zh-CN";
+
+// Default export for non-React modules translating at the point a string is
+// produced: `import i18n from "@/i18n"; i18n.t("ns:key")`.
+export default i18next;

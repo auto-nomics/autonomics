@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { convertToExcalidrawElements, CaptureUpdateAction } from "@excalidraw/excalidraw";
 import type { BinaryFileData, ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { gatewayRequest } from "@/gateway";
@@ -17,6 +18,7 @@ export function useBioArtState() {
   return { query, setQuery, format, setFormat, assets, setAssets, preview, setPreview, busy, setBusy, error, setError };
 }
 export function BioArtPanel({ getApi, embedded = false, controller }: { getApi: () => ExcalidrawImperativeAPI | null; embedded?: boolean; controller?: ReturnType<typeof useBioArtState> }) {
+  const { t } = useTranslation("canvas");
   const local = useBioArtState();
   const { query, setQuery, format, setFormat, assets, setAssets, preview, setPreview, busy, setBusy, error, setError } = controller ?? local;
   async function previewAsset(id: number) {
@@ -42,15 +44,15 @@ export function BioArtPanel({ getApi, embedded = false, controller }: { getApi: 
     } catch (cause) { setError(String(cause)); } finally { setBusy(false); }
   }
   const Container = embedded ? "section" : "aside";
-  return <Container aria-label="BioArt 素材" className={embedded ? "canvas-catalog-panel min-w-0 overflow-auto p-3 text-sm" : "w-72 shrink-0 overflow-auto border-l p-2 text-sm"}>
+  return <Container aria-label={t("bioart.panelLabel")} className={embedded ? "canvas-catalog-panel min-w-0 overflow-auto p-3 text-sm" : "w-72 shrink-0 overflow-auto border-l p-2 text-sm"}>
     <form className="flex gap-1" onSubmit={async event => {
       event.preventDefault(); if (busy || !query.trim()) return; setBusy(true); setError("");
       try { const result = await gatewayRequest("GET", `/visualization/bioart/search?q=${encodeURIComponent(query.trim())}`) as { assets: Asset[] }; setAssets(result.assets); setPreview(null); }
       catch (cause) { setError(String(cause)); } finally { setBusy(false); }
-    }}><input aria-label="BioArt 搜索词" placeholder="搜索 BioArt，如 cell" className="min-w-0 flex-1 rounded border bg-background px-2" value={query} onChange={event => setQuery(event.target.value)} /><Button type="submit" size="sm" disabled={busy || !query.trim()}>搜索</Button></form>
-    <label className="my-2 block text-xs">插入格式<select aria-label="BioArt 插入格式" className="ml-2 rounded border bg-background p-1" disabled={busy} value={format} onChange={event => { setFormat(event.target.value as Format); setPreview(null); setError(""); }}><option value="png">PNG 图片</option><option value="svg">SVG 矢量</option></select></label>
+    }}><input aria-label={t("bioart.searchLabel")} placeholder={t("bioart.searchPlaceholder")} className="min-w-0 flex-1 rounded border bg-background px-2" value={query} onChange={event => setQuery(event.target.value)} /><Button type="submit" size="sm" disabled={busy || !query.trim()}>{t("bioart.search")}</Button></form>
+    <label className="my-2 block text-xs">{t("bioart.insertFormat")}<select aria-label={t("bioart.formatLabel")} className="ml-2 rounded border bg-background p-1" disabled={busy} value={format} onChange={event => { setFormat(event.target.value as Format); setPreview(null); setError(""); }}><option value="png">{t("bioart.formatPng")}</option><option value="svg">{t("bioart.formatSvg")}</option></select></label>
     {error && <p role="alert" className="my-2 text-destructive">{error}</p>}
-    <p className="my-2 text-xs text-muted-foreground">素材独立插入，保留来源与许可。SVG 插入后可选中图片，通过“素材编辑”调整颜色与路径；不支持的格式会提示原因。</p>
-    {assets.map(asset => <article key={asset.id} className="my-2 rounded border p-2"><p>{asset.title}</p>{preview?.asset.id === asset.id && <figure className="my-2"><img alt={preview.asset.title} src={preview.previewDataURL ?? preview.dataURL} className="max-h-48 w-full rounded bg-white object-contain" /><figcaption className="mt-1 text-xs text-muted-foreground">{preview.asset.creators?.join(" · ") || "作者信息未提供"}</figcaption></figure>}<p className="text-xs text-muted-foreground">{asset.licenses.join(" · ") || "许可信息未提供"}</p><div className="mt-2 flex flex-wrap items-center gap-2"><a href={asset.source_url} target="_blank" rel="noreferrer" className="underline">来源</a><Button size="sm" variant="outline" disabled={busy} onClick={() => void previewAsset(asset.id)}>预览图片</Button><Button size="sm" disabled={busy} onClick={() => void insert(asset.id)}>插入图片</Button></div></article>)}
+    <p className="my-2 text-xs text-muted-foreground">{t("bioart.note")}</p>
+    {assets.map(asset => <article key={asset.id} className="my-2 rounded border p-2"><p>{asset.title}</p>{preview?.asset.id === asset.id && <figure className="my-2"><img alt={preview.asset.title} src={preview.previewDataURL ?? preview.dataURL} className="max-h-48 w-full rounded bg-white object-contain" /><figcaption className="mt-1 text-xs text-muted-foreground">{preview.asset.creators?.join(" · ") || t("bioart.noAuthors")}</figcaption></figure>}<p className="text-xs text-muted-foreground">{asset.licenses.join(" · ") || t("bioart.noLicense")}</p><div className="mt-2 flex flex-wrap items-center gap-2"><a href={asset.source_url} target="_blank" rel="noreferrer" className="underline">{t("bioart.source")}</a><Button size="sm" variant="outline" disabled={busy} onClick={() => void previewAsset(asset.id)}>{t("bioart.previewImage")}</Button><Button size="sm" disabled={busy} onClick={() => void insert(asset.id)}>{t("bioart.insertImage")}</Button></div></article>)}
   </Container>;
 }

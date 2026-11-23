@@ -1,4 +1,5 @@
 type CommentedHighlight = { id: string; comment?: string; color?: string };
+import { i18next } from './i18n';
 import { defaultAnnotationColor } from '@/lib/annotation-colors';
 
 /** One note affordance per commented highlight, separate from painted text
@@ -14,7 +15,7 @@ export function highlightNoteIndicator(
   button.className = 'reader-note-marker reader-highlight-note-indicator';
   button.dataset.annotationId = annotation.id;
   button.title = comment;
-  button.setAttribute('aria-label', 'Open highlight note');
+  button.setAttribute('aria-label', i18next.t('reader:inspector.openHighlightNote'));
   button.style.background = annotation.color ?? defaultAnnotationColor();
   button.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9M12 12l8-8M16 3l5 5"/></svg>';
   // Clicking a note must not collapse/change an unrelated native text selection

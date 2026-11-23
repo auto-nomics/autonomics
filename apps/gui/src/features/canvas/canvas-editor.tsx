@@ -12,6 +12,7 @@ import { emptySvgPathState, svgPathTransition, type SvgPathEvent, type SvgPathCo
 import { embedLocalSvgFonts } from "./canvas-svg-fonts";
 import { hasProtectedCopyTarget, prepareNativePaste, repairNativeDuplicate, stampNativeIdentities } from "./canvas-native-duplicate";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Excalidraw, MainMenu, CaptureUpdateAction, exportToBlob, exportToSvg, serializeAsJSON } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from "@excalidraw/excalidraw/types";
 import "@excalidraw/excalidraw/index.css";
@@ -48,6 +49,7 @@ export function CanvasEditor(context: EditorContext) {
   return <CanvasEditorInstance key={`${context.editor.id}:${generation}`} {...context} onReload={() => setGeneration(value => value + 1)} />;
 }
 function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: () => void }) {
+  const { t } = useTranslation("canvas");
   const id = String(editor.params.canvasId);
   const projectId = typeof editor.params.projectId === "string" ? editor.params.projectId : undefined;
   const revision = useRef<number | undefined>(undefined);
@@ -67,8 +69,8 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   const previewRevision = useRef<number | undefined>(undefined);
   const lastEditAt = useRef(0);
   const syncRef = useRef<() => Promise<void>>(async () => {});
-  const latestTitle = useRef("未命名画布");
-  const [title, setTitle] = useState("未命名画布");
+  const latestTitle = useRef(t("store.untitled"));
+  const [title, setTitle] = useState(t("store.untitled"));
   const [error, setError] = useState("");
   const [imagesReady, setImagesReady] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -115,10 +117,10 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
   async function save() {
     const instance = api.current;
     if (!instance || saving.current) return false;
-    if (instance.getSceneElements().some(element => element.type === "image" && (!element.fileId || !instance.getFiles()[element.fileId]))) { setError("图片仍在载入，请稍后保存"); return false; }
+    if (instance.getSceneElements().some(element => element.type === "image" && (!element.fileId || !instance.getFiles()[element.fileId]))) { setError(t("editor.imagesLoading")); return false; }
     saving.current = true; setBusy(true); setError("");
     const scene = serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local");
-    const savedTitle = title.trim() || "未命名画布";
+    const savedTitle = title.trim() || t("store.untitled");
     dirty(true);
     try {
       revision.current = await saveCanvas({ id, projectId, revision: revision.current, title: savedTitle, scene, updatedAt: Date.now() });
@@ -128,10 +130,10 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       dirty(current !== scene);
       if (projectId && current === scene && instance.getSceneElements().some(element => !element.isDeleted)) {
         try { await capturePreview(true); }
-        catch (cause) { setError(`画布已保存，但预览更新失败：${String(cause)}`); }
+        catch (cause) { setError(t("editor.savedPreviewFailed", { cause: String(cause) })); }
       }
       return true;
-    } catch (cause) { setError(`保存失败：${String(cause)}`); return false; }
+    } catch (cause) { setError(t("editor.saveFailed", { cause: String(cause) })); return false; }
     finally { saving.current = false; setBusy(false); if (api.current) { const current = serializeScene(api.current.getSceneElements(), api.current.getAppState(), api.current.getFiles(), "local"); dirty(current !== baseline.current || latestTitle.current !== titleRef.current); } }
   }
   async function capturePreview(allowWhileSaving = false) {
@@ -140,14 +142,14 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     const elements = instance.getSceneElements(); if (!elements.length) return false;
     const appState = instance.getAppState(), files = instance.getFiles();
     const observed = serializeScene(elements, appState, files, "local");
-    if (observed !== baseline.current) throw new Error("请先保存画布再生成预览。");
+    if (observed !== baseline.current) throw new Error(t("editor.saveBeforePreview"));
     setBusy(true);
     try {
       const render = (size: number) => exportToBlob({ elements: elements.filter(element => !isLayerHidden(element)), appState: { ...appState, exportWithDarkMode: false, exportEmbedScene: false, exportBackground: true }, files, mimeType: "image/png", maxWidthOrHeight: size });
       let blob = await render(1280);
       if (blob.size > 4.4 * 1024 * 1024) blob = await render(1024);
       const dataURL = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(reader.error); reader.readAsDataURL(blob); });
-      if (version !== revision.current || serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== observed) throw new Error("生成预览时画布发生变化，请重新保存并交接。");
+      if (version !== revision.current || serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== observed) throw new Error(t("editor.previewChanged"));
       await gatewayRequest("PUT", `/visualization/projects/${encodeURIComponent(projectId)}/figures/${encodeURIComponent(id)}/revisions/${version}/preview`, { dataURL });
       previewRevision.current = version;
       return true;
@@ -167,7 +169,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       if (format === "sources") download(new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" }), `${exportTitle}.sources.json`);
       else if (format === "svg") { const svg = await exportToSvg({ elements: elements.filter(element => !isLayerHidden(element)), appState: { ...appState, exportWithDarkMode: false }, files }); await embedLocalSvgFonts(svg); embedSvgSources(svg, manifest); download(new Blob([svg.outerHTML], { type: "image/svg+xml" }), `${exportTitle}.svg`); }
       else { const png = await exportToBlob({ elements: elements.filter(element => !isLayerHidden(element)), appState: { ...appState, exportWithDarkMode: false }, files, mimeType: "image/png" }); download(await embedPngSources(png, manifest), `${exportTitle}.png`); }
-    } catch (cause) { setError(`导出失败：${String(cause)}`); }
+    } catch (cause) { setError(t("editor.exportFailed", { cause: String(cause) })); }
   }
   const hasUnsavedChanges = () => {
     const instance = api.current;
@@ -189,7 +191,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       }
       const record = await readCanvas(id, projectId);
       if (hasUnsavedChanges()) {
-        setError("Agent 已更新画布；本地有未保存的编辑，请先导出本地源文件，再重新载入最新画布。");
+        setError(t("editor.agentUpdatedLocalDirty"));
         return;
       }
       const scene = normalizeEmptyNativeFields(JSON.parse(record.scene || "{}"));
@@ -202,7 +204,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       dirty(false);
       setError("");
       if (instance.getSceneElements().length) await capturePreview();
-    } catch (cause) { setError(`画布同步失败：${String(cause)}`); }
+    } catch (cause) { setError(t("editor.syncFailed", { cause: String(cause) })); }
     finally { syncing.current = false; }
   }
   syncRef.current = syncCanvas;
@@ -220,7 +222,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     if (!await save()) return false;
     return !hasUnsavedChanges();
   }
-  return <CanvasIllustratorContext.Provider value={illustrator.path}><SvgPathChannel.Provider value={publishPath}><section aria-label="画布编辑器" className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDownCapture={event => {
+  return <CanvasIllustratorContext.Provider value={illustrator.path}><SvgPathChannel.Provider value={publishPath}><section aria-label={t("editor.sectionLabel")} className="flex min-h-0 min-w-0 flex-1 flex-col" onKeyDownCapture={event => {
     if (event.target instanceof HTMLElement && event.target.closest('[role="dialog"]')) return;
     const key=event.key.toLowerCase(), target=event.target;
     const history=(event.ctrlKey||event.metaKey)&&!event.altKey&&(key==="z"||(key==="y"&&!event.shiftKey));
@@ -235,10 +237,10 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); event.stopPropagation(); void save(); }
   }}>
-    {inspectedPath && <div aria-label="SVG 路径上下文" className="flex items-center gap-2 border-b px-2 py-1 text-xs text-muted-foreground"><span>{inspectedPath.panel_visible?"正在查看":"上次查看"}：画布 SVG 路径 {inspectedPath.part_index}</span><Button size="sm" variant="ghost" onClick={() => publishPath({kind:"clear"})}>清除路径上下文</Button></div>}
+    {inspectedPath && <div aria-label={t("editor.svgPathContextLabel")} className="flex items-center gap-2 border-b px-2 py-1 text-xs text-muted-foreground"><span>{inspectedPath.panel_visible?t("editor.viewingPath"):t("editor.lastViewedPath")}{t("editor.svgPathSuffix", { index: inspectedPath.part_index })}</span><Button size="sm" variant="ghost" onClick={() => publishPath({kind:"clear"})}>{t("editor.clearPathContext")}</Button></div>}
     {illustrator.error && <p role="alert" className="p-2 text-sm text-destructive">{illustrator.error}</p>}
-    {error && <div role="alert" className="p-2 text-sm text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => { if (!hasUnsavedChanges() || window.confirm("重新载入会丢弃本地未保存的编辑。请先导出需要保留的内容，是否继续？")) onReload(); }}>重新载入画布</Button></div>}
-    {!loaded ? <p className="p-4 text-sm">{error ? "无法加载画布" : "加载画布…"}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" style={{ containerType: "inline-size" }} ref={surface} data-canvas-surface>
+    {error && <div role="alert" className="p-2 text-sm text-destructive">{error}<Button variant="ghost" size="sm" onClick={() => { if (!hasUnsavedChanges() || window.confirm(t("editor.reloadConfirm"))) onReload(); }}>{t("editor.reload")}</Button></div>}
+    {!loaded ? <p className="p-4 text-sm">{error ? t("editor.loadFailed") : t("editor.loading")}</p> : <div className="flex min-h-0 min-w-0 flex-1"><div className="relative min-h-0 min-w-0 flex-1" style={{ containerType: "inline-size" }} ref={surface} data-canvas-surface>
       <Excalidraw initialData={initial} excalidrawAPI={instance => {
         api.current = instance;pointerSubscription.current?.();
         pointerSubscription.current=instance.onPointerDown((_tool,pointerState,event)=>{
@@ -251,7 +253,7 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
             if(pointerState.resize.handleType||state.croppingElementId||state.editingLinearElement||(!pointerState.hit.element&&!pointerState.hit.hasHitCommonBoundingBoxOfSelectedElements))return;
             if(!hasProtectedCopyTarget(instance.getSceneElements(),state.selectedElementIds,pointerState.hit.element?.id))return;
             move.preventDefault();move.stopImmediatePropagation();
-            setError("放大图和批注暂不支持 Alt 拖拽复制；可松开 Alt 移动原对象。");
+            setError(t("editor.altDragUnsupported"));
           };
           const cleanup=()=>{window.removeEventListener("pointermove",block,true);window.removeEventListener("pointerup",cleanup,true);window.removeEventListener("pointercancel",cleanup,true);window.removeEventListener("blur",cleanup);if(stopProtectedPointer.current===cleanup)stopProtectedPointer.current=undefined;};
           stopProtectedPointer.current=cleanup;
@@ -290,30 +292,30 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
         const selectedObjects = JSON.stringify(selection.objects);
         if (previous?.dirty !== nextDirty || previous?.objectCount !== count || previous?.selectedObjectIds !== selectedObjectIds || previous?.selectedObjects !== selectedObjects || previous?.selectedObjectsTotal !== selection.total || previous?.selectedObjectsTruncated !== selection.truncated || previous?.imageFileCount !== Object.keys(files).length) dirty(nextDirty, count, Object.keys(files).length, selection);
       }}>
-        <MainMenu>{projectId && <MainMenu.Item onSelect={illustrator.openConversation}>{illustrator.path ? "打开插画专家对话" : "连接插画专家"}</MainMenu.Item>}<MainMenu.Item onSelect={() => {
+        <MainMenu>{projectId && <MainMenu.Item onSelect={illustrator.openConversation}>{illustrator.path ? t("editor.openIllustrator") : t("editor.connectIllustrator")}</MainMenu.Item>}<MainMenu.Item onSelect={() => {
           if (busy) return;
-          const next = window.prompt("重命名画布", latestTitle.current);
+          const next = window.prompt(t("editor.renamePrompt"), latestTitle.current);
           if (next === null) return;
           const name = next.trim();
-          if (!name) { setError("画布名称不能为空。"); return; }
+          if (!name) { setError(t("editor.nameEmpty")); return; }
           if (name === latestTitle.current) return;
           latestTitle.current = name; setTitle(name); dirty(true); setError("");
-        }}>重命名</MainMenu.Item><MainMenu.Separator /><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
+        }}>{t("editor.rename")}</MainMenu.Item><MainMenu.Separator /><MainMenu.DefaultItems.LoadScene /><MainMenu.DefaultItems.Export /><MainMenu.DefaultItems.SaveAsImage /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /></MainMenu>
       <CanvasMaterialBrowser getApi={() => api.current} />
       <CanvasLayers getApi={() => api.current} />
       <CanvasBottomActions surface={surface}>
-        <div data-canvas-action-dock role="toolbar" aria-label="画布快捷操作" className="relative flex max-w-full flex-wrap items-center justify-center gap-0.5 px-1" onPointerDown={event => event.stopPropagation()}>
-    <div data-canvas-toolbar role="group" aria-label="画布工具栏" className="flex min-w-0 items-center gap-1">
-      <Button size="sm" variant="ghost" disabled={!loaded || busy || !imagesReady} onClick={() => void save()}><Save aria-hidden="true" />{busy ? "保存中…" : !imagesReady ? "图片载入中…" : "保存画布"}</Button>
+        <div data-canvas-action-dock role="toolbar" aria-label={t("editor.quickActionsLabel")} className="relative flex max-w-full flex-wrap items-center justify-center gap-0.5 px-1" onPointerDown={event => event.stopPropagation()}>
+    <div data-canvas-toolbar role="group" aria-label={t("editor.toolbarLabel")} className="flex min-w-0 items-center gap-1">
+      <Button size="sm" variant="ghost" disabled={!loaded || busy || !imagesReady} onClick={() => void save()}><Save aria-hidden="true" />{busy ? t("editor.saving") : !imagesReady ? t("editor.imagesLoadingShort") : t("editor.save")}</Button>
     </div>
-          <Button size="sm" variant="ghost" onClick={() => api.current?.toggleSidebar({ name: "layers" })}><Layers />图层</Button>
-          <CanvasActionMenu label="审阅批注" icon={MessageSquare}>
-            <CanvasActionGroup title="审阅与协作">
+          <Button size="sm" variant="ghost" onClick={() => api.current?.toggleSidebar({ name: "layers" })}><Layers />{t("layers.title")}</Button>
+          <CanvasActionMenu label={t("editor.menuReview")} icon={MessageSquare}>
+            <CanvasActionGroup title={t("editor.groupReview")}>
       {projectId && <CanvasMarkups agentPath={illustrator.path} projectId={projectId} canvasId={id} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} capturePreview={capturePreview} isDirty={hasUnsavedChanges} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
-          <CanvasActionMenu label="对象编辑" icon={Shapes}>
-            <CanvasActionGroup title="对象编辑">
+          <CanvasActionMenu label={t("editor.menuObjectEdit")} icon={Shapes}>
+            <CanvasActionGroup title={t("editor.menuObjectEdit")}>
       <CanvasCodeDrawing getApi={() => api.current} disabled={!loaded || busy} />
       {projectId && <CanvasPalette capturePreview={capturePreview} projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
       {projectId && <CanvasInset projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
@@ -323,26 +325,26 @@ function CanvasEditorInstance({ editor, onReload }: EditorContext & { onReload: 
       {projectId && <CanvasTextEdit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
-          <CanvasActionMenu label="布局连线" icon={LayoutGrid}>
-            <CanvasActionGroup title="分面与连线">
+          <CanvasActionMenu label={t("editor.menuLayout")} icon={LayoutGrid}>
+            <CanvasActionGroup title={t("editor.groupLayout")}>
       {projectId && <CanvasRouting projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
       {projectId && <CanvasFrameFit projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
       {projectId && <CanvasFrameSwap projectId={projectId} canvasId={id} disabled={!loaded || busy} getApi={() => api.current} getRevision={() => revision.current} ensureSaved={ensureSaved} isDirty={hasUnsavedChanges} onApplied={() => void syncCanvas()} />}
             </CanvasActionGroup>
           </CanvasActionMenu>
-          <CanvasActionMenu label="版本" icon={History}>
-            <CanvasActionGroup title="版本操作">
+          <CanvasActionMenu label={t("editor.menuVersion")} icon={History}>
+            <CanvasActionGroup title={t("editor.groupVersion")}>
       {projectId && <CanvasHistory projectId={projectId} canvasId={id} getRevision={() => revision.current} isDirty={hasUnsavedChanges} onRestored={onReload} />}
       {projectId && <Button size="sm" variant="outline" disabled={!loaded || busy} onClick={() => {
         const instance = api.current;
         const changed = instance && (serializeScene(instance.getSceneElements(), instance.getAppState(), instance.getFiles(), "local") !== baseline.current || latestTitle.current !== titleRef.current);
-        if (!changed || window.confirm("重新加载将丢弃未保存修改，继续？")) onReload();
-      }}>重新加载服务端版本</Button>}
+        if (!changed || window.confirm(t("editor.reloadServerConfirm"))) onReload();
+      }}>{t("editor.reloadServer")}</Button>}
             </CanvasActionGroup>
           </CanvasActionMenu>
-          <CanvasActionMenu label="导出" icon={Download}><CanvasActionGroup title="导出图稿与来源">
-      <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>导出素材来源</Button>
-      {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>导出 {format === "excalidraw" ? "源文件" : format.toUpperCase()}</Button>)}
+          <CanvasActionMenu label={t("editor.menuExport")} icon={Download}><CanvasActionGroup title={t("editor.groupExport")}>
+      <Button size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile("sources")}>{t("editor.exportSources")}</Button>
+      {(["svg", "png", "excalidraw"] as const).map(format => <Button key={format} size="sm" variant="outline" disabled={!loaded || !imagesReady} onClick={() => void exportFile(format)}>{t("editor.exportFormat", { format: format === "excalidraw" ? t("editor.exportSourceFile") : format.toUpperCase() })}</Button>)}
           </CanvasActionGroup></CanvasActionMenu>
         </div>
       </CanvasBottomActions>

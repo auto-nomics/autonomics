@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Copy, Download, Upload } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest, saveTextFile } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { SearchDialog } from "./search-dialog";
@@ -9,6 +10,7 @@ type PreviewRow = { index: number; article: BibArticle; warnings: string[]; dupl
 export function LibraryTransferDialog({ mode, articleIds = [], collectionId, onClose, onImported }: {
   mode: "import" | "export"; articleIds?: string[]; collectionId?: string | null; onClose: () => void; onImported: () => void;
 }) {
+  const { t } = useTranslation("bibliography");
   const [format, setFormat] = useState(mode === "import" ? "bibtex" : "apa");
   const [contents, setContents] = useState("");
   const [rows, setRows] = useState<PreviewRow[]>([]);
@@ -45,56 +47,56 @@ export function LibraryTransferDialog({ mode, articleIds = [], collectionId, onC
     setBusy(true); setError("");
     try {
       const response = await gatewayRequest("POST", "/bib/import/commit", { format, contents, selected_indices: selected, collection_id: collectionId || null });
-      setStatus(`Imported ${response.imported_ids.length}; skipped ${response.skipped_ids.length} existing records.`);
+      setStatus(t("libraryTransfer.importedStatus", { imported: response.imported_ids.length, skipped: response.skipped_ids.length }));
       setRows([]); setSelected([]); onImported();
     } catch (failure) { setError(String(failure)); } finally { setBusy(false); }
   };
   const copy = async (text: string) => {
-    try { await navigator.clipboard.writeText(text); setStatus("Copied to clipboard."); } catch { setError("Clipboard unavailable. Select and copy the preview text, or download it."); }
+    try { await navigator.clipboard.writeText(text); setStatus(t("libraryTransfer.copied")); } catch { setError(t("libraryTransfer.clipboardUnavailable")); }
   };
-  return <SearchDialog title={mode === "import" ? "Import bibliography file" : "Export and cite"} onClose={() => { if (!busy) onClose(); }} footer={
+  return <SearchDialog title={mode === "import" ? t("libraryTransfer.importTitle") : t("libraryTransfer.exportTitle")} onClose={() => { if (!busy) onClose(); }} footer={
     <div className="flex flex-wrap justify-end gap-2">
       {mode === "import" ? <>
-        <Button variant="outline" disabled={busy || !contents.trim()} onClick={() => void preview()}>Preview import</Button>
-        <Button disabled={busy || !selected.length} onClick={() => void commit()}><Upload />Import {selected.length} selected</Button>
+        <Button variant="outline" disabled={busy || !contents.trim()} onClick={() => void preview()}>{t("libraryTransfer.previewImport")}</Button>
+        <Button disabled={busy || !selected.length} onClick={() => void commit()}><Upload />{t("libraryTransfer.importSelected", { count: selected.length })}</Button>
       </> : <>
-        {citation && <Button variant="outline" disabled={busy} onClick={() => void copy(citation)}><Copy />Copy citation</Button>}
-        <Button variant="outline" disabled={busy || !output} onClick={() => void copy(output)}><Copy />Copy bibliography</Button>
-        <Button disabled={busy || !output} onClick={() => void saveTextFile(`references.${({ bibtex: "bib", ris: "ris", csl_json: "json", markdown: "md" } as Record<string,string>)[format] || "txt"}`, output).catch(failure => setError(String(failure)))}><Download />Download</Button>
+        {citation && <Button variant="outline" disabled={busy} onClick={() => void copy(citation)}><Copy />{t("libraryTransfer.copyCitation")}</Button>}
+        <Button variant="outline" disabled={busy || !output} onClick={() => void copy(output)}><Copy />{t("libraryTransfer.copyBibliography")}</Button>
+        <Button disabled={busy || !output} onClick={() => void saveTextFile(`references.${({ bibtex: "bib", ris: "ris", csl_json: "json", markdown: "md" } as Record<string,string>)[format] || "txt"}`, output).catch(failure => setError(String(failure)))}><Download />{t("libraryTransfer.download")}</Button>
       </>}
     </div>
   }>
     <div className="space-y-3">
-      <label className="flex items-center gap-2">Format
-        <select aria-label="Bibliography format" disabled={busy} className="rounded border bg-background p-2" value={format} onChange={event => { setFormat(event.target.value); invalidate(); }}>
-          {mode === "export" && <><option value="apa">APA 7 (CSL)</option><option value="vancouver">NLM / Vancouver (CSL)</option><option value="gb7714">GB/T 7714-2015 顺序编码 (CSL)</option></>}
+      <label className="flex items-center gap-2">{t("libraryTransfer.format")}
+        <select aria-label={t("libraryTransfer.formatAria")} disabled={busy} className="rounded border bg-background p-2" value={format} onChange={event => { setFormat(event.target.value); invalidate(); }}>
+          {mode === "export" && <><option value="apa">{t("libraryTransfer.formatApa")}</option><option value="vancouver">{t("libraryTransfer.formatVancouver")}</option><option value="gb7714">{t("libraryTransfer.formatGb7714")}</option></>}
           <option value="bibtex">BibTeX</option><option value="ris">RIS</option>
-          {mode === "import" ? <option value="zotero_json">Zotero JSON metadata</option> : <><option value="csl_json">CSL-JSON</option><option value="markdown">Markdown</option></>}
+          {mode === "import" ? <option value="zotero_json">{t("libraryTransfer.formatZoteroJson")}</option> : <><option value="csl_json">CSL-JSON</option><option value="markdown">Markdown</option></>}
         </select>
       </label>
       {error && <p role="alert" className="text-destructive">{error}</p>}
       {status && <p role="status">{status}</p>}
-      {busy && <p role="status">Working…</p>}
+      {busy && <p role="status">{t("libraryTransfer.working")}</p>}
       {mode === "import" ? <>
-        <p className="text-xs text-muted-foreground">Preview before importing. Existing records are skipped. Up to 2,000 records / 8 MiB per file.</p>
-        {format === "zotero_json" && <p className="text-xs">Zotero JSON imports metadata only. Files, notes, collection hierarchy and document citation links are not transferred.</p>}
-        <input aria-label="Bibliography file" type="file" accept=".bib,.ris,.json,.txt" disabled={busy} onChange={event => {
+        <p className="text-xs text-muted-foreground">{t("libraryTransfer.importHint")}</p>
+        {format === "zotero_json" && <p className="text-xs">{t("libraryTransfer.zoteroJsonHint")}</p>}
+        <input aria-label={t("libraryTransfer.fileAria")} type="file" accept=".bib,.ris,.json,.txt" disabled={busy} onChange={event => {
           const file = event.target.files?.[0]; if (!file) return;
-          invalidate(); if (file.size > 8 * 1024 * 1024) { setError("File exceeds 8 MiB."); return; }
+          invalidate(); if (file.size > 8 * 1024 * 1024) { setError(t("libraryTransfer.fileTooLarge")); return; }
           void file.text().then(setContents).catch(failure => setError(String(failure)));
         }} />
-        <textarea aria-label="Import contents" className="min-h-36 w-full rounded border bg-background p-2 font-mono text-xs" disabled={busy} value={contents} onChange={event => { setContents(event.target.value); invalidate(); }} placeholder="Paste BibTeX, RIS, or Zotero JSON here" />
+        <textarea aria-label={t("libraryTransfer.contentsAria")} className="min-h-36 w-full rounded border bg-background p-2 font-mono text-xs" disabled={busy} value={contents} onChange={event => { setContents(event.target.value); invalidate(); }} placeholder={t("libraryTransfer.contentsPlaceholder")} />
         {rows.map(row => <label key={row.index} className="flex gap-2 rounded border p-2">
-          <input type="checkbox" aria-label={`Import ${row.article.title}`} disabled={busy || Boolean(row.duplicate_id) || row.duplicate_in_file !== null} checked={selected.includes(row.index)} onChange={event => setSelected(current => event.target.checked ? [...current, row.index] : current.filter(index => index !== row.index))} />
+          <input type="checkbox" aria-label={t("libraryTransfer.importAria", { title: row.article.title })} disabled={busy || Boolean(row.duplicate_id) || row.duplicate_in_file !== null} checked={selected.includes(row.index)} onChange={event => setSelected(current => event.target.checked ? [...current, row.index] : current.filter(index => index !== row.index))} />
           <span><span className="block">{row.article.title}</span>
-            {(row.duplicate_id || row.duplicate_in_file !== null) && <span className="block text-xs">Duplicate — skipped</span>}
+            {(row.duplicate_id || row.duplicate_in_file !== null) && <span className="block text-xs">{t("libraryTransfer.duplicateSkipped")}</span>}
             {row.warnings.map((warning, index) => <span key={index} className="block text-xs text-muted-foreground">{warning}</span>)}
           </span>
         </label>)}
       </> : <>
-        <p className="text-xs text-muted-foreground">{articleIds.length} selected records. APA, NLM and GB/T 7714 formatting uses bundled CSL styles locally.</p>
-        {citation && <p aria-label="Citation preview" className="rounded border p-2">{citation}</p>}
-        <textarea aria-label="Bibliography preview" readOnly value={output} className="min-h-64 w-full rounded border bg-background p-2 text-sm" />
+        <p className="text-xs text-muted-foreground">{t("libraryTransfer.exportHint", { count: articleIds.length })}</p>
+        {citation && <p aria-label={t("libraryTransfer.citationPreviewAria")} className="rounded border p-2">{citation}</p>}
+        <textarea aria-label={t("libraryTransfer.bibliographyPreviewAria")} readOnly value={output} className="min-h-64 w-full rounded border bg-background p-2 text-sm" />
       </>}
     </div>
   </SearchDialog>;

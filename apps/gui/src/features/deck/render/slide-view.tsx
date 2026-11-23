@@ -7,7 +7,9 @@
  * sibling elements the grid positions.
  */
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { AssetMeta, OutlineEntry, SlideSpec } from "../deck-api";
+import "../i18n";
 import { figureImageSrc, useSlideContent, renderMermaidBlocks } from "./markdown";
 import { applyClickVisibility, CLICK_HIDDEN } from "./deck-model";
 import { scopeSlideCss } from "./scoped-css";
@@ -41,6 +43,7 @@ export function SlideView({
   outline,
   onNavigate,
 }: SlideViewProps): React.ReactNode {
+  const { t } = useTranslation("deck");
   // Comark renders async; the hook keeps the last frame between revisions
   // and the DOM passes below (mermaid, click visibility) key on `html`.
   const html = useSlideContent(slide.content, { deckId, assets });
@@ -104,7 +107,7 @@ export function SlideView({
       <SectionNav outline={outline} slide={slide.index + 1} onNavigate={onNavigate} />
       {figureSrc && (layout === "figure-left" || layout === "figure-right" || layout === "image-left" || layout === "image-right" || layout === "figure-full") ? (
         <figure className="deck-figure">
-          <img src={figureSrc} alt={slide.title ?? "figure"} className="deck-figure-img" />
+          <img src={figureSrc} alt={slide.title ?? t("slideView.figureAlt")} className="deck-figure-img" />
           {slide.frontmatter.tableCaption ? (
             <figcaption className="deck-caption">{slide.frontmatter.tableCaption}</figcaption>
           ) : null}

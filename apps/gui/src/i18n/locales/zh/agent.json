@@ -1,0 +1,212 @@
+{
+  "compaction": {
+    "ariaLabel": "上下文压缩",
+    "rebuilding": "正在重建上下文",
+    "compressing": "正在压缩上下文",
+    "failed": "压缩失败",
+    "done": "压缩完成",
+    "noop": "无需压缩",
+    "plan": "总结 {{head}} 条消息（约 {{headTokens}} tokens），保留最近 {{tail}} 条",
+    "stats": "{{before}} → {{after}} 条消息 · 释放约 {{freed}} tokens · {{seconds}} 秒"
+  },
+  "thinking": {
+    "streaming": "思考中…",
+    "done": "思考过程"
+  },
+  "message": {
+    "attachedRefs": "随消息发送的引用（{{count}}）",
+    "generating": "生成中…",
+    "assistant": "Assistant",
+    "copyReply": "复制助手回复",
+    "result": "结果",
+    "failed": "失败",
+    "agentLabel": "Agent",
+    "agentFromLabel": "Agent · {{from}}",
+    "systemLabel": "系统"
+  },
+  "transcript": {
+    "loadEarlier": "加载更早的消息（{{count}}）",
+    "empty": "此会话还没有消息",
+    "scrollToBottom": "滚动到底部",
+    "copiedCode": "已复制！",
+    "copyCode": "复制"
+  },
+  "header": {
+    "noAgentOpen": "未打开 agent",
+    "noModel": "无模型"
+  },
+  "picker": {
+    "searchAgents": "搜索 agent",
+    "closeSearch": "关闭 agent 搜索",
+    "openSearch": "搜索 agent",
+    "placeholder": "输入以切换 / 搜索 agent，Esc 返回",
+    "empty": "没有匹配的 agent",
+    "newGroup": "新建",
+    "newAgent": "新建 agent…",
+    "openGroup": "打开的 agent",
+    "runningGroup": "运行中（未打开）",
+    "storedGroup": "已存储的 agent（选择即恢复）"
+  },
+  "queued": {
+    "ariaLabel": "待处理消息",
+    "title": "待处理消息",
+    "messageN": "消息 {{n}}",
+    "sending": "发送中…",
+    "queuedWaiting": "已排队 · 等待 Agent 接收",
+    "attachedRefs": "附带 {{count}} 条引用"
+  },
+  "workspace": {
+    "selectAgent": "从侧栏选择一个 agent，或点击 + 新建"
+  },
+  "effort": {
+    "label": "推理",
+    "none": "关闭",
+    "minimal": "极简",
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+    "xhigh": "超高",
+    "max": "最大",
+    "ultra": "极致"
+  },
+  "modelPicker": {
+    "placeholder": "搜索模型，Enter 切换，Esc 关闭",
+    "loadFailed": "模型目录加载失败: {{error}}",
+    "empty": "模型目录为空，请先在「设置 → 模型」中添加"
+  },
+  "composer": {
+    "placeholder": "输入消息…",
+    "cancel": "终止",
+    "cancelTitle": "终止当前回复（状态：{{status}}）",
+    "send": "发送",
+    "sendTitle": "发送（Ctrl+Enter）",
+    "switchModel": "切换模型",
+    "currentModelTitle": "当前模型 {{spec}}，点击切换",
+    "chooseModel": "选择模型",
+    "effortLabel": "推理力度",
+    "effortTitle": "推理力度：{{effort}}，点击切换",
+    "noThinking": "当前模型不支持思考",
+    "compact": "压缩对话",
+    "compactTitle": "压缩对话（Compact）",
+    "viewDag": "查看 agent DAG",
+    "turnRunningTitle": "回合进行中：{{status}}",
+    "runningDefault": "运行中",
+    "terminated": "已终止",
+    "terminatedTitle": "上一回合已被终止",
+    "hint": "Ctrl+Enter 发送 · Ctrl+R 搜索 prompt 历史"
+  },
+  "image": {
+    "reading": "正在读取图片…",
+    "unsupported": "支持 PNG、JPEG、WebP 和 GIF 图片",
+    "tooLarge": "图片过大，请缩小图片后重试（总计约 1 MB）",
+    "readFailed": "图片读取失败，请重试",
+    "pastedTitle": "粘贴的图片",
+    "scope": "本次消息图片",
+    "totalTooLarge": "图片附件总大小过大，请缩小图片后重试（总计约 1 MB）"
+  },
+  "copy": {
+    "copied": "已复制消息",
+    "failed": "复制失败：{{reason}}"
+  },
+  "spawn": {
+    "title": "新建 agent",
+    "description": "在现有路径下派生一个常驻 agent。",
+    "namePlaceholder": "agent 名称",
+    "profileLabel": "Agent profile",
+    "submit": "派生"
+  },
+  "dialogs": {
+    "loadFailed": "加载已持久化的 agent 失败：{{reason}}",
+    "noTextMessages": "没有可复制的文本消息",
+    "cmdResume": "恢复 agent",
+    "cmdHistory": "搜索 prompt 历史",
+    "cmdCopy": "复制消息",
+    "resumeTitle": "恢复已持久化的 agent",
+    "resumeDescription": "还原一个已存储的 agent。已存在的运行实例会被聚焦。",
+    "resumePlaceholder": "按路径或 profile 搜索",
+    "focus": "聚焦",
+    "resuming": "恢复中…",
+    "resume": "恢复",
+    "rename": "重命名",
+    "delete": "删除",
+    "save": "保存",
+    "confirmPlaceholder": "输入 \"yes\"",
+    "deleteForever": "永久删除",
+    "defaultModel": "默认模型",
+    "copyTitle": "复制消息",
+    "copyDescription": "点击一条会话消息即可复制。",
+    "filterMessages": "过滤消息",
+    "roleUser": "你",
+    "roleAssistant": "AI",
+    "noMatchingMessages": "没有匹配的消息",
+    "historyTitle": "Prompt 历史",
+    "historyDescription": "选择一条历史 prompt，恢复到 composer 中。",
+    "filterPrompts": "过滤 prompt",
+    "noMatchingPrompts": "没有匹配的 prompt"
+  },
+  "inspector": {
+    "overview": "概览",
+    "noAgent": "无 agent",
+    "model": "模型",
+    "status": "状态",
+    "tokens": "Token 用量",
+    "dagFlow": "DAG / Flow",
+    "nodes": "节点",
+    "flow": "流程",
+    "noAgentSelected": "未选择 agent",
+    "browser": "浏览器",
+    "plan": "计划",
+    "planCompletionAria": "计划完成度",
+    "planCompleted": "已完成 {{done}} / {{total}}",
+    "planStepsAria": "计划步骤",
+    "stepN": "步骤 {{n}}",
+    "stepCompleted": "已完成",
+    "stepInProgress": "进行中",
+    "stepCancelled": "已取消",
+    "stepPending": "待处理",
+    "noActivePlan": "暂无活动计划",
+    "view": "显示",
+    "collapseThinking": "折叠思考",
+    "collapseToolCalls": "折叠工具调用",
+    "collapseToolResults": "折叠工具结果",
+    "actions": "操作",
+    "copy": "复制",
+    "history": "历史",
+    "refresh": "刷新"
+  },
+  "browser": {
+    "noAgentSelected": "未选择 agent",
+    "unavailable": "浏览器监控不可用",
+    "noSession": "暂无活动的浏览器会话——仅限浏览器 agent",
+    "screenshotAlt": "当前浏览器标签页截图",
+    "noCapture": "暂无截图",
+    "openTabsAria": "打开的标签页",
+    "tabN": "标签页 {{n}}"
+  },
+  "usage": {
+    "input": "输入 {{value}}",
+    "output": "输出 {{value}}",
+    "cache": "缓存 {{value}}",
+    "ariaLabel": "Token 用量：{{detail}}"
+  },
+  "json": {
+    "items": "{{count}} 项",
+    "fields": "{{count}} 个字段",
+    "collectionCount": "{{count}} 个 {{collection}}"
+  },
+  "generative": {
+    "renderFailed": "交互界面渲染失败。",
+    "showRaw": "查看原始内容",
+    "loading": "正在加载交互界面…"
+  },
+  "drawing": {
+    "iframeTitle": "交互式绘图",
+    "sectionAria": "交互式解释",
+    "drawing": "正在绘制交互图…",
+    "supplementing": "正在补充图形与交互…",
+    "loadTimeout": "绘图加载超时，请重试。",
+    "runFailed": "绘图未能完整运行：{{error}}",
+    "preparing": "正在准备交互图…",
+    "parseFailed": "无法解析绘图回复：{{error}}"
+  }
+}

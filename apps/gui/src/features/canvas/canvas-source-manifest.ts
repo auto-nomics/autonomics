@@ -1,4 +1,5 @@
 /** Source inventory for the exact exported scene; never includes image bytes or user notes. */
+import i18n from "@/i18n";
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown): ObjectValue => value && typeof value === "object" && !Array.isArray(value) ? value as ObjectValue : {};
 const string = (value: unknown): string | null => typeof value === "string" && value.trim() ? value : null;
@@ -107,19 +108,19 @@ function crc32(bytes: Uint8Array) {
 }
 export async function embedPngSources(blob: Blob, manifest: SourceManifest) {
   const bytes = new Uint8Array(await blob.arrayBuffer());
-  if (bytes.length < 20 || [137, 80, 78, 71, 13, 10, 26, 10].some((v, i) => bytes[i] !== v)) throw new Error("无效的 PNG 导出");
+  if (bytes.length < 20 || [137, 80, 78, 71, 13, 10, 26, 10].some((v, i) => bytes[i] !== v)) throw new Error(i18n.t("canvas:sourceManifest.invalidPng"));
   const data = new TextEncoder().encode(`${keyword}\0\0\0\0\0${JSON.stringify(manifest)}`), type = new TextEncoder().encode("iTXt");
   const chunk = new Uint8Array(data.length + 12), view = new DataView(chunk.buffer); view.setUint32(0, data.length); chunk.set(type, 4); chunk.set(data, 8); view.setUint32(data.length + 8, crc32(chunk.subarray(4, data.length + 8)));
   const parts: Uint8Array[] = [bytes.slice(0, 8)]; let offset = 8, ended = false;
   while (offset + 12 <= bytes.length) {
     const length = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0), end = offset + 12 + length;
-    if (end > bytes.length) throw new Error("无效的 PNG 数据块");
+    if (end > bytes.length) throw new Error(i18n.t("canvas:sourceManifest.invalidChunk"));
     const name = new TextDecoder().decode(bytes.subarray(offset + 4, offset + 8));
     if (name === "IEND") { parts.push(chunk, bytes.slice(offset, end)); ended = true; break; }
     const old = name === "iTXt" && length >= keyword.length + 1 && new TextDecoder().decode(bytes.subarray(offset + 8, offset + 8 + keyword.length + 1)) === `${keyword}\0`;
     if (!old) parts.push(bytes.slice(offset, end)); offset = end;
   }
-  if (!ended) throw new Error("PNG 缺少结束数据块");
+  if (!ended) throw new Error(i18n.t("canvas:sourceManifest.missingIend"));
   return new Blob(parts.map(part => Uint8Array.from(part).buffer), { type: "image/png" });
 }
 

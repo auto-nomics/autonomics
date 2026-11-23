@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,6 +8,7 @@ import { formatExpression, type SavedSearch, type SearchRequest } from "./bib-se
 
 type Props = { disabled?: boolean; scopeLabel: string; request: SearchRequest; activeId: string | null; onSelect: (rule: SavedSearch) => void; onSaved: (rule: SavedSearch) => void; onDeleted: (id: string) => void };
 export function SavedSearches({ disabled, scopeLabel, request, activeId, onSelect, onSaved, onDeleted }: Props) {
+  const { t } = useTranslation("bibliography");
   const [rules, setRules] = useState<SavedSearch[]>([]);
   const [dialog, setDialog] = useState<{ kind: "create" | "update" | "delete"; rule?: SavedSearch } | null>(null);
   const [name, setName] = useState("");
@@ -35,26 +37,26 @@ export function SavedSearches({ disabled, scopeLabel, request, activeId, onSelec
     } catch (failure) { setError(String(failure)); await load(); } finally { setBusy(false); }
   };
   const open = (kind: "create" | "update" | "delete", rule?: SavedSearch) => { setError(""); setName(rule?.name ?? ""); setDialog({ kind, rule }); };
-  return <section aria-label="Saved searches" className="mt-3 border-t px-1 pt-2 text-xs">
-    <div className="mb-1 flex items-center justify-between"><span className="font-medium text-muted-foreground">Saved searches</span><Button size="icon-xs" variant="ghost" aria-label="Save current search" title="Save current search" disabled={disabled} onClick={() => open("create")}>+</Button></div>
-    {!rules.length && <p className="px-1 py-2 text-muted-foreground">Save a query to follow matching articles.</p>}
+  return <section aria-label={t("savedSearches.sectionAria")} className="mt-3 border-t px-1 pt-2 text-xs">
+    <div className="mb-1 flex items-center justify-between"><span className="font-medium text-muted-foreground">{t("savedSearches.heading")}</span><Button size="icon-xs" variant="ghost" aria-label={t("savedSearches.saveCurrent")} title={t("savedSearches.saveCurrent")} disabled={disabled} onClick={() => open("create")}>+</Button></div>
+    {!rules.length && <p className="px-1 py-2 text-muted-foreground">{t("savedSearches.empty")}</p>}
     {rules.map(rule => <div key={rule.id} className={`flex items-center gap-1 rounded ${rule.id === activeId ? "bg-accent" : ""}`}>
       <button className="min-w-0 flex-1 truncate p-1.5 text-left hover:underline" aria-pressed={rule.id === activeId} disabled={disabled} title={rule.name} onClick={() => onSelect(rule)}>⌕ {rule.name}</button>
-      <Button size="icon-xs" variant="ghost" aria-label={`Delete saved search ${rule.name}`} onClick={() => open("delete", rule)}>×</Button>
+      <Button size="icon-xs" variant="ghost" aria-label={t("savedSearches.deleteAria", { name: rule.name })} onClick={() => open("delete", rule)}>×</Button>
     </div>)}
-    {active && <Button size="xs" variant="ghost" disabled={disabled} onClick={() => open("update", active)}>Update saved search</Button>}
-    {error && !dialog && <p role="alert" className="p-1 text-destructive">{error}<button className="ml-1 underline" onClick={() => void load()}>Refresh saved searches</button></p>}
-    {dialog && <SearchDialog title={dialog.kind === "delete" ? "Delete saved search" : dialog.kind === "update" ? "Update saved search" : "Save search"} onClose={() => setDialog(null)}>
-      {dialog.kind === "delete" ? <p>Delete “{dialog.rule?.name}”? The articles remain in your library.</p> : <>
-        <label className="block text-xs">Search name<Input aria-label="Search name" autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
-        <p className="mt-2 text-xs text-muted-foreground">This rule follows the current query, scope and filters. New matching articles appear when the search runs.</p>
-        {request.mode === "hybrid" && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs"><strong>Topic:</strong> {request.semantic_query}</p>}
-        <pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{request.mode === "hybrid" ? "Required conditions: " : ""}{request.expression ? formatExpression(request.expression) : request.query || "All articles"}</pre>
-        {request.mode === "hybrid" && <p className="mt-2 text-xs text-muted-foreground">This rule retains the topic and required conditions. Running it needs an enabled topic index; results are a retrieved candidate pool.</p>}
-        <p className="mt-2 text-xs">{scopeLabel} · {request.sort ?? "relevance"} sorting · {Object.values(request.filters ?? {}).filter(value => Array.isArray(value) ? value.length : value != null).length} active filter groups</p>
+    {active && <Button size="xs" variant="ghost" disabled={disabled} onClick={() => open("update", active)}>{t("savedSearches.update")}</Button>}
+    {error && !dialog && <p role="alert" className="p-1 text-destructive">{error}<button className="ml-1 underline" onClick={() => void load()}>{t("savedSearches.refresh")}</button></p>}
+    {dialog && <SearchDialog title={dialog.kind === "delete" ? t("savedSearches.deleteTitle") : dialog.kind === "update" ? t("savedSearches.updateTitle") : t("savedSearches.saveTitle")} onClose={() => setDialog(null)}>
+      {dialog.kind === "delete" ? <p>{t("savedSearches.deleteConfirm", { name: dialog.rule?.name ?? "" })}</p> : <>
+        <label className="block text-xs">{t("savedSearches.nameLabel")}<Input aria-label={t("savedSearches.nameLabel")} autoFocus maxLength={120} value={name} onChange={event => setName(event.target.value)} /></label>
+        <p className="mt-2 text-xs text-muted-foreground">{t("savedSearches.ruleHint")}</p>
+        {request.mode === "hybrid" && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs"><strong>{t("savedSearches.topic")}</strong> {request.semantic_query}</p>}
+        <pre className="mt-2 whitespace-pre-wrap break-words rounded bg-muted p-2 text-xs">{request.mode === "hybrid" ? t("savedSearches.requiredConditions") : ""}{request.expression ? formatExpression(request.expression) : request.query || t("savedSearches.allArticles")}</pre>
+        {request.mode === "hybrid" && <p className="mt-2 text-xs text-muted-foreground">{t("savedSearches.hybridHint")}</p>}
+        <p className="mt-2 text-xs">{scopeLabel} · {t("savedSearches.sorting", { sort: request.sort ?? "relevance" })} · {t("savedSearches.filterGroups", { count: Object.values(request.filters ?? {}).filter(value => Array.isArray(value) ? value.length : value != null).length })}</p>
       </>}
       {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
-      <div className="mt-3 flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={() => setDialog(null)}>Cancel</Button><Button size="sm" disabled={busy || (dialog.kind !== "delete" && !name.trim())} onClick={() => void submit()}>{dialog.kind === "delete" ? "Delete rule" : "Save rule"}</Button></div>
+      <div className="mt-3 flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={() => setDialog(null)}>{t("savedSearches.cancel")}</Button><Button size="sm" disabled={busy || (dialog.kind !== "delete" && !name.trim())} onClick={() => void submit()}>{dialog.kind === "delete" ? t("savedSearches.deleteRule") : t("savedSearches.saveRule")}</Button></div>
     </SearchDialog>}
   </section>;
 }

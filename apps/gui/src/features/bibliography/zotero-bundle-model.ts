@@ -1,3 +1,5 @@
+import i18next from "i18next";
+
 export type ZoteroObject = Record<string, unknown>;
 export type ZoteroChild = { key: string; data: ZoteroObject };
 export type ZoteroRecord = { index: number; key: string; aliases: string[]; notes: ZoteroChild[]; attachments: ZoteroChild[]; collections: string[] };
@@ -24,13 +26,13 @@ export function matchBundleFile<T extends { name: string; webkitRelativePath?: s
     const actual = safeBundlePath(file.webkitRelativePath || file.name);
     return actual === expected || (file.webkitRelativePath && actual?.split("/").slice(1).join("/") === expected);
   });
-  if (matches.length > 1) throw new Error(`Ambiguous attachment path: ${path}`);
+  if (matches.length > 1) throw new Error(i18next.t("bibliography:zoteroModel.ambiguousPath", { path }));
   return matches[0] || null;
 }
 export function parseZoteroBundle(contents: string): ZoteroBundle {
   const raw: unknown = JSON.parse(contents), root = object(raw);
   const items = Array.isArray(raw) ? raw : array(root.items);
-  if (!items.length) throw new Error("Expected Zotero JSON items.");
+  if (!items.length) throw new Error(i18next.t("bibliography:zoteroModel.expectedItems"));
   const warnings: string[] = [], records: ZoteroRecord[] = [], byAlias = new Map<string, ZoteroRecord>();
   for (const value of items) {
     const item = data(value);
@@ -44,25 +46,25 @@ export function parseZoteroBundle(contents: string): ZoteroBundle {
     };
     records.push(record);
     for (const alias of names) {
-      if (byAlias.has(alias)) throw new Error(`Duplicate source item identity: ${alias}`);
+      if (byAlias.has(alias)) throw new Error(i18next.t("bibliography:zoteroModel.duplicateItem", { alias }));
       byAlias.set(alias, record);
     }
   }
   for (const value of items) {
     const item = data(value), kind = text(item.itemType);
     if (!["note", "attachment", "annotation"].includes(kind)) continue;
-    if (kind === "annotation") { warnings.push("PDF annotations are not migrated; standalone notes are imported as plain text."); continue; }
+    if (kind === "annotation") { warnings.push(i18next.t("bibliography:zoteroModel.annotationWarning")); continue; }
     const parent = byAlias.get(text(item.parentItem || item.parentKey));
-    if (!parent) { warnings.push(`Unattached ${kind} has no matching parent and will be skipped.`); continue; }
+    if (!parent) { warnings.push(i18next.t("bibliography:zoteroModel.unattachedWarning", { kind })); continue; }
     parent[kind === "note" ? "notes" : "attachments"].push({ key: aliases(value)[0] || `${parent.key}:${kind}:${JSON.stringify(item)}`, data: item });
   }
   const collections: ZoteroCollection[] = [];
   const addCollection = (rawValue: unknown, fallback: string, parent: string | null, depth = 0) => {
-    if (depth > 64 || collections.length >= 2000) throw new Error("Collection hierarchy exceeds migration limits.");
+    if (depth > 64 || collections.length >= 2000) throw new Error(i18next.t("bibliography:zoteroModel.hierarchyLimit"));
     const item = data(rawValue), key = aliases(rawValue)[0] || fallback;
     const children = array(item.children), name = text(item.name);
-    if (!name.trim()) { warnings.push(`Collection ${key} has no name and will be skipped.`); return; }
-    if (collections.some(collection => collection.key === key)) throw new Error(`Duplicate source collection identity: ${key}`);
+    if (!name.trim()) { warnings.push(i18next.t("bibliography:zoteroModel.unnamedCollection", { key })); return; }
+    if (collections.some(collection => collection.key === key)) throw new Error(i18next.t("bibliography:zoteroModel.duplicateCollection", { key }));
     const itemRefs = array(item.items).map(value => typeof value === "object" ? text(object(value).id || object(value).key) : text(value));
     itemRefs.push(...children.filter(value => text(object(value).type) === "item").map(value => text(object(value).id || object(value).key)));
     collections.push({ key, name, parent: text(item.parentCollection) || parent, items: itemRefs.filter(Boolean) });
@@ -73,15 +75,15 @@ export function parseZoteroBundle(contents: string): ZoteroBundle {
   else for (const [key, value] of Object.entries(object(sourceCollections))) addCollection(value, key, null);
   const keys = new Set(collections.map(collection => collection.key));
   for (const collection of collections) {
-    if (collection.parent && !keys.has(collection.parent)) throw new Error(`Missing parent collection: ${collection.parent}`);
+    if (collection.parent && !keys.has(collection.parent)) throw new Error(i18next.t("bibliography:zoteroModel.missingParent", { key: collection.parent }));
     const visited = new Set<string>(); let current: ZoteroCollection | undefined = collection;
     while (current) {
-      if (visited.has(current.key)) throw new Error("Collection hierarchy contains a cycle.");
+      if (visited.has(current.key)) throw new Error(i18next.t("bibliography:zoteroModel.cycle"));
       visited.add(current.key); current = collections.find(candidate => candidate.key === current!.parent);
     }
   }
-  for (const record of records) for (const key of record.collections) if (!keys.has(key)) warnings.push(`Collection ${key} was not supplied; its membership cannot be restored.`);
-  if (records.length > 2000) throw new Error("Import exceeds 2,000 records.");
+  for (const record of records) for (const key of record.collections) if (!keys.has(key)) warnings.push(i18next.t("bibliography:zoteroModel.unsuppliedCollection", { key }));
+  if (records.length > 2000) throw new Error(i18next.t("bibliography:zoteroModel.recordLimit"));
   return { records, collections, warnings: [...new Set(warnings)] };
 }
 

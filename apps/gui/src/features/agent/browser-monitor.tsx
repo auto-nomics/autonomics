@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ExternalLink, Globe } from "lucide-react";
 import { gatewayRequest } from "@/gateway";
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ export type BrowserMonitorProps = {
 };
 
 export function BrowserMonitor({ activeAgent, open }: BrowserMonitorProps) {
+  const { t } = useTranslation("agent");
   const [snapshot, setSnapshot] = useState<BrowserSnapshot | null>(null);
   const [failed, setFailed] = useState(false);
   const inFlight = useRef(false);
@@ -53,13 +55,13 @@ export function BrowserMonitor({ activeAgent, open }: BrowserMonitorProps) {
   }, [activeAgent, open, poll]);
 
   if (!activeAgent || !open) {
-    return <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">No agent selected</div>;
+    return <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">{t("browser.noAgentSelected")}</div>;
   }
 
   if (!snapshot?.live) {
     return (
       <div className="rounded-md border border-dashed p-2 text-xs text-muted-foreground">
-        {failed ? "Browser monitor unavailable" : "No live browser session — browser agents only"}
+        {failed ? t("browser.unavailable") : t("browser.noSession")}
       </div>
     );
   }
@@ -72,12 +74,12 @@ export function BrowserMonitor({ activeAgent, open }: BrowserMonitorProps) {
       {snapshot.screenshot ? (
         <img
           src={`data:image/png;base64,${snapshot.screenshot}`}
-          alt="Active browser tab screenshot"
+          alt={t("browser.screenshotAlt")}
           className="w-full bg-white"
         />
       ) : (
         <div className="flex aspect-video items-center justify-center text-xs text-muted-foreground">
-          <Globe className="mr-1.5 size-3.5" aria-hidden="true" /> No capture
+          <Globe className="mr-1.5 size-3.5" aria-hidden="true" /> {t("browser.noCapture")}
         </div>
       )}
       {activeTab && (
@@ -98,17 +100,17 @@ export function BrowserMonitor({ activeAgent, open }: BrowserMonitorProps) {
         </div>
       )}
       {snapshot.tabs.length > 1 && (
-        <div className="flex items-center gap-1 overflow-x-auto border-t px-1.5 py-1" aria-label="Open tabs">
+        <div className="flex items-center gap-1 overflow-x-auto border-t px-1.5 py-1" aria-label={t("browser.openTabsAria")}>
           {snapshot.tabs.map((tab, index) => (
             <span
               key={index}
-              title={tab.url ?? tab.title ?? `Tab ${index + 1}`}
+              title={tab.url ?? tab.title ?? t("browser.tabN", { n: index + 1 })}
               className={cn(
                 "max-w-28 truncate rounded px-1.5 py-0.5 text-[10px]",
                 index === snapshot.active_index ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground",
               )}
             >
-              {tab.title || tab.url || `Tab ${index + 1}`}
+              {tab.title || tab.url || t("browser.tabN", { n: index + 1 })}
             </span>
           ))}
         </div>
