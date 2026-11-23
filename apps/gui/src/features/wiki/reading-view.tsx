@@ -8,6 +8,7 @@ import { useWikiImages } from "./wiki-images";
 import { BookOpen, SquarePen, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,29 +27,30 @@ export function ModeSwitch({
   mode: WikiMode;
   onChange: (mode: WikiMode) => void;
 }) {
+  const { t } = useTranslation("wiki");
   const item = (active: boolean) =>
     `flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors ${
       active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
     }`;
   return (
-    <span className="inline-flex items-center rounded-md border p-0.5" role="group" aria-label="视图切换">
+    <span className="inline-flex items-center rounded-md border p-0.5" role="group" aria-label={t("reading.modeAria")}>
       <button
         type="button"
         className={item(mode === "read")}
         aria-pressed={mode === "read"}
-        title="阅读模式"
+        title={t("reading.readMode")}
         onClick={() => onChange("read")}
       >
-        <BookOpen className="h-3.5 w-3.5" /> <span className="hidden md:inline">阅读</span>
+        <BookOpen className="h-3.5 w-3.5" /> <span className="hidden md:inline">{t("reading.read")}</span>
       </button>
       <button
         type="button"
         className={item(mode === "edit")}
         aria-pressed={mode === "edit"}
-        title="编辑模式"
+        title={t("reading.editMode")}
         onClick={() => onChange("edit")}
       >
-        <SquarePen className="h-3.5 w-3.5" /> <span className="hidden md:inline">编辑</span>
+        <SquarePen className="h-3.5 w-3.5" /> <span className="hidden md:inline">{t("reading.edit")}</span>
       </button>
     </span>
   );
@@ -73,6 +75,7 @@ export function ReadingView({
   onMissingLink: (target: string) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation("wiki");
   // Comark renders async — DOM passes below key on the rendered HTML so
   // they re-run after the markup lands, not before it exists.
   const html = useWikiMarkdown(entry.content, entry.id);
@@ -149,9 +152,9 @@ export function ReadingView({
         const code = copyButton.closest(".md-code")?.querySelector("pre");
         if (code) {
           void navigator.clipboard.writeText(code.textContent ?? "");
-          copyButton.textContent = "已复制";
+          copyButton.textContent = t("reading.copied");
           window.setTimeout(() => {
-            copyButton.textContent = "Copy";
+            copyButton.textContent = t("reading.copy");
           }, 1400);
         }
         return;
@@ -180,7 +183,7 @@ export function ReadingView({
           <div className="flex min-w-0 items-start gap-1">{navigation}<h1 className="min-w-0 break-words text-[15px] leading-6 font-semibold">{entry.title}</h1></div>
           <span className="flex shrink-0 items-center gap-1">
             <ModeSwitch mode="read" onChange={onModeChange} />
-            <Button size="icon-sm" variant="ghost" title="移入回收站" onClick={() => void onDelete()}>
+            <Button size="icon-sm" variant="ghost" title={t("reading.moveToRecycle")} onClick={() => void onDelete()}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </span>

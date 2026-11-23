@@ -4,6 +4,7 @@
  * 词条并关闭弹窗(思源式全局搜索),浏览列表不被打断。
  */
 import { Loader2, Search, Tag } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -48,6 +49,7 @@ export function SearchDialog({
   const [loading, setLoading] = useState(false);
   const runIdRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { t } = useTranslation("wiki");
 
   const run = useCallback(async (term: string, tagRaw: string) => {
     const runId = ++runIdRef.current;
@@ -110,15 +112,15 @@ export function SearchDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[12%] max-w-[calc(100%-2rem)] translate-y-0 gap-3 sm:max-w-lg">
         <DialogHeader className="sr-only">
-          <DialogTitle>检索词条</DialogTitle>
-          <DialogDescription>BM25 全文检索与标签过滤。</DialogDescription>
+          <DialogTitle>{t("search.title")}</DialogTitle>
+          <DialogDescription>{t("search.description")}</DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-2">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
           <Input
             ref={inputRef}
             className="h-9 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
-            placeholder="全文检索(BM25,中英文)…"
+            placeholder={t("search.queryPlaceholder")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
@@ -131,7 +133,7 @@ export function SearchDialog({
           <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <Input
             className="h-7 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
-            placeholder="标签过滤(逗号分隔,AND),可与关键词同用"
+            placeholder={t("search.tagsPlaceholder")}
             value={tags}
             onChange={(event) => setTags(event.target.value)}
             onKeyDown={(event) => {
@@ -141,13 +143,13 @@ export function SearchDialog({
         </div>
         {results === null ? (
           <p className="py-6 text-center text-xs text-muted-foreground">
-            输入关键词或标签开始检索,结果最多 {SEARCH_LIMIT} 条。
+            {t("search.hint", { limit: SEARCH_LIMIT })}
           </p>
         ) : results.length === 0 && !loading ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">没有匹配的词条。</p>
+          <p className="py-6 text-center text-sm text-muted-foreground">{t("common.noMatches")}</p>
         ) : (
           <ScrollArea className="-mr-2 max-h-[min(20rem,45vh)] pr-2">
-            <div role="list" aria-label="检索结果">
+            <div role="list" aria-label={t("search.resultsAria")}>
               {results.map((item) => (
                 <div key={item.id} role="listitem">
                   <button
@@ -169,7 +171,7 @@ export function SearchDialog({
           </ScrollArea>
         )}
         {results !== null && results.length > 0 ? (
-          <p className="text-xs text-muted-foreground">{results.length} 条结果,点击在新标签页打开。</p>
+          <p className="text-xs text-muted-foreground">{t("search.resultCount", { count: results.length })}</p>
         ) : null}
       </DialogContent>
     </Dialog>

@@ -1,0 +1,375 @@
+_version: 2
+cli.bib.articleNotFound:
+  en: "Article '%{id}' not found."
+  zh: "未找到文章 '%{id}'。"
+cli.bib.articleNotFoundImport:
+  en: "Article '%{id}' not found in library. Run a `bib_save` DAG node to import it first."
+  zh: "文献库中不存在文章 '%{id}'。请先运行 `bib_save` DAG 节点导入。"
+cli.bib.exported:
+  en: "Exported %{count} articles to %{path} (%{format})"
+  zh: "已导出 %{count} 篇文章到 %{path}(%{format})"
+cli.bib.extractionsSucceeded:
+  en: "\n%{succeeded}/%{total} extractions succeeded."
+  zh: "\n%{succeeded}/%{total} 次提取成功。"
+cli.bib.infoArticle:
+  en: "Article: %{title}"
+  zh: "文章:%{title}"
+cli.bib.infoDoi:
+  en: "DOI    : %{doi}"
+  zh: "DOI   :%{doi}"
+cli.bib.infoFormat:
+  en: "  Format  : %{format}"
+  zh: "  格式  :%{format}"
+cli.bib.infoFulltextAvailable:
+  en: "Full text: ✓ available"
+  zh: "全文:✓ 可用"
+cli.bib.infoFulltextMissing:
+  en: "Full text: ✗ not uploaded"
+  zh: "全文:✗ 未上传"
+cli.bib.infoJournal:
+  en: "Journal: %{journal}"
+  zh: "期刊:%{journal}"
+cli.bib.infoPath:
+  en: "  Path    : %{path}"
+  zh: "  路径  :%{path}"
+cli.bib.infoPreview:
+  en: "  Preview : %{preview}"
+  zh: "  预览  :%{preview}"
+cli.bib.infoSize:
+  en: "  Size    : %{size} bytes"
+  zh: "  大小  :%{size} 字节"
+cli.bib.infoSource:
+  en: "  Source  : %{source}"
+  zh: "  来源  :%{source}"
+cli.bib.infoText:
+  en: "  Text    : %{chars} chars"
+  zh: "  文本  :%{chars} 字符"
+cli.bib.infoYear:
+  en: "Year   : %{year}"
+  zh: "年份  :%{year}"
+cli.bib.libraryCount:
+  en: "Library: %{count} articles total\n"
+  zh: "文献库:共 %{count} 篇文章\n"
+cli.bib.listHeaderDoi:
+  en: "DOI"
+  zh: "DOI"
+cli.bib.listHeaderId:
+  en: "ID"
+  zh: "ID"
+cli.bib.listHeaderTitle:
+  en: "Title"
+  zh: "标题"
+cli.bib.listHeaderYear:
+  en: "Year"
+  zh: "年份"
+cli.bib.metadataMissing:
+  en: "(metadata missing)"
+  zh: "(元数据缺失)"
+cli.bib.noArticlesFound:
+  en: "No articles found."
+  zh: "未找到文章。"
+cli.bib.noArticlesToExport:
+  en: "No articles to export."
+  zh: "没有可导出的文章。"
+cli.bib.noFullTextStored:
+  en: "No full text stored for '%{id}'."
+  zh: "'%{id}' 没有已存储的全文。"
+cli.bib.noPendingRequests:
+  en: "No pending full-text requests."
+  zh: "没有待处理的全文请求。"
+cli.bib.noReextractNeeded:
+  en: "No articles need re-extraction."
+  zh: "没有需要重新提取的文章。"
+cli.bib.pendingRequestsHeader:
+  en: "Pending full-text requests (%{count}):"
+  zh: "待处理全文请求(%{count}):"
+cli.bib.readFailed:
+  en: "Failed to read '%{path}': %{error}"
+  zh: "读取 '%{path}' 失败:%{error}"
+cli.bib.reextractDone:
+  en: "[%{index}/%{total}] %{id} … done (%{chars} chars, %{extractor})"
+  zh: "[%{index}/%{total}] %{id} … 完成(%{chars} 字符,%{extractor})"
+cli.bib.reextractFailed:
+  en: "[%{index}/%{total}] %{id} … failed (%{message})"
+  zh: "[%{index}/%{total}] %{id} … 失败(%{message})"
+cli.bib.repairDone:
+  en: "Repaired %{count} legacy full-text attachments; original attachment keys and annotations preserved."
+  zh: "已修复 %{count} 条旧版全文附件;原始附件键与批注均已保留。"
+cli.bib.requestsUploadHint:
+  en: "To upload: autonomics bib upload --pdf <file> --article-id <id> --collection-id <id>"
+  zh: "上传命令:autonomics bib upload --pdf <文件> --article-id <id> --collection-id <id>"
+cli.bib.specifyReextractTarget:
+  en: "Specify --article-id <ID> or --all-missing."
+  zh: "请指定 --article-id <ID> 或 --all-missing。"
+cli.bib.uploadedTip:
+  en: "✓ Full text uploaded for '%{title}' (%{bytes} bytes, %{chars} chars extracted)\n  Tip: use --collection-id to also update the fetch_status."
+  zh: "✓ 已上传 '%{title}' 的全文(%{bytes} 字节,提取 %{chars} 字符)\n  提示:使用 --collection-id 可同时更新 fetch_status。"
+cli.bib.uploadedWithCollection:
+  en: "✓ Full text uploaded for '%{title}' (%{bytes} bytes, %{chars} chars extracted)\n  Collection '%{cid}' status → fulltext_available"
+  zh: "✓ 已上传 '%{title}' 的全文(%{bytes} 字节,提取 %{chars} 字符)\n  采集 '%{cid}' 状态 → fulltext_available"
+cli.cache.aborted:
+  en: "aborted"
+  zh: "已中止"
+cli.cache.cacheFile:
+  en: "OpenGWAS cache file: %{path}"
+  zh: "OpenGWAS 缓存文件:%{path}"
+cli.cache.confirmDelete:
+  en: "About to delete OpenGWAS cache at %{path}. Continue? [y/N] "
+  zh: "即将删除位于 %{path} 的 OpenGWAS 缓存。继续?[y/N] "
+cli.cache.deleted:
+  en: "OpenGWAS cache deleted: %{path}"
+  zh: "OpenGWAS 缓存已删除:%{path}"
+cli.cache.refreshed:
+  en: "OpenGWAS cache refreshed: %{count} dataset(s) persisted to %{path}"
+  zh: "OpenGWAS 缓存已刷新:%{count} 个数据集已持久化到 %{path}"
+cli.cache.tokenNotSet:
+  en: "OPENGWAS_TOKEN env var is not set"
+  zh: "未设置 OPENGWAS_TOKEN 环境变量"
+cli.diag.gapHintAdvisory:
+  en: " — run `autonomics prepare` to fetch the rest (nodes needing them fail at build time until then)"
+  zh: " —— 运行 `autonomics prepare` 拉取其余内容(在此之前需要它们的节点会在构建期失败)"
+cli.diag.gapHintFatal:
+  en: " — run `autonomics prepare`"
+  zh: " —— 运行 `autonomics prepare`"
+cli.diag.imageDetail:
+  en: "not in the local store"
+  zh: "不在本地存储中"
+cli.diag.imageSubject:
+  en: "image '%{reference}'"
+  zh: "镜像 '%{reference}'"
+cli.diag.imagesConfigFailed:
+  en: "invalid container execution configuration: %{error}"
+  zh: "容器执行配置无效:%{error}"
+cli.diag.imagesEnumFailed:
+  en: "cannot enumerate plugin images — the plugin check did not pass"
+  zh: "无法枚举插件镜像 —— 插件检查未通过"
+cli.diag.imagesOk:
+  en: "%{count} pinned images present in the local store"
+  zh: "%{count} 个钉版镜像已存在于本地存储"
+cli.diag.invalidPluginLayout:
+  en: "invalid plugin layout: %{error}"
+  zh: "插件目录布局无效:%{error}"
+cli.diag.kindInconsistent:
+  en: "inconsistent"
+  zh: "不一致"
+cli.diag.kindMissing:
+  en: "missing"
+  zh: "缺失"
+cli.diag.modelDisabledSkipped:
+  en: "Ollama embedding disabled — BM25 over the corpus serves the hub"
+  zh: "Ollama 嵌入已禁用 —— 文献中枢由语料库上的 BM25 提供检索"
+cli.diag.modelEmptyFailed:
+  en: "Ollama base URL and model must not be empty"
+  zh: "Ollama base URL 和模型不能为空"
+cli.diag.modelOk:
+  en: "configured — %{model} @ %{url}"
+  zh: "已配置 —— %{model} @ %{url}"
+cli.diag.panelDetail:
+  en: "not cached"
+  zh: "未缓存"
+cli.diag.panelSubject:
+  en: "panel bundle '%{repo}'"
+  zh: "面板数据包 '%{repo}'"
+cli.diag.panelsCacheFailed:
+  en: "panel cache: %{error}"
+  zh: "面板缓存:%{error}"
+cli.diag.panelsNoBundles:
+  en: "no data bundles declared"
+  zh: "未声明任何数据包"
+cli.diag.panelsNoPlugins:
+  en: "no loadable plugin families"
+  zh: "没有可加载的插件家族"
+cli.diag.panelsOk:
+  en: "%{cached}/%{total} data bundles cached"
+  zh: "%{cached}/%{total} 个数据包已缓存"
+cli.diag.pluginSubject:
+  en: "plugin '%{name}'"
+  zh: "插件 '%{name}'"
+cli.diag.pluginsNotPresent:
+  en: "%{path} not present — built-in nodes only"
+  zh: "%{path} 不存在 —— 仅内置节点"
+cli.diag.pluginsSummaryMany:
+  en: "%{count} plugin families verified, %{kinds} node kinds"
+  zh: "%{count} 个插件家族已验证,%{kinds} 个节点类型"
+cli.diag.pluginsSummaryOne:
+  en: "%{count} plugin family verified, %{kinds} node kinds"
+cli.diag.runPrepare:
+  en: "run `autonomics prepare`"
+  zh: "运行 `autonomics prepare`"
+cli.guide.gatewayNotRunning:
+  en: "gateway: not running"
+  zh: "gateway:未运行"
+cli.guide.gatewayProbeFailed:
+  en: "gateway: cannot probe (%{error}) — check 'autonomics serve status'"
+  zh: "gateway:无法探测(%{error})—— 请检查 'autonomics serve status'"
+cli.guide.localReadiness:
+  en: "local readiness (offline checks)"
+  zh: "本地就绪检查(离线)"
+cli.guide.nextSteps:
+  en: "next steps"
+  zh: "后续步骤"
+cli.guide.stepPrepare:
+  en: "`autonomics prepare`     # provision the gaps above"
+  zh: "`autonomics prepare`     # 补齐上面的缺口"
+cli.guide.stepServe:
+  en: "`autonomics serve`       # then start the daemon"
+  zh: "`autonomics serve`       # 然后启动守护进程"
+cli.guide.stepServeClean:
+  en: "`autonomics serve`       # readiness is clean — start the daemon"
+  zh: "`autonomics serve`       # 就绪检查已通过 —— 启动守护进程"
+cli.guide.stepServeRestart:
+  en: "`autonomics serve`       # restart it on the provisioned state"
+  zh: "`autonomics serve`       # 在补齐后的状态上重启"
+cli.guide.stepServeStopDone:
+  en: "`autonomics serve stop` when you are done"
+  zh: "结束时执行 `autonomics serve stop`"
+cli.guide.stepServeStopRestart:
+  en: "`autonomics serve stop`  # the running daemon predates prepare"
+  zh: "`autonomics serve stop`  # 正在运行的守护进程早于 prepare"
+cli.guide.stepTui:
+  en: "`autonomics tui`         # then launch the TUI"
+  zh: "`autonomics tui`         # 然后启动 TUI"
+cli.guide.stepTuiReady:
+  en: "`autonomics tui` — the daemon is up and readiness is clean"
+  zh: "`autonomics tui` —— 守护进程已就绪且检查通过"
+cli.panels.bundleFailed:
+  en: "! %{repo} download failed: %{error}"
+  zh: "! %{repo} 下载失败:%{error}"
+cli.panels.bundleInstalled:
+  en: "+ %{repo} (%{version})"
+  zh: "+ %{repo}(%{version})"
+cli.panels.bundleMissing:
+  en: "! %{repo} not cached and no catalog is configured to fetch it"
+  zh: "! %{repo} 未缓存且未配置可拉取它的 catalog"
+cli.panels.checkingMany:
+  en: "panels: checking %{count} data bundles against the catalog cache%{remote}"
+  zh: "panels:正在对照 catalog 缓存检查 %{count} 个数据包%{remote}"
+cli.panels.checkingOne:
+  en: "panels: checking %{count} data bundle against the catalog cache%{remote}"
+cli.panels.noBundlesDeclared:
+  en: "panels: no data bundles declared by installed plugins"
+  zh: "panels:已安装的插件未声明任何数据包"
+cli.panels.noCatalogSuffix:
+  en: " (no catalog configured — nothing can be fetched)"
+  zh: "(未配置 catalog —— 无法拉取任何内容)"
+cli.panels.progressLine:
+  en: "⇒ %{count} downloading | %{done} / %{total} (%{percent}%) | %{speed}/s | %{bundles}"
+  zh: "⇒ %{count} 个下载中 | %{done} / %{total}(%{percent}%)| %{speed}/s | %{bundles}"
+cli.panels.summaryMany:
+  en: "panels: %{count} data bundles — %{cached} cached, %{downloaded} downloaded, %{unavailable} unavailable"
+  zh: "panels:%{count} 个数据包 —— %{cached} 个已缓存,%{downloaded} 个已下载,%{unavailable} 个不可用"
+cli.panels.summaryOne:
+  en: "panels: %{count} data bundle — %{cached} cached, %{downloaded} downloaded, %{unavailable} unavailable"
+cli.prepare.bundlesUnavailableMany:
+  en: "provisioning incomplete: %{count} bundles unavailable (%{missing})"
+  zh: "补齐未完成:%{count} 个数据包不可用(%{missing})"
+cli.prepare.bundlesUnavailableOne:
+  en: "provisioning incomplete: %{count} bundle unavailable (%{missing})"
+cli.prepare.checkNotReady:
+  en: "not ready — run `autonomics prepare` to provision the gaps above"
+  zh: "未就绪 —— 运行 `autonomics prepare` 补齐上面的缺口"
+cli.prepare.complete:
+  en: "prepare complete — daemon ready to start (`autonomics serve`)"
+  zh: "prepare 完成 —— 守护进程可启动(`autonomics serve`)"
+cli.prepare.imagePullFailedError:
+  en: "image pull failed for %{count} reference(s): %{refs}"
+  zh: "以下 %{count} 个镜像引用拉取失败:%{refs}"
+cli.prepare.imagesAllPresent:
+  en: "images: %{count} declared, all present"
+  zh: "images:已声明 %{count} 个,全部就位"
+cli.prepare.imagesPulled:
+  en: "images: pulled %{count} missing images in %{secs}"
+  zh: "images:已拉取 %{count} 个缺失镜像,用时 %{secs}"
+cli.prepare.imagesPulling:
+  en: "images: %{count} declared, %{missing} missing — pulling (%{concurrency} concurrent)"
+  zh: "images:已声明 %{count} 个,缺失 %{missing} 个 —— 正在拉取(并发 %{concurrency})"
+cli.prepare.modelConfigured:
+  en: "model: Ollama embedding configured — %{model} @ %{url}"
+  zh: "model:Ollama 嵌入已配置 —— %{model} @ %{url}"
+cli.prepare.modelSkipped:
+  en: "model: skipped — Ollama embedding disabled"
+  zh: "model:已跳过 —— Ollama 嵌入已禁用"
+cli.prepare.noPluginSources:
+  en: "(no plugin sources declared)"
+  zh: "(未声明任何插件源)"
+cli.prepare.pluginInstalled:
+  en: "+ %{name} installed"
+  zh: "+ %{name} 已安装"
+cli.prepare.pluginUpdated:
+  en: "~ %{name} updated"
+  zh: "~ %{name} 已更新"
+cli.prepare.pluginsSyncing:
+  en: "plugins: syncing from %{path}"
+  zh: "plugins:正在从 %{path} 同步"
+cli.prepare.provisioningIncomplete:
+  en: "provisioning incomplete — the gaps above remain after `prepare`; inspect the errors above and re-run"
+  zh: "补齐未完成 —— `prepare` 之后上述缺口仍存在;请检查上方错误并重跑"
+cli.prepare.pullFailed:
+  en: "✗ %{label}: %{error}"
+  zh: "✗ %{label}:%{error}"
+cli.prepare.pullOk:
+  en: "✓ %{label} in %{secs}"
+  zh: "✓ %{label} 用时 %{secs}"
+cli.prepare.pullProgress:
+  en: "images: %{done}/%{total} pulled, %{failed} failed (%{secs}s elapsed)"
+  zh: "images:已拉取 %{done}/%{total},失败 %{failed} 个(已用时 %{secs}s)"
+cli.prepare.pullWorkerPanicked:
+  en: "images: pull worker panicked: %{error}"
+  zh: "images:拉取 worker 崩溃:%{error}"
+cli.prepare.pullingImage:
+  en: "→ pulling %{label}"
+  zh: "→ 正在拉取 %{label}"
+cli.run.emptyStdinPrompt:
+  en: "prompt (read from stdin) is empty"
+  zh: "prompt(从 stdin 读取)为空"
+cli.run.invalidAgentConfig:
+  en: "invalid --agent-config JSON: %{error}"
+  zh: "无效的 --agent-config JSON:%{error}"
+cli.run.invalidName:
+  en: "invalid --name `%{name}`: %{error}"
+  zh: "无效的 --name `%{name}`:%{error}"
+cli.run.lastMessageEmptyWarning:
+  en: "Warning: no last agent message; wrote empty content to %{path}"
+  zh: "警告:没有最后的 agent 消息;已向 %{path} 写入空内容"
+cli.run.lastMessageWriteFailed:
+  en: "Failed to write last message file %{path}: %{error}"
+  zh: "写入 last message 文件 %{path} 失败:%{error}"
+cli.run.manifestWriteFailed:
+  en: "Failed to write manifest %{path}: %{error}"
+  zh: "写入 manifest %{path} 失败:%{error}"
+cli.run.noPrompt:
+  en: "no prompt provided — pass one as an argument or pipe it into stdin"
+  zh: "未提供 prompt —— 请作为参数传入或通过 stdin 管道输入"
+cli.serve.daemonExited:
+  en: "daemon exited during startup (code %{code})\n%{tail}  see logs: %{path}"
+  zh: "守护进程在启动期间退出(代码 %{code})\n%{tail}  日志见:%{path}"
+cli.serve.daemonTimeout:
+  en: "daemon did not become ready within %{secs}s\n%{tail}  see logs: %{path}"
+  zh: "守护进程未在 %{secs}s 内就绪\n%{tail}  日志见:%{path}"
+cli.serve.notRunning:
+  en: "gateway not running"
+  zh: "gateway 未运行"
+cli.serve.running:
+  en: "gateway running — pid %{pid} (v%{version}, up %{uptime})"
+  zh: "gateway 运行中 —— pid %{pid}(v%{version},已运行 %{uptime})"
+cli.serve.startupOutput:
+  en: "\ndaemon startup output"
+  zh: "\n守护进程启动输出"
+cli.serve.startupOutputCut:
+  en: " (first %{count} lines cut)"
+  zh: "(前 %{count} 行已截断)"
+cli.serve.stopped:
+  en: "gateway stopped"
+  zh: "gateway 已停止"
+cli.serve.vaultExhausted:
+  en: "vault passphrase attempts exhausted; export AUTONOMICS_SSH_PASSPHRASE for unattended runs"
+  zh: "vault 口令尝试次数已用尽;无人值守运行请 export AUTONOMICS_SSH_PASSPHRASE"
+cli.serve.vaultPassphrasePrompt:
+  en: "vault passphrase: "
+  zh: "vault 口令:"
+cli.serve.vaultSealed:
+  en: "The SSH credential vault at %{path} is sealed; the daemon needs its passphrase."
+  zh: "位于 %{path} 的 SSH 凭据 vault 处于密封状态;守护进程需要它的口令。"
+cli.serve.vaultUnlockFailed:
+  en: "unlock failed; try again"
+  zh: "解锁失败;请重试"

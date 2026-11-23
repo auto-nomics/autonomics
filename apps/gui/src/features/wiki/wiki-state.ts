@@ -10,6 +10,7 @@
 
 import { useSyncExternalStore } from "react";
 import { toast } from "sonner";
+import i18n from "@/i18n";
 import { getEntry, type WikiEntry } from "./wiki-api";
 
 // ---------------------------------------------------------------------------
@@ -83,7 +84,7 @@ export function registerWikiOpener(implementation: WikiOpener): void {
 
 export function openWikiEntry(entryId: string, options: WikiOpenOptions = {}): void {
   if (!opener) {
-    toast.error("知识库尚未就绪");
+    toast.error(i18n.t("wiki:state.notReady"));
     return;
   }
   opener(entryId, options);

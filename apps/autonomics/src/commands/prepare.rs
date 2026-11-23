@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use color_eyre::Result;
+use i18n::t;
 use plugin::factory::Plugin;
 
 use crate::cli::PrepareArgs;
@@ -40,9 +41,7 @@ async fn check_only(config: &gateway::RuntimeConfig) -> Result<()> {
     let report = diagnostics::check_readiness(config).await;
     report.print();
     if report.has_fatal_gaps() {
-        return Err(color_eyre::eyre::eyre!(
-            "not ready — run `autonomics prepare` to provision the gaps above"
-        ));
+        return Err(color_eyre::eyre::eyre!("{}", t!("cli.prepare.checkNotReady")));
     }
     Ok(())
 }
@@ -60,12 +59,9 @@ async fn provision(config: &gateway::RuntimeConfig) -> Result<()> {
     let report = diagnostics::check_readiness(config).await;
     report.print();
     if report.has_fatal_gaps() {
-        return Err(color_eyre::eyre::eyre!(
-            "provisioning incomplete — the gaps above remain after `prepare`; \\
-             inspect the errors above and re-run"
-        ));
+        return Err(color_eyre::eyre::eyre!("{}", t!("cli.prepare.provisioningIncomplete")));
     }
-    println!("prepare complete — daemon ready to start (`autonomics serve`)");
+    println!("{}", t!("cli.prepare.complete"));
     Ok(())
 }
 
@@ -75,40 +71,44 @@ fn sync_plugins(config: &gateway::RuntimeConfig) -> Result<Vec<Plugin>> {
     let layout = plugin_rsi::PluginStateLayout::open(&config.state_dir);
     layout
         .ensure_v2_directories()
-        .map_err(|error| color_eyre::eyre::eyre!("invalid plugin layout: {error}"))?;
+        .map_err(|error| color_eyre::eyre::eyre!("{}", t!("cli.diag.invalidPluginLayout", error = error)))?;
     let root = layout.runtime_root();
     let config_path = config.state_dir.join(plugin::sync::PLUGIN_CONFIG_FILE);
     if !config_path.is_file() {
         println!(
-            "plugins: {} not present — built-in nodes only",
-            config_path.display()
+            "{}",
+            t!("cli.diag.pluginsNotPresent", path = config_path.display())
         );
         return Ok(Vec::new());
     }
 
-    println!("plugins: syncing from {}", config_path.display());
+    println!(
+        "{}",
+        t!("cli.prepare.pluginsSyncing", path = config_path.display())
+    );
     let report = plugin::sync::sync(&config_path, &root)
         .map_err(|error| color_eyre::eyre::eyre!("plugin sync failed: {error}"))?;
     for (name, outcome) in &report.outcomes {
         match outcome {
             plugin::sync::EntryOutcome::Installed => {
-                println!("  + {name} installed")
+                println!("  + {}", t!("cli.prepare.pluginInstalled", name = name))
             }
-            plugin::sync::EntryOutcome::Updated => println!("  ~ {name} updated"),
+            plugin::sync::EntryOutcome::Updated => {
+                println!("  ~ {}", t!("cli.prepare.pluginUpdated", name = name))
+            }
             plugin::sync::EntryOutcome::Unchanged => {}
         }
     }
     if report.outcomes.is_empty() {
-        println!("  (no plugin sources declared)");
+        println!("  {}", t!("cli.prepare.noPluginSources"));
     }
 
     // Loading validates every manifest fail-closed.
     let plugins = load_installed_plugins(&config.state_dir)?;
     let kinds: usize = plugins.iter().map(|p| p.registered_kinds().len()).sum();
     println!(
-        "plugins: {} famil{} verified, {kinds} node kinds",
-        plugins.len(),
-        if plugins.len() == 1 { "y" } else { "ies" }
+        "plugins: {}",
+        t!("cli.diag.pluginsSummary", count = plugins.len(), kinds = kinds)
     );
     Ok(plugins)
 }
@@ -120,9 +120,20 @@ async fn provision_panels(config: &gateway::RuntimeConfig) -> Result<()> {
     if counts.unavailable > 0 {
         let missing = report.missing_repos().join(", ");
         return Err(color_eyre::eyre::eyre!(
-            "provisioning incomplete: {} bundle{} unavailable ({missing})",
-            counts.unavailable,
-            if counts.unavailable == 1 { "" } else { "s" },
+            "{}",
+            if counts.unavailable == 1 {
+                t!(
+                    "cli.prepare.bundlesUnavailableOne",
+                    count = counts.unavailable,
+                    missing = missing
+                )
+            } else {
+                t!(
+                    "cli.prepare.bundlesUnavailableMany",
+                    count = counts.unavailable,
+                    missing = missing
+                )
+            }
         ));
     }
     Ok(())
@@ -132,12 +143,16 @@ async fn provision_panels(config: &gateway::RuntimeConfig) -> Result<()> {
 /// off — the daemon then runs on the corpus-fitted BM25 fallback.
 async fn install_model(config: &gateway::RuntimeConfig) -> Result<()> {
     if !config.embedding.enabled {
-        println!("model: skipped — Ollama embedding disabled");
+        println!("{}", t!("cli.prepare.modelSkipped"));
         return Ok(());
     }
     println!(
-        "model: Ollama embedding configured — {} @ {}",
-        config.embedding.model, config.embedding.base_url
+        "{}",
+        t!(
+            "cli.prepare.modelConfigured",
+            model = config.embedding.model,
+            url = config.embedding.base_url
+        )
     );
     Ok(())
 }
@@ -181,7 +196,10 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
     let infra =
         container_runtime::ContainerExecutionInfra::for_operator_state_dir(&config.state_dir)
             .map_err(|error| {
-                color_eyre::eyre::eyre!("invalid container execution configuration: {error}")
+                color_eyre::eyre::eyre!(
+                    "{}",
+                    t!("cli.diag.imagesConfigFailed", error = error)
+                )
             })?;
     let local = container_runtime::images::local_images_with_config(&infra.config)
         .await
@@ -192,15 +210,21 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
         .cloned()
         .collect();
     if missing.is_empty() {
-        println!("images: {} declared, all present", declared.len());
+        println!(
+            "{}",
+            t!("cli.prepare.imagesAllPresent", count = declared.len())
+        );
         return Ok(());
     }
     let concurrency = pull_concurrency(infra.config.storage_driver.as_deref());
     println!(
-        "images: {} declared, {} missing — pulling ({} concurrent)",
-        declared.len(),
-        missing.len(),
-        concurrency
+        "{}",
+        t!(
+            "cli.prepare.imagesPulling",
+            count = declared.len(),
+            missing = missing.len(),
+            concurrency = concurrency
+        )
     );
     let started = std::time::Instant::now();
     let permits = Arc::new(tokio::sync::Semaphore::new(concurrency));
@@ -222,7 +246,7 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
             let _permit = permit;
             let label = short_label(&reference).to_string();
             let pull_started = std::time::Instant::now();
-            println!("  → pulling {label}");
+            println!("  → {}", t!("cli.prepare.pullingImage", label = label));
             let result = container_runtime::images::pull_with_config_progress(
                 &pull_config,
                 &reference,
@@ -233,13 +257,20 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
                 Ok(()) => {
                     done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     println!(
-                        "  ✓ {label} in {:.1}s",
-                        pull_started.elapsed().as_secs_f32()
+                        "  {}",
+                        t!(
+                            "cli.prepare.pullOk",
+                            label = label,
+                            secs = format!("{:.1}s", pull_started.elapsed().as_secs_f32())
+                        )
                     );
                 }
                 Err(error) => {
                     failed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    println!("  ✗ {label}: {error}");
+                    println!(
+                        "  {}",
+                        t!("cli.prepare.pullFailed", label = label, error = error)
+                    );
                     failures.lock().unwrap().push(reference);
                 }
             }
@@ -253,34 +284,43 @@ async fn pull_missing_images(config: &gateway::RuntimeConfig, plugins: &[Plugin]
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                 println!(
-                    "images: {}/{} pulled, {} failed ({:.0}s elapsed)",
-                    done.load(std::sync::atomic::Ordering::Relaxed),
-                    done.load(std::sync::atomic::Ordering::Relaxed)
-                        + failed.load(std::sync::atomic::Ordering::Relaxed),
-                    failed.load(std::sync::atomic::Ordering::Relaxed),
-                    started.elapsed().as_secs_f32(),
+                    "{}",
+                    t!(
+                        "cli.prepare.pullProgress",
+                        done = done.load(std::sync::atomic::Ordering::Relaxed),
+                        total = done.load(std::sync::atomic::Ordering::Relaxed)
+                            + failed.load(std::sync::atomic::Ordering::Relaxed),
+                        failed = failed.load(std::sync::atomic::Ordering::Relaxed),
+                        secs = format!("{:.0}", started.elapsed().as_secs_f32()),
+                    )
                 );
             }
         })
     };
     while let Some(outcome) = set.join_next().await {
         if let Err(error) = outcome {
-            eprintln!("images: pull worker panicked: {error}");
+            eprintln!("{}", t!("cli.prepare.pullWorkerPanicked", error = error));
         }
     }
     ticker.abort();
     let failed_refs = failures.lock().unwrap().clone();
     if !failed_refs.is_empty() {
         return Err(color_eyre::eyre::eyre!(
-            "image pull failed for {} reference(s): {}",
-            failed_refs.len(),
-            failed_refs.join(", ")
+            "{}",
+            t!(
+                "cli.prepare.imagePullFailedError",
+                count = failed_refs.len(),
+                refs = failed_refs.join(", ")
+            )
         ));
     }
     println!(
-        "images: pulled {} missing images in {:.1}s",
-        done.load(std::sync::atomic::Ordering::Relaxed),
-        started.elapsed().as_secs_f32()
+        "{}",
+        t!(
+            "cli.prepare.imagesPulled",
+            count = done.load(std::sync::atomic::Ordering::Relaxed),
+            secs = format!("{:.1}s", started.elapsed().as_secs_f32())
+        )
     );
     Ok(())
 }

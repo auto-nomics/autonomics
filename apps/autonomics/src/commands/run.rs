@@ -18,6 +18,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use headless::gateway_runner::{GatewayRunConfig, run_via_gateway};
+use i18n::t;
 use headless::processor::{HumanProcessor, JsonlProcessor, OutputProcessor};
 use headless::{RunError, RunSummary};
 use tokio_util::sync::CancellationToken;
@@ -78,7 +79,10 @@ pub fn run_headless(args: RunArgs) -> color_eyre::Result<()> {
                     };
                     let manifest = headless::manifest::RunManifest::new(meta, &summary);
                     if let Err(e) = manifest.write_to(path) {
-                        eprintln!("Failed to write manifest {}: {e}", path.display());
+                        eprintln!(
+                            "{}",
+                            t!("cli.run.manifestWriteFailed", path = path.display(), error = e)
+                        );
                     }
                 }
                 std::process::exit(match summary.outcome {
@@ -167,7 +171,7 @@ async fn daemon_active_model_name() -> Option<String> {
 
 fn validate_run_args(args: &RunArgs) -> Result<(), String> {
     if let Err(error) = agentik_types::validate_segment(&args.name) {
-        return Err(format!("invalid --name `{}`: {error}", args.name));
+        return Err(t!("cli.run.invalidName", name = args.name, error = error).into_owned());
     }
     Ok(())
 }
@@ -175,7 +179,8 @@ fn validate_run_args(args: &RunArgs) -> Result<(), String> {
 fn parse_agent_runtime(args: &RunArgs) -> Result<agentik_core::AgentRuntimeOverrides, String> {
     let mut runtime = match args.agent_config.as_deref() {
         Some(raw) => {
-            serde_json::from_str(raw).map_err(|e| format!("invalid --agent-config JSON: {e}"))?
+            serde_json::from_str(raw)
+                .map_err(|e| t!("cli.run.invalidAgentConfig", error = e).into_owned())?
         }
         None => agentik_core::AgentRuntimeOverrides::default(),
     };
@@ -207,15 +212,12 @@ fn resolve_prompt(arg_prompt: Option<String>) -> Result<String, String> {
         }
         from_stdin => {
             if from_stdin.is_none() && stdin_is_tty {
-                return Err(
-                    "no prompt provided — pass one as an argument or pipe it into stdin"
-                        .to_string(),
-                );
+                return Err(t!("cli.run.noPrompt").into_owned());
             }
             let mut prompt = String::new();
             let _ = std::io::stdin().read_to_string(&mut prompt);
             if prompt.trim().is_empty() {
-                return Err("prompt (read from stdin) is empty".to_string());
+                return Err(t!("cli.run.emptyStdinPrompt").into_owned());
             }
             Ok(prompt)
         }
@@ -230,12 +232,15 @@ fn write_last_message(path: Option<&Path>, message: Option<&str>) {
     let content = message.unwrap_or("");
     if message.is_none() {
         eprintln!(
-            "Warning: no last agent message; wrote empty content to {}",
-            path.display()
+            "{}",
+            t!("cli.run.lastMessageEmptyWarning", path = path.display())
         );
     }
     if let Err(e) = std::fs::write(path, content) {
-        eprintln!("Failed to write last message file {}: {e}", path.display());
+        eprintln!(
+            "{}",
+            t!("cli.run.lastMessageWriteFailed", path = path.display(), error = e)
+        );
     }
     let _ = std::io::stdout().flush();
 }

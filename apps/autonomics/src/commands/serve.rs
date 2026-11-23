@@ -26,6 +26,7 @@ use tracing_subscriber::fmt::time::OffsetTime;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 use gateway::daemon::{DaemonOptions, run_daemon};
+use i18n::t;
 use gateway::manager;
 use gateway::proto::GatewayStatus;
 
@@ -57,7 +58,7 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
                     Ok(())
                 }
                 Ok(None) => {
-                    println!("gateway not running");
+                    println!("{}", t!("cli.serve.notRunning"));
                     std::process::exit(3);
                 }
                 Err(error) => {
@@ -68,7 +69,7 @@ pub fn run_serve(args: ServeArgs) -> color_eyre::Result<()> {
         } else if let Some(ServeAction::Stop) = args.action {
             match manager::stop().await {
                 Ok(()) => {
-                    println!("gateway stopped");
+                    println!("{}", t!("cli.serve.stopped"));
                     Ok(())
                 }
                 Err(error) => {
@@ -109,8 +110,13 @@ pub(crate) fn print_serve_status(status: &GatewayStatus) {
     let uptime = format_uptime(status.uptime_secs);
 
     println!(
-        "gateway running — pid {} (v{}, up {})",
-        status.pid, status.version, uptime
+        "{}",
+        t!(
+            "cli.serve.running",
+            pid = status.pid,
+            version = status.version,
+            uptime = uptime
+        )
     );
     println!("  addr        {}", status.addr);
     println!("  bib web     {}/", base_url);
@@ -184,21 +190,19 @@ fn vault_unlock_env() -> color_eyre::Result<Vec<(&'static str, String)>> {
         return Ok(Vec::new()); // unattended: the daemon explains loudly
     }
     eprintln!(
-        "The SSH credential vault at {} is sealed; the daemon needs its passphrase.",
-        vault.display()
+        "{}",
+        t!("cli.serve.vaultSealed", path = vault.display())
     );
     for _ in 0..3 {
-        let Ok(passphrase) = rpassword::prompt_password("vault passphrase: ") else {
+        let Ok(passphrase) = rpassword::prompt_password(t!("cli.serve.vaultPassphrasePrompt")) else {
             return Ok(Vec::new());
         };
         if vfs::credential::CredentialVault::open(&sealed, &passphrase).is_ok() {
             return Ok(vec![("AUTONOMICS_SSH_PASSPHRASE", passphrase)]);
         }
-        eprintln!("unlock failed; try again");
+        eprintln!("{}", t!("cli.serve.vaultUnlockFailed"));
     }
-    Err(color_eyre::eyre::eyre!(
-        "vault passphrase attempts exhausted; export AUTONOMICS_SSH_PASSPHRASE for unattended runs"
-    ))
+    Err(color_eyre::eyre::eyre!("{}", t!("cli.serve.vaultExhausted")))
 }
 
 fn spawn_detached_and_wait() -> color_eyre::Result<()> {
@@ -239,11 +243,15 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
             if let Some(status) = child.try_wait().ok().flatten() {
                 let tail = startup_output_tail(stderr_tap.as_ref()).await;
                 return Err(color_eyre::eyre::eyre!(
-                    "daemon exited during startup (code {})\n{tail}  see logs: {}",
-                    status
-                        .code()
-                        .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
-                    log_hint().display()
+                    "{}",
+                    t!(
+                        "cli.serve.daemonExited",
+                        code = status
+                            .code()
+                            .map_or_else(|| "signal".to_owned(), |c| c.to_string()),
+                        tail = tail,
+                        path = log_hint().display()
+                    )
                 ));
             }
             if let Ok(Some(status)) = manager::probe().await {
@@ -260,9 +268,13 @@ fn spawn_detached_and_wait() -> color_eyre::Result<()> {
                 let _ = child.kill();
                 let tail = startup_output_tail(stderr_tap.as_ref()).await;
                 return Err(color_eyre::eyre::eyre!(
-                    "daemon did not become ready within {}s\n{tail}  see logs: {}",
-                    DAEMON_READY_TIMEOUT.as_secs(),
-                    log_hint().display()
+                    "{}",
+                    t!(
+                        "cli.serve.daemonTimeout",
+                        secs = DAEMON_READY_TIMEOUT.as_secs(),
+                        tail = tail,
+                        path = log_hint().display()
+                    )
                 ));
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -354,9 +366,9 @@ fn format_startup_tail(text: &str) -> String {
 
     let lines: Vec<&str> = text.lines().collect();
     let skipped = lines.len().saturating_sub(STDERR_TAIL_LINES);
-    let mut out = String::from("\ndaemon startup output");
+    let mut out = t!("cli.serve.startupOutput").into_owned();
     if skipped > 0 {
-        out.push_str(&format!(" (first {skipped} lines cut)"));
+        out.push_str(&t!("cli.serve.startupOutputCut", count = skipped));
     }
     out.push_str(":\n");
     for line in &lines[skipped..] {

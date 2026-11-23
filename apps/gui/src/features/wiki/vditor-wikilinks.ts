@@ -1,5 +1,6 @@
 import type Vditor from "vditor";
 import { toast } from "sonner";
+import i18n from "@/i18n";
 import { findEntryByTitle } from "./wiki-api";
 import { openWikiEntry } from "./wiki-state";
 
@@ -64,14 +65,14 @@ export function observeWikiEditorLinks(editor: Vditor) {
           link.dataset.wikilink = target;
           link.dataset.wikiLinkSource = match[0];
           link.textContent = display;
-          link.title = `${target} · Ctrl/Cmd+点击打开`;
+          link.title = i18n.t("wiki:vditor.wikilinkHint", { target });
           fragment.append(link);
           offset = match.index! + match[0].length;
           void resolve(target).then(entry => {
             if (disposed || !link.isConnected) return;
             link.classList.toggle("md-wikilink--missing", !entry);
             link.classList.toggle("md-wikilink--resolved", !!entry);
-            link.title = entry ? `${entry.title}\n${entry.content.slice(0, 200)}\nCtrl/Cmd+点击打开` : `${target} · 词条尚不存在`;
+            link.title = entry ? i18n.t("wiki:vditor.wikilinkPreview", { title: entry.title, excerpt: entry.content.slice(0, 200) }) : i18n.t("wiki:vditor.wikilinkMissing", { target });
           });
         }
         if (offset) { fragment.append(text.data.slice(offset)); text.replaceWith(fragment); }
@@ -93,7 +94,7 @@ export function observeWikiEditorLinks(editor: Vditor) {
       void resolve(link.dataset.wikilink!).then(entry => {
         if (disposed) return;
         if (entry) openWikiEntry(entry.id, { title: entry.title, forceNew: true });
-        else toast.info(`词条「${link.dataset.wikilink}」尚不存在`);
+        else toast.info(i18n.t("wiki:vditor.wikilinkToast", { title: link.dataset.wikilink }));
       });
       return;
     }

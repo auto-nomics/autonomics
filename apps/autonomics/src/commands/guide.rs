@@ -6,6 +6,7 @@
 //! to `prepare --check`.
 
 use color_eyre::Result;
+use i18n::t;
 
 use crate::diagnostics;
 
@@ -26,37 +27,40 @@ async fn guide() -> Result<()> {
             true
         }
         Ok(None) => {
-            println!("gateway: not running");
+            println!("{}", t!("cli.guide.gatewayNotRunning"));
             false
         }
         Err(error) => {
-            println!("gateway: cannot probe ({error}) — check 'autonomics serve status'");
+            println!(
+                "{}",
+                t!("cli.guide.gatewayProbeFailed", error = error)
+            );
             false
         }
     };
 
     // ── Local readiness (offline checks) ─────────────────────────
-    println!("\nlocal readiness (offline checks)");
+    println!("\n{}", t!("cli.guide.localReadiness"));
     let report = diagnostics::check_readiness(&config).await;
     report.print();
 
     // ── Suggested next steps ─────────────────────────────────────
-    println!("\nnext steps");
+    println!("\n{}", t!("cli.guide.nextSteps"));
     if report.has_fatal_gaps() {
-        println!("  1. `autonomics prepare`     # provision the gaps above");
+        println!("  1. {}", t!("cli.guide.stepPrepare"));
         if !daemon_running {
-            println!("  2. `autonomics serve`       # then start the daemon");
-            println!("  3. `autonomics tui`         # then launch the TUI");
+            println!("  2. {}", t!("cli.guide.stepServe"));
+            println!("  3. {}", t!("cli.guide.stepTui"));
         } else {
-            println!("  2. `autonomics serve stop`  # the running daemon predates prepare");
-            println!("  3. `autonomics serve`       # restart it on the provisioned state");
+            println!("  2. {}", t!("cli.guide.stepServeStopRestart"));
+            println!("  3. {}", t!("cli.guide.stepServeRestart"));
         }
     } else if daemon_running {
-        println!("  `autonomics tui` — the daemon is up and readiness is clean");
-        println!("  `autonomics serve stop` when you are done");
+        println!("  {}", t!("cli.guide.stepTuiReady"));
+        println!("  {}", t!("cli.guide.stepServeStopDone"));
     } else {
-        println!("  1. `autonomics serve`       # readiness is clean — start the daemon");
-        println!("  2. `autonomics tui`         # then launch the TUI");
+        println!("  1. {}", t!("cli.guide.stepServeClean"));
+        println!("  2. {}", t!("cli.guide.stepTui"));
     }
     Ok(())
 }

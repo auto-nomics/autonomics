@@ -6,6 +6,7 @@ import { useWikiDocument } from "./wiki-document";
 import { Loader2 } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ export function EditorView({
   const setContent = (content: string) => model.update({ content });
   const setSaving = (saving: boolean) => model.update({ saving });
   const [uploadSource] = useState(newId);
+  const { t } = useTranslation("wiki");
   const setUploading = useCallback((pending: boolean) => model.setUploading(uploadSource, pending), [model, uploadSource]);
   const uploading = pendingImages > 0;
 
@@ -50,7 +52,7 @@ export function EditorView({
     const { title, alias, tags, content, entry } = model.state;
     const trimmed = title.trim();
     if (!trimmed) {
-      toast.error("标题不能为空");
+      toast.error(t("editor.titleEmpty"));
       return;
     }
     setSaving(true);
@@ -75,7 +77,7 @@ export function EditorView({
       const saved = { ...latest, title: trimmed, alias: aliasList, tags: tagList, content };
       model.accept(saved, { title, alias, tags, content });
       onSaved(saved, model.dirty || model.state.pendingImages > 0);
-      toast.success("已保存(新版本快照已追加)");
+      toast.success(t("editor.saved"));
     } catch (error) {
       toast.error((error as Error).message);
     } finally {
@@ -84,7 +86,7 @@ export function EditorView({
   }
 
   const requestDone = () => {
-    if (dirty && !window.confirm("有未保存的修改,确定返回阅读模式?")) return;
+    if (dirty && !window.confirm(t("editor.confirmBack"))) return;
     if (dirty) model.update({ title: entry.title, alias: entry.alias.join(", "), tags: entry.tags.join(", "), content: entry.content });
     onModeChange("read");
   };
@@ -104,14 +106,14 @@ export function EditorView({
           <input
             id="wiki-title"
             value={title}
-            placeholder="标题(唯一,自动 trim)"
+            placeholder={t("editor.titlePlaceholder")}
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent text-[15px] leading-6 font-semibold outline-none placeholder:text-sm placeholder:font-normal placeholder:text-muted-foreground"
             onChange={(event) => setTitle(event.target.value)}
           />
           {dirty ? (
             <Badge variant="outline" className="shrink-0 border-amber-500/40 text-[10px] text-amber-400">
-              未保存
+              {t("editor.unsaved")}
             </Badge>
           ) : null}
           <ModeSwitch
@@ -124,9 +126,9 @@ export function EditorView({
             size="sm"
             onClick={() => void save()}
             disabled={saving || uploading || !title.trim()}
-            title="保存 Ctrl+S"
+            title={t("editor.saveTitle")}
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} 保存
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} {t("editor.save")}
           </Button>
         </div>
       </div>
@@ -146,7 +148,7 @@ export function EditorView({
               <Input
                 id="wiki-alias"
                 className="h-6 border-0 bg-transparent px-1 text-[13px] shadow-none focus-visible:ring-0"
-                placeholder="别名(逗号分隔)"
+                placeholder={t("editor.aliasPlaceholder")}
                 value={alias}
                 onChange={(event) => setAlias(event.target.value)}
               />
@@ -156,7 +158,7 @@ export function EditorView({
               <Input
                 id="wiki-tags"
                 className="h-6 border-0 bg-transparent px-1 text-[13px] shadow-none focus-visible:ring-0"
-                placeholder="标签(逗号分隔)"
+                placeholder={t("editor.tagsPlaceholder")}
                 value={tags}
                 onChange={(event) => setTags(event.target.value)}
               />

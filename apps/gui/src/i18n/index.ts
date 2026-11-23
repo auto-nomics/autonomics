@@ -22,6 +22,8 @@ import zhDiscovery from "./locales/zh/discovery.json";
 import enDiscovery from "./locales/en/discovery.json";
 import zhReader from "./locales/zh/reader.json";
 import enReader from "./locales/en/reader.json";
+import zhWiki from "./locales/zh/wiki.json";
+import enWiki from "./locales/en/wiki.json";
 
 export const defaultNS = "common";
 export const resources = {
@@ -33,6 +35,7 @@ export const resources = {
     deck: zhDeck,
     discovery: zhDiscovery,
     reader: zhReader,
+    wiki: zhWiki,
   },
   en: {
     common: enCommon,
@@ -42,6 +45,7 @@ export const resources = {
     deck: enDeck,
     discovery: enDiscovery,
     reader: enReader,
+    wiki: enWiki,
   },
 } as const;
 

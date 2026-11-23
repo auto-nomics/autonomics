@@ -5,6 +5,7 @@
  * 视觉与文献库一致:无卡片,密铺行(h-9 细线分隔 + hover 加亮)。
  */
 import { Loader2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -28,13 +29,12 @@ export function HomeView({
   onLoadMore: () => void;
   onOpen: (id: string, title: string, newTab: boolean) => void;
 }) {
+  const { t } = useTranslation("wiki");
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="flex h-8 shrink-0 items-center gap-1 border-b px-2 text-xs text-muted-foreground">
-        <span>
-          共 {entries.length} 条词条
-        </span>
-        <span className="opacity-70"> 检索(Ctrl+K)</span>
+        <span>{t("home.count", { count: entries.length })}</span>
+        <span className="opacity-70">{t("home.searchHint")}</span>
       </div>
       <ScrollArea className="min-h-0 flex-1" contentClassName="pb-6">
         {loading ? (
@@ -45,10 +45,10 @@ export function HomeView({
           </div>
         ) : entries.length === 0 ? (
           <div className="grid h-full place-items-center text-sm text-muted-foreground">
-            还没有词条。
+            {t("common.noEntries")}
           </div>
         ) : (
-          <div className="space-y-px" role="list" aria-label="词条列表">
+          <div className="space-y-px" role="list" aria-label={t("home.listAria")}>
             {entries.map((item) => (
               <div key={item.id} role="listitem">
                 <button
@@ -83,7 +83,7 @@ export function HomeView({
               onClick={onLoadMore}
             >
               {loadingMore ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              加载更多(已显示 {entries.length} 条)
+              {t("common.loadMore", { count: entries.length })}
             </Button>
           </div>
         ) : null}
