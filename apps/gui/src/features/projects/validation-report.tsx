@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 /** 六门校验报告渲染：门列表 + 通过/失败状态 + 原因。 */
 
 export interface GateResult {
@@ -14,8 +16,9 @@ export interface ValidationReport {
 }
 
 export function ValidationReportView({ report }: { report: ValidationReport }) {
+  const { t } = useTranslation("projects");
   return (
-    <div role="group" aria-label="校验报告" data-validation-report className="grid gap-1 p-2 text-xs">
+    <div role="group" aria-label={t("validation.ariaLabel")} data-validation-report className="grid gap-1 p-2 text-xs">
       {report.gates.map((gate) => (
         <div
           key={gate.name}

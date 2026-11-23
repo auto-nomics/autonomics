@@ -12,7 +12,7 @@ import { toggleSecondarySidebar } from "./view-layout";
 
 /** Cycle workbench regions independently of each region's internal Tab order. */
 function cycleWorkbenchFocus(backward: boolean) {
-  const regions = Array.from(document.querySelectorAll<HTMLElement>('aside[data-slot="workbench-sidebar"], [data-editor-group], section[aria-label="底部面板"], aside[aria-label="辅助侧边栏"]'))
+  const regions = Array.from(document.querySelectorAll<HTMLElement>('aside[data-slot="workbench-sidebar"], [data-editor-group], section[data-bottom-panel], aside[data-secondary-sidebar]'))
     .filter(element => element.getClientRects().length > 0 && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
   if (!regions.length) return;
   const current = regions.findIndex(region => region.contains(document.activeElement));

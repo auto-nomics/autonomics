@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest } from "@/gateway";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -42,6 +43,7 @@ export type FlowViewData = {
 };
 
 export function FlowView({ activeAgent }: { activeAgent: string }) {
+  const { t } = useTranslation("system");
   const [view, setView] = useState<FlowViewData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,14 +73,14 @@ export function FlowView({ activeAgent }: { activeAgent: string }) {
   }, [refresh]);
 
   if (!activeAgent) {
-    return <div className="p-4 text-sm text-muted-foreground">No active agent — the flow is session state.</div>;
+    return <div className="p-4 text-sm text-muted-foreground">{t("flow.noActiveAgent")}</div>;
   }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
       <div className="flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-          {loading ? "Refreshing…" : "Refresh"}
+          {loading ? t("flow.refreshing") : t("flow.refresh")}
         </Button>
         {view?.last_run && (
           <span
@@ -87,21 +89,21 @@ export function FlowView({ activeAgent }: { activeAgent: string }) {
               view.last_run.ok ? "bg-emerald-500/15 text-emerald-600" : "bg-red-500/15 text-red-600",
             )}
           >
-            last run {view.last_run.cancelled ? "cancelled" : view.last_run.ok ? "ok" : "failed"}
+            {view.last_run.cancelled ? t("flow.lastRunCancelled") : view.last_run.ok ? t("flow.lastRunOk") : t("flow.lastRunFailed")}
           </span>
         )}
         <span className="text-xs text-muted-foreground">
-          process view — instances are run-scoped and do not expand this graph
+          {t("flow.processViewHint")}
         </span>
       </div>
 
       {error && <div className="rounded border border-red-500/40 bg-red-500/10 p-2 text-sm text-red-600">{error}</div>}
 
-      {!error && !view && <div className="p-2 text-sm text-muted-foreground">loading flow…</div>}
+      {!error && !view && <div className="p-2 text-sm text-muted-foreground">{t("flow.loading")}</div>}
 
       {view?.flow.processes.length === 0 && (
         <div className="p-2 text-sm text-muted-foreground">
-          no flow set for this session — the agent builds one with set_flow
+          {t("flow.noFlow")}
         </div>
       )}
 
@@ -129,12 +131,12 @@ export function FlowView({ activeAgent }: { activeAgent: string }) {
                   </div>
                   {run && (
                     <div className={cn("mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs", failed ? "text-red-600" : "text-emerald-600")}>
-                      <span>{run.total} total</span>
-                      <span>{run.succeeded} ok</span>
-                      <span>{run.failed} failed</span>
-                      <span>{run.skipped} skipped</span>
-                      <span>{run.reused} reused</span>
-                      {run.ignored > 0 && <span>{run.ignored} ignored</span>}
+                      <span>{t("flow.run.total", { count: run.total })}</span>
+                      <span>{t("flow.run.ok", { count: run.succeeded })}</span>
+                      <span>{t("flow.run.failed", { count: run.failed })}</span>
+                      <span>{t("flow.run.skipped", { count: run.skipped })}</span>
+                      <span>{t("flow.run.reused", { count: run.reused })}</span>
+                      {run.ignored > 0 && <span>{t("flow.run.ignored", { count: run.ignored })}</span>}
                       <span className="text-muted-foreground">Σ {Math.round(run.summed_elapsed_ms / 100) / 10}s</span>
                     </div>
                   )}
@@ -144,7 +146,7 @@ export function FlowView({ activeAgent }: { activeAgent: string }) {
 
             {view.flow.wires.length > 0 && (
               <Card className="p-3">
-                <div className="mb-1 text-xs font-medium text-muted-foreground">wires</div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground">{t("flow.wires")}</div>
                 <div className="flex flex-col gap-0.5 font-mono text-xs">
                   {view.flow.wires.map((wire, index) => (
                     <div key={index}>

@@ -4,9 +4,11 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { gatewayRequest } from "@/gateway";
 import { useTheme } from "@/hooks/use-theme";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 
 export function ProjectTerminal({ project }: { project: string }) {
+  const { t } = useTranslation("projects");
   const host = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const { resolved } = useTheme();
@@ -38,10 +40,10 @@ export function ProjectTerminal({ project }: { project: string }) {
       try {
         const result = await gatewayRequest("GET", `${base}?offset=${offset}`);
         if (cancelled) return;
-        if (result.truncated) terminal.write("\r\n[部分终端输出已过期]\r\n");
+        if (result.truncated) terminal.write(`\r\n${t("terminal.truncatedNotice")}\r\n`);
         if (result.data.length) terminal.write(new Uint8Array(result.data));
         offset = result.offset;
-        if (result.exited) { terminal.write("\r\n[终端已退出]\r\n"); setExited(true); return; }
+        if (result.exited) { terminal.write(`\r\n${t("terminal.exitedNotice")}\r\n`); setExited(true); return; }
         timer = window.setTimeout(() => void poll(), 150);
       } catch (cause) { if (!cancelled) setError(String(cause)); }
     };
@@ -74,7 +76,7 @@ export function ProjectTerminal({ project }: { project: string }) {
   }, [resolved, project, generation]);
 
   return <div className="flex min-h-0 flex-1 flex-col">
-    {(error || exited) && <div className="flex items-center gap-2 border-b px-3 py-1 text-xs"><span role={error ? "alert" : "status"} className={error ? "text-destructive" : "text-muted-foreground"}>{error ? `终端连接失败：${error}` : "终端已退出"}</span><Button size="xs" variant="outline" onClick={() => setGeneration(value => value + 1)}>重新连接</Button></div>}
-    <div ref={host} aria-label={`${project} 容器终端`} className="min-h-0 flex-1 overflow-hidden p-2" />
+    {(error || exited) && <div className="flex items-center gap-2 border-b px-3 py-1 text-xs"><span role={error ? "alert" : "status"} className={error ? "text-destructive" : "text-muted-foreground"}>{error ? t("terminal.connectionFailed", { error }) : t("terminal.exited")}</span><Button size="xs" variant="outline" onClick={() => setGeneration(value => value + 1)}>{t("terminal.reconnect")}</Button></div>}
+    <div ref={host} aria-label={t("terminal.ariaLabel", { project })} className="min-h-0 flex-1 overflow-hidden p-2" />
   </div>;
 }

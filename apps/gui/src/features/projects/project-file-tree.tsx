@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, FileCode2, Folder, FolderOpen } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 type FileNode = { name: string; path: string; children: Map<string, FileNode> | null };
 
@@ -27,6 +28,7 @@ function sortedNodes(nodes: Map<string, FileNode>): FileNode[] {
 }
 
 export function ProjectFileTree({ files, directories, selected, disabled, directoryMove, onOpen, onSelectDirectory }: { files: string[]; directories: string[]; selected: string; disabled: boolean; directoryMove?: { from: string; to: string; id: number }; onOpen: (path: string) => void; onSelectDirectory: (path: string) => void }) {
+  const { t } = useTranslation("projects");
   const nodes = useMemo(() => buildTree(files, directories), [files, directories]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   useEffect(() => {
@@ -61,5 +63,5 @@ export function ProjectFileTree({ files, directories, selected, disabled, direct
     })}</ul>;
   }
 
-  return <nav aria-label="项目文件">{renderNodes(nodes, 0)}</nav>;
+  return <nav aria-label={t("fileTree.ariaLabel")}>{renderNodes(nodes, 0)}</nav>;
 }

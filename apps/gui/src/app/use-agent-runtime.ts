@@ -1,4 +1,5 @@
 import { mergeDraftContext, restoreFailedContextDraft } from "@/features/context/context-draft";
+import i18n from "@/i18n";
 import { parseContextMessage } from "@/features/context/context-model";
 // Agent runtime store: gateway connection, login, the per-agent event
 // reducer and every agent/context action. The shell (app-view) consumes this
@@ -283,7 +284,7 @@ export function useAgentRuntime() {
       }));
     } catch (cause) {
       if (historyLoadSeq.current[agentPath] === seq) {
-        appendMessage(agentPath, makeItem("error", `加载历史失败: ${String(cause)}`));
+        appendMessage(agentPath, makeItem("error", i18n.t("workbench:runtime.historyFailed", { cause: String(cause) })));
       }
     } finally {
       if (historyLoadSeq.current[agentPath] === seq) {
@@ -349,7 +350,7 @@ export function useAgentRuntime() {
         } catch (error) {
           if (contextRequests.current.get(path) === request) {
             contextRequests.current.delete(path);
-            if (openTabsRef.current.includes(path)) appendMessage(path, makeItem("error", `加载历史失败: ${String(error)}`));
+            if (openTabsRef.current.includes(path)) appendMessage(path, makeItem("error", i18n.t("workbench:runtime.historyFailed", { cause: String(error) })));
           }
         }
       })();
@@ -459,7 +460,7 @@ export function useAgentRuntime() {
       } else if (event.ToolCallBackground !== undefined) {
         appendMessage(agent, makeItem("tool", `background #${event.ToolCallBackground.seq}: ${event.ToolCallBackground.name}`));
       } else if (event.ToolBackgroundComplete !== undefined) {
-        appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? "完成" : "失败"}`));
+        appendMessage(agent, makeItem("tool", `background #${event.ToolBackgroundComplete.seq} ${event.ToolBackgroundComplete.ok ? i18n.t("workbench:runtime.backgroundDone") : i18n.t("workbench:runtime.backgroundFailed")}`));
       } else if (event.UserMessageAcknowledged !== undefined) {
         setQueuedMessages(current => {
           const queue = current[agent] ?? [];
@@ -483,7 +484,7 @@ export function useAgentRuntime() {
         // off and re-sends the same request, so this renders as progress
         // info in the transcript — the terminal Error item is separate.
         const retry = event.RetryableError;
-        appendMessage(agent, makeItem("error", `第 ${retry.attempt}/${retry.max_retries} 次重试: ${retry.message}`));
+        appendMessage(agent, makeItem("error", i18n.t("workbench:runtime.retry", { attempt: retry.attempt, max: retry.max_retries, message: retry.message })));
       } else if (event.Error !== undefined) {
         appendMessage(agent, makeItem("error", event.Error));
       } else if (event.ContextList !== undefined) {
@@ -610,7 +611,7 @@ export function useAgentRuntime() {
     contextRequests.current.clear();
     try {
       const probe = await probeGateway();
-      if (!probe.running) throw new Error(`${probe.addr} (未认证)`);
+      if (!probe.running) throw new Error(i18n.t("workbench:runtime.unauthenticated", { addr: probe.addr }));
       const snapshot: StateSnapshot = await gatewayRequest("GET", "/state");
       // Tolerate a snapshot without the contexts map (mock gateways,
       // degraded backends) instead of failing the whole hydration.
@@ -675,7 +676,7 @@ export function useAgentRuntime() {
       setConnected(false);
       const unauthorized = cause instanceof GatewayHttpError && cause.status === 401;
       setNeedsLogin(unauthorized);
-      setConnectionError(unauthorized ? "需要 Gateway 令牌" : String(cause));
+      setConnectionError(unauthorized ? i18n.t("workbench:runtime.needToken") : String(cause));
       setBooting(false);
     }
   }, [ensureAgentHistory, refreshStoredAgents]);
@@ -799,7 +800,7 @@ export function useAgentRuntime() {
       const result = await gatewayRequest("POST", "/agents", {
         name, parent_path: "/root", profile: "illustrator", model_spec: null,
       });
-      if (result?.path !== path) throw new Error("插画专家创建失败：返回的 Agent 路径不匹配。");
+      if (result?.path !== path) throw new Error(i18n.t("workbench:runtime.illustratorFailed"));
       setAgents(current => current.some(agent => agent.path === path) ? current : [...current, { path, agent_id: null, status: "Idle" }]);
       setOpenTabs(current => current.includes(path) ? current : [...current, path]);
       return path;
@@ -868,7 +869,7 @@ export function useAgentRuntime() {
       // The effective reasoning effort comes from the model, so re-read it.
       void refreshAgentEffort(path);
     } catch (cause) {
-      appendMessage(path, makeItem("error", `切换模型失败: ${String(cause)}`));
+      appendMessage(path, makeItem("error", i18n.t("workbench:runtime.modelFailed", { cause: String(cause) })));
     }
   };
 
@@ -896,7 +897,7 @@ export function useAgentRuntime() {
       await gatewayRequest("PUT", `/agents/${path}/config`, { runtime });
       setAgentEfforts((current) => ({ ...current, [path]: effort }));
     } catch (cause) {
-      appendMessage(path, makeItem("error", `切换推理力度失败: ${String(cause)}`));
+      appendMessage(path, makeItem("error", i18n.t("workbench:runtime.effortFailed", { cause: String(cause) })));
     }
   };
 

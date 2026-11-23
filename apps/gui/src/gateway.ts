@@ -4,6 +4,7 @@ export type GatewayProbe = {
 };
 
 import type { GatewayFrame } from "./types";
+import i18n from "@/i18n";
 
 export type GatewayFrameHandler = (frame: GatewayFrame) => void;
 
@@ -140,7 +141,7 @@ export async function loginGateway(token: string): Promise<void> {
     const payload = await response.json().catch(() => null);
     throw new GatewayHttpError(
       response.status,
-      payload?.error ?? `登录失败 (${response.status})`,
+      payload?.error ?? i18n.t("workbench:gateway.loginFailed", { status: response.status }),
     );
   }
 }
@@ -538,9 +539,9 @@ export async function gatewayEnrollment<T>(
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new GatewayHttpError(response.status, payload?.error ?? `注册请求失败（HTTP ${response.status}）`);
+    throw new GatewayHttpError(response.status, payload?.error ?? i18n.t("workbench:gateway.enrollFailed", { status: response.status }));
   }
-  if (!response.body) throw new Error("无法读取安装进度，请刷新计算目标状态后再重试。");
+  if (!response.body) throw new Error(i18n.t("workbench:gateway.noStream"));
   const { readSseJson } = await import("./gateway-stream");
   try {
   for await (const raw of readSseJson(response.body)) {
@@ -548,13 +549,13 @@ export async function gatewayEnrollment<T>(
     if (event.type === "progress") onProgress(event);
     else if (event.type === "result") return event.state;
     else if (event.type === "error") throw new GatewayHttpError(400, event.message);
-    else throw new Error("收到无法识别的安装进度消息");
+    else throw new Error(i18n.t("workbench:gateway.unrecognizedProgress"));
   }
   } catch (error) {
     if (error instanceof GatewayHttpError) throw error;
-    throw new Error("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。");
+    throw new Error(i18n.t("workbench:gateway.progressDisconnected"));
   }
-  throw new Error("安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。");
+  throw new Error(i18n.t("workbench:gateway.progressDisconnected"));
 }
 
 /** Load an immutable compiler artifact through the authenticated transport. */

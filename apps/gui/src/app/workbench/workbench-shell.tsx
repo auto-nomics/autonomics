@@ -32,6 +32,7 @@ import { parseContextMessage, serializeContext } from "@/features/context/contex
 import { useAgentContextBinding } from "./agent-context-binding";
 import { useAgentSlot } from "./agent-slot-registry";
 import "./static-commands";
+import { useTranslation } from "react-i18next";
 import { useWorkbenchKeybindings } from "./keybindings";
 import {
   activateEditorById,
@@ -117,6 +118,7 @@ function AgentWorkspaceHost({ path, visible, runtime, onSpawn }: { path: string;
 }
 
 export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
+  const { t, i18n } = useTranslation("workbench");
   const state = useWorkbenchState();
   const viewLayout = useViewLayout();
   const isDesktop = useMediaQuery("(min-width: 768px)");
@@ -214,20 +216,20 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
 
   // Runtime-dependent commands (owner "shell-runtime").
   useEffect(() => registerCommands("shell-runtime", [
-    { id: "agent.new", title: "New agent", category: "agent", keywords: "spawn create start profile", run: () => setSpawnOpen(true) },
-    { id: "agent.cancel", title: "Cancel agent", category: "agent", keywords: "stop abort interrupt", run: cancel },
-    { id: "agent.compact", title: "Compact conversation", category: "agent", keywords: "compress summarize context", run: compact },
-    { id: "agent.model", title: "Select model", category: "config", keywords: "model provider api key activate", run: () => openEditor({ kind: "config" }) },
-    { id: "agent.dag", title: "View DAG", category: "data", keywords: "graph pipeline topology node edge", run: openDag },
-    { id: "agent.open", title: "Open agent tab", category: "agent", keywords: "open chat transcript window", run: () => openAgentEditor(runtime.activeAgent) },
-    { id: "view.thinking", title: "Toggle thinking blocks", category: "view", keywords: "collapse fold reasoning", run: () => void runtime.toggleDisplay("collapse_thinking") },
-    { id: "view.tool-calls", title: "Toggle tool calls", category: "view", keywords: "collapse fold function call", run: () => void runtime.toggleDisplay("collapse_tool_calls") },
-    { id: "view.tool-results", title: "Toggle tool results", category: "view", keywords: "collapse fold output", run: () => void runtime.toggleDisplay("collapse_tool_results") },
-    { id: "go.manuscripts", title: "LaTeX 手稿", category: "research", keywords: "manuscript latex writing overleaf 手稿 写作", run: () => openBibliographyEditor("manuscripts") },
-    { id: "go.library", title: "Bibliography library", category: "research", keywords: "papers articles fulltext collections", run: () => openBibliographyEditor("library") },
-    { id: "go.discover", title: "Discover literature", category: "research", keywords: "federated search sources subscriptions", run: () => openBibliographyEditor("discover") },
-    { id: "go.subscriptions", title: "RSS subscriptions", category: "research", keywords: "feeds rss atom inbox", run: () => openBibliographyEditor("subscriptions") },
-  ]), [runtime, cancel, compact, openDag]);
+    { id: "agent.new", title: t("commands.newAgent"), category: "agent", keywords: "spawn create start profile", run: () => setSpawnOpen(true) },
+    { id: "agent.cancel", title: t("commands.cancelAgent"), category: "agent", keywords: "stop abort interrupt", run: cancel },
+    { id: "agent.compact", title: t("commands.compactConversation"), category: "agent", keywords: "compress summarize context", run: compact },
+    { id: "agent.model", title: t("commands.selectModel"), category: "config", keywords: "model provider api key activate", run: () => openEditor({ kind: "config" }) },
+    { id: "agent.dag", title: t("commands.viewDag"), category: "data", keywords: "graph pipeline topology node edge", run: openDag },
+    { id: "agent.open", title: t("commands.openAgentTab"), category: "agent", keywords: "open chat transcript window", run: () => openAgentEditor(runtime.activeAgent) },
+    { id: "view.thinking", title: t("commands.toggleThinking"), category: "view", keywords: "collapse fold reasoning", run: () => void runtime.toggleDisplay("collapse_thinking") },
+    { id: "view.tool-calls", title: t("commands.toggleToolCalls"), category: "view", keywords: "collapse fold function call", run: () => void runtime.toggleDisplay("collapse_tool_calls") },
+    { id: "view.tool-results", title: t("commands.toggleToolResults"), category: "view", keywords: "collapse fold output", run: () => void runtime.toggleDisplay("collapse_tool_results") },
+    { id: "go.manuscripts", title: t("commands.manuscripts"), category: "research", keywords: "manuscript latex writing overleaf 手稿 写作", run: () => openBibliographyEditor("manuscripts") },
+    { id: "go.library", title: t("commands.library"), category: "research", keywords: "papers articles fulltext collections", run: () => openBibliographyEditor("library") },
+    { id: "go.discover", title: t("commands.discover"), category: "research", keywords: "federated search sources subscriptions", run: () => openBibliographyEditor("discover") },
+    { id: "go.subscriptions", title: t("commands.subscriptions"), category: "research", keywords: "feeds rss atom inbox", run: () => openBibliographyEditor("subscriptions") },
+  ]), [runtime, cancel, compact, openDag, t, i18n.language]);
 
   const logout = useCallback(() => void runtime.logout(), [runtime]);
 
@@ -261,7 +263,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
               <SideBar mobile={false} collapsed={state.sidebar.collapsed} onToggleCollapsed={toggleSidebar} onLogout={logout} onSpawn={() => setSpawnOpen(true)} />
               <div
                 role="separator"
-                aria-label="调整侧栏宽度"
+                aria-label={t("shell.resizeSidebar")}
                 aria-orientation="vertical"
                 aria-valuemin={160}
                 aria-valuemax={600}
@@ -296,7 +298,7 @@ export function WorkbenchShell({ runtime }: { runtime: AgentRuntime }) {
               <EditorArea />
             </ResizablePanel>
             <ResizableHandle
-              aria-label="调整面板高度"
+              aria-label={t("shell.resizePanel")}
               className={cn(!state.panel.visible && "pointer-events-none w-0 opacity-0")}
             />
             <ResizablePanel

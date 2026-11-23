@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest } from "@/gateway";
 import type { DagSnapshot } from "@/types";
 import { calculateLevels, dagStatus } from "./dag";
@@ -18,6 +19,7 @@ type View = { zoom: number; x: number; y: number };
 
 /** Compact overview of the active agent's DAG. */
 export function DagMinimap({ activeAgent }: { activeAgent: string }) {
+  const { t } = useTranslation("system");
   const [snapshot, setSnapshot] = useState<DagSnapshot | null>(null);
   const [error, setError] = useState(false);
   const [view, setView] = useState<View>({ zoom: 1, x: 0, y: 0 });
@@ -85,12 +87,12 @@ export function DagMinimap({ activeAgent }: { activeAgent: string }) {
     return () => svg.removeEventListener("wheel", onWheel);
   }, [svg, layout]);
 
-  if (!snapshot) return <div className="grid h-32 place-items-center rounded-md border text-xs text-muted-foreground">{error ? "Could not load DAG" : "Loading DAG…"}</div>;
-  if (!layout) return <div className="grid h-32 place-items-center rounded-md border text-xs text-muted-foreground">{error ? "Could not refresh DAG" : "No DAG nodes"}</div>;
+  if (!snapshot) return <div className="grid h-32 place-items-center rounded-md border text-xs text-muted-foreground">{error ? t("minimap.loadFailed") : t("minimap.loading")}</div>;
+  if (!layout) return <div className="grid h-32 place-items-center rounded-md border text-xs text-muted-foreground">{error ? t("minimap.couldNotRefresh") : t("minimap.noNodes")}</div>;
 
   return (
     <div className="relative overflow-hidden rounded-md border bg-card">
-      <svg ref={setSvg} role="img" aria-label={`DAG overview: ${snapshot.nodes.length} nodes, ${snapshot.edges.length} edges. Scroll to zoom.`} className="block h-32 w-full" viewBox={`${view.x} ${view.y} ${layout.width / view.zoom} ${layout.height / view.zoom}`}>
+      <svg ref={setSvg} role="img" aria-label={t("minimap.overview", { nodes: snapshot.nodes.length, edges: snapshot.edges.length })} className="block h-32 w-full" viewBox={`${view.x} ${view.y} ${layout.width / view.zoom} ${layout.height / view.zoom}`}>
         {snapshot.edges.map((edge, index) => {
           const from = layout.positions.get(edge.from), to = layout.positions.get(edge.to);
           return from && to ? <line key={`${edge.from}:${edge.to}:${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke="currentColor" className="text-muted-foreground/50" strokeWidth="1.5" /> : null;
@@ -101,7 +103,7 @@ export function DagMinimap({ activeAgent }: { activeAgent: string }) {
           return point && <circle key={node.id} cx={point.x} cy={point.y} r="4" fill="currentColor" className={statusDotColors[status] ?? statusDotColors.pending}><title>{node.id} · {status}</title></circle>;
         })}
       </svg>
-      {error && <span className="absolute right-1 bottom-1 text-xs text-destructive">Refresh failed</span>}
+      {error && <span className="absolute right-1 bottom-1 text-xs text-destructive">{t("minimap.refreshFailed")}</span>}
     </div>
   );
 }

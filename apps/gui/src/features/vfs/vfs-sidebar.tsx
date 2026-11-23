@@ -10,6 +10,7 @@ import { ViewLocationMenu } from "@/app/workbench/view-location-menu";
 
 import { useCallback, useEffect, useState } from "react";
 import { useSyncExternalStore } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ChevronDown, ChevronRight, Download, File, FilePlus2, Folder, FolderOpen, FolderPlus, HardDrive,
   Lock, Pencil, RefreshCw, Server, Trash2, Upload,
@@ -45,13 +46,14 @@ function Row({
   onSelect: (node: TreeNode) => void;
   onMutated: (parent: string) => void;
 }) {
+  const { t } = useTranslation("vfs");
   const state = getVfsTreeState();
   const isOpen = state.expanded.has(node.path);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const rename = async () => {
-    const next = window.prompt("重命名为:", node.name);
+    const next = window.prompt(t("sidebar.renamePrompt"), node.name);
     if (!next || next === node.name) return;
     setBusy(true);
     setError("");
@@ -67,8 +69,8 @@ function Row({
 
   const remove = async () => {
     const message = node.is_dir
-      ? `删除目录 ${node.path} 及其全部内容?`
-      : `删除文件 ${node.path}?`;
+      ? t("sidebar.confirmDeleteDir", { path: node.path })
+      : t("sidebar.confirmDeleteFile", { path: node.path });
     if (!window.confirm(message)) return;
     setBusy(true);
     setError("");
@@ -121,7 +123,7 @@ function Row({
           <File className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         )}
         <span className="min-w-0 flex-1 truncate" data-vfs-entry-name>{node.name}</span>
-        {node.readOnly && <Lock className={cn("size-3 shrink-0 text-muted-foreground", !node.is_dir && "group-hover:invisible")} aria-label="只读挂载" />}
+        {node.readOnly && <Lock className={cn("size-3 shrink-0 text-muted-foreground", !node.is_dir && "group-hover:invisible")} aria-label={t("sidebar.readOnlyBadge")} />}
         {!node.is_dir && node.size > 0 && (
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70 group-hover:invisible">{formatBytes(node.size)}</span>
         )}
@@ -129,16 +131,16 @@ function Row({
       {/* Row actions: hover-only, never on read-only subtrees. */}
       <span className="absolute right-1 top-0 hidden items-center gap-0.5 group-hover:flex" data-vfs-actions={node.path}>
         {!node.is_dir && (
-          <button type="button" aria-label={`下载 ${node.name}`} title="下载" onClick={() => void download()} className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+          <button type="button" aria-label={t("sidebar.downloadAria", { name: node.name })} title={t("sidebar.downloadTitle")} onClick={() => void download()} className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
             <Download className="size-3" />
           </button>
         )}
         {!node.readOnly && (
           <>
-            <button type="button" aria-label={`重命名 ${node.name}`} title="重命名" onClick={() => void rename()} className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+            <button type="button" aria-label={t("sidebar.renameAria", { name: node.name })} title={t("sidebar.renameTitle")} onClick={() => void rename()} className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
               <Pencil className="size-3" />
             </button>
-            <button type="button" aria-label={`删除 ${node.name}`} title="删除" onClick={() => void remove()} className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
+            <button type="button" aria-label={t("sidebar.deleteAria", { name: node.name })} title={t("sidebar.deleteTitle")} onClick={() => void remove()} className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground">
               <Trash2 className="size-3" />
             </button>
           </>
@@ -168,6 +170,7 @@ function Branch({
    *  subtrees owned by remote compute targets). */
   hidden?: (node: TreeNode) => boolean;
 }) {
+  const { t } = useTranslation("vfs");
   const state = getVfsTreeState();
   const children = state.children.get(path)?.filter((node) => !hidden?.(node));
   const error = state.errors.get(path);
@@ -177,11 +180,11 @@ function Branch({
   }
   if (!children) {
     return loading ? (
-      <p className="px-2 py-0.5 text-[11px] text-muted-foreground" style={{ paddingLeft: `${depth * 12 + 4}px` }}>加载中…</p>
+      <p className="px-2 py-0.5 text-[11px] text-muted-foreground" style={{ paddingLeft: `${depth * 12 + 4}px` }}>{t("sidebar.loading")}</p>
     ) : null;
   }
   if (children.length === 0) {
-    return <p className="px-2 py-0.5 text-[11px] text-muted-foreground" style={{ paddingLeft: `${depth * 12 + 4}px` }}>(空)</p>;
+    return <p className="px-2 py-0.5 text-[11px] text-muted-foreground" style={{ paddingLeft: `${depth * 12 + 4}px` }}>{t("sidebar.empty")}</p>;
   }
   return (
     <>
@@ -197,12 +200,6 @@ function Branch({
   );
 }
 
-const BACKEND_LABELS = {
-  local: "本地",
-  slurm: "Slurm",
-  ssh: "SSH",
-} as const;
-
 function GroupHeader({
   group,
   collapsed,
@@ -212,27 +209,32 @@ function GroupHeader({
   collapsed: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation("vfs");
   const readOnly = group.roots.some((root) => readOnlyCover(root));
+  const backendLabel = group.backend === "local" ? t("sidebar.backendLocal") : group.backend === "slurm" ? "Slurm" : "SSH";
   return (
     <button
       type="button"
       aria-expanded={!collapsed}
       data-vfs-group={group.id}
       data-vfs-group-backend={group.backend}
-      title={`${group.name} · ${BACKEND_LABELS[group.backend]}${readOnly ? " · 只读" : ""}`}
+      title={readOnly
+        ? t("sidebar.groupTitleReadOnly", { name: group.name, backend: backendLabel })
+        : t("sidebar.groupTitle", { name: group.name, backend: backendLabel })}
       onClick={onToggle}
       className="flex w-full items-center gap-1 rounded-sm px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-accent"
     >
       {collapsed ? <ChevronRight className="size-3 shrink-0" /> : <ChevronDown className="size-3 shrink-0" />}
       <HardDrive className="size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{group.name}</span>
-      <span className="shrink-0 rounded bg-muted px-1 text-[9px] font-medium normal-case">{BACKEND_LABELS[group.backend]}</span>
-      {readOnly && <Lock className="size-3 shrink-0" aria-label="只读挂载" />}
+      <span className="shrink-0 rounded bg-muted px-1 text-[9px] font-medium normal-case">{backendLabel}</span>
+      {readOnly && <Lock className="size-3 shrink-0" aria-label={t("sidebar.readOnlyBadge")} />}
     </button>
   );
 }
 
 export function VfsSidebar() {
+  const { t } = useTranslation("vfs");
   useSyncExternalStore(subscribeVfsTree, getVfsTreeState);
   const treeState = getVfsTreeState();
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -263,7 +265,7 @@ export function VfsSidebar() {
   };
 
   const newFolder = async () => {
-    const name = window.prompt(`在 ${activeDir} 下新建文件夹:`, "");
+    const name = window.prompt(t("sidebar.newFolderPrompt", { dir: activeDir }), "");
     if (!name) return;
     const path = activeDir === "/" ? `/${name}` : `${activeDir.replace(/\/+$/, "")}/${name}`;
     setBusy(true);
@@ -279,7 +281,7 @@ export function VfsSidebar() {
   };
 
   const newFile = async () => {
-    const name = window.prompt(`在 ${activeDir} 下新建文件:`, "");
+    const name = window.prompt(t("sidebar.newFilePrompt", { dir: activeDir }), "");
     if (!name) return;
     const path = activeDir === "/" ? `/${name}` : `${activeDir.replace(/\/+$/, "")}/${name}`;
     setBusy(true);
@@ -312,26 +314,26 @@ export function VfsSidebar() {
   const writable = !readOnlyCover(activeDir);
 
   return (
-    <div role="group" aria-label="VFS 文件浏览" data-vfs-sidebar data-vfs-active-dir={activeDir} className="flex min-h-0 flex-1 flex-col">
+    <div role="group" aria-label={t("sidebar.browserLabel")} data-vfs-sidebar data-vfs-active-dir={activeDir} className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
         <Server className="size-3.5 text-muted-foreground" />
         <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">VFS</span>
         <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/70" title={activeDir}>{activeDir}</span>
-        <Button size="icon-xs" variant="ghost" aria-label="新建文件夹" title={`在 ${activeDir} 新建文件夹`} disabled={busy || !writable} onClick={() => void newFolder()}>
+        <Button size="icon-xs" variant="ghost" aria-label={t("sidebar.newFolder")} title={t("sidebar.newFolderTitle", { dir: activeDir })} disabled={busy || !writable} onClick={() => void newFolder()}>
           <FolderPlus className="size-3.5" />
         </Button>
-        <Button size="icon-xs" variant="ghost" aria-label="新建文件" title={`在 ${activeDir} 新建文件`} disabled={busy || !writable} onClick={() => void newFile()}>
+        <Button size="icon-xs" variant="ghost" aria-label={t("sidebar.newFile")} title={t("sidebar.newFileTitle", { dir: activeDir })} disabled={busy || !writable} onClick={() => void newFile()}>
           <FilePlus2 className="size-3.5" />
         </Button>
-        <Button size="icon-xs" variant="ghost" aria-label="上传文件" title={`上传到 ${activeDir}`} disabled={busy || !writable} onClick={() => void upload()}>
+        <Button size="icon-xs" variant="ghost" aria-label={t("sidebar.upload")} title={t("sidebar.uploadTitle", { dir: activeDir })} disabled={busy || !writable} onClick={() => void upload()}>
           <Upload className="size-3.5" />
         </Button>
         <Button
           size="icon-xs"
           variant="ghost"
           className="ml-auto"
-          aria-label="重新加载"
-          title="重新加载"
+          aria-label={t("sidebar.refresh")}
+          title={t("sidebar.refresh")}
           onClick={() => void refreshTree()}
         >
           <RefreshCw className="size-3.5" />
@@ -340,11 +342,11 @@ export function VfsSidebar() {
       </div>
       {!writable && (
         <p className="border-b bg-muted/40 px-2 py-1 text-[10px] text-muted-foreground">
-          <Lock className="mr-1 inline size-3" />{activeDir} 位于只读挂载,仅可浏览与下载。
+          <Lock className="mr-1 inline size-3" />{t("sidebar.readOnlyNotice", { dir: activeDir })}
         </p>
       )}
       {error && <div role="alert" className="border-b border-destructive/30 bg-destructive/10 px-2 py-1 text-[11px] text-destructive">{error}</div>}
-      <div role="tree" aria-label="VFS 目录树" className="min-h-0 flex-1 overflow-y-auto p-1">
+      <div role="tree" aria-label={t("sidebar.treeLabel")} className="min-h-0 flex-1 overflow-y-auto p-1">
         {treeState.groups.map((group) => {
           const collapsed = collapsedGroups.has(group.id);
           const hiddenPrefixes = group.hidden ?? [];

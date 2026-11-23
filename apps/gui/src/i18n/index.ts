@@ -24,6 +24,18 @@ import zhReader from "./locales/zh/reader.json";
 import enReader from "./locales/en/reader.json";
 import zhWiki from "./locales/zh/wiki.json";
 import enWiki from "./locales/en/wiki.json";
+import zhWorkbench from "./locales/zh/workbench.json";
+import enWorkbench from "./locales/en/workbench.json";
+import zhHpc from "./locales/zh/hpc.json";
+import enHpc from "./locales/en/hpc.json";
+import zhProjects from "./locales/zh/projects.json";
+import enProjects from "./locales/en/projects.json";
+import zhSystem from "./locales/zh/system.json";
+import enSystem from "./locales/en/system.json";
+import zhVfs from "./locales/zh/vfs.json";
+import enVfs from "./locales/en/vfs.json";
+import zhContext from "./locales/zh/context.json";
+import enContext from "./locales/en/context.json";
 
 export const defaultNS = "common";
 export const resources = {
@@ -36,6 +48,12 @@ export const resources = {
     discovery: zhDiscovery,
     reader: zhReader,
     wiki: zhWiki,
+    workbench: zhWorkbench,
+    hpc: zhHpc,
+    projects: zhProjects,
+    system: zhSystem,
+    vfs: zhVfs,
+    context: zhContext,
   },
   en: {
     common: enCommon,
@@ -46,6 +64,12 @@ export const resources = {
     discovery: enDiscovery,
     reader: enReader,
     wiki: enWiki,
+    workbench: enWorkbench,
+    hpc: enHpc,
+    projects: enProjects,
+    system: enSystem,
+    vfs: enVfs,
+    context: enContext,
   },
 } as const;
 

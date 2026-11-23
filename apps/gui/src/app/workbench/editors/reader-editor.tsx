@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import i18n from "@/i18n";
 import { FileText, Loader2, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { openPdfReader } from "@/features/reader";
@@ -97,11 +98,11 @@ function ReaderEditorBody({ editor }: EditorContext) {
           },
           onReference: (selection) => {
             const current = basketRef.current;
-            if (!current?.available) { window.alert("请先选择 Agent 会话"); return; }
+            if (!current?.available) { window.alert(i18n.t("workbench:reader.selectAgentFirst")); return; }
             current.add({
               kind: "evidence",
               id: JSON.stringify([params.articleId, params.attachmentKey ?? null, selection.page ?? null, selection.start ?? null, selection.end ?? null, selection.text]),
-              title: `${params.title} · 选中文本`,
+              title: i18n.t("workbench:reader.selectionTitle", { title: params.title }),
               scope: "阅读器选中文本（非全文）",
               source: `bib:${params.articleId}${params.attachmentKey ? ` · ${params.attachmentKey}` : ""}${selection.page ? ` · 第 ${selection.page} 页` : ""}${selection.start !== undefined ? ` · 字符 ${selection.start}–${selection.end}` : ""}`,
               content: selection.text,
@@ -134,9 +135,9 @@ function ReaderEditorBody({ editor }: EditorContext) {
   if (error) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-        <p className="text-sm text-destructive">阅读器打开失败:{error}</p>
+        <p className="text-sm text-destructive">{i18n.t("workbench:reader.openFailed", { error })}</p>
         <Button variant="outline" size="sm" onClick={() => { setError(null); setReopenTick((tick) => tick + 1); }}>
-          <RotateCw className="size-3.5" />重试
+          <RotateCw className="size-3.5" />{i18n.t("workbench:reader.retry")}
         </Button>
       </div>
     );

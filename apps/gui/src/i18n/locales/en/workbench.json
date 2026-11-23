@@ -1,0 +1,258 @@
+{
+  "palette": {
+    "title": "Command palette",
+    "description": "Ctrl+P to open · type to filter · arrows to select · Enter to run.",
+    "placeholderCommands": "Select a command…",
+    "placeholderAll": "Search tabs or commands…",
+    "empty": "No matching commands",
+    "editorCategory": "editor",
+    "editorSplitCategory": "editor (split)"
+  },
+  "commandCenter": {
+    "aria": "Command palette",
+    "title": "Command palette (Ctrl+P)",
+    "placeholder": "Search or type a command…"
+  },
+  "commands": {
+    "quickOpen": "Quick switch tabs and commands",
+    "openCommandPalette": "Open command palette",
+    "wikiSearch": "Search knowledge base",
+    "toggleSecondarySidebar": "Toggle secondary side bar",
+    "resetViewLocations": "Reset view locations",
+    "toggleSidebar": "Toggle side bar",
+    "togglePanel": "Toggle bottom panel",
+    "panelEvents": "Show event stream panel",
+    "panelNotices": "Show notices panel",
+    "splitEditor": "Split editor",
+    "closeSplit": "Close editor split",
+    "closeEditor": "Close editor",
+    "openBibliography": "Open bibliography",
+    "openWiki": "Open knowledge base",
+    "openDecks": "Open slides",
+    "openWikiGraph": "Open knowledge graph",
+    "openAgents": "Show agent overview",
+    "openConfig": "Open settings",
+    "openHpcJobs": "Open HPC jobs",
+    "openVfs": "Open VFS browser",
+    "cycleTheme": "Cycle color theme",
+    "newAgent": "New agent",
+    "cancelAgent": "Cancel agent",
+    "compactConversation": "Compact conversation",
+    "selectModel": "Select model",
+    "viewDag": "View DAG",
+    "openAgentTab": "Open agent tab",
+    "toggleThinking": "Toggle thinking blocks",
+    "toggleToolCalls": "Toggle tool calls",
+    "toggleToolResults": "Toggle tool results",
+    "manuscripts": "Manuscripts",
+    "library": "Bibliography library",
+    "discover": "Discover literature",
+    "subscriptions": "RSS subscriptions",
+    "closeWikiEntry": "Close wiki entry",
+    "closeDeck": "Close deck"
+  },
+  "views": {
+    "bibliography": "Bibliography",
+    "projects": "Plugins",
+    "wiki": "Knowledge base",
+    "vfs": "Files",
+    "decks": "Slides",
+    "canvases": "Canvases",
+    "agents": "Agent",
+    "events": "Events",
+    "notices": "Notices",
+    "terminal": "Terminal",
+    "view": "view",
+    "wikiGraph": "Knowledge graph"
+  },
+  "bibViews": {
+    "library": "Library",
+    "manuscripts": "Manuscripts",
+    "discover": "Discover",
+    "subscriptions": "Subscriptions",
+    "workspaceAria": "Bibliography workspace"
+  },
+  "editorKinds": {
+    "untitledCanvas": "Untitled canvas",
+    "untitledEntry": "Untitled entry",
+    "untitledDeck": "Untitled deck",
+    "wikiGraphName": "Knowledge graph",
+    "file": "File",
+    "canvasDirty": "The canvas has unsaved changes; closing will discard them. Continue?",
+    "entryEditing": "This tab is being edited; closing will discard unsaved changes. Continue?",
+    "deckDirty": "This deck has unsaved changes; closing will discard them. Continue?",
+    "pluginDirty": "This file has unsaved changes; closing will discard them. Continue?",
+    "vfsDirty": "This file has unsaved changes; closing will discard them. Continue?",
+    "loadCanvas": "Loading canvas editor…",
+    "computeTargets": "Compute targets",
+    "hpcJobs": "HPC jobs"
+  },
+  "panel": {
+    "eventsEmpty": "No events yet — gateway frames appear here once you interact with an agent",
+    "noticesEmpty": "No notices yet — gateway notices such as model switches and login results appear here"
+  },
+  "activityBar": {
+    "navAria": "Workbench activity bar",
+    "wikiTitle": "Knowledge base (entries open as editor tabs, Ctrl+K to search)",
+    "decksTitle": "Slides (create/browse decks; clicking opens an editor tab)",
+    "vfsLabel": "VFS files",
+    "vfsTitle": "VFS file browser (mounts / container outputs / data)",
+    "agentsTitle": "Agent overview (chats open as editor tabs)",
+    "search": "Search or type a command",
+    "searchTitle": "Search or type a command (Ctrl+P)",
+    "expandSidebar": "Expand side bar",
+    "collapseSidebar": "Collapse side bar",
+    "expandSidebarTitle": "Expand side bar (Ctrl+B)",
+    "collapseSidebarTitle": "Collapse side bar (Ctrl+B)",
+    "togglePanel": "Toggle bottom panel",
+    "panelTitle": "Bottom panel (Ctrl+J)",
+    "configTitle": "Settings",
+    "themeLabel": "Color theme: {{mode}}, click to switch",
+    "themeTitle": "Color theme: {{mode}} (click to switch)",
+    "logout": "Log out"
+  },
+  "theme": {
+    "light": "Light theme",
+    "dark": "Dark theme",
+    "system": "Follow system"
+  },
+  "sidebar": {
+    "collapseAria": "Collapse side bar",
+    "sidebarAria": "Workbench side bar",
+    "collapse": "Collapse side bar",
+    "tagline": "Research workspace",
+    "plugins": "Plugins",
+    "moveBack": "Move view back to side bar"
+  },
+  "editorTabs": {
+    "tabsAria": "Editor tabs",
+    "splitTabsAria": "Split editor tabs",
+    "unsaved": "Unsaved changes",
+    "close": "Close {{title}}",
+    "dragGroup": "Drag editor group",
+    "showAll": "Show all editor tabs",
+    "allTabs": "All editor tabs",
+    "split": "Split editor",
+    "closeSplit": "Close split",
+    "closeGroup": "Close editor group"
+  },
+  "editorArea": {
+    "emptyPre": "Press ",
+    "emptyPost": " to search commands, or open from the left",
+    "library": "Library",
+    "wiki": "Knowledge base",
+    "settings": "Settings",
+    "resizeSplitWidth": "Resize split width",
+    "resizeSplitHeight": "Resize split height"
+  },
+  "shell": {
+    "resizeSidebar": "Resize side bar width",
+    "resizePanel": "Resize panel height"
+  },
+  "bottomPanel": {
+    "aria": "Bottom panel",
+    "tabsAria": "Panel tabs",
+    "collapse": "Collapse panel"
+  },
+  "secondarySidebar": {
+    "aria": "Secondary side bar",
+    "resizeAria": "Resize secondary side bar width",
+    "hide": "Hide secondary side bar"
+  },
+  "viewLocation": {
+    "dragAria": "Drag view",
+    "dragTitle": "Drag to move the view",
+    "menuAria": "View location",
+    "menuTitle": "Move view (drag works too)",
+    "moveTo": "Move {{name}} to",
+    "primarySidebar": "Primary side bar",
+    "secondarySidebar": "Secondary side bar",
+    "panel": "Bottom panel"
+  },
+  "agentSidebar": {
+    "groupAria": "Agent workspace",
+    "tabsAria": "Agent side bar views",
+    "list": "Agent list",
+    "overview": "Agent details",
+    "resume": "Resume agent",
+    "create": "Create agent"
+  },
+  "agentList": {
+    "search": "Search agents",
+    "count": "{{count}} agents",
+    "noMatch": "No matching agents.",
+    "empty": "No agents yet — create or resume one.",
+    "model": "Model: ",
+    "effort": "Reasoning effort: ",
+    "unsupported": "No thinking support",
+    "noneShort": "None",
+    "openAgent": "Open agent {{path}} ({{status}})",
+    "catalogFailed": "Failed to load model catalog",
+    "catalogEmpty": "Model catalog is empty — add models in Settings → Models",
+    "effortUnsupported": "The current model does not support thinking"
+  },
+  "terminal": {
+    "project": "Terminal project",
+    "selectProject": "Select a plugin project."
+  },
+  "windowControls": {
+    "minimize": "Minimize",
+    "restore": "Restore",
+    "maximize": "Maximize",
+    "closeAria": "Close window",
+    "close": "Close"
+  },
+  "contextBinding": {
+    "bindAria": "Bind document context",
+    "changeTitle": "{{label}} · click to change",
+    "pickTitle": "Pick a document; its latest state is attached to every send",
+    "previewAria": "Preview document context",
+    "previewTitle": "Preview what will be attached on the next send",
+    "unbindAria": "Unbind document",
+    "dialogTitle": "Bind document context",
+    "dialogDescription": "Attach the selected document's latest state to every message. Preview the content, or unbind at any time.",
+    "searchPlaceholder": "Search open documents…",
+    "empty": "No matching documents — open one before binding.",
+    "modeHeading": "Binding mode",
+    "unbind": "No document",
+    "follow": "Follow current document",
+    "followDesc": "Uses the most recently viewed document; kept when you switch back to the chat",
+    "followLabel": "Follow · {{title}}",
+    "noDoc": "No document selected",
+    "defaultLabel": "Bind document",
+    "pinHeading": "Pin document",
+    "candidatesEmpty": "Open a wiki entry, reader, deck or plugin project to pick it here."
+  },
+  "reader": {
+    "selectAgentFirst": "Select an agent session first",
+    "openFailed": "Failed to open reader: {{error}}",
+    "retry": "Retry",
+    "selectionTitle": "{{title}} · selected text"
+  },
+  "gateway": {
+    "loginFailed": "Login failed ({{status}})",
+    "enrollFailed": "Enroll request failed (HTTP {{status}})",
+    "noStream": "Cannot read installation progress. Refresh the compute target status and retry.",
+    "unrecognizedProgress": "Received an unrecognized installation progress message",
+    "progressDisconnected": "Installation progress connection dropped; the backend may still be running. Refresh the compute target status to confirm the result, then retry."
+  },
+  "markdown": {
+    "imagePending": "Image pending…",
+    "imageInvalid": "Invalid image reference: {{alt}}"
+  },
+  "runtime": {
+    "historyFailed": "Failed to load history: {{cause}}",
+    "backgroundDone": "done",
+    "backgroundFailed": "failed",
+    "retry": "Retry {{attempt}}/{{max}}: {{message}}",
+    "unauthenticated": "{{addr}} (unauthenticated)",
+    "needToken": "Gateway token required",
+    "illustratorFailed": "Failed to create illustrator specialist: returned agent path does not match.",
+    "modelFailed": "Failed to switch model: {{cause}}",
+    "effortFailed": "Failed to switch reasoning effort: {{cause}}"
+  },
+  "navigation": {
+    "back": "Back",
+    "forward": "Forward"
+  }
+}

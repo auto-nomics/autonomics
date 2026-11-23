@@ -1,4 +1,5 @@
 import { gatewayRequest } from "@/gateway";
+import i18n from "@/i18n";
 
 type Message = { type: string; seq?: number; request_seq?: number; command?: string; event?: string; success?: boolean; message?: string; body?: any };
 
@@ -20,13 +21,13 @@ export class DebugClient {
 
   async start(path: string, breakpoints: Record<string, number[]>) {
     const opened = await gatewayRequest("POST", this.base);
-    if (typeof opened.client !== "string" || !opened.client) throw new Error("调试器未返回会话");
+    if (typeof opened.client !== "string" || !opened.client) throw new Error(i18n.t("projects:debug.noSession"));
     this.client = opened.client;
     if (this.closed) { void gatewayRequest("DELETE", `${this.base}/${this.client}`).catch(() => {}); return; }
     void this.poll();
     await this.request("initialize", { clientID: "autonomics", adapterID: "python", pathFormat: "path", linesStartAt1: true, columnsStartAt1: true, supportsRunInTerminalRequest: false });
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = window.setTimeout(() => { this.initialized = undefined; reject(new Error("调试器初始化超时")); }, 20000);
+      const timer = window.setTimeout(() => { this.initialized = undefined; reject(new Error(i18n.t("projects:debug.initTimeout"))); }, 20000);
       this.initialized = { resolve, reject, timer };
     });
     // debugpy responds to launch only after configurationDone.
@@ -45,14 +46,14 @@ export class DebugClient {
   request(command: string, args: object): Promise<any> {
     const seq = ++this.sequence;
     return new Promise((resolve, reject) => {
-      const timer = window.setTimeout(() => { this.pending.delete(seq); reject(new Error(`${command} 超时`)); }, 30000);
+      const timer = window.setTimeout(() => { this.pending.delete(seq); reject(new Error(i18n.t("projects:debug.requestTimeout", { command }))); }, 30000);
       this.pending.set(seq, { resolve, reject, timer });
       void this.send({ seq, type: "request", command, arguments: args }).catch(error => { window.clearTimeout(timer); this.pending.delete(seq); reject(error); });
     });
   }
 
   private send(message: object) {
-    if (this.closed || !this.client) return Promise.reject(new Error("调试器未连接"));
+    if (this.closed || !this.client) return Promise.reject(new Error(i18n.t("projects:debug.notConnected")));
     const result = this.queue.then(() => gatewayRequest("POST", `${this.base}/${this.client}`, message)).then(() => {});
     this.queue = result.catch(() => {});
     return result;
@@ -62,12 +63,12 @@ export class DebugClient {
     try {
       const result = await gatewayRequest("GET", `${this.base}/${this.client}?offset=${this.offset}`);
       if (this.closed) return;
-      if (result.truncated) throw new Error("调试器消息队列溢出");
+      if (result.truncated) throw new Error(i18n.t("projects:debug.queueOverflow"));
       this.offset = result.offset;
       for (const message of result.messages as Message[]) {
         if (message.type === "response" && typeof message.request_seq === "number") {
           const pending = this.pending.get(message.request_seq);
-          if (pending) { this.pending.delete(message.request_seq); window.clearTimeout(pending.timer); message.success === false ? pending.reject(new Error(message.message ?? "调试请求失败")) : pending.resolve(message.body); }
+          if (pending) { this.pending.delete(message.request_seq); window.clearTimeout(pending.timer); message.success === false ? pending.reject(new Error(message.message ?? i18n.t("projects:debug.requestFailed"))) : pending.resolve(message.body); }
         } else if (message.type === "event") {
           if (message.event === "initialized" && this.initialized) { window.clearTimeout(this.initialized.timer); this.initialized.resolve(); this.initialized = undefined; }
           this.onEvent(message);
@@ -75,7 +76,7 @@ export class DebugClient {
           void this.send({ seq: ++this.sequence, type: "response", request_seq: message.seq, command: message.command, success: false, message: "不支持此调试器请求" });
         }
       }
-      if (result.exited) throw new Error("调试器已退出");
+      if (result.exited) throw new Error(i18n.t("projects:debug.exited"));
       this.timer = window.setTimeout(() => void this.poll(), 120);
     } catch (cause) { if (!this.closed) { const error = cause instanceof Error ? cause : new Error(String(cause)); this.onError(error); this.dispose(); } }
   }
@@ -84,8 +85,8 @@ export class DebugClient {
     if (this.closed) return;
     this.closed = true;
     window.clearTimeout(this.timer);
-    if (this.initialized) { window.clearTimeout(this.initialized.timer); this.initialized.reject(new Error("调试会话已关闭")); this.initialized = undefined; }
-    for (const pending of this.pending.values()) { window.clearTimeout(pending.timer); pending.reject(new Error("调试会话已关闭")); }
+    if (this.initialized) { window.clearTimeout(this.initialized.timer); this.initialized.reject(new Error(i18n.t("projects:debug.sessionClosed"))); this.initialized = undefined; }
+    for (const pending of this.pending.values()) { window.clearTimeout(pending.timer); pending.reject(new Error(i18n.t("projects:debug.sessionClosed"))); }
     this.pending.clear();
     if (this.client) void gatewayRequest("DELETE", `${this.base}/${this.client}`).catch(() => {});
   }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { gatewayRequest } from "@/gateway";
 import { Bot, ChevronDown, Cpu, RefreshCw, Settings2, X } from "lucide-react";
 import type {
@@ -76,6 +77,7 @@ function supportsRemoteCatalog(providerType: string) {
 }
 
 export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent: string; initialTab?: string }) {
+  const { t } = useTranslation("system");
   const [catalog, setCatalog] = useState<Catalog>({ providers: [], models: [], active_model: null });
   const [display, setDisplay] = useState<DisplaySettings>({
     collapse_thinking: false,
@@ -146,7 +148,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
   const saveProvider = async (providerName: string) => {
     const provider = catalog.providers.find((item) => item.name === providerName);
     if (!provider) return;
-    setStatus({ kind: "ok", text: "Saving credentials…" });
+    setStatus({ kind: "ok", text: t("config.savingCredentials") });
     try {
       await gatewayRequest("PUT", "/model-config/provider", {
         name: providerName,
@@ -156,7 +158,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
       });
       await refreshCatalog();
       setCredentialProvider("");
-      setStatus({ kind: "ok", text: `Saved credentials for ${providerName}` });
+      setStatus({ kind: "ok", text: t("config.savedCredentials", { provider: providerName }) });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     }
@@ -169,13 +171,13 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
     const maxOutput = Number(modelForm.max_output_tokens);
     const inputPrice = Number(modelForm.input_token_price);
     const outputPrice = Number(modelForm.output_token_price);
-    if (!modelName) return setStatus({ kind: "error", text: "Model name is required" });
-    if (!Number.isSafeInteger(contextLength) || contextLength <= 0) return setStatus({ kind: "error", text: "Context length must be positive" });
-    if (!Number.isSafeInteger(maxOutput) || maxOutput <= 0) return setStatus({ kind: "error", text: "Max output must be positive" });
+    if (!modelName) return setStatus({ kind: "error", text: t("config.modelNameRequired") });
+    if (!Number.isSafeInteger(contextLength) || contextLength <= 0) return setStatus({ kind: "error", text: t("config.contextLengthPositive") });
+    if (!Number.isSafeInteger(maxOutput) || maxOutput <= 0) return setStatus({ kind: "error", text: t("config.maxOutputPositive") });
     if (![inputPrice, outputPrice].every((value) => Number.isFinite(value) && value >= 0)) {
-      return setStatus({ kind: "error", text: "Prices must be non-negative numbers" });
+      return setStatus({ kind: "error", text: t("config.pricesNonNegative") });
     }
-    setStatus({ kind: "ok", text: "Saving model…" });
+    setStatus({ kind: "ok", text: t("config.savingModel") });
     try {
       await gatewayRequest("PUT", "/model-config/model", {
         provider_name: modelForm.provider_name,
@@ -193,7 +195,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
       });
       await refreshCatalog();
       setModelForm(null);
-      setStatus({ kind: "ok", text: `${modelForm.original_model_name ? "Updated" : "Added"} ${modelForm.provider_name}:${modelName}` });
+      setStatus({ kind: "ok", text: modelForm.original_model_name ? t("config.modelUpdated", { provider: modelForm.provider_name, model: modelName }) : t("config.modelAdded", { provider: modelForm.provider_name, model: modelName }) });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     }
@@ -209,7 +211,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
       );
       await refreshCatalog();
       setConfirmDelete(null);
-      setStatus({ kind: "ok", text: `Deleted ${spec}` });
+      setStatus({ kind: "ok", text: t("config.deletedModel", { spec }) });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     }
@@ -226,12 +228,12 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
 
   const fetchCatalog = async (provider: ProviderRow) => {
     setCatalogBusy(provider.name);
-    setStatus({ kind: "ok", text: `Fetching ${provider.name} catalogue…` });
+    setStatus({ kind: "ok", text: t("config.fetchingCatalog", { provider: provider.name }) });
     try {
       await gatewayRequest("POST", `/model-config/providers/${encodeURIComponent(provider.name)}/catalog`, {
         base_url: provider.base_url,
       });
-      setStatus({ kind: "ok", text: `Fetching ${provider.name} catalogue in daemon…` });
+      setStatus({ kind: "ok", text: t("config.fetchingCatalogDaemon", { provider: provider.name }) });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     } finally {
@@ -246,7 +248,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
       const response = await gatewayRequest("PUT", `/agents/${activeAgent}/config`, { runtime }) as AgentRuntimeConfigView;
       setRuntime(response.runtime);
       setEffective(response.effective);
-      setStatus({ kind: "ok", text: "Agent runtime saved" });
+      setStatus({ kind: "ok", text: t("config.agentRuntimeSaved") });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     } finally {
@@ -270,7 +272,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
     try {
       const response = await gatewayRequest("PUT", "/embedding-config", { config: embedding });
       setEmbedding(response.config ?? embedding);
-      setStatus({ kind: "ok", text: "Embedding model saved" });
+      setStatus({ kind: "ok", text: t("config.embeddingSaved") });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     } finally {
@@ -281,7 +283,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
   const chatgptLogin = async () => {
     try {
       const response = await gatewayRequest("POST", "/model-config/chatgpt/login");
-      setStatus({ kind: "ok", text: `Authorize in the browser: ${response.url}` });
+      setStatus({ kind: "ok", text: t("config.authorizeInBrowser", { url: response.url }) });
       window.open(response.url, "_blank", "noopener");
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
@@ -292,7 +294,7 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
     try {
       const response = await gatewayRequest("POST", "/model-config/chatgpt/refresh");
       await refreshCatalog();
-      setStatus({ kind: response.refreshed ? "ok" : "error", text: response.refreshed ? "ChatGPT token refreshed" : "Token refresh was not needed" });
+      setStatus({ kind: response.refreshed ? "ok" : "error", text: response.refreshed ? t("config.tokenRefreshed") : t("config.tokenRefreshNotNeeded") });
     } catch (cause) {
       setStatus({ kind: "error", text: String(cause) });
     }
@@ -315,51 +317,51 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
   };
 
   return (
-    <ScrollArea className="min-h-0 flex-1" viewportLabel="Configuration">
+    <ScrollArea className="min-h-0 flex-1" viewportLabel={t("config.title")}>
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-1 pb-8 pt-2 sm:px-4 sm:pt-5">
         <header className="space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight">Configuration</h1>
-          <p className="text-sm text-muted-foreground">Manage models, compute targets, agent behavior, and application preferences.</p>
+          <h1 className="text-xl font-semibold tracking-tight">{t("config.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("config.subtitle")}</p>
         </header>
-        {loading && <Card className="p-4 text-sm text-muted-foreground" role="status">Loading configuration…</Card>}
-        {error && <Card className="gap-3 p-4 text-sm text-destructive" role="alert"><span>Could not load configuration: {error}</span><Button className="w-fit" size="sm" variant="outline" onClick={() => void loadAll(activeAgent)}>Try again</Button></Card>}
+        {loading && <Card className="p-4 text-sm text-muted-foreground" role="status">{t("config.loading")}</Card>}
+        {error && <Card className="gap-3 p-4 text-sm text-destructive" role="alert"><span>{t("config.loadFailed", { error })}</span><Button className="w-fit" size="sm" variant="outline" onClick={() => void loadAll(activeAgent)}>{t("config.tryAgain")}</Button></Card>}
         {status && (
           <div role={status.kind === "error" ? "alert" : "status"} className={cn(
             "flex items-start justify-between gap-3 rounded-lg border p-3 text-sm",
             status.kind === "ok" ? "border-primary/40 text-foreground" : "border-destructive/40 text-destructive",
           )}>
             <span className="min-w-0 break-words">{status.text}</span>
-            <button type="button" aria-label="Dismiss notification" className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setStatus(null)}><X className="size-4" /></button>
+            <button type="button" aria-label={t("config.dismissNotification")} className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground" onClick={() => setStatus(null)}><X className="size-4" /></button>
           </div>
         )}
 
         {!loading && !error && <Tabs defaultValue={initialTab} className="gap-5">
           <TabsList className="h-auto max-w-full flex-wrap justify-start gap-1 p-1">
-            <TabsTrigger className="px-3 py-1.5" value="models"><Cpu /> Models</TabsTrigger>
-            <TabsTrigger className="px-3 py-1.5" value="agent"><Bot /> Agent Runtime</TabsTrigger>
-            <TabsTrigger className="px-3 py-1.5" value="compute"><Cpu /> 计算目标</TabsTrigger>
-            <TabsTrigger className="px-3 py-1.5" value="settings"><Settings2 /> Settings</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="models"><Cpu /> {t("config.tabs.models")}</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="agent"><Bot /> {t("config.tabs.agentRuntime")}</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="compute"><Cpu /> {t("config.tabs.computeTargets")}</TabsTrigger>
+            <TabsTrigger className="px-3 py-1.5" value="settings"><Settings2 /> {t("config.tabs.settings")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="models" className="grid gap-4">
             <Card className="p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0 space-y-1">
-                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active model</h2>
-                  <p className="break-all text-base font-medium">{catalog.active_model ?? "No model selected"}</p>
-                  <p className="text-xs text-muted-foreground">Choose a model from a provider below.</p>
+                  <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("config.activeModel")}</h2>
+                  <p className="break-all text-base font-medium">{catalog.active_model ?? t("config.noModelSelected")}</p>
+                  <p className="text-xs text-muted-foreground">{t("config.chooseModelBelow")}</p>
                 </div>
-                <Button size="sm" variant="outline" onClick={() => void refreshCatalog().then(() => setStatus({ kind: "ok", text: "Catalog refreshed" })).catch((cause) => setStatus({ kind: "error", text: String(cause) }))}>
-                  <RefreshCw /> Refresh catalog
+                <Button size="sm" variant="outline" onClick={() => void refreshCatalog().then(() => setStatus({ kind: "ok", text: t("config.catalogRefreshed") })).catch((cause) => setStatus({ kind: "error", text: String(cause) }))}>
+                  <RefreshCw /> {t("config.refreshCatalog")}
                 </Button>
               </div>
             </Card>
 
             <div className="space-y-1 px-1">
-              <h2 className="text-sm font-semibold">Providers</h2>
-              <p className="text-xs text-muted-foreground">Configure connections and manage available models.</p>
+              <h2 className="text-sm font-semibold">{t("config.providers")}</h2>
+              <p className="text-xs text-muted-foreground">{t("config.providersHint")}</p>
             </div>
-            {catalog.providers.length === 0 && <Card className="p-4 text-sm text-muted-foreground">No providers available. Refresh the catalog to try again.</Card>}
+            {catalog.providers.length === 0 && <Card className="p-4 text-sm text-muted-foreground">{t("config.noProviders")}</Card>}
             {catalog.providers.map((provider) => {
               const open = expanded.has(provider.name);
               const models = modelsFor(provider.name);
@@ -379,9 +381,9 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
                   >
                     <span className="min-w-0 flex-1">
                       <strong className="block truncate text-sm">{provider.name}</strong>
-                      <span className="text-xs text-muted-foreground">{models.length} {models.length === 1 ? "model" : "models"} · {provider.provider_type}</span>
+                      <span className="text-xs text-muted-foreground">{models.length} {models.length === 1 ? t("config.modelOne") : t("config.modelOther")} · {provider.provider_type}</span>
                     </span>
-                    <Badge variant="secondary">{provider.api_key ? "configured" : "not configured"}</Badge>
+                    <Badge variant="secondary">{provider.api_key ? t("config.configured") : t("config.notConfigured")}</Badge>
                     <ChevronDown aria-hidden="true" className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
                   </button>
                   {open && (
@@ -392,9 +394,9 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
                           <div key={spec} className="flex flex-wrap items-center gap-2 rounded-lg border bg-background p-3">
                             <span className={cn("text-xs", catalog.active_model === spec ? "text-primary" : "text-transparent")}>●</span>
                             <span className="min-w-[8rem] flex-1 break-all text-sm font-medium">{model.model_name}</span>
-                            <span className="text-xs text-muted-foreground">{model.context_length.toLocaleString()} ctx</span>
+                            <span className="text-xs text-muted-foreground">{t("config.ctxCount", { count: model.context_length.toLocaleString() })}</span>
                             <Button size="xs" variant={catalog.active_model === spec ? "secondary" : "outline"} disabled={catalog.active_model === spec} onClick={() => void setActiveModel(spec)}>
-                              {catalog.active_model === spec ? "active" : "activate"}
+                              {catalog.active_model === spec ? t("config.active") : t("config.activate")}
                             </Button>
                             {model.custom && (
                               <>
@@ -413,16 +415,16 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
                                     input_token_price: String(model.input_token_price),
                                     output_token_price: String(model.output_token_price),
                                   });
-                                }}>Edit</Button>
+                                }}>{t("config.edit")}</Button>
                                 <Button size="xs" variant={confirmDelete === spec ? "destructive" : "ghost"} onClick={() => void deleteModel(provider.name, model.model_name)}>
-                                  {confirmDelete === spec ? "Confirm" : "Delete"}
+                                  {confirmDelete === spec ? t("config.confirm") : t("config.delete")}
                                 </Button>
                               </>
                             )}
                           </div>
                         );
                       })}
-                      {!models.length && <p className="text-sm text-muted-foreground">No models</p>}
+                      {!models.length && <p className="text-sm text-muted-foreground">{t("config.noModels")}</p>}
 
                       <div className="flex flex-wrap gap-2">
                         {provider.provider_type !== "openai" && (
@@ -431,15 +433,15 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
                             setApiKey(provider.api_key);
                             setBaseUrl(provider.base_url);
                           }}>
-                            {provider.api_key ? "Edit API key" : "Add API key"}
+                            {provider.api_key ? t("config.editApiKey") : t("config.addApiKey")}
                           </Button>
                         )}
                         <Button size="sm" variant="outline" onClick={() => setModelForm(modelForm?.provider_name === provider.name && !modelForm.original_model_name ? null : newModelDraft(provider.name))}>
-                          {modelForm?.provider_name === provider.name && !modelForm.original_model_name ? "Cancel add" : "Add model"}
+                          {modelForm?.provider_name === provider.name && !modelForm.original_model_name ? t("config.cancelAdd") : t("config.addModel")}
                         </Button>
                         {supportsRemoteCatalog(provider.provider_type) && (
                           <Button size="sm" variant="outline" disabled={catalogBusy === provider.name} onClick={() => void fetchCatalog(provider)}>
-                            {catalogBusy === provider.name ? "Fetching…" : "Fetch catalog"}
+                            {catalogBusy === provider.name ? t("config.fetching") : t("config.fetchCatalog")}
                           </Button>
                         )}
                       </div>
@@ -447,44 +449,44 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
                       {provider.provider_type === "openai" && (
                         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                           <span>
-                            ChatGPT: {!token?.present ? "not signed in" : token.expired ? "token expired" : "token active"}
+                            {!token?.present ? t("config.chatgpt.notSignedIn") : token.expired ? t("config.chatgpt.tokenExpired") : t("config.chatgpt.tokenActive")}
                           </span>
-                          <Button size="xs" variant="secondary" onClick={() => void chatgptLogin()}>Login</Button>
-                          <Button size="xs" variant="secondary" onClick={() => void refreshChatgpt()}>Refresh token</Button>
+                          <Button size="xs" variant="secondary" onClick={() => void chatgptLogin()}>{t("config.chatgpt.login")}</Button>
+                          <Button size="xs" variant="secondary" onClick={() => void refreshChatgpt()}>{t("config.chatgpt.refreshToken")}</Button>
                         </div>
                       )}
 
                       {credentialProvider === provider.name && (
                         <form className="grid gap-3 rounded-md border p-3" onSubmit={(event) => { event.preventDefault(); void saveProvider(provider.name); }}>
-                          <Field label="API Key"><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></Field>
-                          <Field label="Base URL"><Input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></Field>
+                          <Field label={t("config.apiKey")}><Input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} /></Field>
+                          <Field label={t("config.baseUrl")}><Input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /></Field>
                           <div className="flex justify-end gap-2">
-                            <Button type="button" size="sm" variant="ghost" onClick={() => setCredentialProvider("")}>Cancel</Button>
-                            <Button type="submit" size="sm">Save</Button>
+                            <Button type="button" size="sm" variant="ghost" onClick={() => setCredentialProvider("")}>{t("config.cancel")}</Button>
+                            <Button type="submit" size="sm">{t("config.save")}</Button>
                           </div>
                         </form>
                       )}
 
                       {modelForm?.provider_name === provider.name && (
                         <form className="grid gap-3 rounded-md border p-3" onSubmit={(event) => { event.preventDefault(); void saveModel(); }}>
-                          <h4 className="text-sm font-medium">{modelForm.original_model_name ? `Edit ${modelForm.original_model_name}` : "Add custom model"}</h4>
+                          <h4 className="text-sm font-medium">{modelForm.original_model_name ? t("config.editModel", { name: modelForm.original_model_name }) : t("config.addCustomModel")}</h4>
                           <div className="grid gap-3 md:grid-cols-2">
-                            <Field label="Model name"><Input value={modelForm.model_name} onChange={(event) => setModelForm({ ...modelForm, model_name: event.target.value })} /></Field>
-                            <Field label="Context length"><Input type="number" value={modelForm.context_length} onChange={(event) => setModelForm({ ...modelForm, context_length: event.target.value })} /></Field>
-                            <Field label="Max output"><Input type="number" value={modelForm.max_output_tokens} onChange={(event) => setModelForm({ ...modelForm, max_output_tokens: event.target.value })} /></Field>
-                            <Field label="Input price"><Input type="number" value={modelForm.input_token_price} onChange={(event) => setModelForm({ ...modelForm, input_token_price: event.target.value })} /></Field>
-                            <Field label="Output price"><Input type="number" value={modelForm.output_token_price} onChange={(event) => setModelForm({ ...modelForm, output_token_price: event.target.value })} /></Field>
+                            <Field label={t("config.modelName")}><Input value={modelForm.model_name} onChange={(event) => setModelForm({ ...modelForm, model_name: event.target.value })} /></Field>
+                            <Field label={t("config.contextLength")}><Input type="number" value={modelForm.context_length} onChange={(event) => setModelForm({ ...modelForm, context_length: event.target.value })} /></Field>
+                            <Field label={t("config.maxOutput")}><Input type="number" value={modelForm.max_output_tokens} onChange={(event) => setModelForm({ ...modelForm, max_output_tokens: event.target.value })} /></Field>
+                            <Field label={t("config.inputPrice")}><Input type="number" value={modelForm.input_token_price} onChange={(event) => setModelForm({ ...modelForm, input_token_price: event.target.value })} /></Field>
+                            <Field label={t("config.outputPrice")}><Input type="number" value={modelForm.output_token_price} onChange={(event) => setModelForm({ ...modelForm, output_token_price: event.target.value })} /></Field>
                           </div>
                           <div className="grid gap-2 sm:grid-cols-2">
-                            <Toggle label="Vision" checked={modelForm.vision_ability} onChange={(checked) => setModelForm({ ...modelForm, vision_ability: checked })} />
-                            <Toggle label="Function calling" checked={modelForm.supports_function_calling} onChange={(checked) => setModelForm({ ...modelForm, supports_function_calling: checked })} />
-                            <Toggle label="Streaming" checked={modelForm.supports_streaming} onChange={(checked) => setModelForm({ ...modelForm, supports_streaming: checked })} />
-                            <Toggle label="Thinking support" checked={modelForm.supports_thinking} onChange={(checked) => setModelForm({ ...modelForm, supports_thinking: checked })} />
-                            <Toggle label="Thinking enabled" checked={modelForm.thinking_enabled} onChange={(checked) => setModelForm({ ...modelForm, thinking_enabled: checked })} />
+                            <Toggle label={t("config.vision")} checked={modelForm.vision_ability} onChange={(checked) => setModelForm({ ...modelForm, vision_ability: checked })} />
+                            <Toggle label={t("config.functionCalling")} checked={modelForm.supports_function_calling} onChange={(checked) => setModelForm({ ...modelForm, supports_function_calling: checked })} />
+                            <Toggle label={t("config.streaming")} checked={modelForm.supports_streaming} onChange={(checked) => setModelForm({ ...modelForm, supports_streaming: checked })} />
+                            <Toggle label={t("config.thinkingSupport")} checked={modelForm.supports_thinking} onChange={(checked) => setModelForm({ ...modelForm, supports_thinking: checked })} />
+                            <Toggle label={t("config.thinkingEnabled")} checked={modelForm.thinking_enabled} onChange={(checked) => setModelForm({ ...modelForm, thinking_enabled: checked })} />
                           </div>
                           <div className="flex justify-end gap-2">
-                            <Button type="button" variant="ghost" size="sm" onClick={() => setModelForm(null)}>Cancel</Button>
-                            <Button type="submit" size="sm">Save model</Button>
+                            <Button type="button" variant="ghost" size="sm" onClick={() => setModelForm(null)}>{t("config.cancel")}</Button>
+                            <Button type="submit" size="sm">{t("config.saveModel")}</Button>
                           </div>
                         </form>
                       )}
@@ -499,39 +501,39 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
           <TabsContent value="agent" className="grid gap-4">
             <Card className="p-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium">Agent Runtime</h3>
-                <Badge variant="secondary">{activeAgent || "no agent"}</Badge>
+                <h3 className="text-sm font-medium">{t("config.tabs.agentRuntime")}</h3>
+                <Badge variant="secondary">{activeAgent || t("config.noAgent")}</Badge>
               </div>
               {!activeAgent ? (
-                <p className="mt-3 text-sm text-muted-foreground">Select an agent to edit runtime overrides.</p>
+                <p className="mt-3 text-sm text-muted-foreground">{t("config.selectAgentHint")}</p>
               ) : (
                 <div className="mt-4 space-y-4">
                   {(["use_memory", "generate_memory"] as const).map((key) => (
                     <div key={key} className="grid items-center gap-2 sm:grid-cols-[220px_1fr_auto]">
-                      <span className="text-sm capitalize">{key.replace("_", " ")}</span>
+                      <span className="text-sm capitalize">{key === "use_memory" ? t("config.useMemory") : t("config.generateMemory")}</span>
                       <div className="inline-flex w-fit rounded-md bg-secondary p-0.5">{["inherit", "on", "off"].map((option) => runtimeOption(key, option as any))}</div>
                       <small className="text-xs text-muted-foreground">
-                        {key === "use_memory" ? (effective?.use_memory ? "effective on" : "effective off") : (effective?.generate_memory ? "effective on" : "effective off")}
+                        {(key === "use_memory" ? effective?.use_memory : effective?.generate_memory) ? t("config.effectiveOn") : t("config.effectiveOff")}
                       </small>
                     </div>
                   ))}
                   <div className="grid items-center gap-2 sm:grid-cols-[220px_1fr_auto]">
-                    <span className="text-sm">Reasoning effort</span>
+                    <span className="text-sm">{t("config.reasoningEffort")}</span>
                     <select
                       className={selectClass}
                       value={runtime.reasoning_effort ?? ""}
                       onChange={(event) => setRuntime({ ...runtime, reasoning_effort: (event.target.value || null) as AgentRuntimeOverrides["reasoning_effort"] })}
                     >
                       {["", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map((value) => (
-                        <option key={value || "inherit"} value={value}>{value || "inherit"}</option>
+                        <option key={value || t("config.inherit")} value={value}>{value || t("config.inherit")}</option>
                       ))}
                     </select>
-                    <small className="text-xs text-muted-foreground">{effective?.reasoning_effort ? `effective ${effective.reasoning_effort}` : "effective model default"}</small>
+                    <small className="text-xs text-muted-foreground">{effective?.reasoning_effort ? t("config.effectiveValue", { value: effective.reasoning_effort }) : t("config.effectiveModelDefault")}</small>
                   </div>
                   <Separator />
                   <div className="flex justify-between">
-                    <Button variant="ghost" size="sm" onClick={() => setRuntime({})}>All inherit</Button>
-                    <Button size="sm" disabled={runtimeSaving} onClick={() => void saveRuntime()}>{runtimeSaving ? "Saving…" : "Save"}</Button>
+                    <Button variant="ghost" size="sm" onClick={() => setRuntime({})}>{t("config.allInherit")}</Button>
+                    <Button size="sm" disabled={runtimeSaving} onClick={() => void saveRuntime()}>{runtimeSaving ? t("config.saving") : t("config.save")}</Button>
                   </div>
                 </div>
               )}
@@ -540,29 +542,29 @@ export function ConfigView({ activeAgent, initialTab = "models" }: { activeAgent
 
           <TabsContent value="settings" className="grid gap-4">
             <Card className="p-4">
-              <h3 className="text-sm font-medium">Display</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Choose which details are collapsed by default. Changes are saved automatically.</p>
+              <h3 className="text-sm font-medium">{t("config.display")}</h3>
+              <p className="mt-1 text-xs text-muted-foreground">{t("config.displayHint")}</p>
               <div className="mt-3 grid gap-2">
-                <Toggle label="Collapse thinking" checked={display.collapse_thinking} onChange={(checked) => void saveDisplay("collapse_thinking", checked)} />
-                <Toggle label="Collapse tool calls" checked={display.collapse_tool_calls} onChange={(checked) => void saveDisplay("collapse_tool_calls", checked)} />
-                <Toggle label="Collapse tool results" checked={display.collapse_tool_results} onChange={(checked) => void saveDisplay("collapse_tool_results", checked)} />
+                <Toggle label={t("config.collapseThinking")} checked={display.collapse_thinking} onChange={(checked) => void saveDisplay("collapse_thinking", checked)} />
+                <Toggle label={t("config.collapseToolCalls")} checked={display.collapse_tool_calls} onChange={(checked) => void saveDisplay("collapse_tool_calls", checked)} />
+                <Toggle label={t("config.collapseToolResults")} checked={display.collapse_tool_results} onChange={(checked) => void saveDisplay("collapse_tool_results", checked)} />
               </div>
             </Card>
             <Card className="p-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium">Embedding Model</h3>
-                <Badge variant="secondary">{embedding.enabled ? "enabled" : "disabled"}</Badge>
+                <h3 className="text-sm font-medium">{t("config.embeddingModel")}</h3>
+                <Badge variant="secondary">{embedding.enabled ? t("config.enabled") : t("config.disabled")}</Badge>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">Configure the embedding service used for semantic search.</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("config.embeddingHint")}</p>
               <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void saveEmbedding(); }}>
-                <div className="md:col-span-2"><Toggle label="Enabled" checked={embedding.enabled} onChange={(checked) => setEmbedding({ ...embedding, enabled: checked })} /></div>
-                <Field label="Base URL"><Input value={embedding.base_url} onChange={(event) => setEmbedding({ ...embedding, base_url: event.target.value })} /></Field>
-                <Field label="Model"><Input value={embedding.model} onChange={(event) => setEmbedding({ ...embedding, model: event.target.value })} /></Field>
-                <Field label="Batch size"><Input type="number" min={1} value={embedding.batch_size} onChange={(event) => setEmbedding({ ...embedding, batch_size: Number(event.target.value) })} /></Field>
-                <Field label="Timeout seconds"><Input type="number" min={1} value={embedding.timeout_secs} onChange={(event) => setEmbedding({ ...embedding, timeout_secs: Number(event.target.value) })} /></Field>
+                <div className="md:col-span-2"><Toggle label={t("config.enabledLabel")} checked={embedding.enabled} onChange={(checked) => setEmbedding({ ...embedding, enabled: checked })} /></div>
+                <Field label={t("config.baseUrl")}><Input value={embedding.base_url} onChange={(event) => setEmbedding({ ...embedding, base_url: event.target.value })} /></Field>
+                <Field label={t("config.model")}><Input value={embedding.model} onChange={(event) => setEmbedding({ ...embedding, model: event.target.value })} /></Field>
+                <Field label={t("config.batchSize")}><Input type="number" min={1} value={embedding.batch_size} onChange={(event) => setEmbedding({ ...embedding, batch_size: Number(event.target.value) })} /></Field>
+                <Field label={t("config.timeoutSeconds")}><Input type="number" min={1} value={embedding.timeout_secs} onChange={(event) => setEmbedding({ ...embedding, timeout_secs: Number(event.target.value) })} /></Field>
                 <div className="flex justify-end gap-2 md:col-span-2">
-                  <Button type="button" variant="ghost" size="sm" onClick={() => void loadAll(activeAgent)}>Reload</Button>
-                  <Button type="submit" size="sm" disabled={embeddingSaving}>{embeddingSaving ? "Saving…" : "Save"}</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => void loadAll(activeAgent)}>{t("config.reload")}</Button>
+                  <Button type="submit" size="sm" disabled={embeddingSaving}>{embeddingSaving ? t("config.saving") : t("config.save")}</Button>
                 </div>
               </form>
             </Card>

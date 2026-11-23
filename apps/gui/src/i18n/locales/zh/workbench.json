@@ -1,0 +1,258 @@
+{
+  "palette": {
+    "title": "命令面板",
+    "description": "Ctrl+P 打开 · 输入过滤 · 上下选择 · Enter 执行。",
+    "placeholderCommands": "选择命令…",
+    "placeholderAll": "搜索标签页或命令…",
+    "empty": "没有匹配的命令",
+    "editorCategory": "editor",
+    "editorSplitCategory": "editor (split)"
+  },
+  "commandCenter": {
+    "aria": "命令面板",
+    "title": "命令面板(Ctrl+P)",
+    "placeholder": "搜索或输入命令…"
+  },
+  "commands": {
+    "quickOpen": "快速切换标签页与命令",
+    "openCommandPalette": "打开命令面板",
+    "wikiSearch": "检索知识库",
+    "toggleSecondarySidebar": "切换辅助侧边栏",
+    "resetViewLocations": "重置视图位置",
+    "toggleSidebar": "切换侧边栏",
+    "togglePanel": "切换底部面板",
+    "panelEvents": "显示事件流面板",
+    "panelNotices": "显示通知面板",
+    "splitEditor": "拆分编辑器",
+    "closeSplit": "关闭编辑器拆分",
+    "closeEditor": "关闭编辑器",
+    "openBibliography": "打开文献库",
+    "openWiki": "打开知识库",
+    "openDecks": "打开幻灯片",
+    "openWikiGraph": "打开知识图谱",
+    "openAgents": "显示 Agent 概览",
+    "openConfig": "打开设置",
+    "openHpcJobs": "打开 HPC 任务",
+    "openVfs": "打开 VFS 文件浏览器",
+    "cycleTheme": "切换配色主题",
+    "newAgent": "新建 Agent",
+    "cancelAgent": "取消 Agent",
+    "compactConversation": "压缩会话",
+    "selectModel": "选择模型",
+    "viewDag": "查看 DAG",
+    "openAgentTab": "打开 Agent 标签页",
+    "toggleThinking": "切换思考块显示",
+    "toggleToolCalls": "切换工具调用显示",
+    "toggleToolResults": "切换工具结果显示",
+    "manuscripts": "LaTeX 手稿",
+    "library": "文献库",
+    "discover": "发现文献",
+    "subscriptions": "RSS 订阅",
+    "closeWikiEntry": "关闭知识词条",
+    "closeDeck": "关闭文稿"
+  },
+  "views": {
+    "bibliography": "文献与证据",
+    "projects": "插件管理",
+    "wiki": "知识库",
+    "vfs": "文件",
+    "decks": "幻灯片",
+    "canvases": "画布",
+    "agents": "Agent",
+    "events": "事件流",
+    "notices": "通知",
+    "terminal": "终端",
+    "view": "视图",
+    "wikiGraph": "知识图谱"
+  },
+  "bibViews": {
+    "library": "文献库",
+    "manuscripts": "LaTeX 手稿",
+    "discover": "发现",
+    "subscriptions": "订阅",
+    "workspaceAria": "文献工作区"
+  },
+  "editorKinds": {
+    "untitledCanvas": "未命名画布",
+    "untitledEntry": "未命名词条",
+    "untitledDeck": "未命名 deck",
+    "wikiGraphName": "知识关系图谱",
+    "file": "文件",
+    "canvasDirty": "画布有未保存的修改，关闭将丢弃修改。继续？",
+    "entryEditing": "该标签页正在编辑中,关闭将丢弃未保存的修改。继续?",
+    "deckDirty": "该文稿有未保存的修改，关闭将丢弃修改。继续？",
+    "pluginDirty": "当前文件有未保存的修改，关闭将丢弃修改。继续？",
+    "vfsDirty": "该文件有未保存的修改，关闭将丢弃修改。继续？",
+    "loadCanvas": "加载画布编辑器…",
+    "computeTargets": "计算目标",
+    "hpcJobs": "HPC 任务"
+  },
+  "panel": {
+    "eventsEmpty": "暂无事件 — 与 agent 交互后这里显示网关帧流",
+    "noticesEmpty": "暂无通知 — 模型切换、登录结果等网关通知会显示在这里"
+  },
+  "activityBar": {
+    "navAria": "工作台活动栏",
+    "wikiTitle": "知识库(条目即编辑器标签,Ctrl+K 检索)",
+    "decksTitle": "幻灯片(新建/浏览 deck,点开即编辑器标签)",
+    "vfsLabel": "VFS 文件",
+    "vfsTitle": "VFS 文件浏览器（挂载 / 容器输出 / 数据）",
+    "agentsTitle": "Agent 概览(对话即编辑器标签)",
+    "search": "搜索或输入命令",
+    "searchTitle": "搜索或输入命令 (Ctrl+P)",
+    "expandSidebar": "展开侧栏",
+    "collapseSidebar": "折叠侧栏",
+    "expandSidebarTitle": "展开侧栏 (Ctrl+B)",
+    "collapseSidebarTitle": "折叠侧栏 (Ctrl+B)",
+    "togglePanel": "切换底部面板",
+    "panelTitle": "底部面板(Ctrl+J)",
+    "configTitle": "设置",
+    "themeLabel": "色彩主题:{{mode}},点击切换",
+    "themeTitle": "色彩主题:{{mode}}(点击切换)",
+    "logout": "退出登录"
+  },
+  "theme": {
+    "light": "浅色主题",
+    "dark": "深色主题",
+    "system": "跟随系统"
+  },
+  "sidebar": {
+    "collapseAria": "收起侧栏",
+    "sidebarAria": "工作台侧栏",
+    "collapse": "折叠侧栏",
+    "tagline": "科研工作台",
+    "plugins": "插件管理",
+    "moveBack": "将视图移回侧边栏"
+  },
+  "editorTabs": {
+    "tabsAria": "编辑器标签",
+    "splitTabsAria": "分屏编辑器标签",
+    "unsaved": "未保存修改",
+    "close": "关闭 {{title}}",
+    "dragGroup": "拖动编辑器组",
+    "showAll": "显示所有编辑器标签",
+    "allTabs": "所有编辑器标签",
+    "split": "拆分编辑器",
+    "closeSplit": "关闭分屏",
+    "closeGroup": "关闭编辑器组"
+  },
+  "editorArea": {
+    "emptyPre": "按 ",
+    "emptyPost": " 搜索命令,或从左侧打开",
+    "library": "文献库",
+    "wiki": "知识库",
+    "settings": "设置",
+    "resizeSplitWidth": "调整分屏宽度",
+    "resizeSplitHeight": "调整分屏高度"
+  },
+  "shell": {
+    "resizeSidebar": "调整侧栏宽度",
+    "resizePanel": "调整面板高度"
+  },
+  "bottomPanel": {
+    "aria": "底部面板",
+    "tabsAria": "面板标签",
+    "collapse": "收起面板"
+  },
+  "secondarySidebar": {
+    "aria": "辅助侧边栏",
+    "resizeAria": "调整辅助侧边栏宽度",
+    "hide": "隐藏辅助侧边栏"
+  },
+  "viewLocation": {
+    "dragAria": "拖动视图",
+    "dragTitle": "拖动以移动视图",
+    "menuAria": "视图位置",
+    "menuTitle": "移动视图（也可拖动）",
+    "moveTo": "移动{{name}}到",
+    "primarySidebar": "主侧边栏",
+    "secondarySidebar": "辅助侧边栏",
+    "panel": "底部面板"
+  },
+  "agentSidebar": {
+    "groupAria": "Agent 工作区",
+    "tabsAria": "Agent 侧栏视图",
+    "list": "Agent 列表",
+    "overview": "Agent 详情",
+    "resume": "恢复 Agent",
+    "create": "创建 Agent"
+  },
+  "agentList": {
+    "search": "搜索 Agent",
+    "count": "{{count}} 个 Agent",
+    "noMatch": "没有匹配的 Agent。",
+    "empty": "暂无 Agent，可创建或恢复。",
+    "model": "模型：",
+    "effort": "推理力度：",
+    "unsupported": "不支持思考",
+    "noneShort": "无",
+    "openAgent": "打开 Agent {{path}}（{{status}}）",
+    "catalogFailed": "模型目录加载失败",
+    "catalogEmpty": "模型目录为空，请在「设置 → 模型」中添加",
+    "effortUnsupported": "当前模型不支持思考"
+  },
+  "terminal": {
+    "project": "终端项目",
+    "selectProject": "请选择插件项目。"
+  },
+  "windowControls": {
+    "minimize": "最小化",
+    "restore": "还原",
+    "maximize": "最大化",
+    "closeAria": "关闭窗口",
+    "close": "关闭"
+  },
+  "contextBinding": {
+    "bindAria": "绑定文档上下文",
+    "changeTitle": "{{label}} · 点击更换",
+    "pickTitle": "选择文档，每次发送时附加最新状态",
+    "previewAria": "预览文档上下文",
+    "previewTitle": "预览下次发送时附加的内容",
+    "unbindAria": "解除文档绑定",
+    "dialogTitle": "绑定文档上下文",
+    "dialogDescription": "每次发送消息时附加所选文档的最新状态。可预览内容，或随时解除绑定。",
+    "searchPlaceholder": "搜索已打开的文档…",
+    "empty": "没有匹配的文档，请先打开文档再绑定。",
+    "modeHeading": "绑定方式",
+    "unbind": "不绑定文档",
+    "follow": "跟随当前文档",
+    "followDesc": "使用最近查看的文档，切回对话后继续保留",
+    "followLabel": "跟随 · {{title}}",
+    "noDoc": "待选择文档",
+    "defaultLabel": "绑定文档",
+    "pinHeading": "固定文档",
+    "candidatesEmpty": "打开知识词条、阅读器、幻灯片或插件项目后，即可在这里选择。"
+  },
+  "reader": {
+    "selectAgentFirst": "请先选择 Agent 会话",
+    "openFailed": "阅读器打开失败:{{error}}",
+    "retry": "重试",
+    "selectionTitle": "{{title}} · 选中文本"
+  },
+  "gateway": {
+    "loginFailed": "登录失败 ({{status}})",
+    "enrollFailed": "注册请求失败（HTTP {{status}}）",
+    "noStream": "无法读取安装进度，请刷新计算目标状态后再重试。",
+    "unrecognizedProgress": "收到无法识别的安装进度消息",
+    "progressDisconnected": "安装进度连接已断开，后台可能仍在执行。请刷新计算目标状态，确认结果后再重试。"
+  },
+  "markdown": {
+    "imagePending": "图片待插入…",
+    "imageInvalid": "图片引用无效：{{alt}}"
+  },
+  "runtime": {
+    "historyFailed": "加载历史失败: {{cause}}",
+    "backgroundDone": "完成",
+    "backgroundFailed": "失败",
+    "retry": "第 {{attempt}}/{{max}} 次重试: {{message}}",
+    "unauthenticated": "{{addr}} (未认证)",
+    "needToken": "需要 Gateway 令牌",
+    "illustratorFailed": "插画专家创建失败：返回的 Agent 路径不匹配。",
+    "modelFailed": "切换模型失败: {{cause}}",
+    "effortFailed": "切换推理力度失败: {{cause}}"
+  },
+  "navigation": {
+    "back": "后退",
+    "forward": "前进"
+  }
+}

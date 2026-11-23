@@ -7,6 +7,7 @@
  * observe the same tree.
  */
 
+import i18n from "@/i18n";
 import { listDirAll, listMounts, type VfsEntry, type VfsMount } from "./vfs-api";
 import { fetchComputeStatus } from "@/features/hpc/api";
 import type { ComputeStatus } from "@/features/hpc/types";
@@ -44,7 +45,7 @@ export type VfsTreeState = {
   revision: number;
 };
 
-const LOCAL_FALLBACK: ComputeGroup = { id: "local", name: "本地", backend: "local", roots: ["/"] };
+const LOCAL_FALLBACK: ComputeGroup = { id: "local", name: i18n.t("vfs:tree.localTarget"), backend: "local", roots: ["/"] };
 
 let state: VfsTreeState = {
   children: new Map(),
@@ -189,7 +190,7 @@ function buildGroups(status: ComputeStatus | null): ComputeGroup[] {
     if (target.enabled === false || deletedIds.has(target.id)) continue;
     const backend = target.backend?.type ?? "local";
     if (backend === "local") {
-      groups.push({ id: target.id, name: target.name || "本地", backend: "local", roots: ["/"] });
+      groups.push({ id: target.id, name: target.name || i18n.t("vfs:tree.localTarget"), backend: "local", roots: ["/"] });
       continue;
     }
     const roots: string[] = [];

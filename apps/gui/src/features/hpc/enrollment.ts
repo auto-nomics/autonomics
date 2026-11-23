@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import i18n from "@/i18n";
 import { enrollComputeTarget, type EnrollComputeRequest, type EnrollmentEvent } from "./api";
 
 export type EnrollmentRun = {
@@ -29,7 +30,7 @@ export function useEnrollmentRun() {
   );
 }
 export async function startEnrollment(request: EnrollComputeRequest) {
-  if (current?.status === "running") throw new Error("已有目标正在安装，请等待完成。");
+  if (current?.status === "running") throw new Error(i18n.t("hpc:enrollment.busyError"));
   publish({ targetId: request.id, startedAt: Date.now(), status: "running", stage: "validate", events: [], steps: [
     "validate", "authenticate",
     ...(request.deploy_worker ? ["prepare_directory", "check_python", "upload", "commit_upload", "chmod"] : []),

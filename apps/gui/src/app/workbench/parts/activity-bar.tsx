@@ -5,6 +5,7 @@
  * behavior); clicking it again reveals it.
  */
 
+import { useTranslation } from "react-i18next";
 import { BookOpen, FileText, Bot, Compass, FolderCode, FolderTree, Presentation, Library, LogOut, Monitor, Moon, PanelBottom, PanelLeft, Rss, Search, Settings, Sun } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -57,11 +58,12 @@ export function ActivityBar(props: {
   onTogglePanel: () => void;
   onLogout: () => void;
 }) {
+  const { t } = useTranslation("workbench");
   const state = useWorkbenchState();
   const views = useWorkbenchViews();
   const viewLayout = useViewLayout();
   const { mode } = useTheme();
-  const theme = mode === "light" ? { icon: Sun, label: "浅色主题" } : mode === "dark" ? { icon: Moon, label: "深色主题" } : { icon: Monitor, label: "跟随系统" };
+  const theme = mode === "light" ? { icon: Sun, label: t("theme.light") } : mode === "dark" ? { icon: Moon, label: t("theme.dark") } : { icon: Monitor, label: t("theme.system") };
   const collapsed = state.sidebar.collapsed;
 
   const containerClick = (container: ContainerId) => {
@@ -85,45 +87,45 @@ export function ActivityBar(props: {
 
   return (
     <nav
-      aria-label="工作台活动栏"
+      aria-label={t("activityBar.navAria")}
       className={cn("flex w-12 min-h-0 shrink-0 flex-col items-center overflow-y-auto border-r bg-sidebar py-1 text-sidebar-foreground", props.mobile && "hidden")}
     >
       <div className="flex flex-col items-center gap-0.5">
         <RailButton
-          label="Bibliography"
-          title="文献与证据"
+          label={t("views.bibliography")}
+          title={t("views.bibliography")}
           icon={Library}
           active={bibActive}
           onClick={() => containerClick("bibliography")}
         />
-        <RailButton label="Manuscripts" title="LaTeX 手稿" icon={FileText} active={activeWorkspace === "manuscripts"} onClick={() => openBibliographyEditor("manuscripts")} />
-        <RailButton label="Discover" title="发现" icon={Compass} active={activeWorkspace === "discover"} onClick={() => openBibliographyEditor("discover")} />
-        <RailButton label="Subscriptions" title="订阅" icon={Rss} active={activeWorkspace === "subscriptions"} onClick={() => openBibliographyEditor("subscriptions")} />
+        <RailButton label={t("bibViews.manuscripts")} title={t("bibViews.manuscripts")} icon={FileText} active={activeWorkspace === "manuscripts"} onClick={() => openBibliographyEditor("manuscripts")} />
+        <RailButton label={t("bibViews.discover")} title={t("bibViews.discover")} icon={Compass} active={activeWorkspace === "discover"} onClick={() => openBibliographyEditor("discover")} />
+        <RailButton label={t("bibViews.subscriptions")} title={t("bibViews.subscriptions")} icon={Rss} active={activeWorkspace === "subscriptions"} onClick={() => openBibliographyEditor("subscriptions")} />
         <RailButton
-          label="Wiki"
-          title="知识库(条目即编辑器标签,Ctrl+K 检索)"
+          label={t("views.wiki")}
+          title={t("activityBar.wikiTitle")}
           icon={BookOpen}
           active={wikiActive}
           onClick={() => containerClick("wiki")}
         />
         <RailButton
-          label="Decks"
-          title="幻灯片(新建/浏览 deck,点开即编辑器标签)"
+          label={t("views.decks")}
+          title={t("activityBar.decksTitle")}
           icon={Presentation}
           active={decksActive}
           onClick={() => containerClick("decks")}
         />
-        <RailButton label="插件管理" title="插件管理" icon={FolderCode} active={!collapsed && state.sidebar.container === "projects"} onClick={() => containerClick("projects")} />
+        <RailButton label={t("views.projects")} title={t("views.projects")} icon={FolderCode} active={!collapsed && state.sidebar.container === "projects"} onClick={() => containerClick("projects")} />
         <RailButton
-          label="VFS 文件"
-          title="VFS 文件浏览器（挂载 / 容器输出 / 数据）"
+          label={t("activityBar.vfsLabel")}
+          title={t("activityBar.vfsTitle")}
           icon={FolderTree}
           active={vfsActive}
           onClick={() => containerClick("vfs")}
         />
         <RailButton
-          label="Agent"
-          title="Agent 概览(对话即编辑器标签)"
+          label={t("views.agents")}
+          title={t("activityBar.agentsTitle")}
           icon={Bot}
           active={agentsActive}
           onClick={() => containerClick("agents")}
@@ -136,20 +138,20 @@ export function ActivityBar(props: {
       </div>
       <div data-tauri-drag-region="" className="min-h-2 w-full flex-1" />
       <div className="flex shrink-0 flex-col items-center gap-0.5">
-        <RailButton label="搜索或输入命令" title="搜索或输入命令 (Ctrl+P)" icon={Search} onClick={() => openPalette("all")} />
-        <RailButton label={collapsed ? "展开侧栏" : "折叠侧栏"} title={collapsed ? "展开侧栏 (Ctrl+B)" : "折叠侧栏 (Ctrl+B)"} icon={PanelLeft} onClick={props.onToggleSidebar} />
+        <RailButton label={t("activityBar.search")} title={t("activityBar.searchTitle")} icon={Search} onClick={() => openPalette("all")} />
+        <RailButton label={collapsed ? t("activityBar.expandSidebar") : t("activityBar.collapseSidebar")} title={collapsed ? t("activityBar.expandSidebarTitle") : t("activityBar.collapseSidebarTitle")} icon={PanelLeft} onClick={props.onToggleSidebar} />
         <RailButton
-          label="切换底部面板"
-          title="底部面板(Ctrl+J)"
+          label={t("activityBar.togglePanel")}
+          title={t("activityBar.panelTitle")}
           icon={PanelBottom}
           pressed={state.panel.visible}
           active={state.panel.visible}
           badge={pendingNotices}
           onClick={props.onTogglePanel}
         />
-        <RailButton label="CONFIG" title="设置" icon={Settings} onClick={() => openEditor({ kind: "config" })} />
-        <RailButton label={`色彩主题:${theme.label},点击切换`} title={`色彩主题:${theme.label}(点击切换)`} icon={theme.icon} onClick={cycleThemeMode} />
-        <RailButton label="退出登录" title="退出登录" icon={LogOut} onClick={props.onLogout} />
+        <RailButton label={t("activityBar.configTitle")} title={t("activityBar.configTitle")} icon={Settings} onClick={() => openEditor({ kind: "config" })} />
+        <RailButton label={t("activityBar.themeLabel", { mode: theme.label })} title={t("activityBar.themeTitle", { mode: theme.label })} icon={theme.icon} onClick={cycleThemeMode} />
+        <RailButton label={t("activityBar.logout")} title={t("activityBar.logout")} icon={LogOut} onClick={props.onLogout} />
         {isTauri && <WindowControls vertical />}
       </div>
     </nav>

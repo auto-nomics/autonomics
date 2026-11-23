@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Maximize2, Minus, X } from "lucide-react";
 import { isTauri } from "@/lib/is-tauri";
 import { Button } from "@/components/ui/button";
 
 export function WindowControls({ vertical = false }: { vertical?: boolean }) {
+  const { t } = useTranslation("workbench");
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
     if (!isTauri) return;
@@ -33,11 +35,11 @@ export function WindowControls({ vertical = false }: { vertical?: boolean }) {
 
   return (
     <div className={vertical ? "flex flex-col items-center" : "flex items-center"}>
-      <Button size="icon-sm" variant="ghost" aria-label="最小化" title="最小化" onClick={withWindow((w) => w.minimize())}><Minus /></Button>
-      <Button size="icon-sm" variant="ghost" aria-label={maximized ? "还原" : "最大化"} title={maximized ? "还原" : "最大化"} onClick={withWindow((w) => w.toggleMaximize())}>
+      <Button size="icon-sm" variant="ghost" aria-label={t("windowControls.minimize")} title={t("windowControls.minimize")} onClick={withWindow((w) => w.minimize())}><Minus /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label={maximized ? t("windowControls.restore") : t("windowControls.maximize")} title={maximized ? t("windowControls.restore") : t("windowControls.maximize")} onClick={withWindow((w) => w.toggleMaximize())}>
         {maximized ? <MinimizeIcon /> : <Maximize2 />}
       </Button>
-      <Button size="icon-sm" variant="ghost" aria-label="关闭窗口" title="关闭" className="hover:bg-destructive hover:text-white" onClick={withWindow((w) => w.close())}><X /></Button>
+      <Button size="icon-sm" variant="ghost" aria-label={t("windowControls.closeAria")} title={t("windowControls.close")} className="hover:bg-destructive hover:text-white" onClick={withWindow((w) => w.close())}><X /></Button>
     </div>
   );
 }

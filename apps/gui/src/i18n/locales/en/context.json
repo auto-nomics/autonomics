@@ -1,0 +1,33 @@
+{
+  "kind": {
+    "article": "Article",
+    "evidence": "Evidence",
+    "knowledge": "Knowledge",
+    "editor": "Editor",
+    "image": "Image",
+    "manuscript": "Manuscript"
+  },
+  "article": {
+    "scope": "Metadata and abstract (full text excluded)"
+  },
+  "draftAttachments": {
+    "sectionLabel": "Attachments for this message",
+    "previewTitle": "Preview: {{title}}",
+    "removeAttachment": "Remove this attachment: {{title}}"
+  },
+  "basket": {
+    "sectionLabel": "Context basket",
+    "itemLabel": "{{kind}} {{title}}",
+    "previewTitle": "Preview: {{title}} · {{scope}}",
+    "removeReference": "Remove reference",
+    "removeReferenceFull": "Remove reference: {{title}}",
+    "sourceLine": "Source: {{source}}",
+    "revisionLine": "Revision: {{revision}}"
+  },
+  "addToContext": {
+    "addTitle": "{{scope}} · Add to {{label}}",
+    "needContext": "Select an agent context first",
+    "addToSession": "Add to current session",
+    "updateReference": "Update session reference"
+  }
+}

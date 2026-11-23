@@ -1,0 +1,33 @@
+{
+  "kind": {
+    "article": "文献",
+    "evidence": "证据",
+    "knowledge": "知识",
+    "editor": "编辑器",
+    "image": "图片",
+    "manuscript": "手稿"
+  },
+  "article": {
+    "scope": "元数据与摘要（不含全文）"
+  },
+  "draftAttachments": {
+    "sectionLabel": "本次消息附件",
+    "previewTitle": "预览：{{title}}",
+    "removeAttachment": "移除本次附件：{{title}}"
+  },
+  "basket": {
+    "sectionLabel": "上下文篮子",
+    "itemLabel": "{{kind}} {{title}}",
+    "previewTitle": "预览：{{title}} · {{scope}}",
+    "removeReference": "移除引用",
+    "removeReferenceFull": "移除引用：{{title}}",
+    "sourceLine": "来源：{{source}}",
+    "revisionLine": "版本：{{revision}}"
+  },
+  "addToContext": {
+    "addTitle": "{{scope}} · 加入 {{label}}",
+    "needContext": "请先选择 Agent 上下文",
+    "addToSession": "加入当前会话",
+    "updateReference": "更新会话引用"
+  }
+}

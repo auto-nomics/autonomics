@@ -5,8 +5,20 @@
  * through dedicated invoke commands (`gateway.ts` pattern of
  * `fetchBibFulltextRaw`/`uploadBibFulltext`).
  */
+import i18next from "i18next";
 import { gatewayRequest } from "@/gateway";
 import { isTauri } from "@/lib/is-tauri";
+import "@/i18n";
+import zhVfs from "@/i18n/locales/zh/vfs.json";
+import enVfs from "@/i18n/locales/en/vfs.json";
+
+// vfs namespace registration: the shared bootstrap in @/i18n only wires
+// the "common" namespace, so the vfs catalog registers itself here (every
+// vfs module imports this one for the side effect; idempotent).
+if (!i18next.hasResourceBundle("zh", "vfs")) {
+  i18next.addResourceBundle("zh", "vfs", zhVfs);
+  i18next.addResourceBundle("en", "vfs", enVfs);
+}
 
 export interface VfsEntry {
   /** Full virtual path, e.g. `/data/ldsc/panel.parquet`. */
@@ -130,7 +142,7 @@ export async function uploadBrowserFile(path: string, file: File): Promise<void>
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error ?? `上传失败 (${response.status})`);
+    throw new Error(payload?.error ?? i18next.t("vfs:api.uploadFailed", { status: response.status }));
   }
 }
 
@@ -138,7 +150,7 @@ export async function uploadBrowserFile(path: string, file: File): Promise<void>
 export async function pickUploadSource(): Promise<File | string | null> {
   if (isTauri) {
     const dialog = await import("@tauri-apps/plugin-dialog");
-    return dialog.open({ multiple: false, directory: false, title: "上传到 VFS" });
+    return dialog.open({ multiple: false, directory: false, title: i18next.t("vfs:api.uploadDialogTitle") });
   }
   return new Promise<File | null>((resolve) => {
     const input = document.createElement("input");
@@ -156,12 +168,12 @@ export async function uploadToDir(dir: string, source: File | string): Promise<s
     : source.split("/").filter(Boolean).pop() ?? "upload";
   const path = dir === "/" ? `/${name}` : `${dir.replace(/\/+$/, "")}/${name}`;
   if (isTauri) {
-    if (typeof source !== "string") throw new Error("桌面端上传需要一个本地文件路径");
+    if (typeof source !== "string") throw new Error(i18next.t("vfs:api.desktopUploadNeedsPath"));
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("vfs_upload", { request: { path, localPath: source } });
     return path;
   }
-  if (!(source instanceof File)) throw new Error("浏览器上传需要一个文件");
+  if (!(source instanceof File)) throw new Error(i18next.t("vfs:api.browserUploadNeedsFile"));
   await uploadBrowserFile(path, source);
   return path;
 }
@@ -186,7 +198,7 @@ export async function downloadVfsFile(path: string): Promise<void> {
   const response = await fetch(vfsFileUrl(path, true), { credentials: "same-origin" });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error ?? `下载失败 (${response.status})`);
+    throw new Error(payload?.error ?? i18next.t("vfs:api.downloadFailed", { status: response.status }));
   }
   const url = URL.createObjectURL(await response.blob());
   const anchor = document.createElement("a");

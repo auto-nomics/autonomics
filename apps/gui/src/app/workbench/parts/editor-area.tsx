@@ -1,11 +1,13 @@
 /** Editor grid with stable portal hosts, so moving panes keeps editor state. */
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { editorDrag, setEditorDrag, useEditorDrag } from "../editor-drag";
 import { useWorkbenchRuntime } from "../runtime-context";
 import { BookOpen, Library, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
+import i18n from "@/i18n";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import type { Layout } from "react-resizable-panels";
 import { editorKind } from "../editor-registry";
@@ -56,30 +58,31 @@ function EditorBody(props: { editor: EditorRef; active: boolean }) {
 }
 
 function EditorEmptyState() {
+  const { t } = useTranslation("workbench");
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-8 text-center">
-      <div className="text-sm text-muted-foreground">按 <kbd className="rounded border bg-muted px-1 font-mono text-[11px]">Ctrl P</kbd> 搜索命令,或从左侧打开</div>
+      <div className="text-sm text-muted-foreground">{t("editorArea.emptyPre")}<kbd className="rounded border bg-muted px-1 font-mono text-[11px]">Ctrl P</kbd>{t("editorArea.emptyPost")}</div>
       <div className="flex gap-2">
         <button
           type="button"
           className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-accent"
           onClick={() => openEditor({ kind: "bibliography" })}
         >
-          <Library className="size-3.5" />文献库
+          <Library className="size-3.5" />{t("editorArea.library")}
         </button>
         <button
           type="button"
           className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-accent"
           onClick={() => openEditor({ kind: "wiki" })}
         >
-          <BookOpen className="size-3.5" />知识库
+          <BookOpen className="size-3.5" />{t("editorArea.wiki")}
         </button>
         <button
           type="button"
           className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs hover:bg-accent"
           onClick={() => openEditor({ kind: "config" })}
         >
-          <Settings className="size-3.5" />设置
+          <Settings className="size-3.5" />{t("editorArea.settings")}
         </button>
       </div>
     </div>
@@ -182,7 +185,7 @@ function LayoutNode({ node, path, registry }: { node: EditorLayout; path: string
     if (typeof ratio === "number" && Math.abs(ratio - node.ratio) > 0.1) setEditorLayoutRatio(path, ratio);
   }} className="min-h-0 min-w-0 flex-1">
     <ResizablePanel id={first} minSize="15%" className="flex min-h-0 min-w-0"><LayoutNode node={node.first} path={`${path}0`} registry={registry} /></ResizablePanel>
-    <ResizableHandle aria-label={node.axis === "horizontal" ? "调整分屏宽度" : "调整分屏高度"} className={node.axis === "vertical" ? "h-px w-full after:-inset-x-2 after:-top-1 after:h-2.5 after:w-auto" : undefined} />
+    <ResizableHandle aria-label={node.axis === "horizontal" ? i18n.t("workbench:editorArea.resizeSplitWidth") : i18n.t("workbench:editorArea.resizeSplitHeight")} className={node.axis === "vertical" ? "h-px w-full after:-inset-x-2 after:-top-1 after:h-2.5 after:w-auto" : undefined} />
     <ResizablePanel id={second} minSize="15%" className="flex min-h-0 min-w-0"><LayoutNode node={node.second} path={`${path}1`} registry={registry} /></ResizablePanel>
   </ResizablePanelGroup>;
 }

@@ -15,6 +15,7 @@
  * `<semantics><annotation>` (copyable).
  */
 import { wikiAttachmentRef, wikiAttachmentUrl } from "./wiki-attachment-ref";
+import i18n from "@/i18n";
 import katex from "katex";
 import { Marked, type Tokens, type Renderer } from "marked";
 
@@ -189,7 +190,7 @@ const imageUploadExtension = {
     const match = /^<!--wiki-image-upload:([0-9a-f-]{36})-->[ \t]*(?:\n|$)/i.exec(src);
     return match ? { type: "wiki-image-upload", raw: match[0] } : undefined;
   },
-  renderer() { return '<p class="wiki-image-pending" role="status">图片待插入…</p>'; },
+  renderer() { return `<p class="wiki-image-pending" role="status">${i18n.t("workbench:markdown.imagePending")}</p>`; },
 };
 
 // ── pipeline factory ──────────────────────────────────────────────────
@@ -213,7 +214,7 @@ function createMarkdownPipeline(options: { wikilinks?: boolean; entryId?: string
         const alt = token.tokens ? this.parser.parseInline(token.tokens, this.parser.textRenderer) : token.text;
         const ref = wikiAttachmentRef(token.href, options.entryId);
         const src = ref ? wikiAttachmentUrl(ref.entryId, ref.attachmentId) : token.href;
-        if (src.startsWith("wiki-attach:")) return `<span class="wiki-image-error">图片引用无效：${escapeHtml(alt)}</span>`;
+        if (src.startsWith("wiki-attach:")) return `<span class="wiki-image-error">${i18n.t("workbench:markdown.imageInvalid", { alt })}</span>`;
         const desktop = ref && typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
         return `<img${desktop ? "" : ` src="${escapeHtml(src)}"`} alt="${escapeHtml(alt)}"${token.title ? ` title="${escapeHtml(token.title)}"` : ""} loading="lazy" decoding="async"${ref ? ` data-wiki-entry="${escapeHtml(ref.entryId)}" data-wiki-attachment="${escapeHtml(ref.attachmentId)}"` : ""}>`;
       } } : {}),

@@ -10,6 +10,7 @@
  */
 
 import { lazy, Suspense, useCallback, useEffect } from "react";
+import i18n from "@/i18n";
 import { ArrowLeft, ArrowRight, Bot, Compass, FileText, FolderCode, GitFork, Library, ListChecks, Network, NotebookText, Presentation, Rss, Server, Settings } from "lucide-react";
 import type { BibliographyWorkspace } from "@/features/bibliography";
 import { BibliographyView } from "@/features/bibliography";
@@ -83,7 +84,7 @@ function BibliographyEditorBody({ editor }: EditorContext) {
     setContainerView("bibliography", workspace);
   }, [focused, workspace]);
   return (
-    <section aria-label="文献工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section aria-label={i18n.t("workbench:bibViews.workspaceAria")} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <BibliographyView workspace={workspace} active={active} focusArticleId={focusArticleId} focusNonce={focusNonce} sidebarSlot={focused && externalSidebar ? sidebarSlot : null} externalSidebar={externalSidebar} onOpenSidebar={() => { setContainer("bibliography"); setSidebarCollapsed(false); activateEditorById(editor.id); }} />
     </section>
   );
@@ -217,13 +218,13 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
   const canForward = state.cursor < state.stack.length - 1;
 
   return (
-    <section aria-label="知识库工作区" className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section aria-label={i18n.t("workbench:views.wiki")} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <WikiEntrySurface
         navigation={<span className="flex shrink-0 items-center gap-0.5">
         <button
           type="button"
-          aria-label="后退"
-          title="后退"
+          aria-label={i18n.t("workbench:navigation.back")}
+          title={i18n.t("workbench:navigation.back")}
           disabled={!canBack}
           onClick={() => step(-1)}
           className="grid size-6 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
@@ -232,8 +233,8 @@ function WikiEntryEditorBody({ editor }: EditorContext) {
         </button>
         <button
           type="button"
-          aria-label="前进"
-          title="前进"
+          aria-label={i18n.t("workbench:navigation.forward")}
+          title={i18n.t("workbench:navigation.forward")}
           disabled={!canForward}
           onClick={() => step(1)}
           className="grid size-6 place-items-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
@@ -270,7 +271,7 @@ let registered = false;
 /** Idempotent registration; imported by the shell for side effects. */
 const LazyCanvasEditor = lazy(() => import("@/features/canvas/canvas-editor").then(module => ({ default: module.CanvasEditor })));
 function CanvasEditorBody(context: EditorContext) {
-  return <Suspense fallback={<p role="status" className="p-4 text-sm text-muted-foreground">加载画布编辑器…</p>}><LazyCanvasEditor {...context} /></Suspense>;
+  return <Suspense fallback={<p role="status" className="p-4 text-sm text-muted-foreground">{i18n.t("workbench:editorKinds.loadCanvas")}</p>}><LazyCanvasEditor {...context} /></Suspense>;
 }
 
 export function registerWorkbenchEditorKinds(): void {
@@ -278,7 +279,7 @@ export function registerWorkbenchEditorKinds(): void {
   registered = true;
 
   registerEditorKind({
-    kind: "canvas", title: editor => (editor.state as { title?: string } | null)?.title || "未命名画布",
+    kind: "canvas", title: editor => (editor.state as { title?: string } | null)?.title || i18n.t("workbench:editorKinds.untitledCanvas"),
     body: CanvasEditorBody, mount: "keep-alive", hideMode: "visibility",
     resource: editor => `canvas:${editor.params.canvasId}`,
     agentContext: editor => ({
@@ -289,7 +290,7 @@ export function registerWorkbenchEditorKinds(): void {
       inspectedSvgPath: (editor.state as { inspectedSvgPath?: string | null } | null)?.inspectedSvgPath ?? null, svgPathContract: "inspectedSvgPath is bounded JSON from the live canvas. panel_visible=false means a previous inspection, not a current selection. Use it when the user refers to the path. Re-read current revision and SVG sha256/part_id before editing. Use bioicons parts/geometry/edit_parts to directly update that saved SVG; preserve other paths, objects and provenance. Continue with the returned revision and inspect the canvas PNG. Path IDs are graphical, not biological identities.", canvasId: String(editor.params.canvasId), projectId: String(editor.params.projectId ?? ""), revision: (editor.state as { revision?: number } | null)?.revision ?? 0, dirty: (editor.state as { dirty?: boolean } | null)?.dirty ?? false, selectedObjectIds: (editor.state as { selectedObjectIds?: string } | null)?.selectedObjectIds ?? "[]", selectedObjects: (editor.state as { selectedObjects?: string } | null)?.selectedObjects ?? "[]", selectionReady: (editor.state as { selectionReady?: boolean } | null)?.selectionReady ?? false, selectedObjectsTotal: (editor.state as { selectedObjectsTotal?: number } | null)?.selectedObjectsTotal ?? 0, selectedObjectsTruncated: (editor.state as { selectedObjectsTruncated?: boolean } | null)?.selectedObjectsTruncated ?? false, selectionContract: "selectedObjects is bounded JSON from the live canvas; wait for selectionReady=true, including unsaved changes when dirty=true. When truncated, ask for a narrower selection before whole-selection edits; reading the scene cannot recover omitted selection IDs. When dirty, wait for canvas autosave and read the current scene/revision before editing. inset_region/inset_callout are annotations, not scientific components/relations; unverified_inset_reference needs ownership reconciliation.", title: (editor.state as { title?: string } | null)?.title ?? "", objectCount: (editor.state as { objectCount?: number } | null)?.objectCount ?? 0 }),
     confirmLeave: editor => {
       const state = editor.state as { dirty?: boolean; saving?: boolean } | null;
-      return Boolean(state?.saving) || Boolean(state?.dirty) && !window.confirm("画布有未保存的修改，关闭将丢弃修改。继续？");
+      return Boolean(state?.saving) || Boolean(state?.dirty) && !window.confirm(i18n.t("workbench:editorKinds.canvasDirty"));
     },
   });
 
@@ -326,7 +327,7 @@ export function registerWorkbenchEditorKinds(): void {
     title: (editor) => {
       const state = editor.state as WikiEntryEditorState | null;
       const current = state?.stack[state.cursor];
-      return current?.title || state?.title || "未命名词条";
+      return current?.title || state?.title || i18n.t("workbench:editorKinds.untitledEntry");
     },
     name: (editor) => String(editor.params.entryId ?? ""),
     icon: () => NotebookText,
@@ -348,13 +349,13 @@ export function registerWorkbenchEditorKinds(): void {
       if (otherViews) return false;
       if (model.state.saving) return true;
       if (!model.dirty) return false;
-      if (!window.confirm("该标签页正在编辑中,关闭将丢弃未保存的修改。继续?")) return true;
+      if (!window.confirm(i18n.t("workbench:editorKinds.entryEditing"))) return true;
       const entry = model.state.entry;
       model.update({ title: entry.title, alias: entry.alias.join(", "), tags: entry.tags.join(", "), content: entry.content });
       return false;
     },
     commands: (editor) => [
-      { id: "wiki-entry.close", title: "Close wiki entry", run: () => closeEditor(editor.id) },
+      { id: "wiki-entry.close", title: i18n.t("workbench:commands.closeWikiEntry"), run: () => closeEditor(editor.id) },
     ],
   });
   registerEditorKind({
@@ -369,21 +370,21 @@ export function registerWorkbenchEditorKinds(): void {
       const snapshot = document.getSnapshot();
       if (snapshot.saving) return true;
       if (snapshot.source === null || snapshot.source === snapshot.savedSource) return false;
-      if (!window.confirm("该文稿有未保存的修改，关闭将丢弃修改。继续？")) return true;
+      if (!window.confirm(i18n.t("workbench:editorKinds.deckDirty"))) return true;
       document.discardSource();
       return false;
     },
     agentContext: (editor) => ({ deckId: String(editor.params.deckId ?? ""), title: (editor.state as DeckEditorState | null)?.title ?? "", slideNo: (editor.state as DeckEditorState | null)?.slideNo ?? null }),
     title: (editor) => {
       const state = editor.state as DeckEditorState | null;
-      return state?.title || "未命名 deck";
+      return state?.title || i18n.t("workbench:editorKinds.untitledDeck");
     },
     name: (editor) => String(editor.params.deckId ?? ""),
     icon: () => Presentation,
     body: DeckEditorBodyWrapper,
     mount: "keep-alive",
     commands: (editor) => [
-      { id: "deck.close", title: "Close deck", run: () => closeEditor(editor.id) },
+      { id: "deck.close", title: i18n.t("workbench:commands.closeDeck"), run: () => closeEditor(editor.id) },
     ],
   });
   // Deck opener bridge: features open deck tabs without the workbench.
@@ -392,15 +393,15 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "wiki-graph",
-    title: () => "知识图谱",
-    name: () => "知识关系图谱",
+    title: () => i18n.t("workbench:views.wikiGraph"),
+    name: () => i18n.t("workbench:editorKinds.wikiGraphName"),
     icon: () => Network,
     body: WikiLocalGraph,
     mount: "keep-alive",
   });
   registerEditorKind({
     kind: "bibliography",
-    title: (editor) => ({ manuscripts: "LaTeX 手稿", discover: "发现", subscriptions: "订阅" }[String(editor.params.workspace)] ?? "文献与证据"),
+    title: (editor) => ({ manuscripts: i18n.t("workbench:bibViews.manuscripts"), discover: i18n.t("workbench:bibViews.discover"), subscriptions: i18n.t("workbench:bibViews.subscriptions") }[String(editor.params.workspace)] ?? i18n.t("workbench:views.bibliography")),
     name: (editor) => ({ manuscripts: "Manuscripts", discover: "Discover", subscriptions: "Subscriptions" }[String(editor.params.workspace)] ?? "Bibliography"),
     icon: (editor) => ({ manuscripts: FileText, discover: Compass, subscriptions: Rss }[String(editor.params.workspace)] ?? Library),
     body: BibliographyEditorBody,
@@ -419,19 +420,19 @@ export function registerWorkbenchEditorKinds(): void {
       const state = editor.state as { project?: string; dirty?: boolean; containerVersion?: number } | null;
       return { project: state?.project ?? null, dirty: state?.dirty ?? false, containerVersion: state?.containerVersion ?? null, scope: "项目标识与编辑状态，不含文件正文" };
     },
-    title: () => "插件管理",
+    title: () => i18n.t("workbench:views.projects"),
     name: () => "Plugins",
     icon: () => FolderCode,
     body: ProjectEditor,
     mount: "keep-alive",
-    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("当前文件有未保存的修改，关闭将丢弃修改。继续？"),
+    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm(i18n.t("workbench:editorKinds.pluginDirty")),
   });
   registerEditorKind({
     kind: "vfs-file",
     agentContext: (editor) => editorContextSnapshot(editor.id) ?? { path: String(editor.params.path ?? ""), scope: "文件标识（内容尚未加载）" },
     title: (editor) => {
       const path = String(editor.params.path ?? "");
-      return path.split("/").filter(Boolean).pop() || path || "文件";
+      return path.split("/").filter(Boolean).pop() || path || i18n.t("workbench:editorKinds.file");
     },
     name: (editor) => String(editor.params.path ?? ""),
     icon: () => FileText,
@@ -439,11 +440,11 @@ export function registerWorkbenchEditorKinds(): void {
     // keep-alive: loaded contents and unsaved drafts survive tab
     // switches; the dirty veto guards closing with unsaved edits.
     mount: "keep-alive",
-    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm("该文件有未保存的修改，关闭将丢弃修改。继续？"),
+    confirmLeave: (editor) => Boolean((editor.state as { dirty?: boolean } | null)?.dirty) && !window.confirm(i18n.t("workbench:editorKinds.vfsDirty")),
   });
   registerEditorKind({
     kind: "config",
-    title: () => "设置",
+    title: () => i18n.t("workbench:activityBar.configTitle"),
     name: () => "Settings",
     icon: () => Settings,
     body: () => <ConfigEditorBody />,
@@ -451,7 +452,7 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "hpc-compute",
-    title: () => "计算目标",
+    title: () => i18n.t("workbench:editorKinds.computeTargets"),
     name: () => "Compute targets",
     icon: () => Server,
     body: () => <ConfigEditorBody initialTab="compute" />,
@@ -459,7 +460,7 @@ export function registerWorkbenchEditorKinds(): void {
   });
   registerEditorKind({
     kind: "hpc-jobs",
-    title: () => "HPC 任务",
+    title: () => i18n.t("workbench:editorKinds.hpcJobs"),
     name: () => "HPC jobs",
     icon: () => ListChecks,
     body: () => <HpcJobsEditorView />,
