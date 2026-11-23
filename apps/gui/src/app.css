@@ -551,6 +551,27 @@ body {
 .wiki-vditor .vditor-reset { color: var(--foreground); font-family: inherit; }
 .wiki-vditor :is(.vditor-ir, .vditor-wysiwyg) .vditor-reset { padding: 20px max(48px, calc((100% - 768px) / 2)) !important; }
 .wiki-vditor .vditor-sv { color: var(--foreground); background: var(--background); padding: 20px 24px; }
+/* ── split-mode (sv) draggable divider between source and preview ── */
+.wiki-sv-split-handle {
+  flex: 0 0 7px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 2;
+  touch-action: none;
+  margin-left: -3px;
+}
+.wiki-sv-split-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 3px;
+  border-left: 1px solid var(--border);
+}
+.wiki-sv-split-handle:hover::after,
+.wiki-sv-split-handle:active::after {
+  border-left: 2px solid var(--primary);
+  inset: 0 2.5px;
+}
 .wiki-vditor .vditor-reset img { max-width: 100%; height: auto; }
 /* Code blocks in the editor have no .md-code shell; reuse the reading-mode
    code background so both modes render the same surface. */
